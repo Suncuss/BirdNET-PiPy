@@ -1,0 +1,26 @@
+[Unit]
+Description=BirdNET-PiPy AI Bird Detection Service
+Documentation=https://github.com/yourusername/BirdNet-PiPy
+After=docker.service network.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=birdnet
+WorkingDirectory=/home/birdnet/dev/Birdnet-PiPy
+ExecStart=/home/birdnet/dev/Birdnet-PiPy/deployment/birdnet-service.sh
+Restart=on-failure
+RestartSec=10s
+StandardOutput=journal
+StandardError=journal
+
+# Environment variables (optional)
+# Uncomment to enable audio streaming:
+# Environment=ENABLE_AUDIO_STREAM=true
+
+# Graceful shutdown
+TimeoutStopSec=30
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target

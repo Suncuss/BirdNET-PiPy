@@ -1,0 +1,25 @@
+# Test-specific Dockerfile that includes test dependencies
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    sox \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install both runtime and test dependencies
+COPY requirements.txt requirements-test.txt ./
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir -r requirements-test.txt
+
+# Copy the application code
+COPY . .
+
+# Set environment variables
+ENV BASE_DIR=/app
+ENV PYTHONPATH=/app
+
+# Default command runs tests
+CMD ["pytest"]

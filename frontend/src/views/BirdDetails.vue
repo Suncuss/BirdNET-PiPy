@@ -1,0 +1,600 @@
+<template>
+  <div v-if="birdDetails" class="bird-details p-4">
+
+    <h1 class="text-2xl font-semibold mb-4 text-gray-800">{{ birdDetails.common_name }}</h1>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+      <!-- Bird Image, Quick Stats, and Attribution -->
+      <div class="bg-white rounded-lg shadow overflow-hidden lg:col-span-1">
+        <div class="relative overflow-hidden w-full" style="aspect-ratio: 1 / 1; max-height: 300px;">
+          <a :href="birdImageData.pageUrl" target="_blank" rel="noopener noreferrer" 
+            class="block w-full h-full cursor-pointer" 
+            :title="`View ${birdDetails.common_name} on Wikimedia Commons`">
+            <img :src="birdImageData.imageUrl" :alt="birdDetails.common_name"
+              class="absolute inset-0 w-full h-full object-cover object-center transition-transform duration-300 hover:scale-110">
+          </a>
+        </div>
+        <div class="p-4 bg-gray-100 text-sm text-gray-600">
+          <p>
+            Photo by <a :href="birdImageData.authorUrl" target="_blank" class="text-blue-600 underline">{{
+              birdImageData.authorName }}</a>, licensed under {{ birdImageData.licenseType }}
+          </p>
+        </div>
+        <div class="p-6 space-y-2">
+          <p><span class="font-semibold text-gray-700">Total Visits:</span> {{ totalVisits }}</p>
+          <p><span class="font-semibold text-gray-700">First Detected:</span> {{ formatDate(firstDetected) }}</p>
+          <p><span class="font-semibold text-gray-700">Last Detected:</span> {{ formatDate(lastDetected) }}</p>
+          <p><span class="font-semibold text-gray-700">Most Activity Time:</span> {{ peakActivityTime }}</p>
+        </div>
+      </div>
+
+
+      <!-- Detection Distribution -->
+      <div class="bg-white rounded-lg shadow p-6 lg:col-span-2">
+        <h2 class="text-lg font-semibold mb-2">Distribution</h2>
+        
+        <!-- Tab Navigation -->
+        <div class="flex flex-wrap gap-2 mb-4">
+          <button v-for="view in viewOptions" :key="view.value"
+            @click="changeView(view.value)"
+            :disabled="isUpdating"
+            :class="[
+              'px-4 py-2 rounded-md font-medium transition-colors duration-200',
+              view.value === '6month' || view.value === 'year' ? 'hidden sm:block' : '',
+              selectedView === view.value 
+                ? 'bg-green-600 text-white' 
+                : isUpdating
+                  ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                  : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            ]">
+            {{ view.label }}
+          </button>
+        </div>
+        
+        <!-- Date Navigation -->
+        <div class="flex items-center justify-between mb-4">
+          <button @click="navigatePrevious"
+            :disabled="isUpdating"
+            :class="[
+              'flex items-center px-2 sm:px-3 py-2 text-xs sm:text-sm font-medium rounded-md border transition-colors',
+              isUpdating
+                ? 'text-gray-400 bg-gray-100 border-gray-200 cursor-not-allowed'
+                : 'text-gray-700 bg-white border-gray-300 hover:bg-gray-50'
+            ]">
+            <svg class="w-3 h-3 sm:w-4 sm:h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
+            </svg>
+            <span class="hidden sm:inline">Previous</span>
+            <span class="sm:hidden">Prev</span>
+          </button>
+          
+          <span class="text-sm sm:text-lg font-medium text-gray-800 text-center px-2">{{ currentDateDisplay }}</span>
+          
+          <button @click="navigateNext"
+            :disabled="isNextDisabled || isUpdating"
+            :class="[
+              'flex items-center px-2 sm:px-3 py-2 text-xs sm:text-sm font-medium rounded-md border transition-colors',
+              (isNextDisabled || isUpdating)
+                ? 'text-gray-400 bg-gray-100 border-gray-200 cursor-not-allowed' 
+                : 'text-gray-700 bg-white border-gray-300 hover:bg-gray-50'
+            ]">
+            <span class="hidden sm:inline">Next</span>
+            <span class="sm:hidden">Next</span>
+            <svg class="w-3 h-3 sm:w-4 sm:h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+            </svg>
+          </button>
+        </div>
+        
+        <!-- Canvas Container with fixed aspect ratio for Safari -->
+        <div class="relative w-full" style="height: 300px;">
+          <canvas ref="detectionChart" class="absolute inset-0 w-full h-full"></canvas>
+        </div>
+      </div>
+
+      <!-- Recordings Section -->
+      <div class="bg-white rounded-lg shadow p-6 lg:col-span-3">
+        <!-- Header with Selector -->
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-lg font-semibold">Recordings</h2>
+          <select v-model="recordingSort" @change="onSortChange"
+            class="px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-green-500">
+            <option value="recent">Most Recent</option>
+            <option value="best">Best Recordings</option>
+          </select>
+        </div>
+
+        <!-- Recordings Grid (show 4 per page) -->
+        <div v-if="currentPageRecordings.length > 0" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div v-for="(recording, index) in currentPageRecordings" :key="recording.id"
+            class="bg-gray-50 p-4 rounded-lg shadow-sm">
+            <div class="space-y-2">
+              <img :src="`${API_BASE_URL}/spectrogram/${recording.spectrogram_filename}`"
+                :alt="`Spectrogram ${index + 1}`" class="w-full rounded-lg bg-gray-900">
+              <audio controls class="w-full rounded-lg shadow-sm">
+                <source :src="`${API_BASE_URL}/audio/${recording.audio_filename}`" type="audio/mpeg">
+                Your browser does not support the audio element.
+              </audio>
+            </div>
+          </div>
+        </div>
+
+        <!-- Empty state -->
+        <div v-else class="text-center py-8 text-gray-500">
+          No recordings available for this species.
+        </div>
+
+        <!-- Pagination: 1 2 3 4 -->
+        <div v-if="totalPages > 1" class="flex justify-center items-center gap-2 mt-6">
+          <button v-for="page in totalPages" :key="page"
+            @click="currentPage = page"
+            :class="[
+              'px-3 py-1 rounded-md font-medium transition-colors',
+              page === currentPage
+                ? 'bg-green-600 text-white'
+                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            ]">
+            {{ page }}
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</template>
+
+
+<script>
+import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
+import { useRoute } from 'vue-router'
+import axios from 'axios'
+import Chart from 'chart.js/auto'
+
+export default {
+  name: 'BirdDetails',
+  setup() {
+    const route = useRoute()
+    const birdDetails = ref(null)
+    const totalVisits = ref(0)
+    const firstDetected = ref(null)
+    const lastDetected = ref(null)
+    const detectionChart = ref(null)
+    const detectionChartInstance = ref(null)
+    const averageConfidence = ref(0)
+    const peakActivityTime = ref('')
+    const seasonality = ref('')
+    // Recordings state
+    const allRecordings = ref([])       // Store all 16 fetched recordings
+    const recordingSort = ref('recent') // Default to most recent
+    const currentPage = ref(1)
+    const recordingsPerPage = 4
+    const isLoadingRecordings = ref(false)
+
+    const birdImageData = ref({
+      imageUrl: '/default_bird.png',
+      pageUrl: '',
+      authorName: 'N/A',
+      authorUrl: '',
+      licenseType: 'N/A'
+    })
+
+    const API_BASE_URL = '/api'
+    
+    // State management
+    const selectedView = ref('month')
+    const currentAnchorDate = ref(new Date())
+    const isUpdating = ref(false)
+    const updateQueue = ref([])
+    
+    const viewOptions = [
+      { value: 'day', label: 'Day' },
+      { value: 'week', label: 'Week' },
+      { value: 'month', label: 'Month' },
+      { value: '6month', label: '6 Month' },
+      { value: 'year', label: 'Year' }
+    ]
+    
+    // Computed properties for date display
+    const currentDateDisplay = computed(() => {
+      const date = currentAnchorDate.value
+      switch (selectedView.value) {
+        case 'day':
+          return date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+        case 'week':
+          const weekStart = new Date(date)
+          weekStart.setDate(date.getDate() - date.getDay())
+          const weekEnd = new Date(weekStart)
+          weekEnd.setDate(weekStart.getDate() + 6)
+          return `${weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${weekEnd.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+        case 'month':
+          return date.toLocaleDateString('en-US', { year: 'numeric', month: 'long' })
+        case '6month':
+          const start = date.getMonth() < 6 ? 0 : 6
+          const end = start + 5
+          return `${new Date(date.getFullYear(), start).toLocaleDateString('en-US', { month: 'short' })} - ${new Date(date.getFullYear(), end).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}`
+        case 'year':
+          return date.getFullYear().toString()
+      }
+    })
+    
+    const isNextDisabled = computed(() => {
+      const now = new Date()
+      const anchor = currentAnchorDate.value
+      
+      switch (selectedView.value) {
+        case 'day':
+          return anchor.toDateString() === now.toDateString()
+        case 'week':
+          const thisWeekStart = new Date(now)
+          thisWeekStart.setDate(now.getDate() - now.getDay())
+          const anchorWeekStart = new Date(anchor)
+          anchorWeekStart.setDate(anchor.getDate() - anchor.getDay())
+          return anchorWeekStart >= thisWeekStart
+        case 'month':
+          return anchor.getFullYear() === now.getFullYear() && anchor.getMonth() === now.getMonth()
+        case '6month':
+          const currentHalf = Math.floor(now.getMonth() / 6)
+          const anchorHalf = Math.floor(anchor.getMonth() / 6)
+          return anchor.getFullYear() === now.getFullYear() && anchorHalf === currentHalf
+        case 'year':
+          return anchor.getFullYear() === now.getFullYear()
+      }
+    })
+
+    // Recordings pagination computed properties
+    const totalPages = computed(() => Math.ceil(allRecordings.value.length / recordingsPerPage))
+
+    const currentPageRecordings = computed(() => {
+      const start = (currentPage.value - 1) * recordingsPerPage
+      const end = start + recordingsPerPage
+      return allRecordings.value.slice(start, end)
+    })
+
+    const fetchBirdDetails = async () => {
+      try {
+        const response = await axios.get(`${API_BASE_URL}/bird/${route.params.name}`)
+        birdDetails.value = response.data
+        totalVisits.value = response.data.total_visits
+        firstDetected.value = new Date(response.data.first_detected)
+        lastDetected.value = new Date(response.data.last_detected)
+        averageConfidence.value = response.data.average_confidence
+        peakActivityTime.value = response.data.peak_activity_time
+        seasonality.value = response.data.seasonality
+
+        const imageResponse = await axios.get(`${API_BASE_URL}/wikimedia_image`, {
+          params: { species: birdDetails.value.common_name }
+        })
+
+        birdImageData.value = imageResponse.data
+
+        // Fetch recordings
+        await fetchRecordings()
+
+        // Initial chart load
+        updateChart()
+      } catch (error) {
+        console.error('Error fetching bird details:', error)
+      }
+    }
+
+    // Fetch recordings with current sort option
+    const fetchRecordings = async () => {
+      isLoadingRecordings.value = true
+      try {
+        const response = await axios.get(
+          `${API_BASE_URL}/bird/${route.params.name}/recordings`,
+          { params: { sort: recordingSort.value, limit: 16 } }
+        )
+        allRecordings.value = response.data
+        currentPage.value = 1  // Reset to page 1
+      } catch (error) {
+        console.error('Error fetching recordings:', error)
+        allRecordings.value = []
+      } finally {
+        isLoadingRecordings.value = false
+      }
+    }
+
+    // Handle sort change - re-fetch with new sort, reset to page 1
+    const onSortChange = () => {
+      fetchRecordings()
+    }
+
+    // Helper function to format date in local timezone as YYYY-MM-DD
+    const formatDateForAPI = (date) => {
+      const year = date.getFullYear()
+      const month = String(date.getMonth() + 1).padStart(2, '0')
+      const day = String(date.getDate()).padStart(2, '0')
+      return `${year}-${month}-${day}`
+    }
+
+    // Clean chart update function following Chart.js best practices
+    const updateChart = async () => {
+      // If already updating, queue this update
+      if (isUpdating.value) {
+        updateQueue.value.push({ view: selectedView.value, date: new Date(currentAnchorDate.value) })
+        return
+      }
+
+      isUpdating.value = true
+
+      try {
+        const localDateString = formatDateForAPI(currentAnchorDate.value)
+        console.log(`Updating chart for view: ${selectedView.value}, date: ${localDateString}`)
+        
+        const response = await axios.get(`${API_BASE_URL}/bird/${route.params.name}/detection_distribution`, {
+          params: {
+            view: selectedView.value,
+            date: localDateString
+          }
+        })
+
+        // Wait for Vue to update DOM
+        await nextTick()
+
+        // Check if canvas exists
+        if (!detectionChart.value) {
+          console.error('Chart canvas element not found')
+          return
+        }
+
+        // Destroy existing chart using Chart.js best practice
+        const existingChart = Chart.getChart(detectionChart.value)
+        if (existingChart) {
+          existingChart.destroy()
+        }
+
+        const ctx = detectionChart.value.getContext('2d')
+
+        // Create new chart
+        detectionChartInstance.value = new Chart(detectionChart.value, {
+          type: 'bar',
+          data: {
+            labels: response.data.labels,
+            datasets: [{
+              label: 'Detections',
+              data: response.data.data,
+              backgroundColor: '#74C69D',
+              borderColor: '#2D6A4F',
+              borderWidth: 1
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            // Explicitly handle resize for Safari
+            onResize: (chart, size) => {
+              // Force redraw on resize
+              chart.update('none')
+            },
+            animation: {
+              duration: 300
+            },
+            interaction: {
+              intersect: false
+            },
+            layout: {
+              padding: {
+                left: 0,
+                right: 0,
+                top: 0,
+                bottom: 0
+              }
+            },
+            scales: {
+              y: {
+                beginAtZero: true,
+                title: {
+                  display: true,
+                  text: 'Number of Detections',
+                  color: '#1B4332',
+                  padding: 2
+                },
+                ticks: { 
+                  color: '#1B4332',
+                  padding: 2
+                },
+                grid: {
+                  color: 'rgba(0, 0, 0, 0.1)',
+                  lineWidth: 1
+                }
+              },
+              x: {
+                title: {
+                  display: true,
+                  text: 'Time Period',
+                  color: '#1B4332',
+                  padding: 2
+                },
+                ticks: {
+                  color: '#1B4332',
+                  maxRotation: 45,
+                  minRotation: 45,
+                  autoSkip: selectedView.value === 'day' || selectedView.value === 'month' ? false : true,
+                  maxTicksLimit: selectedView.value === 'day' ? 24 : selectedView.value === 'month' ? 31 : 12,
+                  padding: 2
+                },
+                grid: {
+                  color: 'rgba(0, 0, 0, 0.05)',
+                  lineWidth: 1
+                }
+              }
+            },
+            plugins: {
+              legend: { display: false }
+            }
+          }
+        })
+
+      } catch (error) {
+        console.error('Error updating chart:', error)
+      } finally {
+        isUpdating.value = false
+        
+        // Process queued updates
+        if (updateQueue.value.length > 0) {
+          const next = updateQueue.value.shift()
+          selectedView.value = next.view
+          currentAnchorDate.value = next.date
+          // Small delay to prevent rapid updates
+          setTimeout(() => updateChart(), 100)
+        }
+      }
+    }
+    
+    // View change with intelligent date translation
+    const changeView = (newView) => {
+      if (isUpdating.value || selectedView.value === newView) return
+      
+      const oldView = selectedView.value
+      const anchor = currentAnchorDate.value
+      
+      // Translate anchor date to new view
+      if (oldView !== newView) {
+        switch (newView) {
+          case 'day':
+            // Keep the same date
+            break
+          case 'week':
+            // Adjust to start of week
+            currentAnchorDate.value = new Date(anchor)
+            currentAnchorDate.value.setDate(anchor.getDate() - anchor.getDay())
+            break
+          case 'month':
+            // Adjust to first of month
+            currentAnchorDate.value = new Date(anchor.getFullYear(), anchor.getMonth(), 1)
+            break
+          case '6month':
+            // Adjust to start of 6-month period
+            const halfYear = Math.floor(anchor.getMonth() / 6) * 6
+            currentAnchorDate.value = new Date(anchor.getFullYear(), halfYear, 1)
+            break
+          case 'year':
+            // Adjust to January 1st
+            currentAnchorDate.value = new Date(anchor.getFullYear(), 0, 1)
+            break
+        }
+      }
+      
+      selectedView.value = newView
+      updateChart()
+    }
+    
+    // Navigation functions
+    const navigatePrevious = () => {
+      if (isUpdating.value) return
+      
+      const anchor = new Date(currentAnchorDate.value)
+      
+      switch (selectedView.value) {
+        case 'day':
+          anchor.setDate(anchor.getDate() - 1)
+          break
+        case 'week':
+          anchor.setDate(anchor.getDate() - 7)
+          break
+        case 'month':
+          anchor.setMonth(anchor.getMonth() - 1)
+          break
+        case '6month':
+          anchor.setMonth(anchor.getMonth() - 6)
+          break
+        case 'year':
+          anchor.setFullYear(anchor.getFullYear() - 1)
+          break
+      }
+      
+      currentAnchorDate.value = anchor
+      updateChart()
+    }
+    
+    const navigateNext = () => {
+      if (isNextDisabled.value || isUpdating.value) return
+      
+      const anchor = new Date(currentAnchorDate.value)
+      
+      switch (selectedView.value) {
+        case 'day':
+          anchor.setDate(anchor.getDate() + 1)
+          break
+        case 'week':
+          anchor.setDate(anchor.getDate() + 7)
+          break
+        case 'month':
+          anchor.setMonth(anchor.getMonth() + 1)
+          break
+        case '6month':
+          anchor.setMonth(anchor.getMonth() + 6)
+          break
+        case 'year':
+          anchor.setFullYear(anchor.getFullYear() + 1)
+          break
+      }
+      
+      currentAnchorDate.value = anchor
+      updateChart()
+    }
+
+    const formatDate = (date) => {
+      return date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+    }
+
+    // Handle window resize for Safari
+    let resizeTimeout
+    const handleResize = () => {
+      clearTimeout(resizeTimeout)
+      resizeTimeout = setTimeout(() => {
+        if (detectionChartInstance.value) {
+          detectionChartInstance.value.resize()
+        }
+      }, 250)
+    }
+
+    onMounted(() => {
+      fetchBirdDetails()
+      window.addEventListener('resize', handleResize)
+    })
+    
+    onUnmounted(() => {
+      window.removeEventListener('resize', handleResize)
+      
+      // Clean up chart
+      if (detectionChart.value) {
+        const existingChart = Chart.getChart(detectionChart.value)
+        if (existingChart) {
+          existingChart.destroy()
+        }
+      }
+    })
+
+    return {
+      birdDetails,
+      totalVisits,
+      firstDetected,
+      lastDetected,
+      birdImageData,
+      averageConfidence,
+      peakActivityTime,
+      seasonality,
+      formatDate,
+      detectionChart,
+      API_BASE_URL,
+      selectedView,
+      currentAnchorDate,
+      viewOptions,
+      currentDateDisplay,
+      isNextDisabled,
+      isUpdating,
+      changeView,
+      navigatePrevious,
+      navigateNext,
+      // Recordings section
+      recordingSort,
+      currentPage,
+      totalPages,
+      currentPageRecordings,
+      onSortChange,
+    }
+  }
+}
+</script>
