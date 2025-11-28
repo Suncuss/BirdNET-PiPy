@@ -33,6 +33,11 @@ else
     PROJECT_ROOT=""
 fi
 
+# Logging setup
+LOG_FILE="/tmp/birdnet-pipy-install-$(date +%Y%m%d-%H%M%S).log"
+mkdir -p "$(dirname "$LOG_FILE")"
+touch "$LOG_FILE"
+
 # Colors for output
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -51,20 +56,38 @@ CUSTOM_INSTALL_DIR=""
 # Logging Functions
 # ============================================================================
 
+# Log to file with timestamp
+log_to_file() {
+    local level=$1
+    shift
+    local message="$@"
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [$level] $message" >> "$LOG_FILE"
+}
+
+# Print to console and log
 print_status() {
     echo -e "${GREEN}[INSTALL]${NC} $1"
+    log_to_file "STATUS" "$1"
 }
 
 print_warning() {
     echo -e "${YELLOW}[WARNING]${NC} $1"
+    log_to_file "WARNING" "$1"
 }
 
 print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
+    log_to_file "ERROR" "$1"
 }
 
 print_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
+    log_to_file "INFO" "$1"
+}
+
+# Debug logging (only shown in log file)
+log_debug() {
+    log_to_file "DEBUG" "$1"
 }
 
 # ============================================================================
@@ -570,9 +593,22 @@ validate_installation() {
     fi
 
     # Check Docker images
-    if ! docker images | grep -q birdnet-pipy; then
+    local image_count=$(docker images | grep -c "birdnet-pipy" || true)
+    log_debug "Docker images check: found $image_count BirdNET-PiPy images"
+
+    if [ "$image_count" -eq 0 ]; then
         print_error "Docker images not built"
+        # Log all available images for debugging
+        log_debug "Available Docker images:"
+        docker images | while read line; do
+            log_debug "  $line"
+        done
         checks_passed=false
+    else
+        log_debug "Docker images found: $image_count"
+        docker images | grep "birdnet-pipy" | while read line; do
+            log_debug "  $line"
+        done
     fi
 
     if [ "$checks_passed" = true ]; then
@@ -588,9 +624,16 @@ cleanup_on_error() {
     local exit_code=$?
 
     if [ $exit_code -ne 0 ]; then
+        echo ""
         print_error "Installation failed with exit code $exit_code"
-        print_info "Please check the error messages above"
+        print_info "Detailed log saved to: $LOG_FILE"
+        echo ""
+        print_info "To view the log:"
+        echo "  tail -100 $LOG_FILE    # Last 100 lines"
+        echo "  less $LOG_FILE         # Full log"
+        echo ""
         print_info "For help, visit: https://github.com/Suncuss/BirdNET-PiPy/issues"
+        print_info "Include the log file when reporting issues"
     fi
 }
 
@@ -608,6 +651,8 @@ show_completion_message() {
     echo ""
     print_info "Installation directory: $PROJECT_ROOT"
     print_info "Images are built and the systemd service is installed."
+    echo ""
+    print_info "Installation log saved to: $LOG_FILE"
     echo ""
     print_info "Start the service with:"
     echo "  sudo systemctl start $SERVICE_NAME"
