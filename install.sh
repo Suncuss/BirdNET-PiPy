@@ -1,0 +1,753 @@
+#!/bin/bash
+# BirdNET-PiPy Unified Installation Script
+# Can be run via curl or locally after cloning repository
+#
+# Remote curl usage:
+#   curl -fsSL https://raw.githubusercontent.com/Suncuss/BirdNET-PiPy/main/install.sh | sudo bash
+#
+# Local usage (after cloning):
+#   cd BirdNET-PiPy && sudo ./install.sh
+
+set -e
+set -o pipefail
+
+# ============================================================================
+# Configuration & Constants
+# ============================================================================
+
+REPO_URL="https://github.com/Suncuss/BirdNET-PiPy.git"
+REPO_BRANCH="main"
+DEFAULT_INSTALL_DIR="/opt/BirdNET-PiPy"
+SERVICE_NAME="birdnet-pipy"
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+
+# Script detection
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || pwd)"
+
+# Detect if running from git repo (Stage 2) or remotely (Stage 1)
+if [ -d "$SCRIPT_DIR/.git" ]; then
+    IS_LOCAL_INSTALL=true
+    PROJECT_ROOT="$SCRIPT_DIR"
+else
+    IS_LOCAL_INSTALL=false
+    PROJECT_ROOT=""
+fi
+
+# Colors for output
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Command-line options (defaults)
+SKIP_DOCKER=false
+SKIP_PULSEAUDIO=false
+SKIP_SERVICE=false
+RUN_TESTS=false
+CUSTOM_INSTALL_DIR=""
+
+# ============================================================================
+# Logging Functions
+# ============================================================================
+
+print_status() {
+    echo -e "${GREEN}[INSTALL]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+print_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+# ============================================================================
+# Utility Functions
+# ============================================================================
+
+# Check if running as root
+check_root() {
+    if [ "$EUID" -ne 0 ]; then
+        print_error "This script must be run as root (use sudo)"
+        print_info "Example: sudo ./install.sh"
+        exit 1
+    fi
+}
+
+# Get the actual user (not root when using sudo)
+get_actual_user() {
+    if [ -n "$SUDO_USER" ]; then
+        echo "$SUDO_USER"
+    else
+        echo "$USER"
+    fi
+}
+
+# Get actual user's UID/GID (not root's)
+get_actual_uid_gid() {
+    ACTUAL_USER=$(get_actual_user)
+    ACTUAL_UID=$(id -u $ACTUAL_USER)
+    ACTUAL_GID=$(id -g $ACTUAL_USER)
+}
+
+# Detect platform
+detect_platform() {
+    # Check if Linux
+    if [ "$(uname -s)" != "Linux" ]; then
+        print_error "This script only supports Linux"
+        print_info "Detected platform: $(uname -s)"
+        exit 1
+    fi
+
+    # Detect distribution
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS_ID=$ID
+        OS_VERSION_ID=$VERSION_ID
+        OS_NAME=$NAME
+        print_status "Detected platform: $OS_NAME"
+    else
+        print_warning "Cannot detect OS distribution"
+        OS_ID="linux"
+        OS_NAME="Unknown Linux"
+    fi
+
+    # Check if Debian-based (for apt-get)
+    if ! command -v apt-get &> /dev/null; then
+        print_error "This script requires apt-get (Debian/Ubuntu/Raspberry Pi OS)"
+        exit 1
+    fi
+}
+
+# Detect host timezone
+detect_timezone() {
+    if [ -f /etc/timezone ]; then
+        TZ=$(cat /etc/timezone)
+    elif [ -L /etc/localtime ]; then
+        # Extract timezone from symlink (e.g., /usr/share/zoneinfo/America/New_York)
+        TZ=$(readlink /etc/localtime | sed 's|.*/zoneinfo/||')
+    elif [ -n "$TZ" ]; then
+        : # Use existing TZ
+    else
+        TZ="UTC"
+    fi
+    export TZ
+    print_status "Detected timezone: $TZ"
+}
+
+# Show usage
+show_usage() {
+    echo "BirdNET-PiPy Unified Installation Script"
+    echo ""
+    echo "Usage: $0 [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  --install-dir DIR    Installation directory (default: /opt/BirdNET-PiPy)"
+    echo "  --no-docker          Skip Docker installation (assumes already installed)"
+    echo "  --no-pulseaudio      Skip PulseAudio installation"
+    echo "  --no-service         Skip systemd service installation"
+    echo "  --test               Run tests before building"
+    echo "  --help               Show this help message"
+    echo ""
+    echo "Examples:"
+    echo "  # Quick install with defaults"
+    echo "  curl -fsSL https://raw.githubusercontent.com/Suncuss/BirdNET-PiPy/main/install.sh | sudo bash"
+    echo ""
+    echo "  # Custom installation directory"
+    echo "  sudo ./install.sh --install-dir /home/pi/BirdNET"
+    echo ""
+    echo "  # Skip Docker install (already installed)"
+    echo "  sudo ./install.sh --no-docker"
+}
+
+# ============================================================================
+# Stage 1: Clone Repository Logic
+# ============================================================================
+
+# Check prerequisites for cloning
+check_git() {
+    if ! command -v git &> /dev/null; then
+        print_status "Installing git..."
+        apt-get update
+        apt-get install -y git
+    fi
+}
+
+# Clone repository
+clone_repository() {
+    print_status "Cloning BirdNET-PiPy repository..."
+
+    check_git
+
+    # Determine installation directory
+    if [ -n "$CUSTOM_INSTALL_DIR" ]; then
+        INSTALL_DIR="$CUSTOM_INSTALL_DIR"
+    elif [ "$EUID" -eq 0 ] && [ -z "$SUDO_USER" ]; then
+        INSTALL_DIR="$DEFAULT_INSTALL_DIR"
+    else
+        ACTUAL_USER=$(get_actual_user)
+        INSTALL_DIR="/home/$ACTUAL_USER/BirdNET-PiPy"
+    fi
+
+    print_info "Installation directory: $INSTALL_DIR"
+
+    # Check if directory already exists
+    if [ -d "$INSTALL_DIR" ]; then
+        print_warning "Directory already exists: $INSTALL_DIR"
+
+        # Check if it's a git repo
+        if [ -d "$INSTALL_DIR/.git" ]; then
+            print_status "Existing repository found, pulling latest changes..."
+            cd "$INSTALL_DIR"
+            git checkout $REPO_BRANCH
+            git pull origin $REPO_BRANCH || {
+                print_error "Failed to update repository"
+                exit 1
+            }
+        else
+            print_error "Directory exists but is not a git repository"
+            print_info "Please remove or rename: $INSTALL_DIR"
+            exit 1
+        fi
+    else
+        # Clone fresh
+        git clone -b $REPO_BRANCH "$REPO_URL" "$INSTALL_DIR" || {
+            print_error "Failed to clone repository"
+            exit 1
+        }
+        print_status "Repository cloned to $INSTALL_DIR"
+    fi
+
+    # Validate clone
+    validate_clone "$INSTALL_DIR"
+}
+
+# Validate cloned repository
+validate_clone() {
+    local install_dir=$1
+    local required_files=(
+        "docker-compose.yml"
+        "build.sh"
+        "deployment/birdnet-service.sh"
+        "deployment/audio/pulseaudio/system.pa"
+    )
+
+    for file in "${required_files[@]}"; do
+        if [ ! -f "$install_dir/$file" ]; then
+            print_error "Clone validation failed: missing $file"
+            exit 1
+        fi
+    done
+
+    print_status "Repository validation passed"
+}
+
+# Re-execute script from cloned repository
+reexec_from_clone() {
+    print_status "Re-executing from cloned repository..."
+    cd "$INSTALL_DIR"
+    chmod +x install.sh
+
+    # Pass through all original arguments
+    exec bash install.sh "$@"
+}
+
+# ============================================================================
+# Stage 2: Docker Installation
+# ============================================================================
+
+# Check if Docker is installed
+check_docker() {
+    if command -v docker &> /dev/null; then
+        print_status "Docker is already installed"
+        docker --version
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Check if Docker Compose plugin is available
+check_docker_compose() {
+    if docker compose version &> /dev/null 2>&1; then
+        print_status "Docker Compose plugin is available"
+        docker compose version
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Install Docker using official method
+install_docker() {
+    print_status "Installing Docker..."
+    print_info "This may take a few minutes..."
+
+    # Update package index
+    apt-get update
+
+    # Install prerequisites
+    apt-get install -y \
+        ca-certificates \
+        curl \
+        gnupg \
+        lsb-release
+
+    # Add Docker's official GPG key
+    install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/$OS_ID/gpg | \
+        gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    chmod a+r /etc/apt/keyrings/docker.gpg
+
+    # Set up repository
+    echo \
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+      https://download.docker.com/linux/$OS_ID $(lsb_release -cs) stable" | \
+      tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+    # Install Docker Engine
+    apt-get update
+    apt-get install -y \
+        docker-ce \
+        docker-ce-cli \
+        containerd.io \
+        docker-buildx-plugin \
+        docker-compose-plugin
+
+    print_status "Docker installed successfully"
+}
+
+# Add user to docker group
+setup_docker_user() {
+    ACTUAL_USER=$(get_actual_user)
+
+    # Add user to docker group
+    if ! groups $ACTUAL_USER | grep -q docker; then
+        usermod -aG docker $ACTUAL_USER
+        print_status "Added $ACTUAL_USER to docker group"
+        print_warning "IMPORTANT: Log out and back in for docker group to take effect"
+        print_warning "Or run: newgrp docker"
+    else
+        print_status "User $ACTUAL_USER already in docker group"
+    fi
+}
+
+# Verify Docker installation
+verify_docker() {
+    print_status "Verifying Docker installation..."
+
+    if ! docker --version &> /dev/null; then
+        print_error "Docker verification failed"
+        exit 1
+    fi
+
+    if ! docker compose version &> /dev/null; then
+        print_error "Docker Compose plugin verification failed"
+        exit 1
+    fi
+
+    print_status "Docker verification passed"
+}
+
+# ============================================================================
+# Application Setup (Ported from deployment/install-service.sh)
+# ============================================================================
+
+# Install PulseAudio for audio multiplexing
+install_pulseaudio() {
+    print_info ""
+    print_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    print_info "PulseAudio Setup (Required for audio recording)"
+    print_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    print_status "Installing PulseAudio..."
+
+    apt-get update
+    apt-get install -y pulseaudio pulseaudio-utils alsa-utils
+
+    # Copy PulseAudio configuration files
+    print_status "Configuring PulseAudio for system-wide mode..."
+
+    # Backup existing configs if present
+    if [ -f /etc/pulse/system.pa ]; then
+        cp /etc/pulse/system.pa /etc/pulse/system.pa.backup
+        print_info "Backed up existing system.pa"
+    fi
+    if [ -f /etc/pulse/daemon.conf ]; then
+        cp /etc/pulse/daemon.conf /etc/pulse/daemon.conf.backup
+        print_info "Backed up existing daemon.conf"
+    fi
+
+    # Copy our configuration
+    cp "$PROJECT_ROOT/deployment/audio/pulseaudio/system.pa" /etc/pulse/system.pa
+    cp "$PROJECT_ROOT/deployment/audio/pulseaudio/daemon.conf" /etc/pulse/daemon.conf
+
+    # Create pulse user and group if they don't exist
+    if ! getent group pulse > /dev/null; then
+        groupadd --system pulse
+    fi
+    if ! id pulse > /dev/null 2>&1; then
+        useradd --system -g pulse -G audio pulse
+    fi
+
+    # Create pulse-access group for Docker containers
+    if ! getent group pulse-access > /dev/null; then
+        groupadd --system pulse-access
+    fi
+
+    # Add actual user to pulse-access group
+    ACTUAL_USER=$(get_actual_user)
+    usermod -a -G pulse-access,audio $ACTUAL_USER
+
+    print_status "PulseAudio setup complete"
+    print_info "PulseAudio will be started by birdnet-service.sh"
+}
+
+# Build Docker images
+build_application() {
+    print_status "Building BirdNET-PiPy application..."
+
+    get_actual_uid_gid
+    print_status "Building as user $ACTUAL_USER (UID:$ACTUAL_UID, GID:$ACTUAL_GID)..."
+
+    cd "$PROJECT_ROOT"
+
+    # Make build.sh executable if not already
+    chmod +x build.sh
+
+    # Build arguments
+    BUILD_ARGS=""
+    if [ "$RUN_TESTS" = true ]; then
+        BUILD_ARGS="--test"
+    fi
+
+    # Run build script as actual user with correct UID/GID
+    sudo -u $ACTUAL_USER UID=$ACTUAL_UID GID=$ACTUAL_GID ./build.sh $BUILD_ARGS
+
+    if [ $? -eq 0 ]; then
+        print_status "Application built successfully"
+    else
+        print_error "Application build failed!"
+        exit 1
+    fi
+}
+
+# Fix existing data folder permissions
+fix_data_permissions() {
+    print_status "Setting up data directory permissions..."
+
+    get_actual_uid_gid
+
+    # Create data directory if it doesn't exist
+    if [ ! -d "$PROJECT_ROOT/data" ]; then
+        mkdir -p "$PROJECT_ROOT/data"
+    fi
+
+    # Create flags directory for restart/update triggers
+    if [ ! -d "$PROJECT_ROOT/data/flags" ]; then
+        mkdir -p "$PROJECT_ROOT/data/flags"
+    fi
+
+    # Fix ownership
+    chown -R $ACTUAL_USER:$ACTUAL_USER "$PROJECT_ROOT/data"
+    print_status "Data permissions fixed for user $ACTUAL_USER"
+}
+
+# Make runtime script executable
+setup_runtime_script() {
+    print_status "Setting up runtime script..."
+
+    RUNTIME_SCRIPT="$PROJECT_ROOT/deployment/birdnet-service.sh"
+
+    if [ ! -f "$RUNTIME_SCRIPT" ]; then
+        print_error "Runtime script not found: $RUNTIME_SCRIPT"
+        exit 1
+    fi
+
+    chmod +x "$RUNTIME_SCRIPT"
+    print_status "Runtime script is executable"
+}
+
+# Create systemd service file
+create_service_file() {
+    print_status "Creating systemd service file..."
+
+    ACTUAL_USER=$(get_actual_user)
+    RUNTIME_SCRIPT="$PROJECT_ROOT/deployment/birdnet-service.sh"
+
+    cat > "$SERVICE_FILE" << EOF
+[Unit]
+Description=BirdNET-PiPy AI Bird Detection Service
+Documentation=https://github.com/Suncuss/BirdNET-PiPy
+After=docker.service network.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=$ACTUAL_USER
+WorkingDirectory=$PROJECT_ROOT
+ExecStart=$RUNTIME_SCRIPT
+Restart=on-failure
+RestartSec=10s
+StandardOutput=journal
+StandardError=journal
+
+# Environment variables
+Environment=TZ=$TZ
+
+# Graceful shutdown
+TimeoutStopSec=30
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    print_status "Service file created: $SERVICE_FILE"
+}
+
+# Install and enable service
+install_service() {
+    print_status "Installing systemd service..."
+
+    # Reload systemd daemon
+    systemctl daemon-reload
+
+    # Enable service (auto-start on boot)
+    systemctl enable "$SERVICE_NAME"
+
+    print_status "Service installed and enabled"
+}
+
+# ============================================================================
+# Validation & Error Handling
+# ============================================================================
+
+# Validate installation
+validate_installation() {
+    print_status "Validating installation..."
+
+    local checks_passed=true
+
+    # Check Docker
+    if ! docker --version &> /dev/null; then
+        print_error "Docker validation failed"
+        checks_passed=false
+    fi
+
+    # Check Docker Compose
+    if ! docker compose version &> /dev/null; then
+        print_error "Docker Compose validation failed"
+        checks_passed=false
+    fi
+
+    # Check PulseAudio (skip if --no-pulseaudio)
+    if [ "$SKIP_PULSEAUDIO" = false ]; then
+        if ! command -v pulseaudio &> /dev/null; then
+            print_error "PulseAudio validation failed"
+            checks_passed=false
+        fi
+    fi
+
+    # Check systemd service (skip if --no-service)
+    if [ "$SKIP_SERVICE" = false ]; then
+        if [ ! -f "$SERVICE_FILE" ]; then
+            print_error "Systemd service not found"
+            checks_passed=false
+        fi
+    fi
+
+    # Check runtime script
+    if [ ! -x "$PROJECT_ROOT/deployment/birdnet-service.sh" ]; then
+        print_error "Runtime script not executable"
+        checks_passed=false
+    fi
+
+    # Check Docker images
+    if ! docker images | grep -q birdnet-pipy; then
+        print_error "Docker images not built"
+        checks_passed=false
+    fi
+
+    if [ "$checks_passed" = true ]; then
+        print_status "All validation checks passed!"
+    else
+        print_error "Some validation checks failed"
+        return 1
+    fi
+}
+
+# Cleanup on error
+cleanup_on_error() {
+    local exit_code=$?
+
+    if [ $exit_code -ne 0 ]; then
+        print_error "Installation failed with exit code $exit_code"
+        print_info "Please check the error messages above"
+        print_info "For help, visit: https://github.com/Suncuss/BirdNET-PiPy/issues"
+    fi
+}
+
+trap cleanup_on_error ERR
+
+# ============================================================================
+# Completion Message
+# ============================================================================
+
+show_completion_message() {
+    echo ""
+    print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    print_status "BirdNET-PiPy Installation Complete!"
+    print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    print_info "Installation directory: $PROJECT_ROOT"
+    print_info "Images are built and the systemd service is installed."
+    echo ""
+    print_info "Start the service with:"
+    echo "  sudo systemctl start $SERVICE_NAME"
+    echo ""
+    print_info "Service Management Commands:"
+    echo "  sudo systemctl status $SERVICE_NAME    # Check status"
+    echo "  sudo systemctl stop $SERVICE_NAME      # Stop service"
+    echo "  sudo systemctl restart $SERVICE_NAME   # Restart service"
+    echo "  sudo journalctl -u $SERVICE_NAME -f    # View logs"
+    echo ""
+    print_info "Application Access:"
+    echo "  - Frontend: http://localhost:8080"
+    echo "  - API: http://localhost:5002"
+    echo "  - BirdNet Service: http://localhost:5001"
+    echo "  - Live Audio Stream: http://localhost:8888/stream.mp3"
+    echo ""
+    print_info "Audio Services:"
+    echo "  pulseaudio --check && echo Running       # Check PulseAudio"
+    echo "  pactl list sources short                 # List audio sources"
+    echo ""
+    print_info "To trigger a container restart:"
+    echo "  touch $PROJECT_ROOT/data/flags/restart-backend"
+    echo ""
+    print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+}
+
+# ============================================================================
+# Main Execution Flow
+# ============================================================================
+
+main() {
+    print_status "BirdNET-PiPy Installation Script"
+    echo ""
+
+    # Parse command-line arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --install-dir)
+                CUSTOM_INSTALL_DIR="$2"
+                shift 2
+                ;;
+            --no-docker)
+                SKIP_DOCKER=true
+                shift
+                ;;
+            --no-pulseaudio)
+                SKIP_PULSEAUDIO=true
+                shift
+                ;;
+            --no-service)
+                SKIP_SERVICE=true
+                shift
+                ;;
+            --test)
+                RUN_TESTS=true
+                shift
+                ;;
+            --help)
+                show_usage
+                exit 0
+                ;;
+            *)
+                print_error "Unknown option: $1"
+                show_usage
+                exit 1
+                ;;
+        esac
+    done
+
+    # Platform and permission checks
+    detect_platform
+    check_root
+
+    # Stage 1: Clone if needed (remote execution)
+    if [ "$IS_LOCAL_INSTALL" = false ]; then
+        print_status "Running in remote mode (clone required)"
+        clone_repository
+        # Save arguments to pass through
+        ARGS=""
+        [ "$SKIP_DOCKER" = true ] && ARGS="$ARGS --no-docker"
+        [ "$SKIP_PULSEAUDIO" = true ] && ARGS="$ARGS --no-pulseaudio"
+        [ "$SKIP_SERVICE" = true ] && ARGS="$ARGS --no-service"
+        [ "$RUN_TESTS" = true ] && ARGS="$ARGS --test"
+        [ -n "$CUSTOM_INSTALL_DIR" ] && ARGS="$ARGS --install-dir $CUSTOM_INSTALL_DIR"
+        reexec_from_clone $ARGS
+        # Script exits here (exec replaces process)
+    fi
+
+    # Stage 2: Local installation (from cloned repo)
+    print_status "Running in local mode (installing from: $PROJECT_ROOT)"
+    echo ""
+
+    # Detect timezone for Docker containers
+    detect_timezone
+
+    # Docker setup (skip if --no-docker)
+    if [ "$SKIP_DOCKER" = false ]; then
+        if ! check_docker || ! check_docker_compose; then
+            install_docker
+            setup_docker_user
+            verify_docker
+        else
+            print_status "Docker and Docker Compose are already installed, skipping..."
+        fi
+    else
+        print_status "Skipping Docker installation (--no-docker flag)"
+        # Still verify Docker is available
+        if ! check_docker || ! check_docker_compose; then
+            print_error "Docker or Docker Compose not found, but --no-docker was specified"
+            print_info "Please install Docker first or remove --no-docker flag"
+            exit 1
+        fi
+    fi
+
+    # PulseAudio setup (skip if --no-pulseaudio)
+    if [ "$SKIP_PULSEAUDIO" = false ]; then
+        install_pulseaudio
+    else
+        print_status "Skipping PulseAudio installation (--no-pulseaudio flag)"
+    fi
+
+    # Application setup
+    build_application
+    fix_data_permissions
+    setup_runtime_script
+
+    # Service setup (skip if --no-service)
+    if [ "$SKIP_SERVICE" = false ]; then
+        create_service_file
+        install_service
+    else
+        print_status "Skipping systemd service installation (--no-service flag)"
+    fi
+
+    # Validate installation
+    validate_installation
+
+    # Show completion message
+    show_completion_message
+}
+
+# Run main function
+main "$@"
