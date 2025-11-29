@@ -23,7 +23,7 @@ PulseAudio Server (Host)
 
 ## Setup
 
-PulseAudio is installed and configured automatically by `deployment/install-service.sh`.
+PulseAudio is installed and configured automatically by the installation script (`install.sh`).
 
 The Icecast streaming container runs automatically as part of the Docker Compose stack.
 

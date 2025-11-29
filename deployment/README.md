@@ -26,12 +26,6 @@ For detailed installation instructions, see [INSTALLATION.md](../INSTALLATION.md
 
 ## Directory Contents
 
-### Installation Scripts
-
-- **`install-service.sh`** - Legacy wrapper (deprecated)
-  - Now redirects to root `install.sh` for backwards compatibility
-  - **For new installations, use `../install.sh` instead**
-
 ### Runtime Scripts
 
 - **`birdnet-service.sh`** - Service management script
@@ -56,17 +50,16 @@ For detailed installation instructions, see [INSTALLATION.md](../INSTALLATION.md
   - `pulseaudio/daemon.conf` - PulseAudio daemon settings
   - `scripts/start-icecast.sh` - Icecast container entrypoint
 
-## Legacy Scripts (Deprecated)
+## Installation
 
-The following installation workflow is now deprecated:
+Use the unified installer from the repository root:
 
 ```bash
-# OLD METHOD (still works but not recommended)
 cd BirdNET-PiPy
-sudo ./deployment/install-service.sh
+sudo ./install.sh
 ```
 
-This will show a deprecation notice and redirect to the unified installer.
+See [INSTALLATION.md](../INSTALLATION.md) for detailed instructions.
 
 ## Installation Options
 
@@ -236,11 +229,9 @@ This is useful for debugging as you can see all output directly.
 - **[../CLAUDE.md](../CLAUDE.md)** - Development documentation
 - **[../docs/](../docs/)** - Additional technical documentation
 
-## Migration from Legacy Install
+## Reinstallation
 
-If you previously used `deployment/install-service.sh`, no changes are needed. The wrapper will redirect to the new unified installer automatically.
-
-For complete reinstall using the new method:
+For a clean reinstall:
 
 1. Stop and remove old installation:
    ```bash
