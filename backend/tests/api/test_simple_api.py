@@ -66,11 +66,11 @@ class TestSimpleAPI:
         assert 'allTime' in summary
 
     def test_api_empty_database(self, api_client, real_db_manager):
-        """Test API endpoints return proper errors when database is empty."""
-        # Test with empty database
+        """Test API endpoints return proper response when database is empty."""
+        # Test with empty database - returns 200 with null for better frontend UX
         response = api_client.get('/api/observations/latest')
-        assert response.status_code == 404
-        assert response.get_json() == {"error": "No observations found"}
+        assert response.status_code == 200
+        assert response.get_json() is None
     
     def test_activity_endpoints(self, api_client, real_db_manager):
         """Test activity-related endpoints with real database."""

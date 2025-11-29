@@ -160,7 +160,8 @@ def get_latest_observation():
             'timestamp': observation[0].get('timestamp')
         })
         return jsonify(observation[0])
-    return jsonify({"error": "No observations found"}), 404
+    # Return 200 with null for empty database - frontend shows "No observations available yet."
+    return jsonify(None)
 
 @api.route('/api/observations/recent', methods=['GET'])
 @log_api_request
