@@ -33,10 +33,19 @@ print_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
 }
 
-# Check if running as root
+# Check if running as root and using sudo
 check_root() {
     if [ "$EUID" -ne 0 ]; then
         print_error "This script must be run as root (use sudo)"
+        exit 1
+    fi
+
+    # Check if running as direct root (not via sudo)
+    if [ "$EUID" -eq 0 ] && [ -z "$SUDO_USER" ]; then
+        print_error "Please run this script with sudo, not as direct root"
+        print_info "Correct usage:"
+        echo "  sudo ./uninstall.sh"
+        echo "  sudo ./uninstall.sh --full"
         exit 1
     fi
 }
