@@ -17,7 +17,6 @@ set -o pipefail
 
 REPO_URL="https://github.com/Suncuss/BirdNET-PiPy.git"
 REPO_BRANCH="main"
-DEFAULT_INSTALL_DIR="/opt/BirdNET-PiPy"
 SERVICE_NAME="birdnet-pipy"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
@@ -45,11 +44,7 @@ RED='\033[0;31m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Command-line options (defaults)
-SKIP_DOCKER=false
-SKIP_PULSEAUDIO=false
-SKIP_SERVICE=false
-RUN_TESTS=false
+# Command-line options
 CUSTOM_INSTALL_DIR=""
 
 # ============================================================================
@@ -94,11 +89,20 @@ log_debug() {
 # Utility Functions
 # ============================================================================
 
-# Check if running as root
+# Check if running as root and using sudo
 check_root() {
     if [ "$EUID" -ne 0 ]; then
         print_error "This script must be run as root (use sudo)"
         print_info "Example: sudo ./install.sh"
+        exit 1
+    fi
+
+    # Check if running as direct root (not via sudo)
+    if [ "$EUID" -eq 0 ] && [ -z "$SUDO_USER" ]; then
+        print_error "Please run this script with sudo, not as direct root"
+        print_info "Correct usage:"
+        echo "  sudo ./install.sh"
+        echo "  sudo ./install.sh --install-dir /path/to/install"
         exit 1
     fi
 }
@@ -171,11 +175,7 @@ show_usage() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  --install-dir DIR    Installation directory (default: /opt/BirdNET-PiPy)"
-    echo "  --no-docker          Skip Docker installation (assumes already installed)"
-    echo "  --no-pulseaudio      Skip PulseAudio installation"
-    echo "  --no-service         Skip systemd service installation"
-    echo "  --test               Run tests before building"
+    echo "  --install-dir DIR    Installation directory (default: /home/\$USER/BirdNET-PiPy)"
     echo "  --help               Show this help message"
     echo ""
     echo "Examples:"
@@ -184,9 +184,6 @@ show_usage() {
     echo ""
     echo "  # Custom installation directory"
     echo "  sudo ./install.sh --install-dir /home/pi/BirdNET"
-    echo ""
-    echo "  # Skip Docker install (already installed)"
-    echo "  sudo ./install.sh --no-docker"
 }
 
 # ============================================================================
@@ -211,8 +208,6 @@ clone_repository() {
     # Determine installation directory
     if [ -n "$CUSTOM_INSTALL_DIR" ]; then
         INSTALL_DIR="$CUSTOM_INSTALL_DIR"
-    elif [ "$EUID" -eq 0 ] && [ -z "$SUDO_USER" ]; then
-        INSTALL_DIR="$DEFAULT_INSTALL_DIR"
     else
         ACTUAL_USER=$(get_actual_user)
         INSTALL_DIR="/home/$ACTUAL_USER/BirdNET-PiPy"
@@ -301,6 +296,16 @@ check_docker_compose() {
     if docker compose version &> /dev/null 2>&1; then
         print_status "Docker Compose plugin is available"
         docker compose version
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Check if PulseAudio is installed
+check_pulseaudio() {
+    if command -v pulseaudio &> /dev/null; then
+        print_status "PulseAudio is already installed"
         return 0
     else
         return 1
@@ -444,14 +449,8 @@ build_application() {
     # Make build.sh executable if not already
     chmod +x build.sh
 
-    # Build arguments
-    BUILD_ARGS=""
-    if [ "$RUN_TESTS" = true ]; then
-        BUILD_ARGS="--test"
-    fi
-
     # Run build script as actual user with correct UID/GID
-    sudo -u $ACTUAL_USER UID=$ACTUAL_UID GID=$ACTUAL_GID ./build.sh $BUILD_ARGS
+    sudo -u $ACTUAL_USER UID=$ACTUAL_UID GID=$ACTUAL_GID ./build.sh
 
     if [ $? -eq 0 ]; then
         print_status "Application built successfully"
@@ -570,20 +569,16 @@ validate_installation() {
         checks_passed=false
     fi
 
-    # Check PulseAudio (skip if --no-pulseaudio)
-    if [ "$SKIP_PULSEAUDIO" = false ]; then
-        if ! command -v pulseaudio &> /dev/null; then
-            print_error "PulseAudio validation failed"
-            checks_passed=false
-        fi
+    # Check PulseAudio
+    if ! command -v pulseaudio &> /dev/null; then
+        print_error "PulseAudio validation failed"
+        checks_passed=false
     fi
 
-    # Check systemd service (skip if --no-service)
-    if [ "$SKIP_SERVICE" = false ]; then
-        if [ ! -f "$SERVICE_FILE" ]; then
-            print_error "Systemd service not found"
-            checks_passed=false
-        fi
+    # Check systemd service
+    if [ ! -f "$SERVICE_FILE" ]; then
+        print_error "Systemd service not found"
+        checks_passed=false
     fi
 
     # Check runtime script
@@ -694,22 +689,6 @@ main() {
                 CUSTOM_INSTALL_DIR="$2"
                 shift 2
                 ;;
-            --no-docker)
-                SKIP_DOCKER=true
-                shift
-                ;;
-            --no-pulseaudio)
-                SKIP_PULSEAUDIO=true
-                shift
-                ;;
-            --no-service)
-                SKIP_SERVICE=true
-                shift
-                ;;
-            --test)
-                RUN_TESTS=true
-                shift
-                ;;
             --help)
                 show_usage
                 exit 0
@@ -732,10 +711,6 @@ main() {
         clone_repository
         # Save arguments to pass through
         ARGS=""
-        [ "$SKIP_DOCKER" = true ] && ARGS="$ARGS --no-docker"
-        [ "$SKIP_PULSEAUDIO" = true ] && ARGS="$ARGS --no-pulseaudio"
-        [ "$SKIP_SERVICE" = true ] && ARGS="$ARGS --no-service"
-        [ "$RUN_TESTS" = true ] && ARGS="$ARGS --test"
         [ -n "$CUSTOM_INSTALL_DIR" ] && ARGS="$ARGS --install-dir $CUSTOM_INSTALL_DIR"
         reexec_from_clone $ARGS
         # Script exits here (exec replaces process)
@@ -748,30 +723,20 @@ main() {
     # Detect timezone for Docker containers
     detect_timezone
 
-    # Docker setup (skip if --no-docker)
-    if [ "$SKIP_DOCKER" = false ]; then
-        if ! check_docker || ! check_docker_compose; then
-            install_docker
-            setup_docker_user
-            verify_docker
-        else
-            print_status "Docker and Docker Compose are already installed, skipping..."
-        fi
+    # Docker setup
+    if ! check_docker || ! check_docker_compose; then
+        install_docker
+        setup_docker_user
+        verify_docker
     else
-        print_status "Skipping Docker installation (--no-docker flag)"
-        # Still verify Docker is available
-        if ! check_docker || ! check_docker_compose; then
-            print_error "Docker or Docker Compose not found, but --no-docker was specified"
-            print_info "Please install Docker first or remove --no-docker flag"
-            exit 1
-        fi
+        print_status "Docker and Docker Compose are already installed, skipping..."
     fi
 
-    # PulseAudio setup (skip if --no-pulseaudio)
-    if [ "$SKIP_PULSEAUDIO" = false ]; then
+    # PulseAudio setup
+    if ! check_pulseaudio; then
         install_pulseaudio
     else
-        print_status "Skipping PulseAudio installation (--no-pulseaudio flag)"
+        print_status "PulseAudio is already configured, skipping installation..."
     fi
 
     # Application setup
@@ -779,13 +744,9 @@ main() {
     fix_data_permissions
     setup_runtime_script
 
-    # Service setup (skip if --no-service)
-    if [ "$SKIP_SERVICE" = false ]; then
-        create_service_file
-        install_service
-    else
-        print_status "Skipping systemd service installation (--no-service flag)"
-    fi
+    # Service setup
+    create_service_file
+    install_service
 
     # Validate installation
     validate_installation
