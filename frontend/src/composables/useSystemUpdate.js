@@ -50,12 +50,27 @@ export function useSystemUpdate() {
       updateInfo.value = data
       updateAvailable.value = data.update_available
 
+      // Log detailed update check results
+      console.log('=== Update Check Results ===')
+      console.log('Current commit:', data.current_commit)
+      console.log('Remote commit:', data.remote_commit)
+      console.log('Current branch:', data.current_branch)
+      console.log('Target branch:', data.target_branch)
+      console.log('Commits behind:', data.commits_behind)
+      console.log('Update available:', data.update_available)
+      console.log('Preview commits:', data.preview_commits)
+      console.log('============================')
+
       if (data.update_available) {
         setStatus('info', `Update available: ${data.commits_behind} new commits`)
         logger.info('Update available', data)
       } else {
         setStatus('success', 'System is up to date')
-        logger.info('System is up to date')
+        logger.info('System is up to date', {
+          current: data.current_commit,
+          remote: data.remote_commit,
+          branch: data.current_branch
+        })
       }
 
       return data

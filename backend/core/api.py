@@ -611,6 +611,12 @@ def check_for_updates():
         current_branch = version_info.get('branch', 'main')
         target_branch = 'main'  # Always check against main for updates
 
+        logger.info("Update check initiated", extra={
+            'current_commit': current_commit,
+            'current_branch': current_branch,
+            'target_branch': target_branch
+        })
+
         if not current_commit or current_commit == 'unknown':
             return jsonify({
                 'error': 'Current commit hash not available in version.json'
@@ -620,14 +626,29 @@ def check_for_updates():
         comparison, error = get_commits_comparison(current_commit, target_branch)
 
         if error:
+            logger.error("GitHub API comparison failed", extra={'error': error})
             return jsonify({'error': f'Failed to check for updates: {error}'}), 500
 
         commits_behind = comparison['behind_by']
         update_available = commits_behind > 0
 
+        logger.info("GitHub API comparison result", extra={
+            'comparison_status': comparison.get('status'),
+            'ahead_by': comparison.get('ahead_by'),
+            'behind_by': commits_behind,
+            'update_available': update_available,
+            'commits_count': len(comparison.get('commits', []))
+        })
+
         # Get latest remote commit info
         remote_info, _ = get_latest_remote_commit(target_branch)
         remote_commit = remote_info['sha'] if remote_info else comparison.get('target_commit', 'unknown')
+
+        if remote_info:
+            logger.info("Latest remote commit", extra={
+                'remote_commit': remote_commit,
+                'remote_message': remote_info.get('message', 'N/A')
+            })
 
         return jsonify({
             'update_available': update_available,
