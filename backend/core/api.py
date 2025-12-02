@@ -18,7 +18,6 @@ import json
 import requests
 import time
 import re
-import subprocess
 from flask_cors import CORS
 
 # Setup logging
@@ -375,23 +374,79 @@ def write_flag(flag_name):
         'path': flag_file
     })
 
-def run_git_command(command, cwd=None):
-    """Run git command and return output, handling errors"""
-    try:
-        if cwd is None:
-            cwd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# GitHub API configuration
+GITHUB_OWNER = "Suncuss"
+GITHUB_REPO = "BirdNET-PiPy"
+GITHUB_API_BASE = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}"
 
-        result = subprocess.check_output(
-            command,
-            cwd=cwd,
-            shell=True,
-            stderr=subprocess.STDOUT,
-            text=True
-        ).strip()
-        return result
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Git command failed: {command}", extra={'error': str(e)})
-        raise
+def load_version_info():
+    """Load version information from version.json"""
+    version_file = os.path.join(BASE_DIR, 'data', 'version.json')
+
+    if not os.path.exists(version_file):
+        logger.warning("version.json not found", extra={'path': version_file})
+        return None
+
+    try:
+        with open(version_file, 'r') as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error("Failed to load version.json", extra={'error': str(e)})
+        return None
+
+def call_github_api(endpoint, timeout=10):
+    """Call GitHub API and return JSON response"""
+    url = f"{GITHUB_API_BASE}/{endpoint}"
+    headers = {
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': f'{DISPLAY_NAME}/{__version__}'
+    }
+
+    try:
+        response = requests.get(url, headers=headers, timeout=timeout)
+        response.raise_for_status()
+        return response.json(), None
+    except requests.exceptions.Timeout:
+        return None, "GitHub API request timed out"
+    except requests.exceptions.RequestException as e:
+        return None, f"GitHub API error: {str(e)}"
+
+def get_commits_comparison(base_commit, target_branch='main'):
+    """Compare local commit with remote branch using GitHub API"""
+    endpoint = f"compare/{base_commit}...{target_branch}"
+    data, error = call_github_api(endpoint)
+
+    if error:
+        return None, error
+
+    return {
+        'ahead_by': data.get('ahead_by', 0),
+        'behind_by': data.get('behind_by', 0),
+        'status': data.get('status', 'unknown'),
+        'commits': [
+            {
+                'hash': c['sha'][:7],
+                'message': c['commit']['message'].split('\n')[0],
+                'date': c['commit']['committer']['date']
+            }
+            for c in data.get('commits', [])[:10]  # Limit to 10 commits
+        ],
+        'target_commit': data.get('commits', [{}])[-1].get('sha', '')[:7] if data.get('commits') else ''
+    }, None
+
+def get_latest_remote_commit(branch='main'):
+    """Get the latest commit on the remote branch"""
+    endpoint = f"commits/{branch}"
+    data, error = call_github_api(endpoint)
+
+    if error:
+        return None, error
+
+    return {
+        'sha': data.get('sha', '')[:7],
+        'message': data['commit']['message'].split('\n')[0],
+        'date': data['commit']['committer']['date']
+    }, None
 
 def save_user_settings(settings_dict):
     """Save settings to JSON file atomically"""
@@ -519,20 +574,21 @@ def update_settings():
 @log_api_request
 @handle_api_errors
 def get_system_version():
-    """Get current system version info from git"""
+    """Get current system version info from version.json"""
     try:
-        current_commit = run_git_command('git rev-parse --short HEAD')
-        current_message = run_git_command('git log -1 --pretty=%s')
-        current_date = run_git_command('git log -1 --pretty=%cI')
-        current_branch = run_git_command('git rev-parse --abbrev-ref HEAD')
-        remote_url = run_git_command('git config --get remote.origin.url')
+        version_info = load_version_info()
+
+        if version_info is None:
+            return jsonify({
+                'error': 'Version information not available. Run build.sh to generate version.json'
+            }), 500
 
         return jsonify({
-            'current_commit': current_commit,
-            'current_commit_message': current_message,
-            'current_commit_date': current_date,
-            'current_branch': current_branch,
-            'remote_url': remote_url
+            'current_commit': version_info.get('commit', 'unknown'),
+            'current_commit_message': version_info.get('commit_message', 'unknown'),
+            'current_commit_date': version_info.get('commit_date', 'unknown'),
+            'current_branch': version_info.get('branch', 'unknown'),
+            'remote_url': version_info.get('remote_url', f'https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}')
         }), 200
     except Exception as e:
         return jsonify({'error': f'Failed to get version info: {str(e)}'}), 500
@@ -541,35 +597,37 @@ def get_system_version():
 @log_api_request
 @handle_api_errors
 def check_for_updates():
-    """Check if updates are available from origin/main"""
+    """Check if updates are available using GitHub API"""
     try:
-        # Fetch latest from remote
-        run_git_command('git fetch origin main')
+        # Load current version info
+        version_info = load_version_info()
 
-        # Get commit hashes
-        current_commit = run_git_command('git rev-parse --short HEAD')
-        remote_commit = run_git_command('git rev-parse --short origin/main')
-        current_branch = run_git_command('git rev-parse --abbrev-ref HEAD')
+        if version_info is None:
+            return jsonify({
+                'error': 'Version information not available. Run build.sh to generate version.json'
+            }), 500
 
-        # Check if behind
-        commits_behind = int(run_git_command('git rev-list --count HEAD..origin/main'))
+        current_commit = version_info.get('commit', '')
+        current_branch = version_info.get('branch', 'main')
+        target_branch = 'main'  # Always check against main for updates
+
+        if not current_commit or current_commit == 'unknown':
+            return jsonify({
+                'error': 'Current commit hash not available in version.json'
+            }), 500
+
+        # Get comparison from GitHub API
+        comparison, error = get_commits_comparison(current_commit, target_branch)
+
+        if error:
+            return jsonify({'error': f'Failed to check for updates: {error}'}), 500
+
+        commits_behind = comparison['behind_by']
         update_available = commits_behind > 0
 
-        # Get preview of commits (max 10)
-        preview_commits = []
-        if update_available:
-            log_output = run_git_command(
-                'git log --oneline --pretty=format:"%h|%s|%cI" HEAD..origin/main -n 10'
-            )
-            for line in log_output.split('\n'):
-                if line:
-                    parts = line.split('|')
-                    if len(parts) == 3:
-                        preview_commits.append({
-                            'hash': parts[0],
-                            'message': parts[1],
-                            'date': parts[2]
-                        })
+        # Get latest remote commit info
+        remote_info, _ = get_latest_remote_commit(target_branch)
+        remote_commit = remote_info['sha'] if remote_info else comparison.get('target_commit', 'unknown')
 
         return jsonify({
             'update_available': update_available,
@@ -577,9 +635,10 @@ def check_for_updates():
             'remote_commit': remote_commit,
             'commits_behind': commits_behind,
             'current_branch': current_branch,
-            'target_branch': 'main',
-            'preview_commits': preview_commits
+            'target_branch': target_branch,
+            'preview_commits': comparison['commits']
         }), 200
+
     except Exception as e:
         return jsonify({'error': f'Failed to check for updates: {str(e)}'}), 500
 
@@ -589,15 +648,33 @@ def check_for_updates():
 def trigger_system_update():
     """Trigger system update by writing flag file"""
     try:
-        # Verify not in detached HEAD state
-        branch = run_git_command('git rev-parse --abbrev-ref HEAD')
-        if branch == 'HEAD':
+        # Load current version info
+        version_info = load_version_info()
+
+        if version_info is None:
+            return jsonify({
+                'error': 'Version information not available'
+            }), 500
+
+        current_commit = version_info.get('commit', '')
+        current_branch = version_info.get('branch', 'main')
+
+        # Verify not on detached HEAD (branch would be "HEAD" in that case)
+        if current_branch == 'HEAD':
             return jsonify({
                 'error': 'Cannot update: repository in detached HEAD state'
             }), 400
 
-        # Check if updates are available (optional safety check)
-        commits_behind = int(run_git_command('git rev-list --count HEAD..origin/main'))
+        # Check if updates are available using GitHub API
+        comparison, error = get_commits_comparison(current_commit, 'main')
+
+        if error:
+            return jsonify({
+                'error': f'Failed to verify update availability: {error}'
+            }), 500
+
+        commits_behind = comparison['behind_by']
+
         if commits_behind == 0:
             return jsonify({
                 'status': 'no_update_needed',
@@ -617,6 +694,7 @@ def trigger_system_update():
             'estimated_downtime': '2-5 minutes',
             'commits_to_apply': commits_behind
         }), 200
+
     except Exception as e:
         return jsonify({'error': f'Failed to trigger update: {str(e)}'}), 500
 

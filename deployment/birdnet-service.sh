@@ -199,6 +199,35 @@ perform_system_update() {
         return 1
     fi
 
+    # Step 3.5: Regenerate version.json with updated git info
+    log_info "Regenerating version information..."
+    mkdir -p data
+    COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    COMMIT_MESSAGE=$(git log -1 --pretty=%s 2>/dev/null || echo "unknown")
+    COMMIT_DATE=$(git log -1 --pretty=%cI 2>/dev/null || echo "unknown")
+    BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    REMOTE_URL=$(git config --get remote.origin.url 2>/dev/null || echo "unknown")
+    BUILD_TIME=$(date -Iseconds)
+
+    # Convert SSH URL to HTTPS for display
+    if [[ "$REMOTE_URL" == git@github.com:* ]]; then
+        REMOTE_URL=$(echo "$REMOTE_URL" | sed 's|git@github.com:|https://github.com/|' | sed 's|\.git$||')
+    elif [[ "$REMOTE_URL" == *.git ]]; then
+        REMOTE_URL="${REMOTE_URL%.git}"
+    fi
+
+    cat > data/version.json << EOF
+{
+    "commit": "$COMMIT_HASH",
+    "commit_message": "$COMMIT_MESSAGE",
+    "commit_date": "$COMMIT_DATE",
+    "branch": "$BRANCH",
+    "remote_url": "$REMOTE_URL",
+    "build_time": "$BUILD_TIME"
+}
+EOF
+    log_info "Version info updated: $COMMIT_HASH ($BRANCH)"
+
     # Step 4: Rebuild Docker images
     log_info "Rebuilding Docker images (this may take 2-3 minutes)..."
     if ! docker compose build 2>&1; then
