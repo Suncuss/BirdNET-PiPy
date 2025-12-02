@@ -51,8 +51,7 @@ AGENTS.md
 # Ignore database files (if not using SQLite, adjust as needed)
 *.sqlite3
 
-# Ignore package-lock.json for npm
-/frontend/package-lock.json
+# Note: package-lock.json IS committed for reproducible Docker builds
 
 # Ignore Python virtual environment
 venv/
