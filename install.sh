@@ -24,7 +24,12 @@ SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || pwd)"
 
 # Detect if running from git repo (Stage 2) or remotely (Stage 1)
-if [ -d "$SCRIPT_DIR/.git" ]; then
+# Must have .git AND BirdNET-specific files to be considered local install
+# If BASH_SOURCE[0] is empty or "-", we're piped from stdin (remote mode)
+if [ -z "${BASH_SOURCE[0]}" ] || [ "${BASH_SOURCE[0]}" = "-" ]; then
+    IS_LOCAL_INSTALL=false
+    PROJECT_ROOT=""
+elif [ -d "$SCRIPT_DIR/.git" ] && [ -f "$SCRIPT_DIR/docker-compose.yml" ] && [ -f "$SCRIPT_DIR/build.sh" ]; then
     IS_LOCAL_INSTALL=true
     PROJECT_ROOT="$SCRIPT_DIR"
 else
@@ -221,13 +226,24 @@ clone_repository() {
 
         # Check if it's a git repo
         if [ -d "$INSTALL_DIR/.git" ]; then
-            print_status "Existing repository found, pulling latest changes..."
-            cd "$INSTALL_DIR"
-            git checkout $REPO_BRANCH
-            git pull origin $REPO_BRANCH || {
-                print_error "Failed to update repository"
+            # Verify it's the correct BirdNET-PiPy repo before pulling
+            CURRENT_REPO=$(cd "$INSTALL_DIR" && git config --get remote.origin.url 2>/dev/null || echo "")
+
+            if [ "$CURRENT_REPO" = "$REPO_URL" ]; then
+                print_status "Existing BirdNET-PiPy repository found, pulling latest changes..."
+                cd "$INSTALL_DIR"
+                git checkout $REPO_BRANCH
+                git pull origin $REPO_BRANCH || {
+                    print_error "Failed to update repository"
+                    exit 1
+                }
+            else
+                print_error "Directory exists but contains a different git repository"
+                print_error "Expected: $REPO_URL"
+                print_error "Found: $CURRENT_REPO"
+                print_info "Use --install-dir to specify a different installation location"
                 exit 1
-            }
+            fi
         else
             print_error "Directory exists but is not a git repository"
             print_info "Please remove or rename: $INSTALL_DIR"
