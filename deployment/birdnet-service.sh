@@ -141,7 +141,8 @@ restart_containers() {
     log_info "Restart flag detected, restarting containers..."
 
     cd "$PROJECT_ROOT"
-    docker compose restart
+    # Use --force-recreate to ensure fresh network connections and avoid nginx DNS cache issues
+    docker compose up -d --force-recreate
 
     if [ $? -eq 0 ]; then
         log_info "Containers restarted successfully"
