@@ -237,6 +237,9 @@ clone_repository() {
                     print_error "Failed to update repository"
                     exit 1
                 }
+                # Fix ownership after git pull
+                get_actual_uid_gid
+                chown -R $ACTUAL_USER:$ACTUAL_USER "$INSTALL_DIR"
             else
                 print_error "Directory exists but contains a different git repository"
                 print_error "Expected: $REPO_URL"
@@ -256,6 +259,10 @@ clone_repository() {
             exit 1
         }
         print_status "Repository cloned to $INSTALL_DIR"
+
+        # Fix ownership after clone
+        get_actual_uid_gid
+        chown -R $ACTUAL_USER:$ACTUAL_USER "$INSTALL_DIR"
     fi
 
     # Validate clone
