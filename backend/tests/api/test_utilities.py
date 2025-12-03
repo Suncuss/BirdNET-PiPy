@@ -73,7 +73,6 @@ class TestSettingsManagement:
             assert settings['detection']['sensitivity'] == 0.75
             assert 'audio' in settings
             assert 'spectrogram' in settings
-            assert 'general' in settings
     
     def test_load_user_settings_from_file(self):
         """Test loading settings from existing file."""

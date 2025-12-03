@@ -26,8 +26,7 @@ def load_user_settings():
             "min_freq_khz": 0,
             "max_dbfs": 0,
             "min_dbfs": -120
-        },
-        "general": {"timezone": "UTC", "language": "en"}
+        }
     }
     
     if os.path.exists(json_path):
