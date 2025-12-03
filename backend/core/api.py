@@ -413,7 +413,9 @@ def call_github_api(endpoint, timeout=10):
 
 def get_commits_comparison(base_commit, target_branch='main'):
     """Compare local commit with remote branch using GitHub API"""
-    endpoint = f"compare/{base_commit}..{target_branch}"
+    # NOTE: GitHub API requires three dots (...), not two dots (..)
+    # Two-dot syntax causes 404 error
+    endpoint = f"compare/{base_commit}...{target_branch}"
     data, error = call_github_api(endpoint)
 
     if error:
@@ -576,35 +578,6 @@ def check_for_updates():
                 'error': 'Current commit hash not available in version.json'
             }), 500
 
-        # Get latest remote commit info first
-        remote_info, remote_error = get_latest_remote_commit(target_branch)
-
-        if remote_error:
-            logger.error("Failed to get remote commit", extra={'error': remote_error})
-            return jsonify({'error': f'Failed to check for updates: {remote_error}'}), 500
-
-        remote_commit = remote_info['sha']
-
-        logger.info("Latest remote commit", extra={
-            'remote_commit': remote_commit,
-            'remote_message': remote_info.get('message', 'N/A')
-        })
-
-        # Quick check: if commits match, we're up to date (no need for comparison API)
-        if current_commit == remote_commit:
-            logger.info("System is up to date (commits match)", extra={
-                'commit': current_commit
-            })
-            return jsonify({
-                'update_available': False,
-                'current_commit': current_commit,
-                'remote_commit': remote_commit,
-                'commits_behind': 0,
-                'current_branch': current_branch,
-                'target_branch': target_branch,
-                'preview_commits': []
-            }), 200
-
         # Get comparison from GitHub API
         comparison, error = get_commits_comparison(current_commit, target_branch)
 
@@ -612,16 +585,29 @@ def check_for_updates():
             logger.error("GitHub API comparison failed", extra={'error': error})
             return jsonify({'error': f'Failed to check for updates: {error}'}), 500
 
-        commits_behind = comparison['behind_by']
+        # Use len(commits) instead of behind_by field
+        # behind_by is unreliable for linear history on same branch (returns 0)
+        # commits array is always accurate
+        commits_behind = len(comparison.get('commits', []))
         update_available = commits_behind > 0
 
         logger.info("GitHub API comparison result", extra={
             'comparison_status': comparison.get('status'),
             'ahead_by': comparison.get('ahead_by'),
-            'behind_by': commits_behind,
-            'update_available': update_available,
-            'commits_count': len(comparison.get('commits', []))
+            'behind_by': comparison.get('behind_by'),  # Log for comparison
+            'commits_behind': commits_behind,
+            'update_available': update_available
         })
+
+        # Get latest remote commit info
+        remote_info, _ = get_latest_remote_commit(target_branch)
+        remote_commit = remote_info['sha'] if remote_info else comparison.get('target_commit', 'unknown')
+
+        if remote_info:
+            logger.info("Latest remote commit", extra={
+                'remote_commit': remote_commit,
+                'remote_message': remote_info.get('message', 'N/A')
+            })
 
         return jsonify({
             'update_available': update_available,
