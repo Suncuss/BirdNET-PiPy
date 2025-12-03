@@ -192,6 +192,11 @@ export default {
         }
       })
 
+      socket.on('connect_error', (error) => {
+        console.warn('WebSocket connection error (will auto-retry):', error.message)
+        // Socket.IO will automatically reconnect, so just log it
+      })
+
       socket.on('bird_detected', (detection) => {
         console.log('Bird detected:', detection)
         
