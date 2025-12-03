@@ -8,7 +8,7 @@ def load_user_settings():
     """Load user settings from JSON file"""
     json_path = os.path.join(BASE_DIR, 'data', 'config', 'user_settings.json')
     
-    # Default settings structure - must match defaults in core/api.py
+    # Default settings structure - single source of truth
     defaults = {
         "location": {"latitude": 42.47, "longitude": -76.45},
         "detection": {"sensitivity": 0.75, "cutoff": 0.60},
@@ -27,6 +27,7 @@ def load_user_settings():
             "max_dbfs": 0,
             "min_dbfs": -120
         },
+        "general": {"timezone": "UTC", "language": "en"}
     }
     
     if os.path.exists(json_path):

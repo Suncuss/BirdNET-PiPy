@@ -1,5 +1,5 @@
 from core.db import DatabaseManager
-from config.settings import SPECTROGRAM_DIR, EXTRACTED_AUDIO_DIR, DEFAULT_AUDIO_PATH, DEFAULT_IMAGE_PATH, API_PORT, BASE_DIR, STREAM_URL, RECORDING_MODE
+from config.settings import SPECTROGRAM_DIR, EXTRACTED_AUDIO_DIR, DEFAULT_AUDIO_PATH, DEFAULT_IMAGE_PATH, API_PORT, BASE_DIR, STREAM_URL, RECORDING_MODE, load_user_settings
 from core.logging_config import setup_logging, get_logger, log_api_request
 from core.api_utils import (
     handle_api_errors,
@@ -463,52 +463,6 @@ def save_user_settings(settings_dict):
     logger.info("User settings saved", extra={
         'path': json_path
     })
-
-def load_user_settings():
-    """Load settings from JSON file"""
-    json_path = os.path.join(BASE_DIR, 'data', 'config', 'user_settings.json')
-    
-    # Default settings structure - must match defaults in config/settings.py
-    defaults = {
-        "location": {"latitude": 42.47, "longitude": -76.45},
-        "detection": {"sensitivity": 0.75, "cutoff": 0.60},
-        "audio": {
-            "recording_mode": "pulseaudio",  # "pulseaudio" or "http_stream"
-            "stream_url": None,
-            "pulseaudio_source": None,
-            "recording_length": 9,
-            "overlap": 0.0,  # Overlap in seconds for future use
-            "sample_rate": 48000,  # Default sample rate in Hz
-            "recording_chunk_length": 3
-        },
-        "spectrogram": {
-            "max_freq_khz": 12,
-            "min_freq_khz": 0,
-            "max_dbfs": 0,
-            "min_dbfs": -120
-        },
-        "general": {"timezone": "UTC", "language": "en"}
-    }
-    
-    if os.path.exists(json_path):
-        try:
-            with open(json_path, 'r') as f:
-                user_data = json.load(f)
-                # Deep merge user settings with defaults
-                for key in defaults:
-                    if key in user_data:
-                        if isinstance(defaults[key], dict):
-                            defaults[key].update(user_data[key])
-                        else:
-                            defaults[key] = user_data[key]
-                return defaults
-        except Exception as e:
-            logger.warning("Error loading user settings, using defaults", extra={
-                'error': str(e),
-                'path': json_path
-            })
-    
-    return defaults
 
 @api.route('/api/settings', methods=['GET'])
 @log_api_request
