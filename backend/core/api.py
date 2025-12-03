@@ -413,7 +413,7 @@ def call_github_api(endpoint, timeout=10):
 
 def get_commits_comparison(base_commit, target_branch='main'):
     """Compare local commit with remote branch using GitHub API"""
-    endpoint = f"compare/{base_commit}...{target_branch}"
+    endpoint = f"compare/{base_commit}..{target_branch}"
     data, error = call_github_api(endpoint)
 
     if error:
