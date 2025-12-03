@@ -756,8 +756,8 @@ main() {
     fi
 
     # Application setup
-    build_application
     fix_data_permissions
+    build_application
     setup_runtime_script
 
     # Service setup
