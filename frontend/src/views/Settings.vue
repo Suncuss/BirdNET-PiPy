@@ -27,9 +27,9 @@
               id="latitude" 
               type="number" 
               step="0.000001"
-              v-model.number="settings.location.latitude" 
+              v-model.number="settings.location.latitude"
               class="block w-full mt-1 rounded-md border-gray-300 shadow-sm focus:border-blue-300 focus:ring focus:ring-blue-200 focus:ring-opacity-50"
-              placeholder="e.g., 36.018"
+              placeholder="e.g., 42.47"
             >
             <p class="text-xs text-gray-500 mt-1">Used for species location filtering</p>
           </div>
@@ -39,9 +39,9 @@
               id="longitude" 
               type="number" 
               step="0.000001"
-              v-model.number="settings.location.longitude" 
+              v-model.number="settings.location.longitude"
               class="block w-full mt-1 rounded-md border-gray-300 shadow-sm focus:border-blue-300 focus:ring focus:ring-blue-200 focus:ring-opacity-50"
-              placeholder="e.g., -78.969"
+              placeholder="e.g., -76.45"
             >
             <p class="text-xs text-gray-500 mt-1">Used for species location filtering</p>
           </div>
@@ -289,8 +289,8 @@ export default {
     const recordingMode = ref('pulseaudio')  // UI state: 'pulseaudio' or 'http_stream'
     const settings = ref({
       location: {
-        latitude: 36.018,
-        longitude: -78.969
+        latitude: 42.47,
+        longitude: -76.45
       },
       detection: {
         sensitivity: 0.75,
@@ -395,8 +395,8 @@ export default {
       if (confirm('Are you sure you want to reset all settings to defaults?')) {
         settings.value = {
           location: {
-            latitude: 36.018,
-            longitude: -78.969
+            latitude: 42.47,
+            longitude: -76.45
           },
           detection: {
             sensitivity: 0.75,

@@ -12,8 +12,8 @@ const createFetchResponse = (data, ok = true) => ({
 
 const mockSettings = {
   location: {
-    latitude: 36.018,
-    longitude: -78.969
+    latitude: 42.47,
+    longitude: -76.45
   },
   detection: {
     sensitivity: 0.75,

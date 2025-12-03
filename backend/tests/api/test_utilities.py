@@ -68,7 +68,7 @@ class TestSettingsManagement:
             
             # Check default structure
             assert 'location' in settings
-            assert settings['location']['latitude'] == 36.018
+            assert settings['location']['latitude'] == 42.47
             assert 'detection' in settings
             assert settings['detection']['sensitivity'] == 0.75
             assert 'audio' in settings
@@ -191,6 +191,6 @@ class TestSettingsMerge:
                 assert settings['audio']['stream_url'] == 'http://custom.stream'
                 
                 # Default values should still be there
-                assert settings['location']['longitude'] == -78.969  # default
+                assert settings['location']['longitude'] == -76.45  # default
                 assert settings['audio']['sample_rate'] == 48000  # default
                 assert settings['detection']['sensitivity'] == 0.75  # completely default section

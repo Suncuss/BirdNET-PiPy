@@ -470,7 +470,7 @@ def load_user_settings():
     
     # Default settings structure - must match defaults in config/settings.py
     defaults = {
-        "location": {"latitude": 36.018, "longitude": -78.969},
+        "location": {"latitude": 42.47, "longitude": -76.45},
         "detection": {"sensitivity": 0.75, "cutoff": 0.60},
         "audio": {
             "recording_mode": "pulseaudio",  # "pulseaudio" or "http_stream"
