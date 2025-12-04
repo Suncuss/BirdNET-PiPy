@@ -45,9 +45,10 @@ class TestSystemAPI:
              patch('core.api.get_latest_remote_commit') as mock_latest:
 
             mock_load.return_value = self.SAMPLE_VERSION_INFO
+            # Note: ahead_by indicates how many commits the remote is ahead of our local commit
             mock_compare.return_value = ({
-                'ahead_by': 0,
-                'behind_by': 5,
+                'ahead_by': 5,
+                'behind_by': 0,
                 'status': 'behind',
                 'commits': [
                     {'hash': '2b192g6', 'message': 'feat: add new feature', 'date': '2025-11-29T10:00:00Z'},
@@ -117,26 +118,21 @@ class TestSystemAPI:
             assert 'Version information not available' in data['error']
 
     def test_trigger_update_success(self, api_client):
-        """Test POST /api/system/update writes flag"""
+        """Test POST /api/system/update writes flag.
+
+        Note: The trigger endpoint no longer checks GitHub API - frontend already
+        verified update availability via /api/system/update-check before calling this.
+        """
         with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.get_commits_comparison') as mock_compare, \
              patch('core.api.write_flag') as mock_flag:
 
             mock_load.return_value = self.SAMPLE_VERSION_INFO
-            mock_compare.return_value = ({
-                'ahead_by': 0,
-                'behind_by': 3,
-                'status': 'behind',
-                'commits': [],
-                'target_commit': '2b192g6'
-            }, None)
 
             response = api_client.post('/api/system/update')
             assert response.status_code == 200
             data = response.get_json()
             assert data['status'] == 'update_triggered'
             assert data['estimated_downtime'] == '2-5 minutes'
-            assert data['commits_to_apply'] == 3
             mock_flag.assert_called_once_with('update-requested')
 
     def test_trigger_update_detached_head(self, api_client):
@@ -149,42 +145,6 @@ class TestSystemAPI:
             data = response.get_json()
             assert 'error' in data
             assert 'detached HEAD state' in data['error']
-
-    def test_trigger_update_already_up_to_date(self, api_client):
-        """Test POST /api/system/update when already up to date"""
-        with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.get_commits_comparison') as mock_compare, \
-             patch('core.api.write_flag') as mock_flag:
-
-            mock_load.return_value = {**self.SAMPLE_VERSION_INFO, 'branch': 'main'}
-            mock_compare.return_value = ({
-                'ahead_by': 0,
-                'behind_by': 0,
-                'status': 'identical',
-                'commits': [],
-                'target_commit': '1a081f5'
-            }, None)
-
-            response = api_client.post('/api/system/update')
-            assert response.status_code == 200
-            data = response.get_json()
-            assert data['status'] == 'no_update_needed'
-            assert 'already up to date' in data['message'].lower()
-            mock_flag.assert_not_called()
-
-    def test_trigger_update_github_api_failure(self, api_client):
-        """Test POST /api/system/update handles GitHub API failure"""
-        with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.get_commits_comparison') as mock_compare:
-
-            mock_load.return_value = self.SAMPLE_VERSION_INFO
-            mock_compare.return_value = (None, "GitHub API error")
-
-            response = api_client.post('/api/system/update')
-            assert response.status_code == 500
-            data = response.get_json()
-            assert 'error' in data
-            assert 'Failed to verify update availability' in data['error']
 
     def test_trigger_update_missing_version(self, api_client):
         """Test POST /api/system/update handles missing version.json"""
