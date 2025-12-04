@@ -417,7 +417,6 @@ def get_commits_comparison(base_commit, target_branch='main'):
     # Two-dot syntax causes 404 error
     endpoint = f"compare/{base_commit}...{target_branch}"
     data, error = call_github_api(endpoint)
-
     if error:
         return None, error
 
@@ -585,10 +584,8 @@ def check_for_updates():
             logger.error("GitHub API comparison failed", extra={'error': error})
             return jsonify({'error': f'Failed to check for updates: {error}'}), 500
 
-        # Use len(commits) instead of behind_by field
-        # behind_by is unreliable for linear history on same branch (returns 0)
-        # commits array is always accurate
-        commits_behind = len(comparison.get('commits', []))
+        # Use ahead_by: how many commits the remote is ahead of our local commit
+        commits_behind = comparison.get('ahead_by', 0)
         update_available = commits_behind > 0
 
         logger.info("GitHub API comparison result", extra={
@@ -626,9 +623,13 @@ def check_for_updates():
 @log_api_request
 @handle_api_errors
 def trigger_system_update():
-    """Trigger system update by writing flag file"""
+    """Trigger system update by writing flag file.
+
+    Note: Update availability is already verified by frontend via /api/system/update-check
+    before this endpoint is called. No need to re-check here.
+    """
     try:
-        # Load current version info
+        # Load current version info for validation and logging
         version_info = load_version_info()
 
         if version_info is None:
@@ -636,7 +637,6 @@ def trigger_system_update():
                 'error': 'Version information not available'
             }), 500
 
-        current_commit = version_info.get('commit', '')
         current_branch = version_info.get('branch', 'main')
 
         # Verify not on detached HEAD (branch would be "HEAD" in that case)
@@ -645,34 +645,18 @@ def trigger_system_update():
                 'error': 'Cannot update: repository in detached HEAD state'
             }), 400
 
-        # Check if updates are available using GitHub API
-        comparison, error = get_commits_comparison(current_commit, 'main')
-
-        if error:
-            return jsonify({
-                'error': f'Failed to verify update availability: {error}'
-            }), 500
-
-        commits_behind = comparison['behind_by']
-
-        if commits_behind == 0:
-            return jsonify({
-                'status': 'no_update_needed',
-                'message': 'System is already up to date'
-            }), 200
-
-        # Write update flag
+        # Write update flag - service script will handle git pull and rebuild
         write_flag('update-requested')
 
         logger.info("System update triggered", extra={
-            'commits_behind': commits_behind
+            'current_commit': version_info.get('commit', 'unknown'),
+            'current_branch': current_branch
         })
 
         return jsonify({
             'status': 'update_triggered',
             'message': 'System update initiated. Services will restart shortly.',
-            'estimated_downtime': '2-5 minutes',
-            'commits_to_apply': commits_behind
+            'estimated_downtime': '2-5 minutes'
         }), 200
 
     except Exception as e:
