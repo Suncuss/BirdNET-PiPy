@@ -57,8 +57,9 @@ def get_probable_species_for_location(lat, lon, week, meta_model, labels):
 
     meta_model.invoke()
 
+    # Use .copy() to avoid holding references to internal TFLite tensor data
     meta_model_output = meta_model.get_tensor(
-        model_loader.meta_output_layer_index)[0]
+        model_loader.meta_output_layer_index)[0].copy()
     meta_model_output = np.where(
         meta_model_output >= sf_thresh, meta_model_output, 0)
     meta_model_output = list(zip(meta_model_output, labels))
@@ -77,7 +78,8 @@ def detect_species_in_audio(model, audio_input, labels, sensitivity, cutoff):
     model_input = np.array(np.expand_dims(audio_input, 0), dtype='float32')
     model.set_tensor(model_loader.input_layer_index, model_input)
     model.invoke()
-    model_output = model.get_tensor(model_loader.output_layer_index)[0]
+    # Use .copy() to avoid holding references to internal TFLite tensor data
+    model_output = model.get_tensor(model_loader.output_layer_index)[0].copy()
 
     def custom_sigmoid(x, sensitivity):
         return 1 / (1.0 + np.exp(-sensitivity * x))
@@ -221,10 +223,14 @@ def process_audio_file(model, meta_model, audio_file_path, labels, lat, lon, wee
 
     results = []
     detections_count = 0
+    chunks_with_detections = 0
 
     for audio_chunk, chunk_index in zip(audio_chunks, range(len(audio_chunks))):
         species_in_audio_chunk = detect_species_in_audio(
             model, audio_chunk, labels, sensitivity, cutoff)
+
+        if species_in_audio_chunk:
+            chunks_with_detections += 1
 
         if len(species_in_audio_chunk) > 1:
             logger.warning("Multiple species detected in single chunk", extra={
@@ -296,19 +302,17 @@ def process_audio_file(model, meta_model, audio_file_path, labels, lat, lon, wee
                 'time': start_timestamp.isoformat()
             })
 
-    # Summary log - only include extra details if there are issues or detections
+    # Summary log
     log_extra = {
         'file': source_file_name,
         'total_detections': detections_count,
         'chunks_analyzed': len(audio_chunks)
     }
-    
-    # Add additional metrics only if there are detections or issues
+
+    # Add detection rate if there were any detections
     if detections_count > 0:
-        chunks_with_detections = sum(1 for chunk_results in [detect_species_in_audio(
-            model, audio_chunks[i], labels, sensitivity, cutoff) for i in range(len(audio_chunks))] if chunk_results)
         log_extra['detection_rate'] = round(chunks_with_detections / len(audio_chunks) * 100, 1) if audio_chunks else 0
-    
+
     logger.info("Analysis complete", extra=log_extra)
     
     return results
