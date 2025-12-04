@@ -122,11 +122,17 @@ def handle_detection(detection: Dict[str, Any], input_file_path: str, thread_log
         'time': detection['timestamp'].split('T')[1].split('.')[0]
     })
 
-    # Calculate the start and end time of the audio chunk
+    # Get step_seconds from detection (accounts for overlap)
+    # Fallback to ANALYSIS_CHUNK_LENGTH for backward compatibility
+    step_seconds = detection.get('step_seconds', ANALYSIS_CHUNK_LENGTH)
+
+    # Calculate the start and end time of the audio extraction
+    # With overlap, chunks overlap so we use step_seconds for positioning
     audio_segments_indices = select_audio_chunks(
         detection['chunk_index'], detection['total_chunks'])
-    start_time = audio_segments_indices[0] * ANALYSIS_CHUNK_LENGTH
-    end_time = (audio_segments_indices[1] + 1) * ANALYSIS_CHUNK_LENGTH
+    start_time = audio_segments_indices[0] * step_seconds
+    # End time: last chunk start + chunk duration
+    end_time = audio_segments_indices[1] * step_seconds + ANALYSIS_CHUNK_LENGTH
 
     bird_song_file_path = os.path.join(
         EXTRACTED_AUDIO_DIR, detection['bird_song_file_name'])
@@ -136,9 +142,10 @@ def handle_detection(detection: Dict[str, Any], input_file_path: str, thread_log
     # Extract audio and generate spectrogram
     trim_audio(input_file_path, bird_song_file_path, start_time, end_time)
     spectrogram_title = f"{detection['common_name']} ({detection['confidence']:.2f}) - {detection['timestamp']}"
+    # Spectrogram shows the exact 3-second detection window
     generate_spectrogram(input_file_path, spectrogram_file_path, spectrogram_title,
-                        start_time=ANALYSIS_CHUNK_LENGTH * detection['chunk_index'],
-                        end_time=ANALYSIS_CHUNK_LENGTH * (detection['chunk_index'] + 1))
+                        start_time=step_seconds * detection['chunk_index'],
+                        end_time=step_seconds * detection['chunk_index'] + ANALYSIS_CHUNK_LENGTH)
 
     # Convert to MP3 and cleanup WAV
     convert_wav_to_mp3(bird_song_file_path, bird_song_file_path.replace('.wav', '.mp3'))

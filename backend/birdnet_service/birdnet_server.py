@@ -97,15 +97,22 @@ def detect_species_in_audio(model, audio_input, labels, sensitivity, cutoff):
     return model_output
 
 
-def split_audio(path, chunk_length, sample_rate, total_duration):
+def split_audio(path, chunk_length, sample_rate, total_duration, overlap=0.0, minlen=1.5):
     """
-    Split audio file into fixed-length chunks for analysis.
+    Split audio file into chunks for analysis, with optional overlap.
+
+    Compatible with BirdNET-Pi's splitSignal() behavior:
+    - Step size = chunk_length - overlap
+    - Chunks shorter than minlen are discarded
+    - Chunks between minlen and chunk_length are zero-padded
 
     Args:
         path: Path to audio file
         chunk_length: Duration of each chunk in seconds (e.g., 3)
         sample_rate: Sample rate in Hz (e.g., 48000)
         total_duration: Expected total duration in seconds (e.g., 9)
+        overlap: Overlap between chunks in seconds (0.0 to 2.5)
+        minlen: Minimum chunk length to keep (default 1.5s)
 
     Returns:
         List of audio chunks, each exactly chunk_length * sample_rate samples
@@ -149,20 +156,36 @@ def split_audio(path, chunk_length, sample_rate, total_duration):
                 'padding_percent': round(padding_percent, 2)
             })
 
-    # Split into chunks - now guaranteed to be exact
-    chunks = []
+    # Calculate step size and chunk size in samples
     chunk_size = int(chunk_length * rate)
+    step_size = int((chunk_length - overlap) * rate)
+    minlen_samples = int(minlen * rate)
 
-    for i in range(0, len(sig), chunk_size):
+    # Split into chunks with overlap (BirdNET-Pi compatible)
+    chunks = []
+    for i in range(0, len(sig), step_size):
         split = sig[i:i + chunk_size]
+
+        # Check if chunk is too short
+        if len(split) < minlen_samples:
+            # End of signal - chunk too short, discard
+            break
+
+        # Pad short chunks (>= minlen but < chunk_length) with zeros
+        if len(split) < chunk_size:
+            padded = np.zeros(chunk_size, dtype=sig.dtype)
+            padded[:len(split)] = split
+            split = padded
+
         chunks.append(split)
 
-    expected_chunks = int(total_duration / chunk_length)
-    if len(chunks) != expected_chunks:
-        logger.warning("Unexpected chunk count after normalization", extra={
+    # Log chunk info with overlap details
+    if overlap > 0:
+        logger.debug("Audio split with overlap", extra={
             'file': file_name,
-            'expected_chunks': expected_chunks,
-            'actual_chunks': len(chunks)
+            'overlap': overlap,
+            'step_size': round(chunk_length - overlap, 2),
+            'chunks': len(chunks)
         })
 
     return chunks
@@ -178,30 +201,38 @@ def process_audio_file(model, meta_model, audio_file_path, labels, lat, lon, wee
     local_species_list = get_probable_species_for_location(
         lat, lon, week, meta_model, labels)
 
+    # Get overlap from settings
+    overlap = settings.OVERLAP
+
     audio_chunks = split_audio(
-        audio_file_path, settings.ANALYSIS_CHUNK_LENGTH, settings.SAMPLE_RATE, settings.RECORDING_LENGTH)
+        audio_file_path, settings.ANALYSIS_CHUNK_LENGTH, settings.SAMPLE_RATE,
+        settings.RECORDING_LENGTH, overlap=overlap)
+
+    # Calculate step size for timestamp calculation (BirdNET-Pi compatible)
+    step_seconds = settings.ANALYSIS_CHUNK_LENGTH - overlap
 
     logger.info("Starting audio analysis", extra={
         'file': audio_file_path.split('/')[-1],
         'chunks': len(audio_chunks),
+        'overlap': overlap,
         'sensitivity': sensitivity,
         'cutoff': cutoff
     })
-    
+
     results = []
     detections_count = 0
-    
+
     for audio_chunk, chunk_index in zip(audio_chunks, range(len(audio_chunks))):
         species_in_audio_chunk = detect_species_in_audio(
             model, audio_chunk, labels, sensitivity, cutoff)
-        
+
         if len(species_in_audio_chunk) > 1:
             logger.warning("Multiple species detected in single chunk", extra={
                 'chunk_index': chunk_index,
                 'species_count': len(species_in_audio_chunk),
                 'species': [(s[0].split('_')[1], round(s[1]*100)) for s in species_in_audio_chunk[:3]]
             })
-        
+
         if species_in_audio_chunk:
             species_info = [(s[0].split('_')[1], round(s[1]*100)) for s in species_in_audio_chunk]
             logger.debug(f"Chunk {chunk_index}/{len(audio_chunks)-1} analyzed", extra={
@@ -216,9 +247,9 @@ def process_audio_file(model, meta_model, audio_file_path, labels, lat, lon, wee
         file_timestamp_str = source_file_name.split('.')[0]
         file_timestamp = datetime.datetime.strptime(
             file_timestamp_str, "%Y%m%d_%H%M%S")
+        # Use step_seconds for timestamp calculation (accounts for overlap)
         start_timestamp = file_timestamp + \
-            datetime.timedelta(seconds=chunk_index *
-                               settings.ANALYSIS_CHUNK_LENGTH)
+            datetime.timedelta(seconds=chunk_index * step_seconds)
 
         for species in filtered_species_list:
             scientific_name = species[0].split('_')[0]
@@ -244,18 +275,19 @@ def process_audio_file(model, meta_model, audio_file_path, labels, lat, lon, wee
                 "longitude": float(lon),
                 "cutoff": float(cutoff),
                 "sensitivity": float(sensitivity),
-                "overlap": float(0), # Not used
+                "overlap": float(overlap),
 
                 # Additional fields not in the database schema
                 "chunk_index": chunk_index,
                 "total_chunks": len(audio_chunks),
+                "step_seconds": step_seconds,  # For accurate extraction in main.py
                 "bird_song_file_name": filenames['audio_filename'],
                 "spectrogram_file_name": filenames['spectrogram_filename'],
                 "bird_song_duration": settings.ANALYSIS_CHUNK_LENGTH,
                 "source_file_name": source_file_name,
             })
             detections_count += 1
-            
+
             # Log each confirmed detection
             logger.info("Bird detected", extra={
                 'species': common_name,
