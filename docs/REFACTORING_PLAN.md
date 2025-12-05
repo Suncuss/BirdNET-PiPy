@@ -268,9 +268,9 @@ detection_data = {
 - [x] `birdnet_server.py`: Extract `SPECIES_FILTER_THRESHOLD` constant
 - [x] `main.py`: Break `handle_detection` into smaller functions
 
-### Phase 3: Major Refactoring (Optional)
-- [ ] `birdnet_server.py`: Break `process_audio_file` into smaller functions
-- [ ] Consider adding error handling/rollback in `handle_detection`
+### Phase 3: Major Refactoring ✅ COMPLETE
+- [x] `birdnet_server.py`: Extract `build_detection_result()` from `process_audio_file`
+- [ ] Consider adding error handling/rollback in `handle_detection` (deferred - not needed currently)
 
 ---
 

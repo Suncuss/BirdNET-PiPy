@@ -221,6 +221,61 @@ def split_audio(path, chunk_length, sample_rate, total_duration, overlap=0.0, mi
     return chunks
 
 
+def build_detection_result(species, chunk_index, total_chunks, step_seconds,
+                          file_timestamp, source_file_name, lat, lon,
+                          cutoff, sensitivity, overlap):
+    """Build a detection result dictionary for a single species detection.
+
+    Args:
+        species: Tuple of (species_label, confidence) from model output
+        chunk_index: Index of the audio chunk
+        total_chunks: Total number of chunks in the audio file
+        step_seconds: Step size in seconds (accounts for overlap)
+        file_timestamp: Datetime of the source file
+        source_file_name: Name of the source audio file
+        lat, lon: Location coordinates
+        cutoff, sensitivity, overlap: Analysis parameters
+
+    Returns:
+        Detection result dictionary
+    """
+    scientific_name = species[0].split('_')[0]
+    common_name = species[0].split('_')[1]
+    confidence = float(species[1])
+
+    start_timestamp = file_timestamp + datetime.timedelta(seconds=chunk_index * step_seconds)
+
+    filenames = build_detection_filenames(
+        common_name,
+        confidence,
+        start_timestamp,
+        audio_extension='wav'
+    )
+
+    return {
+        # Fields in the database schema
+        "timestamp": start_timestamp.isoformat(),
+        "group_timestamp": file_timestamp.isoformat(),
+        "scientific_name": scientific_name,
+        "common_name": common_name,
+        "confidence": confidence,
+        "latitude": float(lat),
+        "longitude": float(lon),
+        "cutoff": float(cutoff),
+        "sensitivity": float(sensitivity),
+        "overlap": float(overlap),
+
+        # Additional fields not in the database schema
+        "chunk_index": chunk_index,
+        "total_chunks": total_chunks,
+        "step_seconds": step_seconds,
+        "bird_song_file_name": filenames['audio_filename'],
+        "spectrogram_file_name": filenames['spectrogram_filename'],
+        "bird_song_duration": settings.ANALYSIS_CHUNK_LENGTH,
+        "source_file_name": source_file_name,
+    }
+
+
 @log_execution_time
 def process_audio_file(model, meta_model, audio_file_path, labels, lat, lon, week, sensitivity, cutoff):
     # Time meta model inference
@@ -292,53 +347,21 @@ def process_audio_file(model, meta_model, audio_file_path, labels, lat, lon, wee
         filtered_species_list = [
             x for x in species_in_audio_chunk if x[0] in local_species_list]
 
-        # Use step_seconds for timestamp calculation (accounts for overlap)
-        start_timestamp = file_timestamp + \
-            datetime.timedelta(seconds=chunk_index * step_seconds)
-
         for species in filtered_species_list:
-            scientific_name = species[0].split('_')[0]
-            common_name = species[0].split('_')[1]
-            confidence = float(species[1])
-
-            # Generate standardized filenames using utility function
-            filenames = build_detection_filenames(
-                common_name,
-                confidence,
-                start_timestamp,
-                audio_extension='wav'
+            result = build_detection_result(
+                species, chunk_index, len(audio_chunks), step_seconds,
+                file_timestamp, source_file_name, lat, lon,
+                cutoff, sensitivity, overlap
             )
-
-            results.append({
-                # Fields in the database schema
-                "timestamp": start_timestamp.isoformat(),
-                "group_timestamp": file_timestamp.isoformat(),
-                "scientific_name": scientific_name,
-                "common_name": common_name,
-                "confidence": float(confidence),
-                "latitude": float(lat),
-                "longitude": float(lon),
-                "cutoff": float(cutoff),
-                "sensitivity": float(sensitivity),
-                "overlap": float(overlap),
-
-                # Additional fields not in the database schema
-                "chunk_index": chunk_index,
-                "total_chunks": len(audio_chunks),
-                "step_seconds": step_seconds,  # For accurate extraction in main.py
-                "bird_song_file_name": filenames['audio_filename'],
-                "spectrogram_file_name": filenames['spectrogram_filename'],
-                "bird_song_duration": settings.ANALYSIS_CHUNK_LENGTH,
-                "source_file_name": source_file_name,
-            })
+            results.append(result)
             detections_count += 1
 
             # Log each confirmed detection
             logger.info("Bird detected", extra={
-                'species': common_name,
-                'confidence': round(confidence * 100),
+                'species': result['common_name'],
+                'confidence': round(result['confidence'] * 100),
                 'chunk': chunk_index,
-                'time': start_timestamp.isoformat()
+                'time': result['timestamp']
             })
 
     # Log inference loop timing
