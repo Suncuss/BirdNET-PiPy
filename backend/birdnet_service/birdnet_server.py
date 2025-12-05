@@ -3,6 +3,7 @@ from config import settings
 import datetime
 import warnings
 import numpy as np
+import threading
 # Suppress NumPy floating point limit warnings
 warnings.filterwarnings('ignore', category=UserWarning, module='numpy.core.getlimits')
 from flask import Flask, request, jsonify
@@ -44,6 +45,9 @@ try:
 except Exception as e:
     logger.error("Failed to load models", exc_info=True)
     raise
+
+# Lock to serialize access to TFLite interpreters (not thread-safe)
+inference_lock = threading.Lock()
 
 
 def get_probable_species_for_location(lat, lon, week, meta_model, labels):
@@ -347,9 +351,11 @@ def analyze_audio_file():
             'sensitivity': sensitivity,
             'cutoff': cutoff
         })
-        
-        results = process_audio_file(model, meta_model, audio_file_path, labels,
-                                     lat, lon, week, sensitivity, cutoff)
+
+        # Acquire lock to prevent concurrent TFLite interpreter access
+        with inference_lock:
+            results = process_audio_file(model, meta_model, audio_file_path, labels,
+                                         lat, lon, week, sensitivity, cutoff)
         
         processing_time = time.time() - start_time
         logger.info("Request completed", extra={
