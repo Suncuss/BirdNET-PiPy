@@ -126,8 +126,15 @@ def split_audio(path, chunk_length, sample_rate, total_duration, overlap=0.0, mi
     import os
     file_name = os.path.basename(path)
 
-    # Load audio
+    # Load audio (time this - librosa can be slow on first call due to JIT)
+    load_start = time.time()
     sig, rate = librosa.load(path, sr=sample_rate, mono=True, res_type='kaiser_fast')
+    load_time = time.time() - load_start
+    logger.debug("Audio loaded with librosa", extra={
+        'file': file_name,
+        'load_time': round(load_time, 3),
+        'samples': len(sig)
+    })
 
     # Calculate target samples for normalization
     target_samples = int(total_duration * rate)
@@ -199,20 +206,29 @@ def split_audio(path, chunk_length, sample_rate, total_duration, overlap=0.0, mi
 
 @log_execution_time
 def process_audio_file(model, meta_model, audio_file_path, labels, lat, lon, week, sensitivity, cutoff):
-    logger.debug("Generating location-specific species list", extra={
-        'latitude': lat,
-        'longitude': lon,
-        'week': week
-    })
+    # Time meta model inference
+    meta_start = time.time()
     local_species_list = get_probable_species_for_location(
         lat, lon, week, meta_model, labels)
+    meta_time = time.time() - meta_start
+    logger.debug("Meta model inference complete", extra={
+        'meta_time': round(meta_time, 3),
+        'local_species_count': len(local_species_list)
+    })
 
     # Get overlap from settings
     overlap = settings.OVERLAP
 
+    # Time audio loading and splitting
+    split_start = time.time()
     audio_chunks = split_audio(
         audio_file_path, settings.ANALYSIS_CHUNK_LENGTH, settings.SAMPLE_RATE,
         settings.RECORDING_LENGTH, overlap=overlap)
+    split_time = time.time() - split_start
+    logger.debug("Audio split complete", extra={
+        'split_time': round(split_time, 3),
+        'chunks': len(audio_chunks)
+    })
 
     # Calculate step size for timestamp calculation (BirdNET-Pi compatible)
     step_seconds = settings.ANALYSIS_CHUNK_LENGTH - overlap
@@ -229,6 +245,8 @@ def process_audio_file(model, meta_model, audio_file_path, labels, lat, lon, wee
     detections_count = 0
     chunks_with_detections = 0
 
+    # Time TFLite inference loop
+    inference_start = time.time()
     for audio_chunk, chunk_index in zip(audio_chunks, range(len(audio_chunks))):
         species_in_audio_chunk = detect_species_in_audio(
             model, audio_chunk, labels, sensitivity, cutoff)
@@ -305,6 +323,14 @@ def process_audio_file(model, meta_model, audio_file_path, labels, lat, lon, wee
                 'chunk': chunk_index,
                 'time': start_timestamp.isoformat()
             })
+
+    # Log inference loop timing
+    inference_time = time.time() - inference_start
+    logger.debug("TFLite inference complete", extra={
+        'inference_time': round(inference_time, 3),
+        'chunks': len(audio_chunks),
+        'avg_per_chunk': round(inference_time / len(audio_chunks), 3) if audio_chunks else 0
+    })
 
     # Summary log
     log_extra = {
