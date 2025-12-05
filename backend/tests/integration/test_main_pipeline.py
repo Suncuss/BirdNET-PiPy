@@ -1787,6 +1787,8 @@ class TestHandleDetectionErrors:
              patch('core.main.ANALYSIS_CHUNK_LENGTH', 3), \
              patch('core.main.select_audio_chunks', return_value=(0, 3)), \
              patch('core.main.trim_audio') as mock_trim, \
+             patch('core.main.convert_wav_to_mp3') as mock_convert, \
+             patch('os.remove') as mock_remove, \
              patch('core.main.generate_spectrogram') as mock_spec, \
              patch('core.main.get_logger') as mock_logger:
 

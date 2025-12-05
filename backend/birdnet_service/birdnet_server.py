@@ -49,6 +49,9 @@ except Exception as e:
 # Lock to serialize access to TFLite interpreters (not thread-safe)
 inference_lock = threading.Lock()
 
+# Minimum probability threshold for local species filtering (meta model)
+SPECIES_FILTER_THRESHOLD = 0.03
+
 # Warmup: Pre-compile librosa/numba JIT functions at startup
 # This avoids ~50 second delay on first real request
 logger.info("Warming up librosa (JIT compilation)...")
@@ -64,9 +67,13 @@ except Exception as e:
     logger.warning("Warmup failed (non-fatal)", extra={'error': str(e)})
 
 
+def custom_sigmoid(x, sensitivity):
+    """Apply custom sigmoid with adjustable sensitivity."""
+    return 1 / (1.0 + np.exp(-sensitivity * x))
+
+
 def get_probable_species_for_location(lat, lon, week, meta_model, labels):
     local_species = []
-    sf_thresh = 0.03
 
     meta_model_input = np.expand_dims(
         np.array([lat, lon, week], dtype='float32'), 0)
@@ -79,13 +86,13 @@ def get_probable_species_for_location(lat, lon, week, meta_model, labels):
     meta_model_output = meta_model.get_tensor(
         model_loader.meta_output_layer_index)[0].copy()
     meta_model_output = np.where(
-        meta_model_output >= sf_thresh, meta_model_output, 0)
+        meta_model_output >= SPECIES_FILTER_THRESHOLD, meta_model_output, 0)
     meta_model_output = list(zip(meta_model_output, labels))
     meta_model_output = sorted(
         meta_model_output, key=lambda x: x[0], reverse=True)
 
     for species in meta_model_output:
-        if species[0] >= float(sf_thresh):
+        if species[0] >= SPECIES_FILTER_THRESHOLD:
             local_species.append(species[1])
 
     return local_species
@@ -98,9 +105,6 @@ def detect_species_in_audio(model, audio_input, labels, sensitivity, cutoff):
     model.invoke()
     # Use .copy() to avoid holding references to internal TFLite tensor data
     model_output = model.get_tensor(model_loader.output_layer_index)[0].copy()
-
-    def custom_sigmoid(x, sensitivity):
-        return 1 / (1.0 + np.exp(-sensitivity * x))
 
     model_output = custom_sigmoid(model_output, sensitivity)
     model_output = np.where(model_output >= cutoff, model_output, 0)
@@ -137,7 +141,6 @@ def split_audio(path, chunk_length, sample_rate, total_duration, overlap=0.0, mi
     Returns:
         List of audio chunks, each exactly chunk_length * sample_rate samples
     """
-    import os
     file_name = os.path.basename(path)
 
     # Load audio (time this - librosa can be slow on first call due to JIT)
@@ -248,7 +251,7 @@ def process_audio_file(model, meta_model, audio_file_path, labels, lat, lon, wee
     step_seconds = settings.ANALYSIS_CHUNK_LENGTH - overlap
 
     logger.info("Starting audio analysis", extra={
-        'file': audio_file_path.split('/')[-1],
+        'file': os.path.basename(audio_file_path),
         'chunks': len(audio_chunks),
         'overlap': overlap,
         'sensitivity': sensitivity,
@@ -259,9 +262,14 @@ def process_audio_file(model, meta_model, audio_file_path, labels, lat, lon, wee
     detections_count = 0
     chunks_with_detections = 0
 
+    # Parse file timestamp once before loop (constant value)
+    source_file_name = os.path.basename(audio_file_path)
+    file_timestamp_str = source_file_name.split('.')[0]
+    file_timestamp = datetime.datetime.strptime(file_timestamp_str, "%Y%m%d_%H%M%S")
+
     # Time TFLite inference loop
     inference_start = time.time()
-    for audio_chunk, chunk_index in zip(audio_chunks, range(len(audio_chunks))):
+    for chunk_index, audio_chunk in enumerate(audio_chunks):
         species_in_audio_chunk = detect_species_in_audio(
             model, audio_chunk, labels, sensitivity, cutoff)
 
@@ -284,11 +292,6 @@ def process_audio_file(model, meta_model, audio_file_path, labels, lat, lon, wee
         filtered_species_list = [
             x for x in species_in_audio_chunk if x[0] in local_species_list]
 
-        # construct result
-        source_file_name = audio_file_path.split('/')[-1]
-        file_timestamp_str = source_file_name.split('.')[0]
-        file_timestamp = datetime.datetime.strptime(
-            file_timestamp_str, "%Y%m%d_%H%M%S")
         # Use step_seconds for timestamp calculation (accounts for overlap)
         start_timestamp = file_timestamp + \
             datetime.timedelta(seconds=chunk_index * step_seconds)
@@ -372,7 +375,7 @@ def analyze_audio_file():
         # Validate file exists before processing
         if not os.path.exists(audio_file_path):
             logger.warning("Audio file not found", extra={
-                'file': audio_file_path.split('/')[-1]
+                'file': os.path.basename(audio_file_path)
             })
             return jsonify({"error": f"File not found: {audio_file_path}"}), 404
 
@@ -385,7 +388,7 @@ def analyze_audio_file():
         cutoff = settings.CUTOFF
 
         logger.info("Audio analysis request received", extra={
-            'file': audio_file_path.split('/')[-1],
+            'file': os.path.basename(audio_file_path),
             'lat': lat,
             'lon': lon,
             'sensitivity': sensitivity,
@@ -399,7 +402,7 @@ def analyze_audio_file():
         
         processing_time = time.time() - start_time
         logger.info("Request completed", extra={
-            'file': audio_file_path.split('/')[-1],
+            'file': os.path.basename(audio_file_path),
             'detections': len(results),
             'processing_time': round(processing_time, 2)
         })
@@ -408,7 +411,7 @@ def analyze_audio_file():
     except Exception as e:
         processing_time = time.time() - start_time
         logger.error("Audio processing failed", extra={
-            'file': audio_file_path.split('/')[-1] if 'audio_file_path' in locals() else 'unknown',
+            'file': os.path.basename(audio_file_path) if 'audio_file_path' in locals() else 'unknown',
             'processing_time': round(processing_time, 2),
             'error': str(e)
         }, exc_info=True)

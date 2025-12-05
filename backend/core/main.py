@@ -109,55 +109,60 @@ def continuous_audio_recording(thread_logger):
         thread_logger.info("Stopping audio recording")
         recorder.stop()
 
-def handle_detection(detection: Dict[str, Any], input_file_path: str, thread_logger) -> None:
-    """Process a single bird detection: create audio, spectrogram, save to DB, broadcast.
+def extract_detection_audio(detection: Dict[str, Any], input_file_path: str) -> str:
+    """Extract audio segment for detection and convert to MP3.
 
     Args:
         detection: Detection dictionary from BirdNet analysis
         input_file_path: Path to the source audio file
-        thread_logger: Logger instance for this thread
+
+    Returns:
+        Path to the MP3 file
     """
-    # Log the detection (main user-facing log)
-    thread_logger.info("🐦 Bird detected", extra={
-        'species': detection['common_name'],
-        'confidence': round(detection['confidence'] * 100),
-        'time': detection['timestamp'].split('T')[1].split('.')[0]
-    })
-
-    # Get step_seconds from detection (accounts for overlap)
-    # Fallback to ANALYSIS_CHUNK_LENGTH for backward compatibility
     step_seconds = detection.get('step_seconds', ANALYSIS_CHUNK_LENGTH)
-
-    # Calculate the start and end time of the audio extraction
-    # With overlap, chunks overlap so we use step_seconds for positioning
     audio_segments_indices = select_audio_chunks(
         detection['chunk_index'], detection['total_chunks'])
     start_time = audio_segments_indices[0] * step_seconds
-    # End time: last chunk start + chunk duration
     end_time = audio_segments_indices[1] * step_seconds + ANALYSIS_CHUNK_LENGTH
 
-    bird_song_file_path = os.path.join(
-        EXTRACTED_AUDIO_DIR, detection['bird_song_file_name'])
-    spectrogram_file_path = os.path.join(
-        SPECTROGRAM_DIR, detection['spectrogram_file_name'])
+    wav_path = os.path.join(EXTRACTED_AUDIO_DIR, detection['bird_song_file_name'])
+    mp3_path = wav_path.replace('.wav', '.mp3')
 
-    # Extract audio and generate spectrogram
-    trim_audio(input_file_path, bird_song_file_path, start_time, end_time)
-    spectrogram_title = f"{detection['common_name']} ({detection['confidence']:.2f}) - {detection['timestamp']}"
-    # Spectrogram shows the exact 3-second detection window
-    generate_spectrogram(input_file_path, spectrogram_file_path, spectrogram_title,
-                        start_time=step_seconds * detection['chunk_index'],
-                        end_time=step_seconds * detection['chunk_index'] + ANALYSIS_CHUNK_LENGTH)
+    trim_audio(input_file_path, wav_path, start_time, end_time)
+    convert_wav_to_mp3(wav_path, mp3_path)
+    os.remove(wav_path)
 
-    # Convert to MP3 and cleanup WAV
-    convert_wav_to_mp3(bird_song_file_path, bird_song_file_path.replace('.wav', '.mp3'))
-    os.remove(bird_song_file_path)
+    return mp3_path
 
-    # Insert detection into the database
-    thread_logger.debug("Saving detection to database", extra={
-        'species': detection['common_name'],
-        'scientific_name': detection['scientific_name']
-    })
+
+def create_detection_spectrogram(detection: Dict[str, Any], input_file_path: str) -> str:
+    """Generate spectrogram image for detection.
+
+    Args:
+        detection: Detection dictionary from BirdNet analysis
+        input_file_path: Path to the source audio file
+
+    Returns:
+        Path to the spectrogram image
+    """
+    step_seconds = detection.get('step_seconds', ANALYSIS_CHUNK_LENGTH)
+    spectrogram_path = os.path.join(SPECTROGRAM_DIR, detection['spectrogram_file_name'])
+
+    title = f"{detection['common_name']} ({detection['confidence']:.2f}) - {detection['timestamp']}"
+    start_time = step_seconds * detection['chunk_index']
+    end_time = start_time + ANALYSIS_CHUNK_LENGTH
+
+    generate_spectrogram(input_file_path, spectrogram_path, title,
+                        start_time=start_time, end_time=end_time)
+    return spectrogram_path
+
+
+def save_detection_to_db(detection: Dict[str, Any]) -> None:
+    """Insert detection record into database.
+
+    Args:
+        detection: Detection dictionary from BirdNet analysis
+    """
     db_manager.insert_detection({
         'timestamp': detection['timestamp'],
         'group_timestamp': detection['group_timestamp'],
@@ -171,10 +176,16 @@ def handle_detection(detection: Dict[str, Any], input_file_path: str, thread_log
         'overlap': detection['overlap']
     })
 
-    # Broadcast detection to WebSocket clients via HTTP request
+
+def broadcast_detection(detection: Dict[str, Any], thread_logger) -> None:
+    """Send detection to WebSocket clients via API.
+
+    Args:
+        detection: Detection dictionary from BirdNet analysis
+        thread_logger: Logger instance for this thread
+    """
     try:
         detection_data = {
-            'id': detection.get('id'),
             'timestamp': detection['timestamp'],
             'common_name': detection['common_name'],
             'scientific_name': detection['scientific_name'],
@@ -182,8 +193,11 @@ def handle_detection(detection: Dict[str, Any], input_file_path: str, thread_log
             'bird_song_file_name': detection['bird_song_file_name'].replace('.wav', '.mp3'),
             'spectrogram_file_name': detection['spectrogram_file_name']
         }
-        requests.post(f'http://{API_HOST}:{API_PORT}/api/broadcast/detection',
-                     json=detection_data, timeout=BROADCAST_TIMEOUT)
+        requests.post(
+            f'http://{API_HOST}:{API_PORT}/api/broadcast/detection',
+            json=detection_data,
+            timeout=BROADCAST_TIMEOUT
+        )
         thread_logger.debug("Detection broadcasted via WebSocket", extra={
             'species': detection['common_name']
         })
@@ -192,6 +206,31 @@ def handle_detection(detection: Dict[str, Any], input_file_path: str, thread_log
             'species': detection['common_name'],
             'error': str(e)
         })
+
+
+def handle_detection(detection: Dict[str, Any], input_file_path: str, thread_logger) -> None:
+    """Process a single bird detection: create audio, spectrogram, save to DB, broadcast.
+
+    Args:
+        detection: Detection dictionary from BirdNet analysis
+        input_file_path: Path to the source audio file
+        thread_logger: Logger instance for this thread
+    """
+    thread_logger.info("🐦 Bird detected", extra={
+        'species': detection['common_name'],
+        'confidence': round(detection['confidence'] * 100),
+        'time': detection['timestamp'].split('T')[1].split('.')[0]
+    })
+
+    extract_detection_audio(detection, input_file_path)
+    create_detection_spectrogram(detection, input_file_path)
+    save_detection_to_db(detection)
+    broadcast_detection(detection, thread_logger)
+
+    thread_logger.debug("Saving detection to database", extra={
+        'species': detection['common_name'],
+        'scientific_name': detection['scientific_name']
+    })
 
 def is_valid_recording(file_path: str, thread_logger) -> bool:
     """Check if a recording file is valid (meets minimum duration).
