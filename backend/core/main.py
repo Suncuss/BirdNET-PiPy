@@ -21,7 +21,9 @@ import signal
 MIN_RECORDING_DURATION = 5.0  # Minimum acceptable recording duration in seconds
 FILE_SCAN_INTERVAL = 2.0      # How often to scan for new recordings (seconds)
 BROADCAST_TIMEOUT = 5         # WebSocket broadcast request timeout (seconds)
-BIRDNET_REQUEST_TIMEOUT = 30  # BirdNet analysis request timeout (seconds)
+BIRDNET_REQUEST_TIMEOUT = 60  # BirdNet analysis request timeout (seconds) - increased for warmup
+BIRDNET_MAX_RETRIES = 5       # Max retries for BirdNet connection errors
+BIRDNET_RETRY_BASE_DELAY = 2  # Base delay for exponential backoff (seconds)
 RECORDING_THREAD_SHUTDOWN_TIMEOUT = 10  # Max wait for recording thread (seconds)
 PROCESSING_THREAD_SHUTDOWN_TIMEOUT = 5  # Max wait for processing thread (seconds)
 
@@ -290,41 +292,80 @@ def process_audio_files():
             time.sleep(1)
 
 def process_audio_file(audio_file_path: str) -> List[Dict[str, Any]]:
-    try:
-        # Prepare the payload
-        payload = {'audio_file_path': audio_file_path}
+    """Send audio file to BirdNet service for analysis.
 
-        # Send the POST request with timeout to prevent thread hang
-        response = requests.post(BIRDNET_SERVER_ENDPOINT, json=payload, timeout=BIRDNET_REQUEST_TIMEOUT)
+    Includes retry logic with exponential backoff for connection errors,
+    which can occur during server startup (warmup period).
+    """
+    payload = {'audio_file_path': audio_file_path}
+    file_name = os.path.basename(audio_file_path)
 
-        # Check if the request was successful
-        if response.status_code == 200:
-            detections = response.json()
-            logger.debug("BirdNet analysis complete", extra={
-                'file': os.path.basename(audio_file_path),
-                'detections_count': len(detections)
-            })
-            return detections
-        else:
-            logger.error("BirdNet service error", extra={
-                'file': os.path.basename(audio_file_path),
-                'status_code': response.status_code,
-                'response': response.text[:200]
+    for attempt in range(BIRDNET_MAX_RETRIES):
+        try:
+            response = requests.post(
+                BIRDNET_SERVER_ENDPOINT,
+                json=payload,
+                timeout=BIRDNET_REQUEST_TIMEOUT
+            )
+
+            if response.status_code == 200:
+                detections = response.json()
+                logger.debug("BirdNet analysis complete", extra={
+                    'file': file_name,
+                    'detections_count': len(detections)
+                })
+                return detections
+            else:
+                logger.error("BirdNet service error", extra={
+                    'file': file_name,
+                    'status_code': response.status_code,
+                    'response': response.text[:200]
+                })
+                return []
+
+        except requests.exceptions.ConnectionError as e:
+            # Server not ready yet (still warming up) - retry with backoff
+            if attempt < BIRDNET_MAX_RETRIES - 1:
+                wait_time = BIRDNET_RETRY_BASE_DELAY ** (attempt + 1)  # 2, 4, 8, 16, 32 seconds
+                logger.warning("BirdNet service not ready, retrying", extra={
+                    'file': file_name,
+                    'attempt': attempt + 1,
+                    'max_retries': BIRDNET_MAX_RETRIES,
+                    'retry_in': wait_time
+                })
+                time.sleep(wait_time)
+            else:
+                logger.error("BirdNet service unavailable after retries", extra={
+                    'file': file_name,
+                    'attempts': BIRDNET_MAX_RETRIES,
+                    'error': str(e)
+                })
+                return []
+
+        except requests.exceptions.Timeout as e:
+            # Request timed out - don't retry, server is likely overloaded
+            logger.error("BirdNet service request timed out", extra={
+                'file': file_name,
+                'timeout': BIRDNET_REQUEST_TIMEOUT,
+                'error': str(e)
             })
             return []
 
-    except requests.RequestException as e:
-        logger.error("BirdNet service request failed", extra={
-            'file': os.path.basename(audio_file_path),
-            'error': str(e)
-        })
-        return []
-    except Exception as e:
-        logger.error("Unexpected error calling BirdNet service", extra={
-            'file': os.path.basename(audio_file_path),
-            'error': str(e)
-        }, exc_info=True)
-        return []
+        except requests.RequestException as e:
+            logger.error("BirdNet service request failed", extra={
+                'file': file_name,
+                'error': str(e)
+            })
+            return []
+
+        except Exception as e:
+            logger.error("Unexpected error calling BirdNet service", extra={
+                'file': file_name,
+                'error': str(e)
+            }, exc_info=True)
+            return []
+
+    return []  # Should not reach here, but safety fallback
 
 def shutdown():
     logger.info("Shutdown initiated")
