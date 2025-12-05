@@ -49,6 +49,20 @@ except Exception as e:
 # Lock to serialize access to TFLite interpreters (not thread-safe)
 inference_lock = threading.Lock()
 
+# Warmup: Pre-compile librosa/numba JIT functions at startup
+# This avoids ~50 second delay on first real request
+logger.info("Warming up librosa (JIT compilation)...")
+warmup_start = time.time()
+try:
+    # Create dummy audio at target sample rate
+    dummy_audio = np.zeros(settings.SAMPLE_RATE, dtype='float32')
+    # Trigger librosa's resampling JIT compilation
+    _ = librosa.resample(dummy_audio, orig_sr=settings.SAMPLE_RATE, target_sr=settings.SAMPLE_RATE)
+    warmup_time = time.time() - warmup_start
+    logger.info("Warmup complete", extra={'warmup_time': round(warmup_time, 2)})
+except Exception as e:
+    logger.warning("Warmup failed (non-fatal)", extra={'error': str(e)})
+
 
 def get_probable_species_for_location(lat, lon, week, meta_model, labels):
     local_species = []
