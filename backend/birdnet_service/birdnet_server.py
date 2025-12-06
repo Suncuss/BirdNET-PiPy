@@ -331,13 +331,6 @@ def process_audio_file(model, meta_model, audio_file_path, labels, lat, lon, wee
         if species_in_audio_chunk:
             chunks_with_detections += 1
 
-        if len(species_in_audio_chunk) > 1:
-            logger.warning("Multiple species detected in single chunk", extra={
-                'chunk_index': chunk_index,
-                'species_count': len(species_in_audio_chunk),
-                'species': [(s[0].split('_')[1], round(s[1]*100)) for s in species_in_audio_chunk[:3]]
-            })
-
         if species_in_audio_chunk:
             species_info = [(s[0].split('_')[1], round(s[1]*100)) for s in species_in_audio_chunk]
             logger.debug(f"Chunk {chunk_index}/{len(audio_chunks)-1} analyzed", extra={
