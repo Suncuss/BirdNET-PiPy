@@ -1,8 +1,10 @@
 import { ref } from 'vue'
 import { useLogger } from './useLogger'
+import { useServiceRestart } from './useServiceRestart'
 
 export function useSystemUpdate() {
   const logger = useLogger('useSystemUpdate')
+  const serviceRestart = useServiceRestart()
 
   // State
   const versionInfo = ref(null)
@@ -49,17 +51,6 @@ export function useSystemUpdate() {
       const data = await response.json()
       updateInfo.value = data
       updateAvailable.value = data.update_available
-
-      // Log detailed update check results
-      console.log('=== Update Check Results ===')
-      console.log('Current commit:', data.current_commit)
-      console.log('Remote commit:', data.remote_commit)
-      console.log('Current branch:', data.current_branch)
-      console.log('Target branch:', data.target_branch)
-      console.log('Commits behind:', data.commits_behind)
-      console.log('Update available:', data.update_available)
-      console.log('Preview commits:', data.preview_commits)
-      console.log('============================')
 
       if (data.update_available) {
         setStatus('info', `Update available: ${data.commits_behind} new commits`)
@@ -129,68 +120,17 @@ export function useSystemUpdate() {
       setStatus('info', 'Update started. Services restarting...')
       logger.info('Update triggered successfully', data)
 
-      // Start monitoring for reconnection
-      monitorReconnection()
+      // Use shared service restart monitoring
+      await serviceRestart.waitForRestart({
+        maxWaitSeconds: 300, // 5 minutes for updates (longer than settings save)
+        autoReload: true
+      })
     } catch (error) {
       logger.error('Failed to trigger update', error)
       setStatus('error', `Update failed: ${error.message}`)
       updating.value = false
       throw error
     }
-  }
-
-  /**
-   * Monitor service reconnection after update
-   */
-  const monitorReconnection = () => {
-    let attempts = 0
-    const maxAttempts = 60 // 5 minutes (5s interval)
-
-    const checkConnection = async () => {
-      attempts++
-
-      try {
-        const response = await fetch(`${API_BASE_URL}/system/version`, {
-          method: 'GET',
-          cache: 'no-cache',
-          headers: { 'Cache-Control': 'no-cache' }
-        })
-
-        if (response.ok) {
-          logger.info('Service reconnected after update')
-          setStatus('success', 'Update complete! Reloading page...')
-
-          // Reload page after short delay
-          setTimeout(() => {
-            window.location.reload()
-          }, 2000)
-        } else {
-          throw new Error('Service not ready')
-        }
-      } catch (error) {
-        // Service still down
-        if (attempts >= maxAttempts) {
-          logger.error('Update timeout - service did not reconnect')
-          setStatus(
-            'error',
-            'Update may have failed. Service did not restart. Please check manually.'
-          )
-          updating.value = false
-        } else {
-          // Update status message every 6 attempts (30 seconds)
-          if (attempts % 6 === 0) {
-            const elapsed = Math.floor(attempts * 5 / 60)
-            setStatus('info', `Update in progress... (${elapsed} min)`)
-          }
-
-          // Try again in 5 seconds
-          setTimeout(checkConnection, 5000)
-        }
-      }
-    }
-
-    // Start checking after 10 seconds (allow time for shutdown)
-    setTimeout(checkConnection, 10000)
   }
 
   /**
@@ -220,6 +160,9 @@ export function useSystemUpdate() {
     updating,
     statusMessage,
     statusType,
+    // Expose service restart state for UI
+    restartMessage: serviceRestart.restartMessage,
+    isRestarting: serviceRestart.isRestarting,
     // Methods
     loadVersionInfo,
     checkForUpdates,

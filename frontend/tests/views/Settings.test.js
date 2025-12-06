@@ -23,6 +23,9 @@ vi.mock('@/composables/useSystemUpdate', () => ({
     updating: { value: false },
     statusMessage: { value: null },
     statusType: { value: null },
+    // Exposed from internal useServiceRestart
+    restartMessage: { value: '' },
+    isRestarting: { value: false },
     loadVersionInfo: vi.fn().mockResolvedValue({}),
     checkForUpdates: vi.fn().mockResolvedValue({}),
     triggerUpdate: vi.fn().mockResolvedValue({})
@@ -118,11 +121,11 @@ describe('Settings', () => {
       fetchSpy.mockResolvedValue(createFetchResponse(mockSettings))
     })
 
-    it('displays "Recording Settings" heading', async () => {
+    it('displays "Recording" heading', async () => {
       const wrapper = mountSettings()
       await flushPromises()
 
-      expect(wrapper.text()).toContain('Recording Settings')
+      expect(wrapper.text()).toContain('Recording')
     })
 
     it('shows recording length dropdown with correct options', async () => {
@@ -203,30 +206,23 @@ describe('Settings', () => {
       fetchSpy.mockResolvedValue(createFetchResponse(mockSettings))
     })
 
-    it('displays Location Settings section', async () => {
+    it('displays Location & Audio section', async () => {
       const wrapper = mountSettings()
       await flushPromises()
 
-      expect(wrapper.text()).toContain('Location Settings')
+      expect(wrapper.text()).toContain('Location & Audio')
       expect(wrapper.find('#latitude').exists()).toBe(true)
       expect(wrapper.find('#longitude').exists()).toBe(true)
+      expect(wrapper.find('#recordingMode').exists()).toBe(true)
     })
 
-    it('displays Detection Settings section', async () => {
+    it('displays Detection section', async () => {
       const wrapper = mountSettings()
       await flushPromises()
 
-      expect(wrapper.text()).toContain('Detection Settings')
+      expect(wrapper.text()).toContain('Detection')
       expect(wrapper.find('#sensitivity').exists()).toBe(true)
       expect(wrapper.find('#cutoff').exists()).toBe(true)
-    })
-
-    it('displays Audio Settings section', async () => {
-      const wrapper = mountSettings()
-      await flushPromises()
-
-      expect(wrapper.text()).toContain('Audio Settings')
-      expect(wrapper.find('#recordingMode').exists()).toBe(true)
     })
 
     it('does NOT display General Settings section', async () => {
@@ -260,7 +256,7 @@ describe('Settings', () => {
       await wrapper.vm.$nextTick()
 
       // Click save button
-      const saveButton = wrapper.findAll('button').find(btn => btn.text().includes('Save Settings'))
+      const saveButton = wrapper.findAll('button').find(btn => btn.text() === 'Save' || btn.text() === 'Saving...')
       await saveButton.trigger('click')
       await flushPromises()
 
@@ -284,7 +280,7 @@ describe('Settings', () => {
         settings: mockSettings
       }))
 
-      const saveButton = wrapper.findAll('button').find(btn => btn.text().includes('Save Settings'))
+      const saveButton = wrapper.findAll('button').find(btn => btn.text() === 'Save' || btn.text() === 'Saving...')
       await saveButton.trigger('click')
       await flushPromises()
 
@@ -304,11 +300,11 @@ describe('Settings', () => {
         false
       ))
 
-      const saveButton = wrapper.findAll('button').find(btn => btn.text().includes('Save Settings'))
+      const saveButton = wrapper.findAll('button').find(btn => btn.text() === 'Save' || btn.text() === 'Saving...')
       await saveButton.trigger('click')
       await flushPromises()
 
-      expect(wrapper.text()).toContain('Failed to save settings')
+      expect(wrapper.text()).toContain('Failed to save')
     })
 
     it('disables save button while saving', async () => {
@@ -317,7 +313,7 @@ describe('Settings', () => {
 
       fetchSpy.mockImplementationOnce(() => new Promise(resolve => setTimeout(resolve, 100)))
 
-      const saveButton = wrapper.findAll('button').find(btn => btn.text().includes('Save Settings'))
+      const saveButton = wrapper.findAll('button').find(btn => btn.text() === 'Save' || btn.text() === 'Saving...')
       await saveButton.trigger('click')
 
       expect(wrapper.vm.loading).toBe(true)
@@ -348,7 +344,7 @@ describe('Settings', () => {
         settings: mockSettings
       }))
 
-      const resetButton = wrapper.findAll('button').find(btn => btn.text().includes('Reset to Defaults'))
+      const resetButton = wrapper.findAll('button').find(btn => btn.text() === 'Reset')
       await resetButton.trigger('click')
       await flushPromises()
 
@@ -365,7 +361,7 @@ describe('Settings', () => {
 
       vi.spyOn(window, 'confirm').mockReturnValue(false)
 
-      const resetButton = wrapper.findAll('button').find(btn => btn.text().includes('Reset to Defaults'))
+      const resetButton = wrapper.findAll('button').find(btn => btn.text() === 'Reset')
       await resetButton.trigger('click')
       await flushPromises()
 

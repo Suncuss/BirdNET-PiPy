@@ -1,6 +1,17 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { useSystemUpdate } from '@/composables/useSystemUpdate'
 
+// Mock useServiceRestart since useSystemUpdate now delegates to it
+vi.mock('@/composables/useServiceRestart', () => ({
+  useServiceRestart: () => ({
+    isRestarting: { value: false },
+    restartMessage: { value: '' },
+    restartError: { value: '' },
+    waitForRestart: vi.fn().mockResolvedValue(true),
+    reset: vi.fn()
+  })
+}))
+
 describe('useSystemUpdate', () => {
   beforeEach(() => {
     global.fetch = vi.fn()
@@ -113,15 +124,10 @@ describe('useSystemUpdate', () => {
     })
 
     const { triggerUpdate, updating, statusMessage } = useSystemUpdate()
-    triggerUpdate()
+    await triggerUpdate()
 
     expect(window.confirm).toHaveBeenCalled()
-    await vi.runAllTimersAsync()
-
-    // Wait for the fetch to complete
-    await new Promise(resolve => setTimeout(resolve, 0))
-
-    expect(updating.value).toBe(true)
+    expect(statusMessage.value).toContain('Services restarting')
   })
 
   it('cancels update when user declines confirmation', async () => {
@@ -170,10 +176,9 @@ describe('useSystemUpdate', () => {
     expect(statusMessage.value).toContain('Update failed')
   })
 
-  it('monitors reconnection and reloads page on success', async () => {
+  it('delegates to useServiceRestart for monitoring reconnection', async () => {
     window.confirm.mockReturnValue(true)
 
-    // First fetch: trigger update
     fetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -182,68 +187,19 @@ describe('useSystemUpdate', () => {
       })
     })
 
-    const { triggerUpdate } = useSystemUpdate()
-    triggerUpdate()
+    const { triggerUpdate, restartMessage, isRestarting } = useSystemUpdate()
 
-    // Wait for initial update trigger
-    await vi.runAllTimersAsync()
-    await new Promise(resolve => setTimeout(resolve, 0))
+    // Verify that restartMessage and isRestarting are exposed from useServiceRestart
+    expect(restartMessage).toBeDefined()
+    expect(isRestarting).toBeDefined()
 
-    // Second fetch: reconnection check succeeds
-    fetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        current_commit: 'new123'
-      })
-    })
+    await triggerUpdate()
 
-    // Fast-forward past the initial 10 second delay
-    await vi.advanceTimersByTimeAsync(10000)
-    await vi.runAllTimersAsync()
-    await new Promise(resolve => setTimeout(resolve, 0))
-
-    // Fast-forward past the reload delay (2 seconds)
-    await vi.advanceTimersByTimeAsync(2000)
-    await vi.runAllTimersAsync()
-
-    expect(window.location.reload).toHaveBeenCalled()
-  })
-
-  it('shows timeout error if service does not reconnect', async () => {
-    window.confirm.mockReturnValue(true)
-
-    // Trigger update
-    fetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        status: 'update_triggered'
-      })
-    })
-
-    const { triggerUpdate, statusMessage, updating } = useSystemUpdate()
-    triggerUpdate()
-
-    await vi.runAllTimersAsync()
-    await new Promise(resolve => setTimeout(resolve, 0))
-
-    // All reconnection attempts fail
-    for (let i = 0; i < 60; i++) {
-      fetch.mockRejectedValueOnce(new Error('Service down'))
-      await vi.advanceTimersByTimeAsync(5000)
-      await vi.runAllTimersAsync()
-      await new Promise(resolve => setTimeout(resolve, 0))
-    }
-
-    expect(updating.value).toBe(false)
-    expect(statusMessage.value).toContain('Update may have failed')
+    // The update should trigger and delegate to serviceRestart.waitForRestart
+    expect(fetch).toHaveBeenCalledWith('/api/system/update', expect.any(Object))
   })
 
   it('auto-clears success/info messages after 10 seconds', async () => {
-    const { setStatus, statusMessage, statusType } = useSystemUpdate()
-
-    // Manually call setStatus (normally called internally)
-    const composable = useSystemUpdate()
-
     // Simulate a success message
     fetch.mockResolvedValueOnce({
       ok: true,
@@ -254,6 +210,7 @@ describe('useSystemUpdate', () => {
       })
     })
 
+    const composable = useSystemUpdate()
     await composable.checkForUpdates()
 
     expect(composable.statusMessage.value).toBeTruthy()

@@ -45,7 +45,11 @@ describe('useServiceRestart', () => {
 
     const { isRestarting, waitForRestart } = useServiceRestart()
 
-    const promise = waitForRestart({ initialDelay: 100, pollInterval: 100 })
+    const promise = waitForRestart({
+      initialDelay: 100,
+      pollInterval: 100,
+      postConnectDelay: 0 // Skip post-connect delay in tests
+    })
 
     expect(isRestarting.value).toBe(true)
 
@@ -67,6 +71,7 @@ describe('useServiceRestart', () => {
     const promise = waitForRestart({
       initialDelay: 100,
       pollInterval: 100,
+      postConnectDelay: 0, // Skip post-connect delay in tests
       autoReload: false
     })
 
@@ -92,14 +97,18 @@ describe('useServiceRestart', () => {
     const promise = waitForRestart({
       initialDelay: 100,
       pollInterval: 100,
+      postConnectDelay: 100, // Small delay for testing
       autoReload: true
     })
 
+    // Initial delay + poll
     await vi.advanceTimersByTimeAsync(200)
-    await promise
-
-    // Advance for reload delay
+    // Post-connect delay
+    await vi.advanceTimersByTimeAsync(100)
+    // Reload delay (1 second)
     await vi.advanceTimersByTimeAsync(1000)
+
+    await promise
 
     expect(window.location.reload).toHaveBeenCalled()
   })
@@ -112,6 +121,7 @@ describe('useServiceRestart', () => {
     const promise = waitForRestart({
       initialDelay: 100,
       pollInterval: 100,
+      postConnectDelay: 0, // Skip post-connect delay in tests
       autoReload: false
     })
 
@@ -120,6 +130,33 @@ describe('useServiceRestart', () => {
     await vi.advanceTimersByTimeAsync(1000)
 
     expect(window.location.reload).not.toHaveBeenCalled()
+  })
+
+  it('waits postConnectDelay before completing', async () => {
+    fetchMock.mockResolvedValue({ ok: true })
+
+    const { restartMessage, waitForRestart } = useServiceRestart()
+
+    const promise = waitForRestart({
+      initialDelay: 100,
+      pollInterval: 100,
+      postConnectDelay: 500,
+      autoReload: false
+    })
+
+    // Initial delay + poll
+    await vi.advanceTimersByTimeAsync(200)
+
+    // Should show "waiting for services" message
+    expect(restartMessage.value).toContain('Waiting')
+
+    // After post-connect delay
+    await vi.advanceTimersByTimeAsync(500)
+
+    await promise
+
+    // Should show ready message
+    expect(restartMessage.value).toContain('ready')
   })
 
   it('resets state correctly', () => {

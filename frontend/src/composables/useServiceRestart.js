@@ -18,6 +18,7 @@ export function useServiceRestart() {
    * @param {number} options.maxWaitSeconds - Max time to wait (default: 150s / 2.5 min)
    * @param {number} options.pollInterval - Polling interval in ms (default: 5000)
    * @param {number} options.initialDelay - Delay before first check in ms (default: 10000)
+   * @param {number} options.postConnectDelay - Extra delay after connection before reload (default: 15000)
    * @param {boolean} options.autoReload - Whether to reload page on success (default: true)
    * @returns {Promise<boolean>} - Resolves true when service is back, rejects on timeout
    */
@@ -26,6 +27,7 @@ export function useServiceRestart() {
       maxWaitSeconds = 150,
       pollInterval = 5000,
       initialDelay = 10000,
+      postConnectDelay = 15000, // Wait for all services (BirdNet, etc.) to fully initialize
       autoReload = true
     } = options
 
@@ -49,18 +51,24 @@ export function useServiceRestart() {
           })
 
           if (response.ok) {
-            logger.info('Service reconnected after restart')
-            restartMessage.value = 'Services ready!'
+            logger.info('API reconnected, waiting for all services to initialize...')
+            restartMessage.value = 'Waiting for services to initialize...'
 
-            if (autoReload) {
-              restartMessage.value = 'Services ready! Reloading...'
-              setTimeout(() => {
-                window.location.reload()
-              }, 1000)
-            }
+            // Wait extra time for all services (BirdNet inference, etc.) to fully start
+            setTimeout(() => {
+              logger.info('Service restart complete')
+              restartMessage.value = 'Services ready!'
 
-            isRestarting.value = false
-            resolve(true)
+              if (autoReload) {
+                restartMessage.value = 'Reloading...'
+                setTimeout(() => {
+                  window.location.reload()
+                }, 1000)
+              }
+
+              isRestarting.value = false
+              resolve(true)
+            }, postConnectDelay)
           } else {
             throw new Error('Service not ready')
           }
