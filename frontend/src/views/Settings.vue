@@ -248,11 +248,11 @@
       </div>
 
       <!-- Save Button -->
-      <div class="flex justify-between items-center col-span-1 lg:col-span-2">
-        <div class="text-sm" :class="saveStatus ? (saveStatus.type === 'success' ? 'text-green-600' : 'text-red-600') : ''">
+      <div class="flex flex-col lg:flex-row lg:justify-between items-center col-span-1 lg:col-span-2 space-y-2 lg:space-y-0">
+        <div class="text-sm order-2 lg:order-1" :class="saveStatus ? (saveStatus.type === 'success' ? 'text-green-600' : 'text-red-600') : ''">
           {{ saveStatus ? saveStatus.message : '' }}
         </div>
-        <div class="flex space-x-2">
+        <div class="flex space-x-2 order-1 lg:order-2">
           <button
             @click="resetToDefaults"
             class="bg-gray-600 hover:bg-gray-700 text-white font-semibold py-2 px-4 rounded-lg shadow focus:outline-none focus:ring-2 focus:ring-gray-300"

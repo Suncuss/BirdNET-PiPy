@@ -3,7 +3,7 @@
         <div class="bg-white rounded-lg shadow p-4">
             <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between mb-4">
                 <h2 class="text-lg font-semibold mb-2">Bird Activity Overview</h2>
-                <div class="flex items-center space-x-2">
+                <div class="flex flex-wrap items-center gap-2 justify-center lg:justify-end">
                     <button 
                         @click="previousDay"
                         :class="[
@@ -47,10 +47,10 @@
                             <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
                         </svg>
                     </button>
-                    <button 
+                    <button
                         @click="goToToday"
                         :class="[
-                            'ml-2 font-semibold py-1 px-3 rounded-lg shadow text-sm transition-all duration-300',
+                            'font-semibold py-1 px-3 rounded-lg shadow text-sm transition-all duration-300',
                             isUpdating
                                 ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
                                 : 'bg-blue-600 hover:bg-blue-700 text-white focus:outline-none focus:ring-2 focus:ring-blue-300'
@@ -82,7 +82,7 @@
         <div class="bg-white rounded-lg shadow p-4 mt-4">
             <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between mb-4">
                 <h2 class="text-lg font-semibold mb-2">Species Detection Distribution</h2>
-                <div class="flex items-center space-x-4">
+                <div class="flex flex-wrap items-center gap-4 justify-center lg:justify-end">
                     <!-- Species Dropdown -->
                     <div class="relative">
                         <div class="flex items-center space-x-2">
@@ -95,7 +95,7 @@
                                     @blur="handleBlur"
                                     @input="filterSpecies"
                                     placeholder="Search or select species..."
-                                    class="px-3 py-1 pr-8 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm w-64"
+                                    class="px-3 py-1 pr-8 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm w-48 lg:w-64"
                                     :disabled="isLoadingSpecies"
                                 />
                                 <button
