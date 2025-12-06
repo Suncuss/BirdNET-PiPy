@@ -84,20 +84,23 @@ export function useSystemUpdate() {
   }
 
   /**
-   * Trigger system update with user confirmation
+   * Trigger system update
+   * @param {boolean} skipConfirm - Skip the browser confirmation dialog (when using custom modal)
    */
-  const triggerUpdate = async () => {
-    // Confirmation dialog
-    const confirmed = window.confirm(
-      `This will update the system and restart all services.\n\n` +
-      `Expected downtime: 2-5 minutes\n` +
-      `Audio detection will be interrupted during this time.\n\n` +
-      `Continue with update?`
-    )
+  const triggerUpdate = async (skipConfirm = false) => {
+    // Confirmation dialog (skip if already confirmed via custom modal)
+    if (!skipConfirm) {
+      const confirmed = window.confirm(
+        `This will update the system and restart all services.\n\n` +
+        `Expected downtime: 2-5 minutes\n` +
+        `Audio detection will be interrupted during this time.\n\n` +
+        `Continue with update?`
+      )
 
-    if (!confirmed) {
-      logger.info('Update cancelled by user')
-      return
+      if (!confirmed) {
+        logger.info('Update cancelled by user')
+        return
+      }
     }
 
     updating.value = true

@@ -2,6 +2,17 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import LocationSetupModal from '@/components/LocationSetupModal.vue'
 
+// Mock the useServiceRestart composable
+vi.mock('@/composables/useServiceRestart', () => ({
+  useServiceRestart: () => ({
+    isRestarting: { value: false },
+    restartMessage: { value: '' },
+    restartError: { value: '' },
+    waitForRestart: vi.fn().mockResolvedValue(true),
+    reset: vi.fn()
+  })
+}))
+
 describe('LocationSetupModal', () => {
   let fetchMock
 
@@ -85,7 +96,7 @@ describe('LocationSetupModal', () => {
   })
 
   describe('Save Location', () => {
-    it('saves location and emits events', async () => {
+    it('saves location and emits location-saved event', async () => {
       fetchMock
         .mockResolvedValueOnce({
           ok: true,
@@ -106,7 +117,7 @@ describe('LocationSetupModal', () => {
       await flushPromises()
 
       expect(wrapper.emitted('location-saved')).toBeTruthy()
-      expect(wrapper.emitted('close')).toBeTruthy()
+      // Note: close is not emitted - page reloads after service restart
     })
 
     it('sets configured flag to true when saving', async () => {
@@ -160,7 +171,7 @@ describe('LocationSetupModal', () => {
       await flushPromises()
 
       expect(savedSettings.location.configured).toBe(true)
-      expect(wrapper.emitted('close')).toBeTruthy()
+      // Note: close is not emitted - page reloads after service restart
     })
   })
 

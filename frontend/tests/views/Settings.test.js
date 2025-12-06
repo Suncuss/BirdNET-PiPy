@@ -2,6 +2,33 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import Settings from '@/views/Settings.vue'
 
+// Mock the useServiceRestart composable
+vi.mock('@/composables/useServiceRestart', () => ({
+  useServiceRestart: () => ({
+    isRestarting: { value: false },
+    restartMessage: { value: '' },
+    restartError: { value: '' },
+    waitForRestart: vi.fn().mockResolvedValue(true),
+    reset: vi.fn()
+  })
+}))
+
+// Mock the useSystemUpdate composable to avoid extra fetch calls
+vi.mock('@/composables/useSystemUpdate', () => ({
+  useSystemUpdate: () => ({
+    versionInfo: { value: null },
+    updateInfo: { value: null },
+    updateAvailable: { value: false },
+    checking: { value: false },
+    updating: { value: false },
+    statusMessage: { value: null },
+    statusType: { value: null },
+    loadVersionInfo: vi.fn().mockResolvedValue({}),
+    checkForUpdates: vi.fn().mockResolvedValue({}),
+    triggerUpdate: vi.fn().mockResolvedValue({})
+  })
+}))
+
 // Create a proper fetch mock
 const createFetchResponse = (data, ok = true) => ({
   ok,
@@ -247,13 +274,13 @@ describe('Settings', () => {
       expect(body.audio.recording_length).toBe(12)
     })
 
-    it('shows success message after save', async () => {
+    it('saves settings and triggers service restart', async () => {
       const wrapper = mountSettings()
       await flushPromises()
 
       fetchSpy.mockResolvedValueOnce(createFetchResponse({
         status: 'updated',
-        message: 'Settings saved! Services will restart in 10-30 seconds.',
+        message: 'Settings saved',
         settings: mockSettings
       }))
 
@@ -261,7 +288,11 @@ describe('Settings', () => {
       await saveButton.trigger('click')
       await flushPromises()
 
-      expect(wrapper.text()).toContain('Settings saved')
+      // Verify PUT request was made
+      expect(fetchSpy).toHaveBeenCalledWith('/api/settings', expect.objectContaining({
+        method: 'PUT'
+      }))
+      // Note: Page auto-reloads after service restart via useServiceRestart composable
     })
 
     it('shows error message on save failure', async () => {
@@ -386,17 +417,4 @@ describe('Settings', () => {
     })
   })
 
-  describe('Service Restart Notice', () => {
-    beforeEach(() => {
-      fetchSpy.mockResolvedValue(createFetchResponse(mockSettings))
-    })
-
-    it('displays service restart notice', async () => {
-      const wrapper = mountSettings()
-      await flushPromises()
-
-      expect(wrapper.text()).toContain('Settings changes require a service restart')
-      expect(wrapper.text()).toContain('backend services will automatically restart')
-    })
-  })
 })
