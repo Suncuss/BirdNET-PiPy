@@ -128,7 +128,4 @@ else
     exit 1
 fi
 
-print_status "Build completed (deployment intentionally not performed)"
-
-echo ""
 print_status "Build process complete!"
