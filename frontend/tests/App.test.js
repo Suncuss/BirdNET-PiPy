@@ -5,6 +5,7 @@ import { DISPLAY_NAME } from '@/version'
 
 let infoSpy
 let debugSpy
+let errorSpy
 const useLoggerMock = vi.fn()
 
 vi.mock('@/composables/useLogger', () => ({
@@ -17,6 +18,9 @@ const mountApp = () => mount(App, {
       'router-link': RouterLinkStub,
       'router-view': {
         template: '<div class="router-view-stub" />'
+      },
+      'LocationSetupModal': {
+        template: '<div class="location-setup-modal-stub" />'
       }
     }
   }
@@ -26,7 +30,14 @@ describe('App', () => {
   beforeEach(() => {
     infoSpy = vi.fn()
     debugSpy = vi.fn()
-    useLoggerMock.mockReturnValue({ info: infoSpy, debug: debugSpy })
+    errorSpy = vi.fn()
+    useLoggerMock.mockReturnValue({ info: infoSpy, debug: debugSpy, error: errorSpy })
+
+    // Mock fetch for settings check
+    global.fetch = vi.fn(() => Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve({ location: { configured: true } })
+    }))
   })
 
   it('renders navigation links', () => {

@@ -290,7 +290,8 @@ export default {
     const settings = ref({
       location: {
         latitude: 42.47,
-        longitude: -76.45
+        longitude: -76.45,
+        configured: false
       },
       detection: {
         sensitivity: 0.75,
@@ -363,6 +364,8 @@ export default {
     const saveSettings = async () => {
       try {
         loading.value = true
+        // Mark location as configured when saving from settings page
+        settings.value.location.configured = true
         const response = await fetch('/api/settings', {
           method: 'PUT',
           headers: {
@@ -392,7 +395,8 @@ export default {
         settings.value = {
           location: {
             latitude: 42.47,
-            longitude: -76.45
+            longitude: -76.45,
+            configured: true  // Keep as configured since user explicitly chose defaults
           },
           detection: {
             sensitivity: 0.75,

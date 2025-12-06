@@ -16,18 +16,50 @@
     <main class="container mx-auto p-1">
       <router-view></router-view>
     </main>
+
+    <!-- Location Setup Modal -->
+    <LocationSetupModal
+      :isVisible="showLocationSetup"
+      @close="showLocationSetup = false"
+      @location-saved="onLocationSaved"
+    />
   </div>
 </template>
 
 <script>
-import { onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useLogger } from '@/composables/useLogger'
 import { DISPLAY_NAME } from './version'
+import LocationSetupModal from '@/components/LocationSetupModal.vue'
 
 export default {
   name: 'App',
+  components: {
+    LocationSetupModal
+  },
   setup() {
     const logger = useLogger('App')
+    const showLocationSetup = ref(false)
+
+    const checkLocationSetup = async () => {
+      try {
+        const response = await fetch('/api/settings')
+        if (response.ok) {
+          const settings = await response.json()
+          // Show setup modal if location has not been configured
+          if (!settings.location?.configured) {
+            logger.info('Location not configured, showing setup modal')
+            showLocationSetup.value = true
+          }
+        }
+      } catch (error) {
+        logger.error('Failed to check location setup', { error: error.message })
+      }
+    }
+
+    const onLocationSaved = (location) => {
+      logger.info('Location saved', location)
+    }
 
     onMounted(() => {
       logger.info('Application mounted')
@@ -36,10 +68,14 @@ export default {
         dev: import.meta.env.DEV,
         prod: import.meta.env.PROD
       })
+      // Check if location setup is needed
+      checkLocationSetup()
     })
 
     return {
-      DISPLAY_NAME
+      DISPLAY_NAME,
+      showLocationSetup,
+      onLocationSaved
     }
   }
 }

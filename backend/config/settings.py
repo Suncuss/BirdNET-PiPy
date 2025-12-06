@@ -10,7 +10,7 @@ def load_user_settings():
     
     # Default settings structure - single source of truth
     defaults = {
-        "location": {"latitude": 42.47, "longitude": -76.45},
+        "location": {"latitude": 42.47, "longitude": -76.45, "configured": False},
         "detection": {"sensitivity": 0.75, "cutoff": 0.60},
         "audio": {
             "recording_mode": "pulseaudio",  # "pulseaudio" or "http_stream"
