@@ -85,7 +85,7 @@ services:
     environment:
       - PULSE_SERVER=unix:/run/pulse/native
       - ICECAST_PASSWORD=${ICECAST_PASSWORD:-hackme}
-      - STREAM_BITRATE=${STREAM_BITRATE:-128k}
+      - STREAM_BITRATE=${STREAM_BITRATE:-320k}
       - TZ=${TZ:-}
     ports:
       - "8888:8888"

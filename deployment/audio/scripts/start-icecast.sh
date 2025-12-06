@@ -5,7 +5,7 @@ set -e
 
 # Configuration from environment
 ICECAST_PASSWORD="${ICECAST_PASSWORD:-hackme}"
-STREAM_BITRATE="${STREAM_BITRATE:-128k}"
+STREAM_BITRATE="${STREAM_BITRATE:-320k}"
 
 echo "Starting Icecast streaming service..."
 echo "  Stream bitrate: $STREAM_BITRATE"
