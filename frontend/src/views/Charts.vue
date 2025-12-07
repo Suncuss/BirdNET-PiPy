@@ -127,22 +127,20 @@
                     </div>
 
                     <!-- View Options and Navigation -->
-                    <div v-if="selectedSpecies" class="flex items-center space-x-4">
-                        <div class="flex items-center space-x-2">
-                            <label class="text-sm font-medium text-gray-700">View:</label>
-                            <select 
-                                v-model="speciesView" 
-                                @change="onSpeciesViewChange"
-                                :disabled="isUpdatingSpecies"
-                                class="px-3 py-1 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm"
-                            >
-                                <option value="day">Day</option>
-                                <option value="week">Week</option>
-                                <option value="month">Month</option>
-                                <option value="6month">6 Month</option>
-                                <option value="year">Year</option>
-                            </select>
-                        </div>
+                    <div v-if="selectedSpecies" class="flex items-center space-x-2 lg:space-x-4">
+                        <select
+                            v-model="speciesView"
+                            @change="onSpeciesViewChange"
+                            :disabled="isUpdatingSpecies"
+                            aria-label="View period"
+                            class="px-3 py-1 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm"
+                        >
+                            <option value="day">Day</option>
+                            <option value="week">Week</option>
+                            <option value="month">Month</option>
+                            <option value="6month">6 Month</option>
+                            <option value="year">Year</option>
+                        </select>
 
                         <!-- Navigation buttons -->
                         <div class="flex items-center space-x-2">
