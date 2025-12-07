@@ -85,7 +85,6 @@
                     <!-- Species Dropdown -->
                     <div class="relative">
                         <div class="flex items-center space-x-2">
-                            <label class="text-sm font-medium text-gray-700">Species:</label>
                             <div class="relative">
                                 <input
                                     type="text"
