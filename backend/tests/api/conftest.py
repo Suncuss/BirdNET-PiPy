@@ -41,8 +41,13 @@ def mock_db_manager():
 @pytest.fixture
 def api_client(real_db_manager):
     """Create a test client for the Flask API with REAL database integration."""
-    with patch('core.api.db_manager', real_db_manager):
-        with patch('core.api.socketio'):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Patch auth config paths to use temp directory (prevents writing to backend/data/)
+        with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+             patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+             patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+             patch('core.api.db_manager', real_db_manager), \
+             patch('core.api.socketio'):
             from core.api import create_app
             app, _ = create_app()
             app.config['TESTING'] = True
@@ -54,8 +59,13 @@ def api_client(real_db_manager):
 @pytest.fixture
 def api_client_with_mock(mock_db_manager):
     """Create a test client with mocked database (for specific unit tests only)."""
-    with patch('core.api.db_manager', mock_db_manager):
-        with patch('core.api.socketio'):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Patch auth config paths to use temp directory (prevents writing to backend/data/)
+        with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+             patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+             patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+             patch('core.api.db_manager', mock_db_manager), \
+             patch('core.api.socketio'):
             from core.api import create_app
             app, _ = create_app()
             app.config['TESTING'] = True

@@ -1,5 +1,7 @@
 """Simple API tests that demonstrate working patterns."""
 
+import os
+import tempfile
 import pytest
 import json
 from unittest.mock import patch, Mock
@@ -166,9 +168,6 @@ class TestSimpleAPI:
     
     def test_file_serving_endpoints(self):
         """Test file serving with mocked paths."""
-        import tempfile
-        import os
-        
         with tempfile.TemporaryDirectory() as tmpdir:
             audio_dir = os.path.join(tmpdir, 'audio')
             os.makedirs(audio_dir)
@@ -183,11 +182,14 @@ class TestSimpleAPI:
             with open(default_file, 'wb') as f:
                 f.write(b'default audio')
             
-            # Patch the paths
-            with patch('core.api.EXTRACTED_AUDIO_DIR', audio_dir), \
+            # Patch the paths (including auth config to prevent writing to backend/data/)
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+                 patch('core.api.EXTRACTED_AUDIO_DIR', audio_dir), \
                  patch('core.api.DEFAULT_AUDIO_PATH', default_file), \
                  patch('core.db.DatabaseManager'):
-                
+
                 from core.api import create_app
                 app, _ = create_app()
                 client = app.test_client()
@@ -269,106 +271,118 @@ class TestSimpleAPI:
     
     def test_wikimedia_endpoints(self):
         """Test Wikimedia image fetching."""
-        with patch('core.db.DatabaseManager') as MockDB, \
-             patch('core.api.requests.get') as mock_get:
-            
-            mock_db_instance = Mock()
-            MockDB.return_value = mock_db_instance
-            
-            from core.api import create_app
-            app, _ = create_app()
-            client = app.test_client()
-            
-            # Mock successful Wikimedia API response
-            mock_response = Mock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = {
-                'query': {
-                    'search': [{'title': 'File:Robin.jpg'}],
-                    'pages': {
-                        '123': {
-                            'title': 'File:Robin.jpg',
-                            'imageinfo': [{
-                                'url': 'https://upload.wikimedia.org/robin.jpg',
-                                'extmetadata': {
-                                    'LicenseShortName': {'value': 'CC BY-SA'},
-                                    'Artist': {'value': 'John Doe'},
-                                    'LicenseUrl': {'value': 'https://creativecommons.org/licenses/by-sa/4.0'}
-                                }
-                            }]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+                 patch('core.db.DatabaseManager') as MockDB, \
+                 patch('core.api.requests.get') as mock_get:
+
+                mock_db_instance = Mock()
+                MockDB.return_value = mock_db_instance
+
+                from core.api import create_app
+                app, _ = create_app()
+                client = app.test_client()
+
+                # Mock successful Wikimedia API response
+                mock_response = Mock()
+                mock_response.status_code = 200
+                mock_response.json.return_value = {
+                    'query': {
+                        'search': [{'title': 'File:Robin.jpg'}],
+                        'pages': {
+                            '123': {
+                                'title': 'File:Robin.jpg',
+                                'imageinfo': [{
+                                    'url': 'https://upload.wikimedia.org/robin.jpg',
+                                    'extmetadata': {
+                                        'LicenseShortName': {'value': 'CC BY-SA'},
+                                        'Artist': {'value': 'John Doe'},
+                                        'LicenseUrl': {'value': 'https://creativecommons.org/licenses/by-sa/4.0'}
+                                    }
+                                }]
+                            }
                         }
                     }
                 }
-            }
-            mock_get.return_value = mock_response
-            
-            response = client.get('/api/wikimedia_image?species=American%20Robin')
-            assert response.status_code == 200
-            data = response.get_json()
-            assert 'imageUrl' in data
-            assert data['imageUrl'] == 'https://upload.wikimedia.org/robin.jpg'
-            assert 'licenseType' in data
-            assert 'authorName' in data
-            
-            # Test missing species parameter
-            response = client.get('/api/wikimedia_image')
-            assert response.status_code == 400
+                mock_get.return_value = mock_response
+
+                response = client.get('/api/wikimedia_image?species=American%20Robin')
+                assert response.status_code == 200
+                data = response.get_json()
+                assert 'imageUrl' in data
+                assert data['imageUrl'] == 'https://upload.wikimedia.org/robin.jpg'
+                assert 'licenseType' in data
+                assert 'authorName' in data
+
+                # Test missing species parameter
+                response = client.get('/api/wikimedia_image')
+                assert response.status_code == 400
     
     def test_settings_endpoints(self):
         """Test settings management."""
-        with patch('core.db.DatabaseManager') as MockDB, \
-             patch('core.api.load_user_settings') as mock_load, \
-             patch('core.api.save_user_settings') as mock_save, \
-             patch('core.api.write_flag') as mock_flag:
-            
-            mock_db_instance = Mock()
-            MockDB.return_value = mock_db_instance
-            
-            from core.api import create_app
-            app, _ = create_app()
-            client = app.test_client()
-            
-            # Test GET settings
-            mock_settings = {
-                'audio': {'samplerate': 48000},
-                'ui': {'theme': 'dark'}
-            }
-            mock_load.return_value = mock_settings
-            
-            response = client.get('/api/settings')
-            assert response.status_code == 200
-            assert response.get_json() == mock_settings
-            
-            # Test PUT settings
-            new_settings = {'audio': {'samplerate': 44100}}
-            response = client.put('/api/settings',
-                                data=json.dumps(new_settings),
-                                content_type='application/json')
-            assert response.status_code == 200
-            assert response.get_json()['message'] == 'Settings saved. Services will restart in 10-30 seconds.'
-            mock_save.assert_called_once()
-            assert mock_flag.call_count >= 1  # at least one restart flag
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+                 patch('core.db.DatabaseManager') as MockDB, \
+                 patch('core.api.load_user_settings') as mock_load, \
+                 patch('core.api.save_user_settings') as mock_save, \
+                 patch('core.api.write_flag') as mock_flag:
+
+                mock_db_instance = Mock()
+                MockDB.return_value = mock_db_instance
+
+                from core.api import create_app
+                app, _ = create_app()
+                client = app.test_client()
+
+                # Test GET settings
+                mock_settings = {
+                    'audio': {'samplerate': 48000},
+                    'ui': {'theme': 'dark'}
+                }
+                mock_load.return_value = mock_settings
+
+                response = client.get('/api/settings')
+                assert response.status_code == 200
+                assert response.get_json() == mock_settings
+
+                # Test PUT settings
+                new_settings = {'audio': {'samplerate': 44100}}
+                response = client.put('/api/settings',
+                                    data=json.dumps(new_settings),
+                                    content_type='application/json')
+                assert response.status_code == 200
+                assert response.get_json()['message'] == 'Settings saved. Services will restart in 10-30 seconds.'
+                mock_save.assert_called_once()
+                assert mock_flag.call_count >= 1  # at least one restart flag
     
     def test_bird_detail_endpoints(self):
         """Test bird detail endpoints."""
-        with patch('core.db.DatabaseManager') as MockDB:
-            mock_db_instance = Mock()
-            MockDB.return_value = mock_db_instance
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+                 patch('core.db.DatabaseManager') as MockDB:
+                mock_db_instance = Mock()
+                MockDB.return_value = mock_db_instance
 
-            from core.api import create_app
-            app, _ = create_app()
-            client = app.test_client()
+                from core.api import create_app
+                app, _ = create_app()
+                client = app.test_client()
 
-            # Test detection distribution
-            mock_distribution = {
-                'hourly': [{'hour': 6, 'count': 10}],
-                'daily': [{'day': 'Monday', 'count': 25}]
-            }
-            mock_db_instance.get_detection_distribution.return_value = mock_distribution
+                # Test detection distribution
+                mock_distribution = {
+                    'hourly': [{'hour': 6, 'count': 10}],
+                    'daily': [{'day': 'Monday', 'count': 25}]
+                }
+                mock_db_instance.get_detection_distribution.return_value = mock_distribution
 
-            response = client.get('/api/bird/American%20Robin/detection_distribution?view=week')
-            assert response.status_code == 200
-            assert response.get_json() == mock_distribution
+                response = client.get('/api/bird/American%20Robin/detection_distribution?view=week')
+                assert response.status_code == 200
+                assert response.get_json() == mock_distribution
 
     def test_bird_recordings_endpoint(self, api_client, real_db_manager):
         """Test /api/bird/<species>/recordings endpoint with real database."""
@@ -431,48 +445,56 @@ class TestSimpleAPI:
     
     def test_broadcast_detection_endpoint(self):
         """Test detection broadcasting."""
-        with patch('core.db.DatabaseManager') as MockDB, \
-             patch('core.api.socketio') as mock_socketio:
-            
-            mock_db_instance = Mock()
-            MockDB.return_value = mock_db_instance
-            
-            from core.api import create_app
-            app, _ = create_app()
-            client = app.test_client()
-            
-            # Test broadcast with valid data
-            detection_data = {
-                'common_name': 'Test Bird',
-                'confidence': 0.95,
-                'timestamp': '2024-01-15 10:00:00'
-            }
-            
-            response = client.post('/api/broadcast/detection',
-                                 data=json.dumps(detection_data),
-                                 content_type='application/json')
-            assert response.status_code == 200
-            # API returns the detection data, not a message
-            assert response.status_code == 200
-            
-            # Test with missing data
-            response = client.post('/api/broadcast/detection',
-                                 data=json.dumps({}),
-                                 content_type='application/json')
-            assert response.status_code == 200  # Still succeeds but broadcasts empty
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+                 patch('core.db.DatabaseManager') as MockDB, \
+                 patch('core.api.socketio') as mock_socketio:
+
+                mock_db_instance = Mock()
+                MockDB.return_value = mock_db_instance
+
+                from core.api import create_app
+                app, _ = create_app()
+                client = app.test_client()
+
+                # Test broadcast with valid data
+                detection_data = {
+                    'common_name': 'Test Bird',
+                    'confidence': 0.95,
+                    'timestamp': '2024-01-15 10:00:00'
+                }
+
+                response = client.post('/api/broadcast/detection',
+                                     data=json.dumps(detection_data),
+                                     content_type='application/json')
+                assert response.status_code == 200
+                # API returns the detection data, not a message
+                assert response.status_code == 200
+
+                # Test with missing data
+                response = client.post('/api/broadcast/detection',
+                                     data=json.dumps({}),
+                                     content_type='application/json')
+                assert response.status_code == 200  # Still succeeds but broadcasts empty
     
     def test_stream_config_endpoint(self):
         """Test stream configuration endpoint."""
-        with patch('core.db.DatabaseManager') as MockDB:
-            mock_db_instance = Mock()
-            MockDB.return_value = mock_db_instance
-            
-            from core.api import create_app
-            app, _ = create_app()
-            client = app.test_client()
-            
-            response = client.get('/api/stream/config')
-            assert response.status_code == 200
-            data = response.get_json()
-            assert 'stream_url' in data
-            assert 'stream_type' in data
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+                 patch('core.db.DatabaseManager') as MockDB:
+                mock_db_instance = Mock()
+                MockDB.return_value = mock_db_instance
+
+                from core.api import create_app
+                app, _ = create_app()
+                client = app.test_client()
+
+                response = client.get('/api/stream/config')
+                assert response.status_code == 200
+                data = response.get_json()
+                assert 'stream_url' in data
+                assert 'stream_type' in data
