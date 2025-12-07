@@ -8,7 +8,7 @@
           <button
             v-if="auth.authStatus.value.authEnabled && auth.authStatus.value.authenticated"
             @click="handleLogout"
-            class="text-sm bg-green-600 hover:bg-green-500 text-white px-3 py-1 rounded-lg flex items-center gap-1 transition-colors"
+            class="text-sm text-green-200 hover:text-white flex items-center gap-1"
             title="Log out"
           >
             <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">

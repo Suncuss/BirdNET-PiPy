@@ -112,7 +112,7 @@
                 max="1.0"
                 step="0.05"
                 v-model.number="settings.detection.sensitivity"
-                class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                class="w-full h-2 rounded-lg cursor-pointer"
               >
               <p class="text-xs text-gray-400 mt-1">Higher = more detections</p>
             </div>
@@ -128,7 +128,7 @@
                 max="1.0"
                 step="0.05"
                 v-model.number="settings.detection.cutoff"
-                class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                class="w-full h-2 rounded-lg cursor-pointer"
               >
               <p class="text-xs text-gray-400 mt-1">Minimum confidence to report</p>
             </div>
@@ -708,12 +708,57 @@ export default {
 </script>
 
   <style scoped>
-  /* Custom range slider styling */
+  /* Custom range slider styling - cross-browser */
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+  }
+
+  /* Track styling */
+  input[type="range"]::-webkit-slider-runnable-track {
+    height: 0.5rem;
+    border-radius: 9999px;
+    background-color: #e5e7eb;
+  }
+
+  input[type="range"]::-moz-range-track {
+    height: 0.5rem;
+    border-radius: 9999px;
+    background-color: #e5e7eb;
+  }
+
+  /* Thumb styling - Chrome, Safari, Edge */
   input[type="range"]::-webkit-slider-thumb {
-    width: 1rem;
-    height: 1rem;
+    -webkit-appearance: none;
+    appearance: none;
+    width: 1.25rem;
+    height: 1.25rem;
     border-radius: 9999px;
     background-color: #2563eb;
     cursor: pointer;
+    margin-top: -0.375rem;
+    border: 2px solid white;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  }
+
+  /* Thumb styling - Firefox */
+  input[type="range"]::-moz-range-thumb {
+    width: 1.25rem;
+    height: 1.25rem;
+    border-radius: 9999px;
+    background-color: #2563eb;
+    cursor: pointer;
+    border: 2px solid white;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  }
+
+  /* Hover state */
+  input[type="range"]:hover::-webkit-slider-thumb {
+    background-color: #1d4ed8;
+  }
+
+  input[type="range"]:hover::-moz-range-thumb {
+    background-color: #1d4ed8;
   }
   </style>
