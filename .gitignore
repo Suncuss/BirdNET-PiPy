@@ -2,8 +2,6 @@
 /data/
 backend/data/
 
-# Ignore misc directory (contains scripts and temporary files)
-/misc/
 
 # Ignore setup directory (contains requirement.txt)
 /setup/
@@ -31,8 +29,7 @@ __pycache__/
 # Ignore build output
 /frontend/dist/
 
-# Ignore CLAUDE and Codex memory
-CLAUDE.md
+# Ignore AGENTS.md
 AGENTS.md
 
 # Ignore claude code settings
