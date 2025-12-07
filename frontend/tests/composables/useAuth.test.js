@@ -20,6 +20,9 @@ describe('useAuth', () => {
   beforeEach(() => {
     fetchMock = vi.fn()
     global.fetch = fetchMock
+    // Reset singleton state before each test
+    const auth = useAuth()
+    auth.resetState()
   })
 
   afterEach(() => {

@@ -2,20 +2,23 @@ import { ref, computed } from 'vue'
 import { useLogger } from './useLogger'
 
 /**
+ * Shared state (singleton pattern) - all components share the same refs.
+ * This ensures that when one component updates auth state, all others see the change.
+ */
+const authStatus = ref({
+  authEnabled: false,
+  setupComplete: false,
+  authenticated: false
+})
+const loading = ref(false)
+const error = ref('')
+
+/**
  * Composable for authentication state management.
  * Handles login, logout, setup, and auth status checking.
  */
 export function useAuth() {
   const logger = useLogger('useAuth')
-
-  // Reactive state
-  const authStatus = ref({
-    authEnabled: false,
-    setupComplete: false,
-    authenticated: false
-  })
-  const loading = ref(false)
-  const error = ref('')
 
   // Computed properties
   const needsSetup = computed(() =>
@@ -219,6 +222,19 @@ export function useAuth() {
     error.value = ''
   }
 
+  /**
+   * Reset all state (for testing purposes)
+   */
+  const resetState = () => {
+    authStatus.value = {
+      authEnabled: false,
+      setupComplete: false,
+      authenticated: false
+    }
+    loading.value = false
+    error.value = ''
+  }
+
   return {
     // State
     authStatus,
@@ -237,6 +253,7 @@ export function useAuth() {
     setup,
     toggleAuth,
     changePassword,
-    clearError
+    clearError,
+    resetState
   }
 }
