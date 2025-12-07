@@ -8,6 +8,18 @@ from core.api_utils import (
     validate_limit_param,
     log_data_metrics
 )
+from core.auth import (
+    configure_session,
+    require_auth,
+    is_auth_enabled,
+    is_setup_complete,
+    is_authenticated,
+    set_auth_enabled,
+    setup_password,
+    change_password,
+    authenticate,
+    logout
+)
 from version import __version__, DISPLAY_NAME
 
 from flask import Flask, Blueprint, jsonify, request
@@ -467,6 +479,7 @@ def save_user_settings(settings_dict):
 
 @api.route('/api/settings', methods=['GET'])
 @log_api_request
+@require_auth
 def get_settings():
     """Get all user settings"""
     try:
@@ -480,6 +493,7 @@ def get_settings():
 
 @api.route('/api/settings', methods=['PUT'])
 @log_api_request
+@require_auth
 def update_settings():
     """Update user settings and trigger service restart"""
     try:
@@ -663,13 +677,152 @@ def trigger_system_update():
         return jsonify({'error': f'Failed to trigger update: {str(e)}'}), 500
 
 
+# =============================================================================
+# Authentication Endpoints
+# =============================================================================
+
+@api.route('/api/auth/status', methods=['GET'])
+def get_auth_status():
+    """Get authentication status for frontend."""
+    return jsonify({
+        'auth_enabled': is_auth_enabled(),
+        'setup_complete': is_setup_complete(),
+        'authenticated': is_authenticated()
+    }), 200
+
+
+@api.route('/api/auth/login', methods=['POST'])
+@log_api_request
+def auth_login():
+    """Authenticate with password."""
+    try:
+        data = request.json
+        if not data or 'password' not in data:
+            return jsonify({'error': 'Password required'}), 400
+
+        if not is_setup_complete():
+            return jsonify({'error': 'Password not set up. Use /api/auth/setup first.'}), 400
+
+        if authenticate(data['password']):
+            return jsonify({'success': True, 'message': 'Login successful'}), 200
+        else:
+            return jsonify({'error': 'Invalid password'}), 401
+
+    except Exception as e:
+        logger.error("Login error", extra={'error': str(e)})
+        return jsonify({'error': 'Login failed'}), 500
+
+
+@api.route('/api/auth/logout', methods=['POST'])
+@log_api_request
+def auth_logout():
+    """Clear authentication session."""
+    logout()
+    return jsonify({'success': True, 'message': 'Logged out'}), 200
+
+
+@api.route('/api/auth/setup', methods=['POST'])
+@log_api_request
+def auth_setup():
+    """Set up initial password (first-time only)."""
+    try:
+        if is_setup_complete():
+            return jsonify({'error': 'Password already set up'}), 400
+
+        data = request.json
+        if not data or 'password' not in data:
+            return jsonify({'error': 'Password required'}), 400
+
+        password = data['password']
+        if len(password) < 4:
+            return jsonify({'error': 'Password must be at least 4 characters'}), 400
+
+        setup_password(password)
+
+        # Auto-login after setup
+        authenticate(password)
+
+        return jsonify({'success': True, 'message': 'Password set successfully'}), 200
+
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.error("Setup error", extra={'error': str(e)})
+        return jsonify({'error': 'Setup failed'}), 500
+
+
+@api.route('/api/auth/verify', methods=['GET'])
+def auth_verify():
+    """Internal endpoint for nginx auth_request. Returns 200 or 401."""
+    if is_authenticated():
+        return '', 200
+    return '', 401
+
+
+@api.route('/api/auth/toggle', methods=['POST'])
+@log_api_request
+@require_auth
+def auth_toggle():
+    """Enable or disable authentication."""
+    try:
+        data = request.json
+        if data is None or 'enabled' not in data:
+            return jsonify({'error': 'enabled field required'}), 400
+
+        enabled = data['enabled']
+        set_auth_enabled(enabled)
+
+        return jsonify({
+            'success': True,
+            'auth_enabled': enabled,
+            'message': 'Authentication enabled' if enabled else 'Authentication disabled'
+        }), 200
+
+    except Exception as e:
+        logger.error("Toggle auth error", extra={'error': str(e)})
+        return jsonify({'error': 'Failed to toggle authentication'}), 500
+
+
+@api.route('/api/auth/change-password', methods=['POST'])
+@log_api_request
+@require_auth
+def auth_change_password():
+    """Change the password (requires current password)."""
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'error': 'Request body required'}), 400
+
+        current = data.get('current_password')
+        new = data.get('new_password')
+
+        if not current or not new:
+            return jsonify({'error': 'Both current_password and new_password required'}), 400
+
+        if len(new) < 4:
+            return jsonify({'error': 'New password must be at least 4 characters'}), 400
+
+        change_password(current, new)
+        return jsonify({'success': True, 'message': 'Password changed successfully'}), 200
+
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.error("Change password error", extra={'error': str(e)})
+        return jsonify({'error': 'Failed to change password'}), 500
+
+
 # Global SocketIO instance to be used by other modules
 socketio = None
 
 def create_app():
     global socketio
     app = Flask(__name__)
-    CORS(app, cors_allowed_origins="*")
+    CORS(app, cors_allowed_origins="*", supports_credentials=True)
+
+    # Configure session for authentication
+    configure_session(app)
+
     app.register_blueprint(api)
 
     # Initialize SocketIO

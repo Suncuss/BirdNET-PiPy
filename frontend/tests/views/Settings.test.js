@@ -32,6 +32,25 @@ vi.mock('@/composables/useSystemUpdate', () => ({
   })
 }))
 
+// Mock the useAuth composable to avoid extra fetch calls
+vi.mock('@/composables/useAuth', () => ({
+  useAuth: () => ({
+    authStatus: { value: { authEnabled: false, setupComplete: true, authenticated: false } },
+    loading: { value: false },
+    error: { value: '' },
+    needsSetup: { value: false },
+    needsLogin: { value: false },
+    isAuthenticated: { value: true },
+    checkAuthStatus: vi.fn().mockResolvedValue(undefined),
+    login: vi.fn().mockResolvedValue(true),
+    logout: vi.fn().mockResolvedValue(undefined),
+    setup: vi.fn().mockResolvedValue(true),
+    toggleAuth: vi.fn().mockResolvedValue(true),
+    changePassword: vi.fn().mockResolvedValue(true),
+    clearError: vi.fn()
+  })
+}))
+
 // Create a proper fetch mock
 const createFetchResponse = (data, ok = true) => ({
   ok,

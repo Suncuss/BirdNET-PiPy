@@ -234,6 +234,167 @@
             {{ systemUpdate.statusMessage.value }}
           </div>
         </div>
+
+        <!-- Security Settings -->
+        <div class="bg-white rounded-lg shadow-sm border border-gray-100 p-5">
+          <h2 class="text-base font-medium text-gray-800 mb-4">Security</h2>
+
+          <!-- Auth Toggle -->
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <label class="text-sm text-gray-600">Require Authentication</label>
+              <p class="text-xs text-gray-400">Protect settings and audio stream with password</p>
+            </div>
+            <button
+              @click="handleAuthToggle"
+              :disabled="authLoading"
+              :class="auth.authStatus.value.authEnabled ? 'bg-green-600' : 'bg-gray-200'"
+              class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+            >
+              <span
+                :class="auth.authStatus.value.authEnabled ? 'translate-x-6' : 'translate-x-1'"
+                class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"
+              />
+            </button>
+          </div>
+
+          <!-- Change Password (when auth enabled and setup complete) -->
+          <div v-if="auth.authStatus.value.authEnabled && auth.authStatus.value.setupComplete" class="mb-4">
+            <button
+              @click="showChangePassword = true"
+              class="text-sm text-blue-600 hover:text-blue-800"
+            >
+              Change Password
+            </button>
+          </div>
+
+          <!-- Auth Error Message -->
+          <div v-if="auth.error.value" class="mb-4 p-2 bg-red-50 text-red-600 text-xs rounded-lg">
+            {{ auth.error.value }}
+          </div>
+
+          <!-- Password Reset Help -->
+          <p class="text-xs text-gray-400">
+            Forgot password? Create a file named <code class="bg-gray-100 px-1 rounded">RESET_PASSWORD</code>
+            in <code class="bg-gray-100 px-1 rounded">data/config/</code> on your Pi to reset.
+          </p>
+        </div>
+      </div>
+
+      <!-- Change Password Modal -->
+      <div v-if="showChangePassword" class="fixed inset-0 z-50 overflow-y-auto">
+        <div class="fixed inset-0 bg-black bg-opacity-50 transition-opacity" @click="showChangePassword = false"></div>
+        <div class="flex min-h-full items-center justify-center p-4">
+          <div class="relative bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
+            <h3 class="text-lg font-semibold text-gray-900 mb-4">Change Password</h3>
+
+            <div v-if="changePasswordError" class="mb-4 p-2 bg-red-50 text-red-600 text-sm rounded-lg">
+              {{ changePasswordError }}
+            </div>
+
+            <form @submit.prevent="handleChangePassword" class="space-y-4">
+              <div>
+                <label class="block text-sm text-gray-600 mb-1">Current Password</label>
+                <input
+                  v-model="currentPassword"
+                  type="password"
+                  class="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                  placeholder="Enter current password"
+                >
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 mb-1">New Password</label>
+                <input
+                  v-model="newPassword"
+                  type="password"
+                  class="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                  placeholder="Enter new password (min 4 characters)"
+                >
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 mb-1">Confirm New Password</label>
+                <input
+                  v-model="confirmNewPassword"
+                  type="password"
+                  class="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                  placeholder="Confirm new password"
+                >
+              </div>
+
+              <div class="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  @click="showChangePassword = false"
+                  class="flex-1 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  :disabled="authLoading || !newPassword || newPassword !== confirmNewPassword"
+                  class="flex-1 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors disabled:bg-gray-400"
+                >
+                  {{ authLoading ? 'Changing...' : 'Change Password' }}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <!-- Setup Password Modal -->
+      <div v-if="showSetupPassword" class="fixed inset-0 z-50 overflow-y-auto">
+        <div class="fixed inset-0 bg-black bg-opacity-50 transition-opacity" @click="showSetupPassword = false"></div>
+        <div class="flex min-h-full items-center justify-center p-4">
+          <div class="relative bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
+            <h3 class="text-lg font-semibold text-gray-900 mb-2">Set Up Authentication</h3>
+            <p class="text-sm text-gray-600 mb-4">
+              Create a password to protect your settings and audio stream.
+            </p>
+
+            <div v-if="setupPasswordError" class="mb-4 p-2 bg-red-50 text-red-600 text-sm rounded-lg">
+              {{ setupPasswordError }}
+            </div>
+
+            <form @submit.prevent="handleSetupPassword" class="space-y-4">
+              <div>
+                <label class="block text-sm text-gray-600 mb-1">Password</label>
+                <input
+                  v-model="setupPassword"
+                  type="password"
+                  class="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                  placeholder="Enter password (min 4 characters)"
+                >
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 mb-1">Confirm Password</label>
+                <input
+                  v-model="confirmSetupPassword"
+                  type="password"
+                  class="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                  placeholder="Confirm password"
+                >
+              </div>
+
+              <div class="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  @click="showSetupPassword = false"
+                  class="flex-1 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  :disabled="authLoading || setupPassword.length < 4 || setupPassword !== confirmSetupPassword"
+                  class="flex-1 py-2 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors disabled:bg-gray-400"
+                >
+                  {{ authLoading ? 'Setting up...' : 'Enable Authentication' }}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       </div>
 
       <!-- Update Confirmation Modal -->
@@ -269,18 +430,32 @@
 import { ref, onMounted } from 'vue'
 import { useSystemUpdate } from '@/composables/useSystemUpdate'
 import { useServiceRestart } from '@/composables/useServiceRestart'
+import { useAuth } from '@/composables/useAuth'
 
 export default {
   name: 'Settings',
   setup() {
     // Composables
     const serviceRestart = useServiceRestart()
+    const auth = useAuth()
 
     // State
     const loading = ref(false)
     const saveStatus = ref(null)
     const recordingMode = ref('pulseaudio')
     const showUpdateConfirm = ref(false)
+
+    // Auth-related state
+    const authLoading = ref(false)
+    const showChangePassword = ref(false)
+    const showSetupPassword = ref(false)
+    const currentPassword = ref('')
+    const newPassword = ref('')
+    const confirmNewPassword = ref('')
+    const setupPassword = ref('')
+    const confirmSetupPassword = ref('')
+    const changePasswordError = ref('')
+    const setupPasswordError = ref('')
     const settings = ref({
       location: {
         latitude: 42.47,
@@ -418,10 +593,86 @@ export default {
       await systemUpdate.triggerUpdate(true)
     }
 
+    // Handle auth toggle
+    const handleAuthToggle = async () => {
+      const newState = !auth.authStatus.value.authEnabled
+
+      // If enabling auth and no password set, show setup modal
+      if (newState && !auth.authStatus.value.setupComplete) {
+        setupPassword.value = ''
+        confirmSetupPassword.value = ''
+        setupPasswordError.value = ''
+        showSetupPassword.value = true
+        return
+      }
+
+      authLoading.value = true
+      await auth.toggleAuth(newState)
+      authLoading.value = false
+    }
+
+    // Handle initial password setup
+    const handleSetupPassword = async () => {
+      setupPasswordError.value = ''
+
+      if (setupPassword.value.length < 4) {
+        setupPasswordError.value = 'Password must be at least 4 characters'
+        return
+      }
+
+      if (setupPassword.value !== confirmSetupPassword.value) {
+        setupPasswordError.value = 'Passwords do not match'
+        return
+      }
+
+      authLoading.value = true
+      const success = await auth.setup(setupPassword.value)
+      authLoading.value = false
+
+      if (success) {
+        showSetupPassword.value = false
+        setupPassword.value = ''
+        confirmSetupPassword.value = ''
+        showStatus('success', 'Authentication enabled')
+      } else {
+        setupPasswordError.value = auth.error.value || 'Failed to set password'
+      }
+    }
+
+    // Handle password change
+    const handleChangePassword = async () => {
+      changePasswordError.value = ''
+
+      if (newPassword.value.length < 4) {
+        changePasswordError.value = 'New password must be at least 4 characters'
+        return
+      }
+
+      if (newPassword.value !== confirmNewPassword.value) {
+        changePasswordError.value = 'Passwords do not match'
+        return
+      }
+
+      authLoading.value = true
+      const success = await auth.changePassword(currentPassword.value, newPassword.value)
+      authLoading.value = false
+
+      if (success) {
+        showChangePassword.value = false
+        currentPassword.value = ''
+        newPassword.value = ''
+        confirmNewPassword.value = ''
+        showStatus('success', 'Password changed successfully')
+      } else {
+        changePasswordError.value = auth.error.value || 'Failed to change password'
+      }
+    }
+
     // Load settings on component mount
     onMounted(() => {
       loadSettings()
       systemUpdate.loadVersionInfo()
+      auth.checkAuthStatus()
     })
 
     return {
@@ -435,7 +686,22 @@ export default {
       onRecordingModeChange,
       confirmUpdate,
       systemUpdate,
-      serviceRestart
+      serviceRestart,
+      // Auth
+      auth,
+      authLoading,
+      showChangePassword,
+      showSetupPassword,
+      currentPassword,
+      newPassword,
+      confirmNewPassword,
+      setupPassword,
+      confirmSetupPassword,
+      changePasswordError,
+      setupPasswordError,
+      handleAuthToggle,
+      handleChangePassword,
+      handleSetupPassword
     }
   }
 }

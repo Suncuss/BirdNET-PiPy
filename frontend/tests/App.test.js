@@ -1,5 +1,6 @@
 import { mount, flushPromises, RouterLinkStub } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { ref } from 'vue'
 import App from '@/App.vue'
 import { DISPLAY_NAME } from '@/version'
 
@@ -12,6 +13,32 @@ vi.mock('@/composables/useLogger', () => ({
   useLogger: (...args) => useLoggerMock(...args)
 }))
 
+// Mock useAuth composable
+vi.mock('@/composables/useAuth', () => ({
+  useAuth: () => ({
+    authStatus: ref({ authEnabled: false, setupComplete: true, authenticated: false }),
+    needsSetup: ref(false),
+    needsLogin: ref(false),
+    loading: ref(false),
+    error: ref(''),
+    checkAuthStatus: vi.fn().mockResolvedValue(undefined),
+    logout: vi.fn().mockResolvedValue(undefined),
+    clearError: vi.fn()
+  })
+}))
+
+// Mock vue-router
+vi.mock('vue-router', () => ({
+  useRoute: () => ({
+    query: {},
+    meta: {}
+  }),
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: vi.fn()
+  })
+}))
+
 const mountApp = () => mount(App, {
   global: {
     stubs: {
@@ -21,6 +48,9 @@ const mountApp = () => mount(App, {
       },
       'LocationSetupModal': {
         template: '<div class="location-setup-modal-stub" />'
+      },
+      'LoginModal': {
+        template: '<div class="login-modal-stub" />'
       }
     }
   }

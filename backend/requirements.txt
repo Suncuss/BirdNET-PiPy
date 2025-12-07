@@ -4,6 +4,9 @@ Flask==3.1.1
 Flask-Cors==6.0.0
 Flask-SocketIO==5.5.1
 
+# Authentication
+bcrypt==4.2.1
+
 # Data processing and analysis
 numpy==1.26.4  # Keep 1.26.x for compatibility with TensorFlow Lite
 scipy==1.15.3
