@@ -35,6 +35,9 @@ __pycache__/
 CLAUDE.md
 AGENTS.md
 
+# Ignore claude code settings
+.claude/
+
 # Ignore VS Code settings
 .vscode/
 

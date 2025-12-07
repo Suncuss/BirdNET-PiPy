@@ -1,6 +1,6 @@
 # BirdNET-PiPy
 
-AI-powered bird detection system using TensorFlow Lite for real-time audio analysis on Raspberry Pi and Linux systems.
+BirdNET-PiPy is a Python-based bird detection system based on the BirdNET model. It's a full-stack application with Vue.js frontend and Python Flask microservices backend, designed for Raspberry Pi deployment.
 
 ## Quick Install
 
