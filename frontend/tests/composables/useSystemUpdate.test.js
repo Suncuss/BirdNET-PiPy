@@ -29,7 +29,6 @@ describe('useSystemUpdate', () => {
       ok: true,
       json: async () => ({
         current_commit: '1a081f5',
-        current_commit_message: 'fix: improve spectrogram',
         current_commit_date: '2025-11-28T08:49:00Z',
         current_branch: 'develop',
         remote_url: 'git@github.com:Suncuss/Birdnet-PiPy-archive.git'
@@ -41,7 +40,6 @@ describe('useSystemUpdate', () => {
 
     expect(versionInfo.value.current_commit).toBe('1a081f5')
     expect(versionInfo.value.current_branch).toBe('develop')
-    expect(versionInfo.value.current_commit_message).toBe('fix: improve spectrogram')
   })
 
   it('handles version info load failure', async () => {

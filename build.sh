@@ -35,7 +35,6 @@ generate_version_info() {
 
     # Gather git information
     COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-    COMMIT_MESSAGE=$(git log -1 --pretty=%s 2>/dev/null || echo "unknown")
     COMMIT_DATE=$(git log -1 --pretty=%cI 2>/dev/null || echo "unknown")
     BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
     REMOTE_URL=$(git config --get remote.origin.url 2>/dev/null || echo "unknown")
@@ -52,7 +51,6 @@ generate_version_info() {
     cat > data/version.json << EOF
 {
     "commit": "$COMMIT_HASH",
-    "commit_message": "$COMMIT_MESSAGE",
     "commit_date": "$COMMIT_DATE",
     "branch": "$BRANCH",
     "remote_url": "$REMOTE_URL",

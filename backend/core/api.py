@@ -554,7 +554,6 @@ def get_system_version():
 
         return jsonify({
             'current_commit': version_info.get('commit', 'unknown'),
-            'current_commit_message': version_info.get('commit_message', 'unknown'),
             'current_commit_date': version_info.get('commit_date', 'unknown'),
             'current_branch': version_info.get('branch', 'unknown'),
             'remote_url': version_info.get('remote_url', f'https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}')

@@ -7,7 +7,6 @@ class TestSystemAPI:
     # Sample version.json content
     SAMPLE_VERSION_INFO = {
         'commit': '1a081f5',
-        'commit_message': 'fix: improve spectrogram display',
         'commit_date': '2025-11-28T08:49:00Z',
         'branch': 'develop',
         'remote_url': 'https://github.com/Suncuss/BirdNET-PiPy',
@@ -23,7 +22,6 @@ class TestSystemAPI:
             assert response.status_code == 200
             data = response.get_json()
             assert data['current_commit'] == '1a081f5'
-            assert data['current_commit_message'] == 'fix: improve spectrogram display'
             assert data['current_branch'] == 'develop'
             assert data['remote_url'] == 'https://github.com/Suncuss/BirdNET-PiPy'
 
@@ -177,7 +175,6 @@ class TestVersionHelpers:
         import json
         version_data = {
             'commit': 'abc1234',
-            'commit_message': 'test commit',
             'commit_date': '2025-11-28T10:00:00Z',
             'branch': 'main',
             'remote_url': 'https://github.com/Suncuss/BirdNET-PiPy',
