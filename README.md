@@ -208,8 +208,21 @@ For more help, see [INSTALLATION.md](INSTALLATION.md) or open an issue on GitHub
 
 ## License
 
-[Add your license here]
+BirdNET-PiPy is licensed under the **Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License** (CC BY-NC-SA 4.0).
+
+This license is compatible with and derived from the upstream projects:
+- **BirdNET-Lite** - K. Lisa Yang Center for Conservation Bioacoustics, Cornell Lab of Ornithology
+- **BirdNET-Pi** - Patrick McGuire
+
+See [LICENSE](LICENSE) file for full details. In summary, you may use and modify this software freely for non-commercial purposes, provided you:
+- Give credit to the original authors
+- Share any modifications under the same license
 
 ## Credits
 
-This project uses the [BirdNET](https://birdnet.cornell.edu/) AI model from the Cornell Lab of Ornithology.
+This project is built upon:
+
+- **[BirdNET-Lite](https://birdnet.cornell.edu/)** - AI model from K. Lisa Yang Center for Conservation Bioacoustics, Cornell Lab of Ornithology, Cornell University
+- **[BirdNET-Pi](https://github.com/mcguirepr89/BirdNET-Pi)** - Original Raspberry Pi implementation by Patrick McGuire
+
+BirdNET-PiPy extends these projects with a modern Vue.js frontend, containerized architecture, and enhanced user interface.
