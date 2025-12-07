@@ -120,6 +120,7 @@ export function useAuth() {
       const data = await response.json()
 
       if (response.ok) {
+        authStatus.value.authEnabled = true
         authStatus.value.setupComplete = true
         authStatus.value.authenticated = true
         logger.info('Password setup successful')
