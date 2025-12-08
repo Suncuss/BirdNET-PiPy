@@ -37,6 +37,7 @@ export function useAuth() {
 
   /**
    * Check current authentication status from API
+   * @returns {Promise<boolean>} - True if status was retrieved successfully
    */
   const checkAuthStatus = async () => {
     try {
@@ -48,10 +49,18 @@ export function useAuth() {
           setupComplete: data.setup_complete,
           authenticated: data.authenticated
         }
+        error.value = ''
         logger.debug('Auth status checked', authStatus.value)
+        return true
+      } else {
+        error.value = 'Failed to check authentication status'
+        logger.error('Auth status check failed', { status: response.status })
+        return false
       }
     } catch (err) {
+      error.value = 'Connection error - could not check authentication'
       logger.error('Failed to check auth status', err)
+      return false
     }
   }
 

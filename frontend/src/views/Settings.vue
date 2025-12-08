@@ -319,7 +319,7 @@
                   v-model="newPassword"
                   type="password"
                   class="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
-                  placeholder="Enter new password (min 4 characters)"
+                  placeholder="Enter new password (min 8 characters)"
                 >
               </div>
               <div>
@@ -374,7 +374,7 @@
                   v-model="setupPassword"
                   type="password"
                   class="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
-                  placeholder="Enter password (min 4 characters)"
+                  placeholder="Enter password (min 8 characters)"
                 >
               </div>
               <div>
@@ -397,7 +397,7 @@
                 </button>
                 <button
                   type="submit"
-                  :disabled="authLoading || setupPassword.length < 4 || setupPassword !== confirmSetupPassword"
+                  :disabled="authLoading || setupPassword.length < 8 || setupPassword !== confirmSetupPassword"
                   class="flex-1 py-2 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors disabled:bg-gray-400"
                 >
                   {{ authLoading ? 'Setting up...' : 'Enable Authentication' }}
@@ -633,8 +633,8 @@ export default {
     const handleSetupPassword = async () => {
       setupPasswordError.value = ''
 
-      if (setupPassword.value.length < 4) {
-        setupPasswordError.value = 'Password must be at least 4 characters'
+      if (setupPassword.value.length < 8) {
+        setupPasswordError.value = 'Password must be at least 8 characters'
         return
       }
 
@@ -661,8 +661,8 @@ export default {
     const handleChangePassword = async () => {
       changePasswordError.value = ''
 
-      if (newPassword.value.length < 4) {
-        changePasswordError.value = 'New password must be at least 4 characters'
+      if (newPassword.value.length < 8) {
+        changePasswordError.value = 'New password must be at least 8 characters'
         return
       }
 

@@ -35,7 +35,6 @@ describe('LoginModal', () => {
     props: {
       isVisible: true,
       isSetup: false,
-      allowCancel: false,
       ...props
     }
   })
@@ -102,7 +101,7 @@ describe('LoginModal', () => {
 
     it('shows password requirements in setup mode', () => {
       const wrapper = mountModal({ isSetup: true })
-      expect(wrapper.text()).toContain('at least 4 characters')
+      expect(wrapper.text()).toContain('at least 8 characters')
     })
   })
 
@@ -140,8 +139,8 @@ describe('LoginModal', () => {
 
     it('requires minimum password length in setup mode', async () => {
       const wrapper = mountModal({ isSetup: true })
-      await wrapper.find('#password').setValue('abc') // 3 chars
-      await wrapper.find('#confirmPassword').setValue('abc')
+      await wrapper.find('#password').setValue('short12') // 7 chars, less than required 8
+      await wrapper.find('#confirmPassword').setValue('short12')
 
       const button = wrapper.find('button[type="submit"]')
       expect(button.attributes('disabled')).toBeDefined()
@@ -305,8 +304,8 @@ describe('LoginModal', () => {
       mockAuth.setup.mockResolvedValue(true)
       const wrapper = mountModal({ isSetup: true })
 
-      await wrapper.find('#password').setValue('newpass')
-      await wrapper.find('#confirmPassword').setValue('newpass')
+      await wrapper.find('#password').setValue('newpass1')  // 8 chars minimum
+      await wrapper.find('#confirmPassword').setValue('newpass1')
       await wrapper.find('form').trigger('submit')
       await flushPromises()
 

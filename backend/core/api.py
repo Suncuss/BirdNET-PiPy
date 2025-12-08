@@ -18,7 +18,8 @@ from core.auth import (
     setup_password,
     change_password,
     authenticate,
-    logout
+    logout,
+    MIN_PASSWORD_LENGTH
 )
 from version import __version__, DISPLAY_NAME
 
@@ -720,6 +721,9 @@ def auth_login():
         else:
             return jsonify({'error': 'Invalid password'}), 401
 
+    except ValueError as e:
+        # Rate limiting or other validation errors
+        return jsonify({'error': str(e)}), 429 if 'Too many' in str(e) else 400
     except Exception as e:
         logger.error("Login error", extra={'error': str(e)})
         return jsonify({'error': 'Login failed'}), 500
@@ -746,8 +750,7 @@ def auth_setup():
             return jsonify({'error': 'Password required'}), 400
 
         password = data['password']
-        if len(password) < 4:
-            return jsonify({'error': 'Password must be at least 4 characters'}), 400
+        # Validation is handled by setup_password() - no duplicate check needed
 
         setup_password(password)
 
@@ -811,8 +814,7 @@ def auth_change_password():
         if not current or not new:
             return jsonify({'error': 'Both current_password and new_password required'}), 400
 
-        if len(new) < 4:
-            return jsonify({'error': 'New password must be at least 4 characters'}), 400
+        # Validation is handled by change_password() - no duplicate check needed
 
         change_password(current, new)
         return jsonify({'success': True, 'message': 'Password changed successfully'}), 200
@@ -830,14 +832,20 @@ socketio = None
 def create_app():
     global socketio
     app = Flask(__name__)
-    CORS(app, cors_allowed_origins="*", supports_credentials=True)
+
+    # Configure CORS for API requests
+    # supports_credentials=True is needed for session cookies to work
+    # Without explicit origins, Flask-CORS mirrors the Origin header (required when credentials=True)
+    # This is safe for a self-hosted app behind nginx reverse proxy
+    CORS(app, supports_credentials=True)
 
     # Configure session for authentication
     configure_session(app)
 
     app.register_blueprint(api)
 
-    # Initialize SocketIO
+    # Initialize SocketIO with CORS support
+    # For WebSocket connections, we need to allow cross-origin for development
     socketio = SocketIO(app, cors_allowed_origins="*", logger=False, engineio_logger=False)
     
     # WebSocket event handlers

@@ -54,10 +54,10 @@
               ref="passwordInput"
               v-model="password"
               type="password"
-              :placeholder="isSetup ? 'Enter password (min 4 characters)' : 'Enter your password'"
+              :placeholder="isSetup ? 'Enter password (min 8 characters)' : 'Enter your password'"
               class="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-green-500 focus:ring-1 focus:ring-green-500"
               :disabled="loading"
-              autocomplete="current-password"
+              :autocomplete="isSetup ? 'new-password' : 'current-password'"
             >
           </div>
 
@@ -93,7 +93,7 @@
 
         <!-- Password requirements (setup mode) -->
         <p v-if="isSetup" class="mt-4 text-xs text-gray-500 text-center">
-          Password must be at least 4 characters.
+          Password must be at least 8 characters.
         </p>
 
         <!-- Forgot password help -->
@@ -120,10 +120,6 @@ export default {
     isSetup: {
       type: Boolean,
       default: false
-    },
-    allowCancel: {
-      type: Boolean,
-      default: false
     }
   },
   emits: ['success', 'cancel'],
@@ -141,7 +137,7 @@ export default {
 
     const isValid = computed(() => {
       if (props.isSetup) {
-        return password.value.length >= 4 && password.value === confirmPassword.value
+        return password.value.length >= 8 && password.value === confirmPassword.value
       }
       return password.value.length > 0
     })

@@ -8,8 +8,11 @@ Uses bcrypt for password hashing and Flask sessions for session management.
 import os
 import json
 import secrets
+import time
 from datetime import datetime, timedelta
 from functools import wraps
+from collections import defaultdict
+from threading import Lock
 
 import bcrypt
 from flask import session, jsonify, request
@@ -27,11 +30,29 @@ RESET_PASSWORD_FILE = os.path.join(AUTH_CONFIG_DIR, 'RESET_PASSWORD')
 # Session configuration
 SESSION_LIFETIME_DAYS = 7
 
+# Password requirements
+MIN_PASSWORD_LENGTH = 8
 
-def load_auth_config():
-    """Load authentication configuration from JSON file."""
-    # Check for password reset file first
-    check_password_reset()
+# Rate limiting configuration
+MAX_LOGIN_ATTEMPTS = 5  # Max attempts before lockout
+LOCKOUT_DURATION_SECONDS = 300  # 5 minutes lockout
+ATTEMPT_WINDOW_SECONDS = 300  # Window for counting attempts
+
+# Rate limiting state (in-memory, resets on restart)
+_login_attempts = defaultdict(list)  # IP -> list of timestamps
+_login_attempts_lock = Lock()
+
+
+def load_auth_config(check_reset=True):
+    """Load authentication configuration from JSON file.
+
+    Args:
+        check_reset: If True, check for password reset file first.
+                    Set to False to avoid redundant checks.
+    """
+    # Check for password reset file first (only when requested)
+    if check_reset:
+        check_password_reset()
 
     if os.path.exists(AUTH_CONFIG_FILE):
         try:
@@ -90,6 +111,88 @@ def check_password_reset():
 
         return True
     return False
+
+
+def _get_client_ip():
+    """Get client IP address from request, handling proxies."""
+    # Check X-Forwarded-For header (set by nginx reverse proxy)
+    forwarded_for = request.headers.get('X-Forwarded-For')
+    if forwarded_for:
+        # Take the first IP (original client)
+        return forwarded_for.split(',')[0].strip()
+    # Check X-Real-IP header (alternative proxy header)
+    real_ip = request.headers.get('X-Real-IP')
+    if real_ip:
+        return real_ip.strip()
+    # Fall back to remote_addr
+    return request.remote_addr or 'unknown'
+
+
+def _clean_old_attempts(ip):
+    """Remove expired login attempts for an IP."""
+    current_time = time.time()
+    cutoff = current_time - ATTEMPT_WINDOW_SECONDS
+    _login_attempts[ip] = [t for t in _login_attempts[ip] if t > cutoff]
+
+
+def check_rate_limit(ip=None):
+    """Check if an IP is rate limited.
+
+    Args:
+        ip: Client IP address. If None, gets from current request.
+
+    Returns:
+        tuple: (is_allowed, seconds_until_unlock)
+               is_allowed is True if login attempt is allowed
+               seconds_until_unlock is 0 if allowed, else seconds to wait
+    """
+    if ip is None:
+        ip = _get_client_ip()
+
+    with _login_attempts_lock:
+        _clean_old_attempts(ip)
+        attempts = _login_attempts[ip]
+
+        if len(attempts) >= MAX_LOGIN_ATTEMPTS:
+            # Check if lockout period has passed since last attempt
+            oldest_in_window = min(attempts) if attempts else 0
+            time_since_oldest = time.time() - oldest_in_window
+            if time_since_oldest < LOCKOUT_DURATION_SECONDS:
+                seconds_left = int(LOCKOUT_DURATION_SECONDS - time_since_oldest)
+                return False, seconds_left
+
+        return True, 0
+
+
+def record_failed_attempt(ip=None):
+    """Record a failed login attempt for rate limiting.
+
+    Args:
+        ip: Client IP address. If None, gets from current request.
+    """
+    if ip is None:
+        ip = _get_client_ip()
+
+    with _login_attempts_lock:
+        _clean_old_attempts(ip)
+        _login_attempts[ip].append(time.time())
+        logger.warning("Failed login attempt recorded",
+                       extra={'ip': ip, 'attempts': len(_login_attempts[ip])})
+
+
+def clear_failed_attempts(ip=None):
+    """Clear failed login attempts after successful login.
+
+    Args:
+        ip: Client IP address. If None, gets from current request.
+    """
+    if ip is None:
+        ip = _get_client_ip()
+
+    with _login_attempts_lock:
+        if ip in _login_attempts:
+            del _login_attempts[ip]
+            logger.debug("Cleared failed attempts", extra={'ip': ip})
 
 
 def get_or_create_session_secret():
@@ -159,8 +262,8 @@ def setup_password(password):
     if is_setup_complete():
         raise ValueError("Password already set up")
 
-    if not password or len(password) < 4:
-        raise ValueError("Password must be at least 4 characters")
+    if not password or len(password) < MIN_PASSWORD_LENGTH:
+        raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
 
     config = load_auth_config()
     config['password_hash'] = hash_password(password)
@@ -186,8 +289,8 @@ def change_password(current_password, new_password):
     if not verify_password(current_password, config['password_hash']):
         raise ValueError("Current password is incorrect")
 
-    if not new_password or len(new_password) < 4:
-        raise ValueError("New password must be at least 4 characters")
+    if not new_password or len(new_password) < MIN_PASSWORD_LENGTH:
+        raise ValueError(f"New password must be at least {MIN_PASSWORD_LENGTH} characters")
 
     config['password_hash'] = hash_password(new_password)
     save_auth_config(config)
@@ -195,15 +298,30 @@ def change_password(current_password, new_password):
 
 
 def authenticate(password):
-    """Authenticate with password and create session."""
+    """Authenticate with password and create session.
+
+    Returns:
+        True if authentication successful, False if password incorrect.
+
+    Raises:
+        ValueError: If no password set up or rate limited.
+    """
+    # Check rate limit first
+    is_allowed, seconds_left = check_rate_limit()
+    if not is_allowed:
+        raise ValueError(f"Too many failed attempts. Try again in {seconds_left} seconds.")
+
     config = load_auth_config()
 
     if not config.get('password_hash'):
         raise ValueError("No password set up")
 
     if not verify_password(password, config['password_hash']):
-        logger.warning("Failed login attempt")
+        record_failed_attempt()
         return False
+
+    # Successful login - clear failed attempts
+    clear_failed_attempts()
 
     # Set session
     session['authenticated'] = True
@@ -225,10 +343,8 @@ def require_auth(f):
     """Decorator to protect API routes requiring authentication."""
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        # Check for password reset on each protected request
-        check_password_reset()
-
-        # If auth is disabled, allow access
+        # is_auth_enabled() calls load_auth_config() which checks password reset
+        # So we don't need a separate check_password_reset() call here
         if not is_auth_enabled():
             return f(*args, **kwargs)
 
@@ -241,7 +357,12 @@ def require_auth(f):
 
 
 def configure_session(app):
-    """Configure Flask session settings for the app."""
+    """Configure Flask session settings for the app.
+
+    Session cookie settings are configured to work with nginx reverse proxy:
+    - Secure flag is set based on whether request came over HTTPS
+    - When behind nginx with SSL termination, nginx should set X-Forwarded-Proto
+    """
     # Get or create session secret
     secret = get_or_create_session_secret()
 
@@ -250,5 +371,10 @@ def configure_session(app):
     app.config['SESSION_COOKIE_HTTPONLY'] = True
     app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
     app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=SESSION_LIFETIME_DAYS)
+
+    # Set Secure flag - cookie only sent over HTTPS
+    # This works with nginx reverse proxy when nginx sets X-Forwarded-Proto
+    # Flask will respect this header when ProxyFix or similar is used
+    app.config['SESSION_COOKIE_SECURE'] = True
 
     logger.info("Session configured", extra={'lifetime_days': SESSION_LIFETIME_DAYS})

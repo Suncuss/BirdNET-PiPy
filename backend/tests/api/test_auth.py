@@ -77,11 +77,11 @@ class TestAuthEndpoints:
         client, _ = auth_client
 
         response = client.post('/api/auth/setup',
-                              data=json.dumps({'password': 'abc'}),
+                              data=json.dumps({'password': 'short12'}),  # 7 chars, less than required 8
                               content_type='application/json')
 
         assert response.status_code == 400
-        assert 'at least 4 characters' in response.get_json()['error']
+        assert 'at least 8 characters' in response.get_json()['error']
 
     def test_setup_fails_if_already_setup(self, auth_client):
         """Test that setup fails if password already set."""
@@ -473,3 +473,88 @@ class TestChangePassword:
                               content_type='application/json')
 
         assert response.status_code == 401
+
+
+class TestRateLimiting:
+    """Test rate limiting functionality."""
+
+    @pytest.fixture
+    def auth_client(self):
+        """Create a test client with temporary auth config directory."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+                 patch('core.api.db_manager'), \
+                 patch('core.api.socketio'):
+
+                # Reset rate limiting state before each test
+                import core.auth
+                core.auth._login_attempts.clear()
+
+                from core.api import create_app
+                app, _ = create_app()
+                app.config['TESTING'] = True
+
+                with app.test_client() as client:
+                    yield client
+
+    def test_rate_limit_after_failed_attempts(self, auth_client):
+        """Test that rate limiting kicks in after max failed attempts."""
+        client = auth_client
+
+        # Setup password
+        client.post('/api/auth/setup',
+                   data=json.dumps({'password': 'testpass123'}),
+                   content_type='application/json')
+
+        # Logout
+        client.post('/api/auth/logout')
+
+        # Make max failed login attempts (5 by default)
+        for i in range(5):
+            response = client.post('/api/auth/login',
+                                  data=json.dumps({'password': 'wrongpassword'}),
+                                  content_type='application/json')
+            assert response.status_code == 401
+
+        # Next attempt should be rate limited
+        response = client.post('/api/auth/login',
+                              data=json.dumps({'password': 'wrongpassword'}),
+                              content_type='application/json')
+
+        assert response.status_code == 429
+        assert 'Too many' in response.get_json()['error']
+
+    def test_successful_login_clears_attempts(self, auth_client):
+        """Test that successful login clears failed attempts."""
+        client = auth_client
+
+        # Setup password
+        client.post('/api/auth/setup',
+                   data=json.dumps({'password': 'testpass123'}),
+                   content_type='application/json')
+
+        # Logout
+        client.post('/api/auth/logout')
+
+        # Make some failed attempts (less than max)
+        for _ in range(3):
+            client.post('/api/auth/login',
+                       data=json.dumps({'password': 'wrongpassword'}),
+                       content_type='application/json')
+
+        # Successful login
+        response = client.post('/api/auth/login',
+                              data=json.dumps({'password': 'testpass123'}),
+                              content_type='application/json')
+        assert response.status_code == 200
+
+        # Logout and try again - should not be rate limited
+        client.post('/api/auth/logout')
+
+        for _ in range(3):
+            response = client.post('/api/auth/login',
+                                  data=json.dumps({'password': 'wrongpassword'}),
+                                  content_type='application/json')
+            assert response.status_code == 401  # Not 429
