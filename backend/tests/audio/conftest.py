@@ -1,7 +1,7 @@
 """
 Audio test fixtures and configuration.
 
-Provides fixtures for testing HttpStreamRecorder and PulseAudioRecorder
+Provides fixtures for testing HttpStreamRecorder, RtspRecorder, and PulseAudioRecorder
 without actual subprocess execution or audio hardware.
 """
 import pytest
@@ -68,6 +68,17 @@ def pulse_recorder_params():
     """Standard parameters for PulseAudioRecorder."""
     return {
         'source_name': 'birdnet_monitor.monitor',
+        'chunk_duration': 3.0,
+        'output_dir': '/tmp/test',
+        'target_sample_rate': 48000
+    }
+
+
+@pytest.fixture
+def rtsp_recorder_params():
+    """Standard parameters for RtspRecorder."""
+    return {
+        'rtsp_url': 'rtsp://192.168.1.100:554/stream',
         'chunk_duration': 3.0,
         'output_dir': '/tmp/test',
         'target_sample_rate': 48000

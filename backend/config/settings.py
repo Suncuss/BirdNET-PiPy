@@ -13,8 +13,9 @@ def load_user_settings():
         "location": {"latitude": 42.47, "longitude": -76.45, "configured": False},
         "detection": {"sensitivity": 0.75, "cutoff": 0.60},
         "audio": {
-            "recording_mode": "pulseaudio",  # "pulseaudio" or "http_stream"
+            "recording_mode": "pulseaudio",  # "pulseaudio", "http_stream", or "rtsp"
             "stream_url": None,  # Custom stream URL for http_stream mode
+            "rtsp_url": None,  # RTSP stream URL for rtsp mode
             "pulseaudio_source": None,  # PulseAudio source name (e.g., "default")
             "recording_length": 9,
             "overlap": 0.0,  # Overlap in seconds for future use
@@ -62,6 +63,9 @@ RECORDING_MODE = user_settings['audio'].get('recording_mode', 'pulseaudio')
 
 # Stream URL configuration (for http_stream mode) - directly from JSON
 STREAM_URL = user_settings['audio'].get('stream_url', None)
+
+# RTSP URL configuration (for rtsp mode) - directly from JSON
+RTSP_URL = user_settings['audio'].get('rtsp_url', None)
 
 # PulseAudio source configuration (for pulseaudio mode) - directly from JSON
 PULSEAUDIO_SOURCE = user_settings['audio'].get('pulseaudio_source', 'default')

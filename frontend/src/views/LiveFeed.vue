@@ -85,31 +85,17 @@ export default {
         isLoading.value = true
         statusMessage.value = 'Initializing audio...'
 
-        // First check if stream is accessible (auth check)
-        try {
-          const checkResponse = await fetch(streamUrl.value, { method: 'HEAD' })
-          if (checkResponse.status === 401) {
-            statusMessage.value = 'Authentication required - please log in'
-            isLoading.value = false
-            // Redirect to trigger login modal
-            window.location.href = '/?auth=required'
-            return
-          }
-        } catch (fetchError) {
-          // If HEAD request fails, try anyway - might be CORS issue
-          console.warn('Stream accessibility check failed, attempting playback anyway')
-        }
-
         initAudioContext()
-        await audioContext.resume(); // Ensure the audio context is resumed
+        await audioContext.resume()
         await audioElement.value.play()
         statusMessage.value = 'Icecast stream connected'
         console.log('Audio playback started successfully')
       } catch (error) {
         console.error('Error starting audio playback:', error)
-        // Check if it might be an auth error
+        // Check if it might be an auth error (nginx returns 401 for unauthenticated requests)
         if (error.name === 'NotAllowedError' || error.message?.includes('401')) {
           statusMessage.value = 'Authentication required - please log in'
+          window.location.href = '/?auth=required'
         } else {
           statusMessage.value = 'Error starting audio playback'
         }

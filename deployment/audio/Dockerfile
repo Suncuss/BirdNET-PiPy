@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libpulse0 \
     curl \
+    jq \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

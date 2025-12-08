@@ -82,6 +82,8 @@ services:
       - ./deployment/audio/icecast.xml:/etc/icecast2/icecast.xml:ro
       # PulseAudio socket for audio access (PipeWire provides this)
       - /run/user/${UID:-1000}/pulse:/run/pulse:ro
+      # User settings for RTSP URL configuration
+      - ./data:/app/data:ro
     environment:
       - PULSE_SERVER=unix:/run/pulse/native
       - ICECAST_PASSWORD=${ICECAST_PASSWORD:-hackme}

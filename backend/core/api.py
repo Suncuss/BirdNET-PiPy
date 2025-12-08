@@ -327,6 +327,7 @@ def get_all_species():
     return jsonify(species_list)
 
 @api.route('/api/stream/config', methods=['GET'])
+@require_auth
 def get_stream_config():
     """Provide stream configuration for frontend based on recording mode"""
 
@@ -336,6 +337,13 @@ def get_stream_config():
             'stream_url': '/stream/stream.mp3',
             'stream_type': 'icecast',
             'description': 'Local Icecast audio stream'
+        })
+    elif RECORDING_MODE == 'rtsp':
+        # RTSP mode - use Icecast to transcode RTSP to MP3 for browser
+        return jsonify({
+            'stream_url': '/stream/stream.mp3',
+            'stream_type': 'icecast',
+            'description': 'RTSP stream via Icecast'
         })
     elif RECORDING_MODE == 'http_stream':
         # HTTP stream mode - use custom stream URL
@@ -504,8 +512,13 @@ def update_settings():
         # Validate recording mode settings
         if 'audio' in new_settings:
             recording_mode = new_settings['audio'].get('recording_mode')
-            if recording_mode and recording_mode not in ['pulseaudio', 'http_stream']:
-                return jsonify({'error': 'Invalid recording_mode. Must be "pulseaudio" or "http_stream"'}), 400
+            if recording_mode and recording_mode not in ['pulseaudio', 'http_stream', 'rtsp']:
+                return jsonify({'error': 'Invalid recording_mode. Must be "pulseaudio", "http_stream", or "rtsp"'}), 400
+
+            # Validate RTSP URL if provided
+            rtsp_url = new_settings['audio'].get('rtsp_url')
+            if rtsp_url and not rtsp_url.startswith(('rtsp://', 'rtsps://')):
+                return jsonify({'error': 'Invalid RTSP URL. Must start with rtsp:// or rtsps://'}), 400
 
             # Validate recording_length
             recording_length = new_settings['audio'].get('recording_length')

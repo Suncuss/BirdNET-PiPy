@@ -81,6 +81,7 @@
                 >
                   <option value="pulseaudio">Local Microphone</option>
                   <option value="http_stream">HTTP Stream</option>
+                  <option value="rtsp">RTSP Stream</option>
                 </select>
               </div>
               <div v-if="recordingMode === 'http_stream'">
@@ -91,6 +92,16 @@
                   class="block w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
                   placeholder="http://example.com:8888/stream.mp3"
                 >
+              </div>
+              <div v-if="recordingMode === 'rtsp'">
+                <input
+                  id="rtspUrl"
+                  type="text"
+                  v-model="settings.audio.rtsp_url"
+                  class="block w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                  placeholder="rtsp://user:pass@192.168.1.100:554/stream"
+                >
+                <p class="text-xs text-gray-400 mt-1">Supports rtsp:// and rtsps://</p>
               </div>
             </div>
           </div>
@@ -469,6 +480,7 @@ export default {
       audio: {
         recording_mode: 'pulseaudio',
         stream_url: null,
+        rtsp_url: null,
         pulseaudio_source: null,
         recording_length: 9,
         overlap: 0.0,
@@ -553,6 +565,7 @@ export default {
           audio: {
             recording_mode: 'pulseaudio',
             stream_url: null,
+            rtsp_url: null,
             pulseaudio_source: null,
             recording_length: 9,
             overlap: 0.0,
@@ -582,8 +595,13 @@ export default {
       settings.value.audio.recording_mode = recordingMode.value
       if (recordingMode.value === 'pulseaudio') {
         settings.value.audio.stream_url = null
+        settings.value.audio.rtsp_url = null
       } else if (recordingMode.value === 'http_stream') {
         settings.value.audio.pulseaudio_source = null
+        settings.value.audio.rtsp_url = null
+      } else if (recordingMode.value === 'rtsp') {
+        settings.value.audio.pulseaudio_source = null
+        settings.value.audio.stream_url = null
       }
     }
 

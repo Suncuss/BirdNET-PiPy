@@ -1,11 +1,11 @@
 from config.settings import (
     RECORDING_DIR, RECORDING_LENGTH, EXTRACTED_AUDIO_DIR, SPECTROGRAM_DIR,
     BIRDNET_SERVER_ENDPOINT, ANALYSIS_CHUNK_LENGTH, API_PORT, API_HOST, SAMPLE_RATE,
-    RECORDING_MODE, PULSEAUDIO_SOURCE, STREAM_URL
+    RECORDING_MODE, PULSEAUDIO_SOURCE, STREAM_URL, RTSP_URL
 )
 from core.db import DatabaseManager
 from core.utils import generate_spectrogram, trim_audio, select_audio_chunks, convert_wav_to_mp3
-from core.audio_manager import HttpStreamRecorder, PulseAudioRecorder
+from core.audio_manager import HttpStreamRecorder, PulseAudioRecorder, RtspRecorder
 from core.logging_config import setup_logging, get_logger
 from version import __version__, DISPLAY_NAME
 
@@ -41,11 +41,11 @@ stop_flag = threading.Event()
 for dir in [RECORDING_DIR, EXTRACTED_AUDIO_DIR, SPECTROGRAM_DIR]:
     os.makedirs(dir, exist_ok=True)
 
-def create_recorder(recording_mode: str, thread_logger) -> Union[PulseAudioRecorder, HttpStreamRecorder]:
+def create_recorder(recording_mode: str, thread_logger) -> Union[PulseAudioRecorder, HttpStreamRecorder, RtspRecorder]:
     """Create and configure audio recorder based on recording mode.
 
     Args:
-        recording_mode: Either 'pulseaudio' or 'http_stream'
+        recording_mode: 'pulseaudio', 'http_stream', or 'rtsp'
         thread_logger: Logger instance for this thread
 
     Returns:
@@ -59,6 +59,18 @@ def create_recorder(recording_mode: str, thread_logger) -> Union[PulseAudioRecor
         })
         return PulseAudioRecorder(
             source_name=PULSEAUDIO_SOURCE,
+            chunk_duration=RECORDING_LENGTH,
+            output_dir=RECORDING_DIR,
+            target_sample_rate=SAMPLE_RATE
+        )
+    elif recording_mode == 'rtsp':
+        thread_logger.info("Starting RTSP stream recording", extra={
+            'rtsp_url': RTSP_URL,
+            'chunk_duration': RECORDING_LENGTH,
+            'output_dir': RECORDING_DIR
+        })
+        return RtspRecorder(
+            rtsp_url=RTSP_URL,
             chunk_duration=RECORDING_LENGTH,
             output_dir=RECORDING_DIR,
             target_sample_rate=SAMPLE_RATE

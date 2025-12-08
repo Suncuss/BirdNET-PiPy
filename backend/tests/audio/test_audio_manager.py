@@ -1,7 +1,7 @@
 """
 Tests for audio recording modules.
 
-Tests HttpStreamRecorder and PulseAudioRecorder functionality including:
+Tests HttpStreamRecorder, RtspRecorder, and PulseAudioRecorder functionality including:
 - Initialization
 - Recording chunk creation
 - Atomic file operations
@@ -16,7 +16,7 @@ import subprocess
 from unittest.mock import Mock, patch, MagicMock, call
 from datetime import datetime
 
-from core.audio_manager import HttpStreamRecorder, PulseAudioRecorder
+from core.audio_manager import HttpStreamRecorder, PulseAudioRecorder, RtspRecorder
 
 
 class TestHttpStreamRecorderInit:
@@ -652,3 +652,257 @@ class TestRecorderComparison:
                 assert '-ar 48000' in cmd  # Sample rate
                 assert '-ac 1' in cmd  # Mono
                 assert '-acodec pcm_s16le' in cmd  # 16-bit PCM
+
+
+class TestRtspRecorderInit:
+    """Test RtspRecorder initialization."""
+
+    def test_initialization_stores_parameters(self, rtsp_recorder_params, temp_output_dir):
+        """Test that constructor stores all parameters correctly."""
+        params = rtsp_recorder_params.copy()
+        params['output_dir'] = temp_output_dir
+
+        recorder = RtspRecorder(**params)
+
+        assert recorder.rtsp_url == params['rtsp_url']
+        assert recorder.chunk_duration == params['chunk_duration']
+        assert recorder.output_dir == temp_output_dir
+        assert recorder.target_sample_rate == params['target_sample_rate']
+
+    def test_initialization_sets_default_state(self, rtsp_recorder_params, temp_output_dir):
+        """Test that recorder starts in stopped state."""
+        params = rtsp_recorder_params.copy()
+        params['output_dir'] = temp_output_dir
+
+        recorder = RtspRecorder(**params)
+
+        assert recorder.is_running is False
+        assert recorder.recording_thread is None
+
+
+class TestRtspRecorderRecordChunk:
+    """Test RtspRecorder._record_chunk() method."""
+
+    def test_record_chunk_builds_correct_command(self, temp_output_dir):
+        """Test that the ffmpeg command for RTSP is built correctly."""
+        recorder = RtspRecorder(
+            rtsp_url='rtsp://192.168.1.100:554/stream',
+            chunk_duration=3.0,
+            output_dir=temp_output_dir,
+            target_sample_rate=48000
+        )
+
+        with patch('subprocess.run') as mock_run, \
+             patch('os.path.exists', return_value=True), \
+             patch('os.path.getsize', return_value=144000), \
+             patch('os.rename'):
+            mock_run.return_value = Mock(returncode=0)
+
+            recorder._record_chunk()
+
+            assert mock_run.called
+            call_args = mock_run.call_args
+            cmd = call_args[0][0]
+
+            # Should be ['bash', '-c', 'ffmpeg -rtsp_transport tcp ...']
+            assert cmd[0] == 'bash'
+            assert cmd[1] == '-c'
+            assert 'ffmpeg' in cmd[2]
+            assert '-rtsp_transport tcp' in cmd[2]
+            assert '-timeout 10000000' in cmd[2]
+            assert 'rtsp://192.168.1.100:554/stream' in cmd[2]
+            assert '-t 3.0' in cmd[2]
+            assert '-ar 48000' in cmd[2]
+            assert '-ac 1' in cmd[2]
+
+    def test_record_chunk_success_returns_final_path(self, temp_output_dir):
+        """Test successful recording returns the final file path."""
+        recorder = RtspRecorder(
+            rtsp_url='rtsp://192.168.1.100:554/stream',
+            chunk_duration=3.0,
+            output_dir=temp_output_dir,
+            target_sample_rate=48000
+        )
+
+        with patch('subprocess.run') as mock_run, \
+             patch('os.path.exists', return_value=True), \
+             patch('os.path.getsize', return_value=144000), \
+             patch('os.rename') as mock_rename:
+
+            mock_run.return_value = Mock(returncode=0)
+
+            result = recorder._record_chunk()
+
+            # Should return final path (not temp path)
+            assert result is not None
+            assert result.endswith('.wav')
+            assert '.tmp' not in result
+            # Filename format: YYYYMMDD_HHMMSS.wav
+            import re
+            filename = os.path.basename(result)
+            assert re.match(r'^\d{8}_\d{6}\.wav$', filename)
+
+    def test_record_chunk_performs_atomic_rename(self, temp_output_dir):
+        """Test that file is atomically renamed from temp to final."""
+        recorder = RtspRecorder(
+            rtsp_url='rtsp://192.168.1.100:554/stream',
+            chunk_duration=3.0,
+            output_dir=temp_output_dir,
+            target_sample_rate=48000
+        )
+
+        with patch('subprocess.run') as mock_run, \
+             patch('os.path.exists', return_value=True), \
+             patch('os.path.getsize', return_value=144000), \
+             patch('os.rename') as mock_rename, \
+             patch('core.audio_manager.datetime') as mock_dt:
+
+            mock_dt.now.return_value = datetime(2025, 11, 26, 10, 30, 0)
+            mock_run.return_value = Mock(returncode=0)
+
+            recorder._record_chunk()
+
+            # Verify atomic rename was called with temp -> final
+            mock_rename.assert_called_once()
+            temp_path, final_path = mock_rename.call_args[0]
+            assert '.tmp.wav' in temp_path
+            assert '.tmp' not in final_path
+
+    def test_record_chunk_failure_returns_none(self, temp_output_dir):
+        """Test that failed recording returns None."""
+        recorder = RtspRecorder(
+            rtsp_url='rtsp://192.168.1.100:554/stream',
+            chunk_duration=3.0,
+            output_dir=temp_output_dir,
+            target_sample_rate=48000
+        )
+
+        with patch('subprocess.run') as mock_run, \
+             patch('os.path.exists', return_value=False):
+            mock_run.return_value = Mock(returncode=1)
+
+            result = recorder._record_chunk()
+
+            assert result is None
+
+    def test_record_chunk_handles_timeout(self, temp_output_dir):
+        """Test that subprocess timeout is handled gracefully."""
+        recorder = RtspRecorder(
+            rtsp_url='rtsp://192.168.1.100:554/stream',
+            chunk_duration=3.0,
+            output_dir=temp_output_dir,
+            target_sample_rate=48000
+        )
+
+        with patch('subprocess.run') as mock_run, \
+             patch('os.path.exists', return_value=True), \
+             patch('os.unlink') as mock_unlink:
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd='test', timeout=18)
+
+            result = recorder._record_chunk()
+
+            assert result is None
+            mock_unlink.assert_called_once()
+
+
+class TestRtspRecorderLifecycle:
+    """Test RtspRecorder start/stop/health methods."""
+
+    def test_start_creates_daemon_thread(self, temp_output_dir):
+        """Test that start() creates a daemon thread."""
+        recorder = RtspRecorder(
+            rtsp_url='rtsp://192.168.1.100:554/stream',
+            chunk_duration=3.0,
+            output_dir=temp_output_dir,
+            target_sample_rate=48000
+        )
+
+        with patch.object(recorder, '_recording_loop'):
+            recorder.start()
+
+            try:
+                assert recorder.is_running is True
+                assert recorder.recording_thread is not None
+                assert recorder.recording_thread.daemon is True
+                assert recorder.recording_thread.name == "RTSPRecordingThread"
+            finally:
+                recorder.is_running = False
+
+    def test_start_is_idempotent(self, temp_output_dir):
+        """Test that calling start() twice doesn't create two threads."""
+        recorder = RtspRecorder(
+            rtsp_url='rtsp://192.168.1.100:554/stream',
+            chunk_duration=3.0,
+            output_dir=temp_output_dir,
+            target_sample_rate=48000
+        )
+
+        with patch.object(recorder, '_recording_loop'):
+            recorder.start()
+            first_thread = recorder.recording_thread
+
+            recorder.start()  # Second call should be no-op
+
+            assert recorder.recording_thread is first_thread
+            recorder.is_running = False
+
+    def test_stop_sets_is_running_false(self, temp_output_dir):
+        """Test that stop() sets is_running to False."""
+        recorder = RtspRecorder(
+            rtsp_url='rtsp://192.168.1.100:554/stream',
+            chunk_duration=3.0,
+            output_dir=temp_output_dir,
+            target_sample_rate=48000
+        )
+
+        recorder.is_running = True
+        recorder.recording_thread = Mock()
+        recorder.recording_thread.is_alive.return_value = True
+
+        recorder.stop()
+
+        assert recorder.is_running is False
+
+    def test_is_healthy_returns_false_when_not_running(self, temp_output_dir):
+        """Test is_healthy() returns False when recorder is stopped."""
+        recorder = RtspRecorder(
+            rtsp_url='rtsp://192.168.1.100:554/stream',
+            chunk_duration=3.0,
+            output_dir=temp_output_dir,
+            target_sample_rate=48000
+        )
+
+        assert recorder.is_healthy() is False
+
+    def test_is_healthy_returns_true_when_thread_alive(self, temp_output_dir):
+        """Test is_healthy() returns True when thread is alive."""
+        recorder = RtspRecorder(
+            rtsp_url='rtsp://192.168.1.100:554/stream',
+            chunk_duration=3.0,
+            output_dir=temp_output_dir,
+            target_sample_rate=48000
+        )
+
+        mock_thread = Mock()
+        mock_thread.is_alive.return_value = True
+        recorder.is_running = True
+        recorder.recording_thread = mock_thread
+
+        assert recorder.is_healthy() is True
+
+    def test_restart_stops_then_starts(self, temp_output_dir):
+        """Test that restart() calls stop() then start()."""
+        recorder = RtspRecorder(
+            rtsp_url='rtsp://192.168.1.100:554/stream',
+            chunk_duration=3.0,
+            output_dir=temp_output_dir,
+            target_sample_rate=48000
+        )
+
+        with patch.object(recorder, 'stop') as mock_stop, \
+             patch.object(recorder, 'start') as mock_start, \
+             patch('time.sleep'):
+            recorder.restart()
+
+            mock_stop.assert_called_once()
+            mock_start.assert_called_once()
