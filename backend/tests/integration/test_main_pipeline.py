@@ -439,7 +439,7 @@ class TestHandleDetection:
              patch('core.main.get_logger') as mock_get_logger:
 
             # Setup mocks
-            mock_select.return_value = (0, 3)  # Start, end indices
+            mock_select.return_value = (0, 2)  # Start, end indices (inclusive)
             mock_logger = Mock()
             mock_get_logger.return_value = mock_logger
 
@@ -459,7 +459,7 @@ class TestHandleDetection:
             trim_args = mock_trim.call_args[0]
             assert trim_args[0] == input_file  # source file
             assert trim_args[2] == 0  # start time (0 * 3 seconds)
-            assert trim_args[3] == 12  # end time ((3 + 1) * 3 seconds)
+            assert trim_args[3] == 9  # end time (2 * 3 + 3 = 9 seconds)
 
             mock_spec.assert_called_once()
             spec_args = mock_spec.call_args[0]
@@ -525,7 +525,7 @@ class TestHandleDetection:
              patch('core.main.os.remove'), \
              patch('core.main.get_logger') as mock_get_logger:
 
-            mock_select.return_value = [0, 1]  # First two chunks
+            mock_select.return_value = (0, 1)  # First two chunks
             mock_logger = Mock()
             mock_get_logger.return_value = mock_logger
 
@@ -559,7 +559,7 @@ class TestHandleDetection:
              patch('core.main.os.remove'), \
              patch('core.main.get_logger') as mock_get_logger:
 
-            mock_select.return_value = (0, 3)  # Tuple: start=0, end=3
+            mock_select.return_value = (0, 2)  # Tuple: start=0, end=2 (inclusive)
             mock_logger = Mock()
             mock_get_logger.return_value = mock_logger
 
@@ -595,7 +595,7 @@ class TestHandleDetection:
              patch('core.main.os.remove'), \
              patch('core.main.get_logger') as mock_get_logger:
 
-            mock_select.return_value = [1, 2]  # Last two chunks
+            mock_select.return_value = (1, 2)  # Last two chunks
             mock_logger = Mock()
             mock_get_logger.return_value = mock_logger
 
@@ -628,7 +628,7 @@ class TestHandleDetection:
              patch('core.main.os.remove'), \
              patch('core.main.get_logger') as mock_get_logger:
 
-            mock_select.return_value = (0, 3)
+            mock_select.return_value = (0, 2)  # 3 chunks (0, 1, 2) inclusive
             mock_logger = Mock()
             mock_get_logger.return_value = mock_logger
 
@@ -649,7 +649,7 @@ class TestHandleDetection:
 
             # Check start and end times
             assert args[2] == 0  # start_time = 0 * 3
-            assert args[3] == 12  # end_time = (3 + 1) * 3
+            assert args[3] == 9  # end_time = 2 * 3 + 3 = 9
 
     def test_spectrogram_generation_with_correct_title(
         self, temp_recording_dir, temp_extraction_dirs, mock_detection_with_metadata
@@ -673,7 +673,7 @@ class TestHandleDetection:
              patch('core.main.os.remove'), \
              patch('core.main.get_logger') as mock_get_logger:
 
-            mock_select.return_value = (0, 3)
+            mock_select.return_value = (0, 2)  # inclusive range
             mock_logger = Mock()
             mock_get_logger.return_value = mock_logger
 
@@ -725,7 +725,7 @@ class TestHandleDetection:
              patch('core.main.os.remove'), \
              patch('core.main.get_logger') as mock_get_logger:
 
-            mock_select.return_value = (0, 3)
+            mock_select.return_value = (0, 2)  # inclusive range
             mock_logger = Mock()
             mock_get_logger.return_value = mock_logger
 
@@ -767,7 +767,7 @@ class TestHandleDetection:
              patch('core.main.os.remove') as mock_remove, \
              patch('core.main.get_logger') as mock_get_logger:
 
-            mock_select.return_value = (0, 3)
+            mock_select.return_value = (0, 2)  # inclusive range
             mock_logger = Mock()
             mock_get_logger.return_value = mock_logger
 
@@ -805,7 +805,7 @@ class TestHandleDetection:
              patch('core.main.os.remove'), \
              patch('core.main.get_logger') as mock_get_logger:
 
-            mock_select.return_value = (0, 3)
+            mock_select.return_value = (0, 2)  # inclusive range
             mock_logger = Mock()
             mock_get_logger.return_value = mock_logger
 
@@ -852,7 +852,7 @@ class TestHandleDetection:
              patch('core.main.os.remove'), \
              patch('core.main.get_logger') as mock_get_logger:
 
-            mock_select.return_value = (0, 3)
+            mock_select.return_value = (0, 2)  # inclusive range
             mock_logger = Mock()
             mock_get_logger.return_value = mock_logger
 
@@ -904,7 +904,7 @@ class TestHandleDetection:
             # Broadcast fails with exception
             mock_post.side_effect = Exception("Connection refused")
 
-            mock_select.return_value = (0, 3)
+            mock_select.return_value = (0, 2)  # inclusive range
             mock_logger = Mock()
             mock_get_logger.return_value = mock_logger
 
@@ -945,7 +945,7 @@ class TestHandleDetection:
              patch('core.main.os.remove'), \
              patch('core.main.get_logger') as mock_get_logger:
 
-            mock_select.return_value = (0, 3)
+            mock_select.return_value = (0, 2)  # inclusive range
             mock_logger = Mock()
             mock_get_logger.return_value = mock_logger
 
@@ -1023,7 +1023,7 @@ class TestFullPipelineIntegration:
              patch('core.main.stop_flag') as mock_stop:
 
             # Mock select_audio_chunks to return proper range
-            mock_select.return_value = (0, 3)
+            mock_select.return_value = (0, 2)  # inclusive range
 
             # Mock BirdNet API response
             mock_response = Mock()
@@ -1145,7 +1145,7 @@ class TestFullPipelineIntegration:
              patch('core.main.stop_flag') as mock_stop:
 
             # Mock select_audio_chunks
-            mock_select.return_value = (0, 3)
+            mock_select.return_value = (0, 2)  # inclusive range
 
             # Mock BirdNet API response with no detections
             mock_response = Mock()
@@ -1204,7 +1204,7 @@ class TestFullPipelineIntegration:
              patch('core.main.stop_flag') as mock_stop:
 
             # Mock select_audio_chunks
-            mock_select.return_value = (0, 3)
+            mock_select.return_value = (0, 2)  # inclusive range
 
             # Mock BirdNet API response with 2 detections
             mock_response = Mock()
@@ -1268,7 +1268,7 @@ class TestFullPipelineIntegration:
              patch('core.main.stop_flag') as mock_stop:
 
             # Mock select_audio_chunks
-            mock_select.return_value = (0, 3)
+            mock_select.return_value = (0, 2)  # inclusive range
 
             # Mock BirdNet API response
             mock_response = Mock()
@@ -1347,7 +1347,7 @@ class TestFullPipelineIntegration:
              patch('core.main.stop_flag') as mock_stop:
 
             # Mock select_audio_chunks
-            mock_select.return_value = (0, 3)
+            mock_select.return_value = (0, 2)  # inclusive range
 
             # Mock BirdNet API response
             mock_response = Mock()
@@ -1407,7 +1407,7 @@ class TestFullPipelineIntegration:
              patch('core.main.stop_flag') as mock_stop:
 
             # Mock select_audio_chunks
-            mock_select.return_value = (0, 3)
+            mock_select.return_value = (0, 2)  # inclusive range
 
             # Mock BirdNet API response
             mock_response = Mock()
@@ -1466,7 +1466,7 @@ class TestFullPipelineIntegration:
              patch('core.main.stop_flag') as mock_stop:
 
             # Mock select_audio_chunks
-            mock_select.return_value = (0, 3)
+            mock_select.return_value = (0, 2)  # inclusive range
 
             # Mock BirdNet API to return error (500 Internal Server Error)
             mock_response = Mock()

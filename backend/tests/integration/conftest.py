@@ -129,7 +129,8 @@ def mock_utils_functions():
          patch('core.main.generate_spectrogram') as mock_spec, \
          patch('core.main.convert_wav_to_mp3') as mock_convert:
 
-        mock_select.return_value = (0, 3)
+        # Returns (start_chunk, end_chunk) inclusive - represents 3 chunks (0, 1, 2)
+        mock_select.return_value = (0, 2)
 
         yield {
             'select_audio_chunks': mock_select,
