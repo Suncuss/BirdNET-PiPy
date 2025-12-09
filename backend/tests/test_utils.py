@@ -114,42 +114,61 @@ class TestBuildDetectionFilenames:
 
 
 class TestSelectAudioChunks:
-    """Tests for select_audio_chunks() function"""
+    """Tests for select_audio_chunks() function
+
+    The function returns (start_chunk_index, end_chunk_index) as inclusive range.
+    - Edge detections (first/last chunk): 2 chunks (6 seconds)
+    - Middle detections: 3 chunks centered on detection (9 seconds)
+    """
 
     def test_first_chunk_returns_first_two(self):
-        """Test that first chunk selection returns [0, 1]"""
+        """Test that first chunk selection returns (0, 1) - 2 chunks"""
         from core.utils import select_audio_chunks
 
         result = select_audio_chunks(0, 3)
-        assert result == [0, 1]
+        assert result == (0, 1)
 
     def test_last_chunk_returns_last_two(self):
         """Test that last chunk selection returns last two indices"""
         from core.utils import select_audio_chunks
 
         result = select_audio_chunks(2, 3)  # Last chunk of 3
-        assert result == [1, 2]
+        assert result == (1, 2)
 
-    def test_middle_chunk_returns_surrounding(self):
-        """Test that middle chunk returns surrounding indices"""
+    def test_middle_chunk_returns_three_centered(self):
+        """Test that middle chunk returns 3 chunks centered on detection"""
         from core.utils import select_audio_chunks
 
         result = select_audio_chunks(1, 3)  # Middle chunk of 3
-        assert result == (0, 3)  # Returns tuple with start=0, end=3
+        assert result == (0, 2)  # chunks 0, 1, 2 (all 3)
 
     def test_middle_chunk_in_longer_array(self):
         """Test middle chunk in array with more chunks"""
         from core.utils import select_audio_chunks
 
         result = select_audio_chunks(2, 5)  # Middle of 5 chunks
-        assert result == (1, 4)  # chunk_index-1 to chunk_index+2
+        assert result == (1, 3)  # chunks 1, 2, 3 (3 chunks centered on 2)
 
     def test_second_chunk_in_five(self):
         """Test selection of second chunk in 5 chunk array"""
         from core.utils import select_audio_chunks
 
         result = select_audio_chunks(1, 5)
-        assert result == (0, 3)
+        assert result == (0, 2)  # chunks 0, 1, 2 (3 chunks centered on 1)
+
+    def test_fourth_chunk_in_five(self):
+        """Test selection of fourth chunk (index 3) in 5 chunk array"""
+        from core.utils import select_audio_chunks
+
+        result = select_audio_chunks(3, 5)
+        assert result == (2, 4)  # chunks 2, 3, 4 (3 chunks centered on 3)
+
+    def test_last_chunk_in_five(self):
+        """Test selection of last chunk in 5 chunk array"""
+        from core.utils import select_audio_chunks
+
+        result = select_audio_chunks(4, 5)
+        assert result == (3, 4)  # Last 2 chunks
 
     def test_invalid_negative_index_raises(self):
         """Test that negative index raises ValueError"""
@@ -165,22 +184,22 @@ class TestSelectAudioChunks:
         with pytest.raises(ValueError, match="detected_chunk_index must be within"):
             select_audio_chunks(3, 3)  # Index 3 is out of range for 3 chunks
 
-    def test_single_chunk_returns_all(self):
-        """Test that single chunk returns all (0)"""
+    def test_single_chunk_returns_same_start_end(self):
+        """Test that single chunk returns (0, 0)"""
         from core.utils import select_audio_chunks
 
         result = select_audio_chunks(0, 1)
-        assert result == [0]
+        assert result == (0, 0)
 
     def test_two_chunks_returns_both(self):
-        """Test that two chunks returns both"""
+        """Test that two chunks returns both as (0, 1)"""
         from core.utils import select_audio_chunks
 
         result = select_audio_chunks(0, 2)
-        assert result == [0, 1]
+        assert result == (0, 1)
 
         result2 = select_audio_chunks(1, 2)
-        assert result2 == [0, 1]
+        assert result2 == (0, 1)
 
 
 class TestTrimAudio:

@@ -154,29 +154,36 @@ def generate_spectrogram(input_file_path, output_file_path, graph_title, start_t
 
 def select_audio_chunks(detected_chunk_index, total_chunks):
     """
-    Select the chunks of audio to be stitched together based on the index of the detected chunk.
-    
+    Select the range of audio chunks to extract based on the detected chunk index.
+
+    For edge detections (first/last chunk): extracts 2 chunks (6 seconds)
+    For middle detections: extracts 3 chunks centered on detection (9 seconds)
+
     Args:
-    detected_chunk_index (int): The index of the chunk where the audio event was detected (0-based).
-    total_chunks (int): The total number of chunks in the audio.
-    
+        detected_chunk_index (int): The index of the chunk where detection occurred (0-based).
+        total_chunks (int): The total number of chunks in the audio.
+
     Returns:
-    list: A list of indices of the chunks to be stitched together.
+        tuple: (start_chunk_index, end_chunk_index) - both inclusive.
+               Used by extract_detection_audio() to calculate time range.
     """
     if detected_chunk_index < 0 or detected_chunk_index >= total_chunks:
         raise ValueError("detected_chunk_index must be within the range of total_chunks")
-    
+
     if total_chunks < 3:
-        return list(range(total_chunks))  # Return all chunks if there are fewer than 3
-    
+        # Return all chunks if fewer than 3
+        return (0, total_chunks - 1)
+
     if detected_chunk_index == 0:
-        return [0, 1]  # First two chunks if the first chunk is detected
+        # First chunk detected: extract chunks 0 and 1 (6 seconds)
+        return (0, 1)
     elif detected_chunk_index == total_chunks - 1:
-        return [total_chunks - 2, total_chunks - 1]  # Last two chunks if the last chunk is detected
+        # Last chunk detected: extract last 2 chunks (6 seconds)
+        return (total_chunks - 2, total_chunks - 1)
     else:
-        # For middle chunks, return three chunks centered on the detected chunk
-        start = max(0, detected_chunk_index - 1)
-        end = min(total_chunks, detected_chunk_index + 2)
+        # Middle chunk: extract 3 chunks centered on detection (9 seconds)
+        start = detected_chunk_index - 1
+        end = detected_chunk_index + 1
         return (start, end)
 
 
