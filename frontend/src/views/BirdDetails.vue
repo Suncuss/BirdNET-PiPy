@@ -6,7 +6,7 @@
 
       <!-- Bird Image, Quick Stats, and Attribution -->
       <div class="bg-white rounded-lg shadow overflow-hidden lg:col-span-1">
-        <div class="relative overflow-hidden w-full" style="aspect-ratio: 1 / 1; max-height: 300px;">
+        <div class="relative overflow-hidden w-full aspect-square max-h-[300px]">
           <a :href="birdImageData.pageUrl" target="_blank" rel="noopener noreferrer" 
             class="block w-full h-full cursor-pointer" 
             :title="`View ${birdDetails.common_name} on Wikimedia Commons`">
@@ -87,7 +87,7 @@
         </div>
         
         <!-- Canvas Container with fixed aspect ratio for Safari -->
-        <div class="relative w-full" style="height: 300px;">
+        <div class="relative w-full h-[300px]">
           <canvas ref="detectionChart" class="absolute inset-0 w-full h-full"></canvas>
         </div>
       </div>

@@ -737,13 +737,13 @@ export default {
   input[type="range"]::-webkit-slider-runnable-track {
     height: 0.5rem;
     border-radius: 9999px;
-    background-color: #e5e7eb;
+    background-color: theme('colors.gray.200');
   }
 
   input[type="range"]::-moz-range-track {
     height: 0.5rem;
     border-radius: 9999px;
-    background-color: #e5e7eb;
+    background-color: theme('colors.gray.200');
   }
 
   /* Thumb styling - Chrome, Safari, Edge */
@@ -753,7 +753,7 @@ export default {
     width: 1.25rem;
     height: 1.25rem;
     border-radius: 9999px;
-    background-color: #2563eb;
+    background-color: theme('colors.blue.600');
     cursor: pointer;
     margin-top: -0.375rem;
     border: 2px solid white;
@@ -765,7 +765,7 @@ export default {
     width: 1.25rem;
     height: 1.25rem;
     border-radius: 9999px;
-    background-color: #2563eb;
+    background-color: theme('colors.blue.600');
     cursor: pointer;
     border: 2px solid white;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
@@ -773,10 +773,10 @@ export default {
 
   /* Hover state */
   input[type="range"]:hover::-webkit-slider-thumb {
-    background-color: #1d4ed8;
+    background-color: theme('colors.blue.700');
   }
 
   input[type="range"]:hover::-moz-range-thumb {
-    background-color: #1d4ed8;
+    background-color: theme('colors.blue.700');
   }
   </style>

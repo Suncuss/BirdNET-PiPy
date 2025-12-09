@@ -143,7 +143,7 @@
             <!-- Hourly Activity Chart -->
             <div class="bg-white rounded-lg shadow p-4">
                 <h2 class="text-lg font-semibold mb-2">Hourly Activity</h2>
-                <div v-if="!hourlyBirdActivityError" style="position: relative; height: 260px; width: 100%;">
+                <div v-if="!hourlyBirdActivityError" class="relative h-[260px] w-full">
                     <canvas ref="hourlyActivityChart"></canvas>
                 </div>
                 <p v-else class="text-gray-500">{{ hourlyBirdActivityError }}</p>

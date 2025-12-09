@@ -1,5 +1,5 @@
 <template>
-  <div class="live-feed">
+  <div class="flex flex-col items-center w-full max-w-3xl mx-auto">
     <div class="bg-white rounded-lg shadow-md p-4 w-full max-w-4xl">
       <div v-if="isSafari" class="w-full h-32 mb-4 bg-gray-800 rounded-lg flex items-center justify-center">
         <div class="text-center text-white">
@@ -14,7 +14,7 @@
           class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg shadow focus:outline-none focus:ring-2 focus:ring-blue-300 flex items-center justify-center min-w-[120px] flex-shrink-0 disabled:bg-gray-400 disabled:cursor-not-allowed"
           :disabled="isLoading || !streamUrl">
           <template v-if="isLoading">
-            <div class="spinner mr-2"></div>
+            <div class="animate-spin w-4 h-4 rounded-full border-2 border-gray-100 border-t-blue-500 mr-2"></div>
             Loading...
           </template>
           <template v-else>
@@ -319,33 +319,3 @@ export default {
   }
 }
 </script>
-
-<style scoped>
-.live-feed {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  width: 100%;
-  max-width: 800px;
-  margin: 0 auto;
-}
-
-.spinner {
-  border: 2px solid #f3f3f3;
-  border-top: 2px solid #3498db;
-  border-radius: 50%;
-  width: 16px;
-  height: 16px;
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  0% {
-    transform: rotate(0deg);
-  }
-
-  100% {
-    transform: rotate(360deg);
-  }
-}
-</style>

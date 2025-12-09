@@ -6,7 +6,7 @@
             @click="navigateToBirdDetails(detection.common_name)"
             :class="[
               'p-3 bg-gray-100 rounded-lg border-l-4 border-green-500 transition-all duration-300 cursor-pointer hover:bg-gray-200 hover:shadow-md',
-              detection.justUpdated ? 'highlight-flash' : ''
+              detection.justUpdated ? '!bg-green-100 !border-l-green-600 shadow-[0_0_20px_rgba(34,197,94,0.3)] scale-[1.02]' : ''
             ]">
           <div class="flex items-center justify-between">
             <div class="flex-grow">
@@ -66,13 +66,6 @@
   .list-leave-to {
     opacity: 0;
     transform: translateY(30px);
-  }
-  
-  .highlight-flash {
-    background-color: #dcfce7 !important; /* light green background */
-    border-left-color: #16a34a !important; /* brighter green border */
-    box-shadow: 0 0 20px rgba(34, 197, 94, 0.3); /* green glow */
-    transform: scale(1.02); /* subtle scale up */
   }
   
   .list-move {
