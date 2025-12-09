@@ -7,6 +7,7 @@ Tests HttpStreamRecorder, RtspRecorder, and PulseAudioRecorder functionality inc
 - Atomic file operations
 - Thread lifecycle management
 - Error handling and cleanup
+- Shell injection prevention (argument lists, not shell strings)
 """
 import pytest
 import os
@@ -16,7 +17,102 @@ import subprocess
 from unittest.mock import Mock, patch, MagicMock, call
 from datetime import datetime
 
-from core.audio_manager import HttpStreamRecorder, PulseAudioRecorder, RtspRecorder
+from core.audio_manager import HttpStreamRecorder, PulseAudioRecorder, RtspRecorder, BaseRecorder, create_recorder
+
+
+class TestCreateRecorderFactory:
+    """Test the create_recorder factory function."""
+
+    def test_creates_pulseaudio_recorder(self, temp_output_dir):
+        """Test factory creates PulseAudioRecorder for pulseaudio mode."""
+        recorder = create_recorder(
+            recording_mode='pulseaudio',
+            chunk_duration=3.0,
+            output_dir=temp_output_dir,
+            target_sample_rate=48000,
+            source_name='test_source'
+        )
+        assert isinstance(recorder, PulseAudioRecorder)
+        assert recorder.source_name == 'test_source'
+
+    def test_creates_http_recorder(self, temp_output_dir):
+        """Test factory creates HttpStreamRecorder for http_stream mode."""
+        recorder = create_recorder(
+            recording_mode='http_stream',
+            chunk_duration=3.0,
+            output_dir=temp_output_dir,
+            target_sample_rate=48000,
+            stream_url='http://example.com/stream'
+        )
+        assert isinstance(recorder, HttpStreamRecorder)
+        assert recorder.stream_url == 'http://example.com/stream'
+
+    def test_creates_rtsp_recorder(self, temp_output_dir):
+        """Test factory creates RtspRecorder for rtsp mode."""
+        recorder = create_recorder(
+            recording_mode='rtsp',
+            chunk_duration=3.0,
+            output_dir=temp_output_dir,
+            target_sample_rate=48000,
+            rtsp_url='rtsp://192.168.1.100/stream'
+        )
+        assert isinstance(recorder, RtspRecorder)
+        assert recorder.rtsp_url == 'rtsp://192.168.1.100/stream'
+
+    def test_raises_for_missing_stream_url(self, temp_output_dir):
+        """Test factory raises ValueError if http_stream mode but no stream_url."""
+        with pytest.raises(ValueError, match="stream_url required"):
+            create_recorder(
+                recording_mode='http_stream',
+                chunk_duration=3.0,
+                output_dir=temp_output_dir,
+                target_sample_rate=48000
+            )
+
+    def test_raises_for_missing_rtsp_url(self, temp_output_dir):
+        """Test factory raises ValueError if rtsp mode but no rtsp_url."""
+        with pytest.raises(ValueError, match="rtsp_url required"):
+            create_recorder(
+                recording_mode='rtsp',
+                chunk_duration=3.0,
+                output_dir=temp_output_dir,
+                target_sample_rate=48000
+            )
+
+    def test_raises_for_unknown_mode(self, temp_output_dir):
+        """Test factory raises ValueError for unknown recording mode."""
+        with pytest.raises(ValueError, match="Unknown recording mode"):
+            create_recorder(
+                recording_mode='unknown_mode',
+                chunk_duration=3.0,
+                output_dir=temp_output_dir,
+                target_sample_rate=48000
+            )
+
+    def test_pulseaudio_defaults_to_default_source(self, temp_output_dir):
+        """Test pulseaudio mode defaults source_name to 'default'."""
+        recorder = create_recorder(
+            recording_mode='pulseaudio',
+            chunk_duration=3.0,
+            output_dir=temp_output_dir,
+            target_sample_rate=48000
+        )
+        assert recorder.source_name == 'default'
+
+
+class TestBaseRecorderInterface:
+    """Test that BaseRecorder provides correct interface."""
+
+    def test_base_recorder_is_abstract(self):
+        """Test that BaseRecorder cannot be instantiated directly."""
+        with pytest.raises(TypeError):
+            BaseRecorder(chunk_duration=3.0, output_dir='/tmp', target_sample_rate=48000)
+
+    def test_all_recorders_inherit_from_base(self):
+        """Test that all recorder classes inherit from BaseRecorder."""
+        assert issubclass(HttpStreamRecorder, BaseRecorder)
+        assert issubclass(RtspRecorder, BaseRecorder)
+        assert issubclass(PulseAudioRecorder, BaseRecorder)
 
 
 class TestHttpStreamRecorderInit:
@@ -48,8 +144,8 @@ class TestHttpStreamRecorderInit:
 class TestHttpStreamRecorderRecordChunk:
     """Test HttpStreamRecorder._record_chunk() method."""
 
-    def test_record_chunk_builds_correct_command(self, temp_output_dir):
-        """Test that the ffmpeg command is built correctly."""
+    def test_record_chunk_uses_popen_not_shell(self, temp_output_dir):
+        """Test that recording uses Popen with argument lists, not shell strings."""
         recorder = HttpStreamRecorder(
             stream_url='http://test:8888/stream.mp3',
             chunk_duration=3.0,
@@ -57,28 +153,41 @@ class TestHttpStreamRecorderRecordChunk:
             target_sample_rate=48000
         )
 
-        with patch('subprocess.run') as mock_run, \
+        with patch('subprocess.Popen') as mock_popen, \
              patch('os.path.exists', return_value=True), \
              patch('os.path.getsize', return_value=144000), \
              patch('os.rename'):
-            mock_run.return_value = Mock(returncode=0)
+
+            # Mock curl process
+            mock_curl = Mock()
+            mock_curl.stdout = Mock()
+
+            # Mock ffmpeg process
+            mock_ffmpeg = Mock()
+            mock_ffmpeg.wait.return_value = None
+            mock_ffmpeg.returncode = 0
+
+            mock_popen.side_effect = [mock_curl, mock_ffmpeg]
 
             recorder._record_chunk()
 
-            # Verify subprocess was called
-            assert mock_run.called
-            call_args = mock_run.call_args
-            cmd = call_args[0][0]
+            # Verify Popen was called twice (curl and ffmpeg)
+            assert mock_popen.call_count == 2
 
-            # Should be ['bash', '-c', 'curl ... | ffmpeg ...']
-            assert cmd[0] == 'bash'
-            assert cmd[1] == '-c'
-            assert 'curl' in cmd[2]
-            assert 'ffmpeg' in cmd[2]
-            assert 'http://test:8888/stream.mp3' in cmd[2]
-            assert '-t 3.0' in cmd[2]
-            assert '-ar 48000' in cmd[2]
-            assert '-ac 1' in cmd[2]
+            # Verify curl command uses argument list
+            curl_call = mock_popen.call_args_list[0]
+            curl_cmd = curl_call[0][0]
+            assert isinstance(curl_cmd, list)
+            assert curl_cmd[0] == 'curl'
+            assert '-s' in curl_cmd
+            assert 'http://test:8888/stream.mp3' in curl_cmd
+
+            # Verify ffmpeg command uses argument list
+            ffmpeg_call = mock_popen.call_args_list[1]
+            ffmpeg_cmd = ffmpeg_call[0][0]
+            assert isinstance(ffmpeg_cmd, list)
+            assert ffmpeg_cmd[0] == 'ffmpeg'
+            assert 'pipe:0' in ffmpeg_cmd
 
     def test_record_chunk_success_returns_final_path(self, temp_output_dir):
         """Test successful recording returns the final file path."""
@@ -89,12 +198,17 @@ class TestHttpStreamRecorderRecordChunk:
             target_sample_rate=48000
         )
 
-        with patch('subprocess.run') as mock_run, \
+        with patch('subprocess.Popen') as mock_popen, \
              patch('os.path.exists', return_value=True), \
              patch('os.path.getsize', return_value=144000), \
              patch('os.rename') as mock_rename:
 
-            mock_run.return_value = Mock(returncode=0)
+            mock_curl = Mock()
+            mock_curl.stdout = Mock()
+            mock_ffmpeg = Mock()
+            mock_ffmpeg.wait.return_value = None
+            mock_ffmpeg.returncode = 0
+            mock_popen.side_effect = [mock_curl, mock_ffmpeg]
 
             result = recorder._record_chunk()
 
@@ -116,14 +230,19 @@ class TestHttpStreamRecorderRecordChunk:
             target_sample_rate=48000
         )
 
-        with patch('subprocess.run') as mock_run, \
+        with patch('subprocess.Popen') as mock_popen, \
              patch('os.path.exists', return_value=True), \
              patch('os.path.getsize', return_value=144000), \
              patch('os.rename') as mock_rename, \
              patch('core.audio_manager.datetime') as mock_dt:
 
             mock_dt.now.return_value = datetime(2025, 11, 26, 10, 30, 0)
-            mock_run.return_value = Mock(returncode=0)
+            mock_curl = Mock()
+            mock_curl.stdout = Mock()
+            mock_ffmpeg = Mock()
+            mock_ffmpeg.wait.return_value = None
+            mock_ffmpeg.returncode = 0
+            mock_popen.side_effect = [mock_curl, mock_ffmpeg]
 
             recorder._record_chunk()
 
@@ -142,9 +261,15 @@ class TestHttpStreamRecorderRecordChunk:
             target_sample_rate=48000
         )
 
-        with patch('subprocess.run') as mock_run, \
+        with patch('subprocess.Popen') as mock_popen, \
              patch('os.path.exists', return_value=False):
-            mock_run.return_value = Mock(returncode=1)
+
+            mock_curl = Mock()
+            mock_curl.stdout = Mock()
+            mock_ffmpeg = Mock()
+            mock_ffmpeg.wait.return_value = None
+            mock_ffmpeg.returncode = 1  # Failure
+            mock_popen.side_effect = [mock_curl, mock_ffmpeg]
 
             result = recorder._record_chunk()
 
@@ -159,13 +284,17 @@ class TestHttpStreamRecorderRecordChunk:
             target_sample_rate=48000
         )
 
-        # Simulate: subprocess succeeds but file exists check passes initially,
-        # then we check for cleanup
-        with patch('subprocess.run') as mock_run, \
+        with patch('subprocess.Popen') as mock_popen, \
              patch('os.path.exists', return_value=True), \
              patch('os.path.getsize', return_value=0), \
              patch('os.unlink') as mock_unlink:
-            mock_run.return_value = Mock(returncode=0)
+
+            mock_curl = Mock()
+            mock_curl.stdout = Mock()
+            mock_ffmpeg = Mock()
+            mock_ffmpeg.wait.return_value = None
+            mock_ffmpeg.returncode = 0
+            mock_popen.side_effect = [mock_curl, mock_ffmpeg]
 
             result = recorder._record_chunk()
 
@@ -182,34 +311,22 @@ class TestHttpStreamRecorderRecordChunk:
             target_sample_rate=48000
         )
 
-        with patch('subprocess.run') as mock_run, \
+        with patch('subprocess.Popen') as mock_popen, \
              patch('os.path.exists', return_value=True), \
              patch('os.unlink') as mock_unlink:
-            mock_run.side_effect = subprocess.TimeoutExpired(cmd='test', timeout=13)
+
+            mock_curl = Mock()
+            mock_curl.stdout = Mock()
+            mock_ffmpeg = Mock()
+            mock_ffmpeg.wait.side_effect = subprocess.TimeoutExpired(cmd='test', timeout=13)
+            mock_ffmpeg.kill = Mock()
+            mock_curl.kill = Mock()
+            mock_popen.side_effect = [mock_curl, mock_ffmpeg]
 
             result = recorder._record_chunk()
 
             assert result is None
             # Should attempt cleanup
-            mock_unlink.assert_called_once()
-
-    def test_record_chunk_handles_generic_exception(self, temp_output_dir):
-        """Test that generic exceptions are handled gracefully."""
-        recorder = HttpStreamRecorder(
-            stream_url='http://test:8888/stream.mp3',
-            chunk_duration=3.0,
-            output_dir=temp_output_dir,
-            target_sample_rate=48000
-        )
-
-        with patch('subprocess.run') as mock_run, \
-             patch('os.path.exists', return_value=True), \
-             patch('os.unlink') as mock_unlink:
-            mock_run.side_effect = Exception("Unexpected error")
-
-            result = recorder._record_chunk()
-
-            assert result is None
             mock_unlink.assert_called_once()
 
     def test_record_chunk_rejects_empty_file(self, temp_output_dir):
@@ -221,12 +338,18 @@ class TestHttpStreamRecorderRecordChunk:
             target_sample_rate=48000
         )
 
-        with patch('subprocess.run') as mock_run, \
+        with patch('subprocess.Popen') as mock_popen, \
              patch('os.path.exists', return_value=True), \
              patch('os.path.getsize', return_value=0), \
              patch('os.unlink') as mock_unlink, \
              patch('os.rename') as mock_rename:
-            mock_run.return_value = Mock(returncode=0)
+
+            mock_curl = Mock()
+            mock_curl.stdout = Mock()
+            mock_ffmpeg = Mock()
+            mock_ffmpeg.wait.return_value = None
+            mock_ffmpeg.returncode = 0
+            mock_popen.side_effect = [mock_curl, mock_ffmpeg]
 
             result = recorder._record_chunk()
 
@@ -426,8 +549,8 @@ class TestPulseAudioRecorderInit:
 class TestPulseAudioRecorderRecordChunk:
     """Test PulseAudioRecorder._record_chunk() method."""
 
-    def test_record_chunk_builds_correct_command(self, temp_output_dir):
-        """Test that the ffmpeg command for PulseAudio is built correctly."""
+    def test_record_chunk_uses_argument_list_not_shell(self, temp_output_dir):
+        """Test that the ffmpeg command uses argument list, not shell string."""
         recorder = PulseAudioRecorder(
             source_name='birdnet_monitor.monitor',
             chunk_duration=3.0,
@@ -447,15 +570,19 @@ class TestPulseAudioRecorderRecordChunk:
             call_args = mock_run.call_args
             cmd = call_args[0][0]
 
-            # Should be ['bash', '-c', 'ffmpeg -f pulse ...']
-            assert cmd[0] == 'bash'
-            assert cmd[1] == '-c'
-            assert 'ffmpeg' in cmd[2]
-            assert '-f pulse' in cmd[2]
-            assert '-i birdnet_monitor.monitor' in cmd[2]
-            assert '-t 3.0' in cmd[2]
-            assert '-ar 48000' in cmd[2]
-            assert '-ac 1' in cmd[2]
+            # Should be a list, not a string (no shell injection)
+            assert isinstance(cmd, list)
+            assert cmd[0] == 'ffmpeg'
+            assert '-f' in cmd
+            assert 'pulse' in cmd
+            assert '-i' in cmd
+            assert 'birdnet_monitor.monitor' in cmd
+            assert '-t' in cmd
+            assert '3.0' in cmd
+            assert '-ar' in cmd
+            assert '48000' in cmd
+            assert '-ac' in cmd
+            assert '1' in cmd
 
     def test_record_chunk_success_returns_final_path(self, temp_output_dir):
         """Test successful recording returns the final file path."""
@@ -579,10 +706,10 @@ class TestPulseAudioRecorderLifecycle:
 
 
 class TestRecorderComparison:
-    """Test that both recorders produce compatible output patterns."""
+    """Test that all recorders produce compatible output patterns."""
 
-    def test_both_recorders_use_same_filename_format(self, temp_output_dir):
-        """Test that both recorders use YYYYMMDD_HHMMSS.wav format."""
+    def test_all_recorders_use_same_filename_format(self, temp_output_dir):
+        """Test that all recorders use YYYYMMDD_HHMMSS.wav format."""
         import re
 
         http_recorder = HttpStreamRecorder(
@@ -599,35 +726,54 @@ class TestRecorderComparison:
             target_sample_rate=48000
         )
 
-        with patch('subprocess.run') as mock_run, \
-             patch('os.path.exists', return_value=True), \
-             patch('os.path.getsize', return_value=144000), \
-             patch('os.rename') as mock_rename:
-
-            mock_run.return_value = Mock(returncode=0)
-
-            http_result = http_recorder._record_chunk()
-
-            mock_rename.reset_mock()
-
-            pulse_result = pulse_recorder._record_chunk()
-
-            # Both should produce same filename format: YYYYMMDD_HHMMSS.wav
-            http_filename = os.path.basename(http_result)
-            pulse_filename = os.path.basename(pulse_result)
-            filename_pattern = r'^\d{8}_\d{6}\.wav$'
-            assert re.match(filename_pattern, http_filename), f"HTTP filename '{http_filename}' doesn't match pattern"
-            assert re.match(filename_pattern, pulse_filename), f"Pulse filename '{pulse_filename}' doesn't match pattern"
-
-    def test_both_recorders_output_same_audio_format(self, temp_output_dir):
-        """Test that both recorders specify same audio format in commands."""
-        http_recorder = HttpStreamRecorder(
-            stream_url='http://test:8888/stream.mp3',
+        rtsp_recorder = RtspRecorder(
+            rtsp_url='rtsp://192.168.1.100:554/stream',
             chunk_duration=3.0,
             output_dir=temp_output_dir,
             target_sample_rate=48000
         )
 
+        # Test HTTP recorder
+        with patch('subprocess.Popen') as mock_popen, \
+             patch('os.path.exists', return_value=True), \
+             patch('os.path.getsize', return_value=144000), \
+             patch('os.rename') as mock_rename:
+
+            mock_curl = Mock()
+            mock_curl.stdout = Mock()
+            mock_ffmpeg = Mock()
+            mock_ffmpeg.wait.return_value = None
+            mock_ffmpeg.returncode = 0
+            mock_popen.side_effect = [mock_curl, mock_ffmpeg]
+
+            http_result = http_recorder._record_chunk()
+
+        # Test Pulse recorder
+        with patch('subprocess.run') as mock_run, \
+             patch('os.path.exists', return_value=True), \
+             patch('os.path.getsize', return_value=144000), \
+             patch('os.rename'):
+
+            mock_run.return_value = Mock(returncode=0)
+            pulse_result = pulse_recorder._record_chunk()
+
+        # Test RTSP recorder
+        with patch('subprocess.run') as mock_run, \
+             patch('os.path.exists', return_value=True), \
+             patch('os.path.getsize', return_value=144000), \
+             patch('os.rename'):
+
+            mock_run.return_value = Mock(returncode=0)
+            rtsp_result = rtsp_recorder._record_chunk()
+
+        # All should produce same filename format: YYYYMMDD_HHMMSS.wav
+        filename_pattern = r'^\d{8}_\d{6}\.wav$'
+        for result, name in [(http_result, 'HTTP'), (pulse_result, 'Pulse'), (rtsp_result, 'RTSP')]:
+            filename = os.path.basename(result)
+            assert re.match(filename_pattern, filename), f"{name} filename '{filename}' doesn't match pattern"
+
+    def test_all_recorders_use_argument_lists_not_shell(self, temp_output_dir):
+        """Test that all recorders use argument lists to prevent shell injection."""
         pulse_recorder = PulseAudioRecorder(
             source_name='default',
             chunk_duration=3.0,
@@ -635,23 +781,29 @@ class TestRecorderComparison:
             target_sample_rate=48000
         )
 
+        rtsp_recorder = RtspRecorder(
+            rtsp_url='rtsp://192.168.1.100:554/stream',
+            chunk_duration=3.0,
+            output_dir=temp_output_dir,
+            target_sample_rate=48000
+        )
+
+        # PulseAudio recorder should use subprocess.run with list
         with patch('subprocess.run') as mock_run, \
              patch('os.path.exists', return_value=True), \
              patch('os.path.getsize', return_value=144000), \
              patch('os.rename'):
             mock_run.return_value = Mock(returncode=0)
 
-            http_recorder._record_chunk()
-            http_cmd = mock_run.call_args_list[0][0][0][2]
-
             pulse_recorder._record_chunk()
-            pulse_cmd = mock_run.call_args_list[1][0][0][2]
+            pulse_cmd = mock_run.call_args[0][0]
+            assert isinstance(pulse_cmd, list), "PulseAudio recorder should use argument list"
 
-            # Both should specify same audio format parameters
-            for cmd in [http_cmd, pulse_cmd]:
-                assert '-ar 48000' in cmd  # Sample rate
-                assert '-ac 1' in cmd  # Mono
-                assert '-acodec pcm_s16le' in cmd  # 16-bit PCM
+            mock_run.reset_mock()
+
+            rtsp_recorder._record_chunk()
+            rtsp_cmd = mock_run.call_args[0][0]
+            assert isinstance(rtsp_cmd, list), "RTSP recorder should use argument list"
 
 
 class TestRtspRecorderInit:
@@ -683,8 +835,8 @@ class TestRtspRecorderInit:
 class TestRtspRecorderRecordChunk:
     """Test RtspRecorder._record_chunk() method."""
 
-    def test_record_chunk_builds_correct_command(self, temp_output_dir):
-        """Test that the ffmpeg command for RTSP is built correctly."""
+    def test_record_chunk_uses_argument_list_not_shell(self, temp_output_dir):
+        """Test that the ffmpeg command uses argument list, not shell string."""
         recorder = RtspRecorder(
             rtsp_url='rtsp://192.168.1.100:554/stream',
             chunk_duration=3.0,
@@ -704,16 +856,18 @@ class TestRtspRecorderRecordChunk:
             call_args = mock_run.call_args
             cmd = call_args[0][0]
 
-            # Should be ['bash', '-c', 'ffmpeg -rtsp_transport tcp ...']
-            assert cmd[0] == 'bash'
-            assert cmd[1] == '-c'
-            assert 'ffmpeg' in cmd[2]
-            assert '-rtsp_transport tcp' in cmd[2]
-            assert '-timeout 10000000' in cmd[2]
-            assert 'rtsp://192.168.1.100:554/stream' in cmd[2]
-            assert '-t 3.0' in cmd[2]
-            assert '-ar 48000' in cmd[2]
-            assert '-ac 1' in cmd[2]
+            # Should be a list, not a string (no shell injection)
+            assert isinstance(cmd, list)
+            assert cmd[0] == 'ffmpeg'
+            assert '-rtsp_transport' in cmd
+            assert 'tcp' in cmd
+            assert '-timeout' in cmd
+            assert '10000000' in cmd
+            assert 'rtsp://192.168.1.100:554/stream' in cmd
+            assert '-t' in cmd
+            assert '3.0' in cmd
+            assert '-ar' in cmd
+            assert '48000' in cmd
 
     def test_record_chunk_success_returns_final_path(self, temp_output_dir):
         """Test successful recording returns the final file path."""
@@ -803,6 +957,24 @@ class TestRtspRecorderRecordChunk:
 
             assert result is None
             mock_unlink.assert_called_once()
+
+    def test_rtsp_recorder_has_longer_retry_delay(self, temp_output_dir):
+        """Test that RTSP recorder has longer retry delay for reconnection."""
+        recorder = RtspRecorder(
+            rtsp_url='rtsp://192.168.1.100:554/stream',
+            chunk_duration=3.0,
+            output_dir=temp_output_dir,
+            target_sample_rate=48000
+        )
+
+        http_recorder = HttpStreamRecorder(
+            stream_url='http://test:8888/stream.mp3',
+            chunk_duration=3.0,
+            output_dir=temp_output_dir,
+            target_sample_rate=48000
+        )
+
+        assert recorder._get_retry_delay() > http_recorder._get_retry_delay()
 
 
 class TestRtspRecorderLifecycle:

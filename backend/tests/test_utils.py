@@ -301,3 +301,88 @@ class TestConvertWavToMp3:
             # Verify check=True is passed for error handling
             call_kwargs = mock_run.call_args[1]
             assert call_kwargs.get('check') is True
+
+
+class TestSanitizeUrl:
+    """Tests for sanitize_url() function"""
+
+    def test_rtsp_url_with_credentials(self):
+        """Test RTSP URL with username and password is masked"""
+        from core.utils import sanitize_url
+
+        result = sanitize_url("rtsp://admin:secret123@192.168.1.100:554/stream")
+        assert result == "rtsp://admin:***@192.168.1.100:554/stream"
+
+    def test_rtsp_url_with_special_chars_in_password(self):
+        """Test RTSP URL with special characters in password"""
+        from core.utils import sanitize_url
+
+        result = sanitize_url("rtsp://user:p@ss!word@192.168.1.100:554/live")
+        assert "***" in result
+        assert "p@ss!word" not in result
+
+    def test_http_url_with_credentials(self):
+        """Test HTTP URL with credentials is masked"""
+        from core.utils import sanitize_url
+
+        result = sanitize_url("http://user:password@example.com:8080/stream")
+        assert result == "http://user:***@example.com:8080/stream"
+
+    def test_url_without_password_unchanged(self):
+        """Test URL without password is returned unchanged"""
+        from core.utils import sanitize_url
+
+        url = "http://example.com/stream.mp3"
+        result = sanitize_url(url)
+        assert result == url
+
+    def test_url_with_username_only_unchanged(self):
+        """Test URL with only username (no password) is unchanged"""
+        from core.utils import sanitize_url
+
+        url = "rtsp://admin@192.168.1.100:554/stream"
+        result = sanitize_url(url)
+        assert result == url
+
+    def test_empty_url_returns_empty(self):
+        """Test empty string returns empty"""
+        from core.utils import sanitize_url
+
+        assert sanitize_url("") == ""
+
+    def test_none_url_returns_none(self):
+        """Test None returns None"""
+        from core.utils import sanitize_url
+
+        assert sanitize_url(None) is None
+
+    def test_url_without_port(self):
+        """Test URL with credentials but no port"""
+        from core.utils import sanitize_url
+
+        result = sanitize_url("rtsp://user:pass@192.168.1.100/stream")
+        assert result == "rtsp://user:***@192.168.1.100/stream"
+
+    def test_url_preserves_path_and_query(self):
+        """Test that path and query string are preserved"""
+        from core.utils import sanitize_url
+
+        result = sanitize_url("http://user:pass@example.com:8080/path/to/stream?key=value")
+        assert "/path/to/stream" in result
+        assert "key=value" in result
+        assert "pass" not in result
+
+    def test_malformed_url_returns_original(self):
+        """Test that malformed URLs are returned unchanged"""
+        from core.utils import sanitize_url
+
+        malformed = "not-a-valid-url"
+        result = sanitize_url(malformed)
+        assert result == malformed
+
+    def test_rtsps_url_with_credentials(self):
+        """Test RTSPS (secure RTSP) URL is handled"""
+        from core.utils import sanitize_url
+
+        result = sanitize_url("rtsps://admin:secret@secure.camera.com:443/live")
+        assert result == "rtsps://admin:***@secure.camera.com:443/live"

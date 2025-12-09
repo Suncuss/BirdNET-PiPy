@@ -192,3 +192,50 @@ def convert_wav_to_mp3(input_file_name, output_file_name, bitrate="320k"):
         output_file_name
     ]
     subprocess.run(command, check=True)
+
+
+def sanitize_url(url: str) -> str:
+    """
+    Mask credentials in URL for safe logging.
+
+    Replaces password in URLs with '***' to prevent credential exposure in logs.
+
+    Args:
+        url: URL string that may contain embedded credentials
+
+    Returns:
+        URL with password masked, or original URL if no password present
+
+    Example:
+        >>> sanitize_url("rtsp://admin:secret123@192.168.1.100:554/stream")
+        'rtsp://admin:***@192.168.1.100:554/stream'
+        >>> sanitize_url("http://example.com/stream")
+        'http://example.com/stream'
+    """
+    if not url:
+        return url
+
+    from urllib.parse import urlparse, urlunparse
+
+    try:
+        parsed = urlparse(url)
+
+        # If no password, return original URL unchanged
+        if not parsed.password:
+            return url
+
+        # Build new netloc with masked password
+        if parsed.username:
+            netloc = f"{parsed.username}:***@{parsed.hostname}"
+        else:
+            netloc = f":***@{parsed.hostname}"
+
+        if parsed.port:
+            netloc += f":{parsed.port}"
+
+        # Reconstruct URL with masked password
+        return urlunparse(parsed._replace(netloc=netloc))
+
+    except Exception:
+        # If parsing fails, return original to avoid breaking logging
+        return url

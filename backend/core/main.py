@@ -4,8 +4,8 @@ from config.settings import (
     RECORDING_MODE, PULSEAUDIO_SOURCE, STREAM_URL, RTSP_URL
 )
 from core.db import DatabaseManager
-from core.utils import generate_spectrogram, trim_audio, select_audio_chunks, convert_wav_to_mp3
-from core.audio_manager import HttpStreamRecorder, PulseAudioRecorder, RtspRecorder
+from core.utils import generate_spectrogram, trim_audio, select_audio_chunks, convert_wav_to_mp3, sanitize_url
+from core.audio_manager import BaseRecorder, create_recorder
 from core.logging_config import setup_logging, get_logger
 from version import __version__, DISPLAY_NAME
 
@@ -14,7 +14,7 @@ import time
 import glob
 import threading
 import requests
-from typing import List, Dict, Any, Union
+from typing import List, Dict, Any
 import signal
 
 # Configuration constants
@@ -41,7 +41,7 @@ stop_flag = threading.Event()
 for dir in [RECORDING_DIR, EXTRACTED_AUDIO_DIR, SPECTROGRAM_DIR]:
     os.makedirs(dir, exist_ok=True)
 
-def create_recorder(recording_mode: str, thread_logger) -> Union[PulseAudioRecorder, HttpStreamRecorder, RtspRecorder]:
+def setup_recorder(recording_mode: str, thread_logger) -> BaseRecorder:
     """Create and configure audio recorder based on recording mode.
 
     Args:
@@ -51,42 +51,36 @@ def create_recorder(recording_mode: str, thread_logger) -> Union[PulseAudioRecor
     Returns:
         Configured recorder instance
     """
+    # Log startup info based on mode
     if recording_mode == 'pulseaudio':
         thread_logger.info("Starting PulseAudio recording", extra={
             'pulseaudio_source': PULSEAUDIO_SOURCE,
             'chunk_duration': RECORDING_LENGTH,
             'output_dir': RECORDING_DIR
         })
-        return PulseAudioRecorder(
-            source_name=PULSEAUDIO_SOURCE,
-            chunk_duration=RECORDING_LENGTH,
-            output_dir=RECORDING_DIR,
-            target_sample_rate=SAMPLE_RATE
-        )
     elif recording_mode == 'rtsp':
         thread_logger.info("Starting RTSP stream recording", extra={
-            'rtsp_url': RTSP_URL,
+            'rtsp_url': sanitize_url(RTSP_URL),
             'chunk_duration': RECORDING_LENGTH,
             'output_dir': RECORDING_DIR
         })
-        return RtspRecorder(
-            rtsp_url=RTSP_URL,
-            chunk_duration=RECORDING_LENGTH,
-            output_dir=RECORDING_DIR,
-            target_sample_rate=SAMPLE_RATE
-        )
     else:  # http_stream
         thread_logger.info("Starting HTTP stream recording", extra={
             'stream_url': STREAM_URL,
             'chunk_duration': RECORDING_LENGTH,
             'output_dir': RECORDING_DIR
         })
-        return HttpStreamRecorder(
-            stream_url=STREAM_URL,
-            chunk_duration=RECORDING_LENGTH,
-            output_dir=RECORDING_DIR,
-            target_sample_rate=SAMPLE_RATE
-        )
+
+    # Delegate to audio_manager factory
+    return create_recorder(
+        recording_mode=recording_mode,
+        chunk_duration=RECORDING_LENGTH,
+        output_dir=RECORDING_DIR,
+        target_sample_rate=SAMPLE_RATE,
+        source_name=PULSEAUDIO_SOURCE,
+        stream_url=STREAM_URL,
+        rtsp_url=RTSP_URL
+    )
 
 def continuous_audio_recording(thread_logger):
     """Continuous audio recording from PulseAudio or HTTP stream.
@@ -95,7 +89,7 @@ def continuous_audio_recording(thread_logger):
     or queue them - that's the processing thread's job.
     """
     # Create recorder
-    recorder = create_recorder(RECORDING_MODE, thread_logger)
+    recorder = setup_recorder(RECORDING_MODE, thread_logger)
 
     try:
         recorder.start()
@@ -236,13 +230,13 @@ def handle_detection(detection: Dict[str, Any], input_file_path: str, thread_log
 
     extract_detection_audio(detection, input_file_path)
     create_detection_spectrogram(detection, input_file_path)
-    save_detection_to_db(detection)
-    broadcast_detection(detection, thread_logger)
 
     thread_logger.debug("Saving detection to database", extra={
         'species': detection['common_name'],
         'scientific_name': detection['scientific_name']
     })
+    save_detection_to_db(detection)
+    broadcast_detection(detection, thread_logger)
 
 def is_valid_recording(file_path: str, thread_logger) -> bool:
     """Check if a recording file is valid (meets minimum duration).
