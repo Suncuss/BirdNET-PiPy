@@ -590,19 +590,9 @@ export default {
       setTimeout(() => { saveStatus.value = null }, 5000)
     }
 
-    // Handle recording mode change
+    // Handle recording mode change - just update the mode, preserve all URLs
     const onRecordingModeChange = () => {
       settings.value.audio.recording_mode = recordingMode.value
-      if (recordingMode.value === 'pulseaudio') {
-        settings.value.audio.stream_url = null
-        settings.value.audio.rtsp_url = null
-      } else if (recordingMode.value === 'http_stream') {
-        settings.value.audio.pulseaudio_source = null
-        settings.value.audio.rtsp_url = null
-      } else if (recordingMode.value === 'rtsp') {
-        settings.value.audio.pulseaudio_source = null
-        settings.value.audio.stream_url = null
-      }
     }
 
     // Confirm and trigger system update
