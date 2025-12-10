@@ -48,11 +48,13 @@ describe('BirdDetectionList', () => {
     expect(wrapper.text()).toContain('10:15:00')
   })
 
-  it('applies highlight class when detection was just updated', () => {
+  it('applies highlight styling when detection was just updated', () => {
     const wrapper = mountList(sampleDetections)
     const firstItem = wrapper.findAll('li')[0]
 
-    expect(firstItem.classes()).toContain('highlight-flash')
+    // When justUpdated is true, the item gets highlight styling via Tailwind classes
+    expect(firstItem.classes()).toContain('!bg-green-100')
+    expect(firstItem.classes()).toContain('scale-[1.02]')
   })
 
   it('navigates to bird details on click', async () => {

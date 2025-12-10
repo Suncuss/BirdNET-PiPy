@@ -417,7 +417,7 @@ describe('Settings', () => {
       expect(wrapper.find('#streamUrl').exists()).toBe(false)
     })
 
-    it('clears stream_url when switching to pulseaudio mode', async () => {
+    it('preserves stream_url when switching to pulseaudio mode', async () => {
       const wrapper = mountSettings()
       await flushPromises()
 
@@ -428,7 +428,9 @@ describe('Settings', () => {
       await modeSelect.setValue('pulseaudio')
       wrapper.vm.onRecordingModeChange()
 
-      expect(wrapper.vm.settings.audio.stream_url).toBe(null)
+      // URLs are intentionally preserved when switching modes
+      // This allows users to switch back without re-entering URLs
+      expect(wrapper.vm.settings.audio.stream_url).toBe('http://example.com/stream.mp3')
     })
   })
 

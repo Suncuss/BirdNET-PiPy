@@ -165,13 +165,13 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import Chart from 'chart.js/auto'
 import { MatrixController, MatrixElement } from 'chartjs-chart-matrix'
-import axios from 'axios'
 
 import { library } from '@fortawesome/fontawesome-svg-core';
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome';
 import { faPlay, faPause, faCircleInfo, faExternalLinkAlt } from '@fortawesome/free-solid-svg-icons';
 
 import { useFetchBirdData } from '@/composables/useFetchBirdData';
+import { useBirdCharts } from '@/composables/useBirdCharts';
 import SpectrogramModal from '@/components/SpectrogramModal.vue';
 
 library.add(faPlay, faPause, faCircleInfo, faExternalLinkAlt);
@@ -237,15 +237,14 @@ export default {
             { label: 'All Time', value: 'allTime' }
         ]
 
-        const colorPalette = {
-            primary: '#2D6A4F',     // Forest Green
-            secondary: '#74C69D',   // Mint Green
-            accent1: '#D9ED92',     // Light Yellow-Green
-            accent2: '#B7E4C7',     // Pale Green
-            text: '#1B4332',        // Dark Green
-            background: '#F1FAEE',  // Off-White
-            grid: 'rgba(45, 106, 79, 0.2)' // Semi-transparent Forest Green
-        };
+        // Use bird charts composable for chart creation
+        const {
+            colorPalette,
+            destroyChart,
+            createTotalObservationsChart: createTotalObsChart,
+            createHourlyActivityHeatmap: createHeatmap,
+            createHourlyActivityChart: createHourlyChart
+        } = useBirdCharts()
 
         // Lifecycle hooks
         onMounted(async () => {
@@ -253,11 +252,11 @@ export default {
             dataFetchInterval = setInterval(fetchDashboardData, 4500)
 
             if (!hourlyBirdActivityError.value) {
-                createHourlyActivityChart();
+                createHourlyChart(hourlyActivityChart, hourlyBirdActivityData.value, { animate: initialLoad.value });
             }
             if (!isDataEmpty.value) {
-                createTotalObservationsChart(detailedBirdActivityData.value);
-                createHourlyActivityHeatmap(detailedBirdActivityData.value);
+                createTotalObsChart(totalObservationsChart, detailedBirdActivityData.value, { animate: initialLoad.value, title: null });
+                createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: initialLoad.value, title: null });
             }
             chartUpdateInterval = setInterval(redrawCharts, 4500)
             initializeCanvas();
@@ -459,294 +458,12 @@ export default {
             isSpectrogramModalVisible.value = true
         }
 
-        const createHourlyActivityChart = () => {
-            const ctx = hourlyActivityChart.value.getContext('2d')
-            destroyChartIfExists(hourlyActivityChartInstance)
-            hourlyActivityChartInstance.value = new Chart(ctx, {
-                type: 'bar',
-                data: {
-                    labels: hourlyBirdActivityData.value.map(d => d.hour),
-                    datasets: [{
-                        label: 'Detections',
-                        data: hourlyBirdActivityData.value.map(d => d.count),
-                        backgroundColor: colorPalette.accent1,
-                        borderColor: colorPalette.primary,
-                        borderWidth: 1
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    animation: initialLoad.value,
-                    maintainAspectRatio: false,
-                    scales: {
-                        y: {
-                            beginAtZero: true,
-                            title: {
-                                display: true,
-                                text: 'Number of Detections',
-                                color: colorPalette.text
-                            },
-                            ticks: { 
-                                color: colorPalette.text,
-                                callback: (value) => {
-                                    const numericValue = Number(value);
-                                    return Number.isInteger(numericValue) ? numericValue.toString() : '';
-                                }
-                            }
-                        },
-                        x: {
-                            title: {
-                                display: true,
-                                text: 'Hour of Day',
-                                color: colorPalette.text
-                            },
-                            ticks: { 
-                                color: colorPalette.text,
-                                callback: function(value, index) {
-                                    const hour = parseInt(this.getLabelForValue(index).split(':')[0]);
-                                    if (hour === 0) return '12AM';
-                                    if (hour === 12) return '12PM';
-                                    return hour > 12 ? `${hour - 12}PM` : `${hour}AM`;
-                                }
-                            }
-                        }
-                    },
-                    plugins: {
-                        legend: {
-                            display: false
-                        }
-                    }
-                }
-            })
-        }
-
-        const createTotalObservationsChart = (data) => {
-
-            if (!totalObservationsChart.value) {
-                return;
-            }
-
-            const ctx = totalObservationsChart.value.getContext('2d');
-            destroyChartIfExists(totalObservationsChartInstance);
-            totalObservationsChartInstance.value = new Chart(ctx, {
-                type: 'bar',
-                data: {
-                    labels: data.map(d => d.species),
-                    datasets: [{
-                        label: 'Total Detections',
-                        data: data.map(d => d.hourlyActivity.reduce((sum, val) => sum + val, 0)),
-                        backgroundColor: colorPalette.secondary,
-                        borderColor: colorPalette.primary,
-                        borderWidth: 1,
-                    }]
-                },
-                options: {
-                    indexAxis: 'y',
-                    animation: initialLoad.value,
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: { display: false },
-                    },
-                    scales: {
-                        x: {
-                            title: { display: true, text: 'Detections', color: colorPalette.text, },
-                            ticks: { color: colorPalette.text },
-
-                        },
-                        y: {
-                            ticks: { color: colorPalette.text },
-                        }
-                    },
-                    layout: {
-                        padding: {
-                            left: 10,
-                            right: 10,
-                            top: 0,
-                            bottom: 0
-                        }
-                    },
-                }
-            });
-        }
-
-        const createHourlyActivityHeatmap = (data) => {
-
-            if (!hourlyActivityHeatmap.value) {
-                return;
-            }
-
-            const ctx = hourlyActivityHeatmap.value.getContext('2d');
-            destroyChartIfExists(hourlyActivityHeatmapInstance);
-            const species = data.map(d => d.species);
-
-            const rowStats = data.map(d => ({
-                min: Math.min(...d.hourlyActivity),
-                max: Math.max(...d.hourlyActivity)
-            }));
-
-            const prepareDataForCategoryMatrix = (data) => {
-                const hours = Array.from({ length: 24 }, (_, i) => i.toString().padStart(2, '0') + ':00');
-
-                return data.flatMap((d, index) =>
-                    d.hourlyActivity.map((value, hourIndex) => ({
-                        x: hours[hourIndex],
-                        y: d.species,
-                        v: value,
-                        rowStats: rowStats[index] // Include row stats in each data point
-                    }))
-                );
-            };
-
-            hourlyActivityHeatmapInstance.value = new Chart(ctx, {
-                type: 'matrix',
-                data: {
-                    datasets: [{
-                        label: 'Hourly Bird Detections',
-                        data: prepareDataForCategoryMatrix(data),
-                        borderColor: 'white',
-                        borderWidth: 1,
-                        width: ({ chart }) => (chart.chartArea || {}).width / 24,
-                        height: ({ chart }) => (chart.chartArea || {}).height / species.length,
-                        backgroundColor: (context) => {
-                            const { v: value, rowStats } = context.raw;
-                            const { min, max } = rowStats;
-                            const normalizedValue = (max > min) ? (value - min) / (max - min) : 0.5;
-                            const [r, g, b] = [116, 198, 157]; // RGB values for #74C69D
-                            const alpha = Math.sqrt(normalizedValue);
-                            return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-                        },
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    animation: initialLoad.value,
-                    layout: {
-                        padding: {
-                            left: 0,
-                            right: 10,
-                            top: 10,
-                            bottom: 0
-                        }
-                    },
-                    maintainAspectRatio: false,
-                    scales: {
-                        x: {
-                            type: 'category',
-                            labels: Array.from({ length: 24 }, (_, i) => i.toString().padStart(2, '0') + ':00'),
-                            ticks: {
-                                maxRotation: 0,
-                                autoSkip: false,
-                                font: { size: 9 }
-                            },
-                            grid: {
-                                display: false
-                            },
-                            title: {
-                                display: true,
-                                text: 'Hour of Day'
-                            }
-                        },
-                        y: {
-                            type: 'category',
-                            labels: species,
-                            reverse: false,
-
-                            offset: true,
-                            ticks: { display: false },
-                            grid: {
-                                display: false
-                            },
-                            border: {
-                                display: false, // This removes the y-axis line
-                            },
-                        }
-                    },
-                    plugins: {
-                        legend: { display: false },
-                        tooltip: {
-                            callbacks: {
-                                title: (context) => {
-                                    const { x, y } = context[0].raw;
-                                    return `${context[0].raw.y} at ${context[0].raw.x}`;
-                                },
-                                label: (context) => {
-                                    return `Detections: ${context.raw.v}`;
-                                },
-                            },
-                            backgroundColor: colorPalette.primary,
-                            titleColor: colorPalette.background,
-                            bodyColor: colorPalette.background,
-                        }
-                    },
-                },
-                plugins: [{
-                    id: 'customGrid',
-                    afterDatasetsDraw: (chart) => {
-                        const { ctx, chartArea, scales: { x, y } } = chart;
-                        ctx.save();
-                        ctx.strokeStyle = colorPalette.grid;
-                        ctx.lineWidth = 1;
-
-                        // Vertical lines
-                        for (let i = 0; i <= 24; i++) {
-                            const xPos = x.getPixelForValue(i - 0.5);
-                            ctx.beginPath();
-                            ctx.moveTo(xPos, chartArea.top);
-                            ctx.lineTo(xPos, chartArea.bottom);
-                            ctx.stroke();
-                        }
-
-                        // Horizontal lines
-                        for (let i = 0; i <= species.length; i++) {
-                            const yPos = y.getPixelForValue(i - 0.5);
-                            ctx.beginPath();
-                            ctx.moveTo(chartArea.left, yPos);
-                            ctx.lineTo(chartArea.right, yPos);
-                            ctx.stroke();
-                        }
-
-                        ctx.restore();
-                    }
-                }, {
-                    id: 'matrixLabels',
-                    afterDatasetsDraw: (chart) => {
-                        const { ctx, chartArea, scales: { x, y } } = chart;
-                        const dataset = chart.data.datasets[0];
-
-                        ctx.save();
-                        ctx.font = 'bold 10px Arial';
-                        ctx.textAlign = 'center';
-                        ctx.textBaseline = 'middle';
-
-                        dataset.data.forEach((datapoint) => {
-                            const value = datapoint.v;
-                            if (value > 0) {
-                                const xCenter = x.getPixelForValue(datapoint.x);
-                                const yCenter = y.getPixelForValue(datapoint.y);
-
-                                ctx.fillStyle = 'black';
-                                ctx.fillText(value, xCenter, yCenter);
-                            }
-                        });
-                        ctx.restore();
-                    }
-                }]
-            });
-        }
-
-        const redrawCharts = () => {
+        // Redraw charts function using composable methods
+        const redrawCharts = async () => {
             initialLoad.value = false;
-            createTotalObservationsChart(detailedBirdActivityData.value);
-            createHourlyActivityHeatmap(detailedBirdActivityData.value);
-            createHourlyActivityChart(hourlyBirdActivityData.value);
-        };
-
-        const destroyChartIfExists = (chartInstance) => {
-            if (chartInstance.value) {
-                chartInstance.value.destroy();
-                chartInstance.value = null;
-            }
+            await createTotalObsChart(totalObservationsChart, detailedBirdActivityData.value, { animate: false, title: null });
+            await createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: false, title: null });
+            await createHourlyChart(hourlyActivityChart, hourlyBirdActivityData.value, { animate: false });
         };
 
         return {

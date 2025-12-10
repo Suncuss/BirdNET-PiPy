@@ -129,8 +129,8 @@
                     <!-- View Options and Navigation -->
                     <div v-if="selectedSpecies" class="flex items-center space-x-2 lg:space-x-4">
                         <select
-                            v-model="speciesView"
-                            @change="onSpeciesViewChange"
+                            :value="speciesView"
+                            @change="onSpeciesViewChange($event.target.value)"
                             :disabled="isUpdatingSpecies"
                             aria-label="View period"
                             class="px-3 py-1 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm"
@@ -197,6 +197,9 @@ import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import Chart from 'chart.js/auto'
 import { MatrixController, MatrixElement } from 'chartjs-chart-matrix'
 import { useFetchBirdData } from '@/composables/useFetchBirdData'
+import { useBirdCharts } from '@/composables/useBirdCharts'
+import { useDateNavigation } from '@/composables/useDateNavigation'
+import { useChartHelpers } from '@/composables/useChartHelpers'
 import axios from 'axios'
 
 Chart.register(MatrixController, MatrixElement)
@@ -210,14 +213,31 @@ export default {
             fetchChartsData
         } = useFetchBirdData()
 
-        // Date management - fix timezone issue by using local date
-        const getLocalDateString = (date = new Date()) => {
-            const year = date.getFullYear()
-            const month = String(date.getMonth() + 1).padStart(2, '0')
-            const day = String(date.getDate()).padStart(2, '0')
-            return `${year}-${month}-${day}`
-        }
+        // Use composables
+        const {
+            colorPalette,
+            destroyChart,
+            createTotalObservationsChart: createTotalObsChart,
+            createHourlyActivityHeatmap: createHeatmap
+        } = useBirdCharts()
 
+        const { getLocalDateString } = useChartHelpers()
+
+        // Use date navigation for species chart
+        const {
+            selectedView: speciesView,
+            anchorDate: speciesAnchorDate,
+            anchorDateString: speciesAnchorDateString,
+            isUpdating: isUpdatingSpecies,
+            dateDisplay: speciesDateDisplay,
+            canGoForward: canGoForwardSpecies,
+            navigatePrevious: navPreviousSpecies,
+            navigateNext: navNextSpecies,
+            changeView: changeSpeciesView,
+            setAnchorDate: setSpeciesAnchorDate
+        } = useDateNavigation({ initialView: 'month' })
+
+        // Main date selection (for bird activity overview)
         const selectedDate = ref(getLocalDateString())
         const maxDate = ref(getLocalDateString())
         const isLoading = ref(false)
@@ -226,8 +246,6 @@ export default {
         // Chart refs
         const totalObservationsChart = ref(null)
         const hourlyActivityHeatmap = ref(null)
-        const totalObservationsChartInstance = ref(null)
-        const hourlyActivityHeatmapInstance = ref(null)
 
         // Species dropdown and chart
         const allSpecies = ref([])
@@ -236,26 +254,12 @@ export default {
         const searchQuery = ref('')
         const showDropdown = ref(false)
         const isLoadingSpecies = ref(false)
-        const speciesView = ref('month')
         const speciesChart = ref(null)
         const speciesChartInstance = ref(null)
         const speciesChartError = ref(null)
-        const isUpdatingSpecies = ref(false)
-        const speciesAnchorDate = ref(new Date(selectedDate.value + 'T00:00:00'))
 
         // API
         const API_BASE_URL = '/api'
-
-        // Color palette
-        const colorPalette = {
-            primary: '#2D6A4F',
-            secondary: '#74C69D',
-            accent1: '#D9ED92',
-            accent2: '#B7E4C7',
-            text: '#1B4332',
-            background: '#F1FAEE',
-            grid: 'rgba(45, 106, 79, 0.2)'
-        }
 
         // Computed properties
         const isDataEmpty = computed(() =>
@@ -265,63 +269,16 @@ export default {
 
         const formattedDate = computed(() => {
             const date = new Date(selectedDate.value + 'T00:00:00')
-            return date.toLocaleDateString('en-US', { 
-                weekday: 'long', 
-                year: 'numeric', 
-                month: 'long', 
-                day: 'numeric' 
+            return date.toLocaleDateString('en-US', {
+                weekday: 'long',
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric'
             })
         })
 
         const canGoForward = computed(() => {
             return selectedDate.value < maxDate.value
-        })
-
-        // Species chart computed properties
-        const speciesDateDisplay = computed(() => {
-            const date = speciesAnchorDate.value
-            switch (speciesView.value) {
-                case 'day':
-                    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-                case 'week':
-                    const weekStart = new Date(date)
-                    weekStart.setDate(date.getDate() - date.getDay())
-                    const weekEnd = new Date(weekStart)
-                    weekEnd.setDate(weekStart.getDate() + 6)
-                    return `${weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${weekEnd.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
-                case 'month':
-                    return date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
-                case '6month':
-                    const start = date.getMonth() < 6 ? 0 : 6
-                    const end = start + 5
-                    return `${new Date(date.getFullYear(), start).toLocaleDateString('en-US', { month: 'short' })} - ${new Date(date.getFullYear(), end).toLocaleDateString('en-US', { month: 'short' })}`
-                case 'year':
-                    return date.getFullYear().toString()
-            }
-        })
-
-        const canGoForwardSpecies = computed(() => {
-            const now = new Date()
-            const anchor = speciesAnchorDate.value
-            
-            switch (speciesView.value) {
-                case 'day':
-                    return anchor.toDateString() !== now.toDateString()
-                case 'week':
-                    const thisWeekStart = new Date(now)
-                    thisWeekStart.setDate(now.getDate() - now.getDay())
-                    const anchorWeekStart = new Date(anchor)
-                    anchorWeekStart.setDate(anchor.getDate() - anchor.getDay())
-                    return anchorWeekStart < thisWeekStart
-                case 'month':
-                    return anchor.getFullYear() !== now.getFullYear() || anchor.getMonth() !== now.getMonth()
-                case '6month':
-                    const currentHalf = Math.floor(now.getMonth() / 6)
-                    const anchorHalf = Math.floor(anchor.getMonth() / 6)
-                    return anchor.getFullYear() !== now.getFullYear() || anchorHalf !== currentHalf
-                case 'year':
-                    return anchor.getFullYear() !== now.getFullYear()
-            }
         })
 
         // Methods
@@ -367,230 +324,8 @@ export default {
         const createCharts = async () => {
             // Add small delay to ensure DOM is ready
             await nextTick()
-            createTotalObservationsChart(detailedBirdActivityData.value)
-            createHourlyActivityHeatmap(detailedBirdActivityData.value)
-        }
-
-        const destroyChartIfExists = (canvasRef) => {
-            if (!canvasRef.value) return
-            
-            // Use Chart.js best practice for getting existing chart
-            const existingChart = Chart.getChart(canvasRef.value)
-            if (existingChart) {
-                existingChart.destroy()
-            }
-        }
-
-        const createTotalObservationsChart = (data) => {
-            if (!totalObservationsChart.value) return
-
-            destroyChartIfExists(totalObservationsChart)
-            const ctx = totalObservationsChart.value.getContext('2d')
-            
-            totalObservationsChartInstance.value = new Chart(ctx, {
-                type: 'bar',
-                data: {
-                    labels: data.map(d => d.species),
-                    datasets: [{
-                        label: 'Total Detections',
-                        data: data.map(d => d.hourlyActivity.reduce((sum, val) => sum + val, 0)),
-                        backgroundColor: colorPalette.secondary,
-                        borderColor: colorPalette.primary,
-                        borderWidth: 1,
-                    }]
-                },
-                options: {
-                    indexAxis: 'y',
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: { display: false },
-                        title: {
-                            display: true,
-                            text: 'Total Detections by Species',
-                            font: { size: 14 },
-                            color: colorPalette.text
-                        }
-                    },
-                    scales: {
-                        x: {
-                            title: { display: true, text: 'Detections', color: colorPalette.text },
-                            ticks: { color: colorPalette.text },
-                        },
-                        y: {
-                            ticks: { color: colorPalette.text },
-                        }
-                    },
-                    layout: {
-                        padding: {
-                            left: 10,
-                            right: 10,
-                            top: 0,
-                            bottom: 0
-                        }
-                    }
-                }
-            })
-        }
-
-        const createHourlyActivityHeatmap = (data) => {
-            if (!hourlyActivityHeatmap.value) return
-
-            destroyChartIfExists(hourlyActivityHeatmap)
-            const ctx = hourlyActivityHeatmap.value.getContext('2d')
-            
-            const species = data.map(d => d.species)
-            const rowStats = data.map(d => ({
-                min: Math.min(...d.hourlyActivity),
-                max: Math.max(...d.hourlyActivity)
-            }))
-
-            const prepareDataForCategoryMatrix = (data) => {
-                const hours = Array.from({ length: 24 }, (_, i) => i.toString().padStart(2, '0') + ':00')
-                return data.flatMap((d, index) =>
-                    d.hourlyActivity.map((value, hourIndex) => ({
-                        x: hours[hourIndex],
-                        y: d.species,
-                        v: value,
-                        rowStats: rowStats[index]
-                    }))
-                )
-            }
-
-            hourlyActivityHeatmapInstance.value = new Chart(ctx, {
-                type: 'matrix',
-                data: {
-                    datasets: [{
-                        label: 'Hourly Bird Detections',
-                        data: prepareDataForCategoryMatrix(data),
-                        borderColor: 'white',
-                        borderWidth: 1,
-                        width: ({ chart }) => (chart.chartArea || {}).width / 24,
-                        height: ({ chart }) => (chart.chartArea || {}).height / species.length,
-                        backgroundColor: (context) => {
-                            const { v: value, rowStats } = context.raw
-                            const { min, max } = rowStats
-                            const normalizedValue = (max > min) ? (value - min) / (max - min) : 0.5
-                            const [r, g, b] = [116, 198, 157]
-                            const alpha = Math.sqrt(normalizedValue)
-                            return `rgba(${r}, ${g}, ${b}, ${alpha})`
-                        },
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    layout: {
-                        padding: {
-                            left: 0,
-                            right: 10,
-                            top: 10,
-                            bottom: 0
-                        }
-                    },
-                    plugins: {
-                        legend: { display: false },
-                        title: {
-                            display: true,
-                            text: 'Hourly Activity Heatmap',
-                            font: { size: 14 },
-                            color: colorPalette.text
-                        },
-                        tooltip: {
-                            callbacks: {
-                                title: (context) => {
-                                    const { x, y } = context[0].raw
-                                    return `${y} at ${x}`
-                                },
-                                label: (context) => {
-                                    return `Detections: ${context.raw.v}`
-                                },
-                            },
-                            backgroundColor: colorPalette.primary,
-                            titleColor: colorPalette.background,
-                            bodyColor: colorPalette.background,
-                        }
-                    },
-                    scales: {
-                        x: {
-                            type: 'category',
-                            labels: Array.from({ length: 24 }, (_, i) => i.toString().padStart(2, '0') + ':00'),
-                            ticks: {
-                                maxRotation: 0,
-                                autoSkip: false,
-                                font: { size: 9 }
-                            },
-                            grid: { display: false },
-                            title: {
-                                display: true,
-                                text: 'Hour of Day',
-                                color: colorPalette.text
-                            }
-                        },
-                        y: {
-                            type: 'category',
-                            labels: species,
-                            reverse: false,
-                            offset: true,
-                            ticks: { display: false },
-                            grid: { display: false },
-                            border: { display: false },
-                        }
-                    }
-                },
-                plugins: [{
-                    id: 'customGrid',
-                    afterDatasetsDraw: (chart) => {
-                        const { ctx, chartArea, scales: { x, y } } = chart
-                        ctx.save()
-                        ctx.strokeStyle = colorPalette.grid
-                        ctx.lineWidth = 1
-
-                        // Vertical lines
-                        for (let i = 0; i <= 24; i++) {
-                            const xPos = x.getPixelForValue(i - 0.5)
-                            ctx.beginPath()
-                            ctx.moveTo(xPos, chartArea.top)
-                            ctx.lineTo(xPos, chartArea.bottom)
-                            ctx.stroke()
-                        }
-
-                        // Horizontal lines
-                        for (let i = 0; i <= species.length; i++) {
-                            const yPos = y.getPixelForValue(i - 0.5)
-                            ctx.beginPath()
-                            ctx.moveTo(chartArea.left, yPos)
-                            ctx.lineTo(chartArea.right, yPos)
-                            ctx.stroke()
-                        }
-
-                        ctx.restore()
-                    }
-                }, {
-                    id: 'matrixLabels',
-                    afterDatasetsDraw: (chart) => {
-                        const { ctx, chartArea, scales: { x, y } } = chart
-                        const dataset = chart.data.datasets[0]
-
-                        ctx.save()
-                        ctx.font = 'bold 10px Arial'
-                        ctx.textAlign = 'center'
-                        ctx.textBaseline = 'middle'
-
-                        dataset.data.forEach((datapoint) => {
-                            const value = datapoint.v
-                            if (value > 0) {
-                                const xCenter = x.getPixelForValue(datapoint.x)
-                                const yCenter = y.getPixelForValue(datapoint.y)
-
-                                ctx.fillStyle = 'black'
-                                ctx.fillText(value, xCenter, yCenter)
-                            }
-                        })
-                        ctx.restore()
-                    }
-                }]
-            })
+            await createTotalObsChart(totalObservationsChart, detailedBirdActivityData.value)
+            await createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value)
         }
 
         // Species dropdown methods
@@ -670,92 +405,26 @@ export default {
             }
         }
 
-        const onSpeciesViewChange = () => {
-            // Adjust anchor date when view changes
-            const anchor = speciesAnchorDate.value
-            
-            switch (speciesView.value) {
-                case 'week':
-                    // Adjust to start of week
-                    speciesAnchorDate.value = new Date(anchor)
-                    speciesAnchorDate.value.setDate(anchor.getDate() - anchor.getDay())
-                    break
-                case 'month':
-                    // Adjust to first of month
-                    speciesAnchorDate.value = new Date(anchor.getFullYear(), anchor.getMonth(), 1)
-                    break
-                case '6month':
-                    // Adjust to start of 6-month period
-                    const halfYear = Math.floor(anchor.getMonth() / 6) * 6
-                    speciesAnchorDate.value = new Date(anchor.getFullYear(), halfYear, 1)
-                    break
-                case 'year':
-                    // Adjust to January 1st
-                    speciesAnchorDate.value = new Date(anchor.getFullYear(), 0, 1)
-                    break
-            }
-            
+        // Wrapped navigation functions that trigger chart updates
+        const onSpeciesViewChange = (newView) => {
+            changeSpeciesView(newView)
             updateSpeciesChart()
         }
 
         const previousSpeciesPeriod = () => {
-            if (isUpdatingSpecies.value) return
-            
-            const anchor = new Date(speciesAnchorDate.value)
-            
-            switch (speciesView.value) {
-                case 'day':
-                    anchor.setDate(anchor.getDate() - 1)
-                    break
-                case 'week':
-                    anchor.setDate(anchor.getDate() - 7)
-                    break
-                case 'month':
-                    anchor.setMonth(anchor.getMonth() - 1)
-                    break
-                case '6month':
-                    anchor.setMonth(anchor.getMonth() - 6)
-                    break
-                case 'year':
-                    anchor.setFullYear(anchor.getFullYear() - 1)
-                    break
-            }
-            
-            speciesAnchorDate.value = anchor
+            navPreviousSpecies()
             updateSpeciesChart()
         }
 
         const nextSpeciesPeriod = () => {
-            if (!canGoForwardSpecies.value || isUpdatingSpecies.value) return
-            
-            const anchor = new Date(speciesAnchorDate.value)
-            
-            switch (speciesView.value) {
-                case 'day':
-                    anchor.setDate(anchor.getDate() + 1)
-                    break
-                case 'week':
-                    anchor.setDate(anchor.getDate() + 7)
-                    break
-                case 'month':
-                    anchor.setMonth(anchor.getMonth() + 1)
-                    break
-                case '6month':
-                    anchor.setMonth(anchor.getMonth() + 6)
-                    break
-                case 'year':
-                    anchor.setFullYear(anchor.getFullYear() + 1)
-                    break
-            }
-            
-            speciesAnchorDate.value = anchor
+            navNextSpecies()
             updateSpeciesChart()
         }
 
         const createSpeciesChart = (data) => {
             if (!speciesChart.value) return
 
-            destroyChartIfExists(speciesChart)
+            destroyChart(speciesChart)
 
             const ctx = speciesChart.value.getContext('2d')
             speciesChartInstance.value = new Chart(ctx, {
@@ -819,9 +488,9 @@ export default {
         })
 
         onUnmounted(() => {
-            destroyChartIfExists(totalObservationsChart)
-            destroyChartIfExists(hourlyActivityHeatmap)
-            destroyChartIfExists(speciesChart)
+            destroyChart(totalObservationsChart)
+            destroyChart(hourlyActivityHeatmap)
+            destroyChart(speciesChart)
         })
 
         // Watch for data changes
@@ -833,7 +502,7 @@ export default {
 
         // Sync species chart date with main date when main date changes
         watch(selectedDate, (newDate) => {
-            speciesAnchorDate.value = new Date(newDate + 'T00:00:00')
+            setSpeciesAnchorDate(newDate)
             if (selectedSpecies.value) {
                 updateSpeciesChart()
             }

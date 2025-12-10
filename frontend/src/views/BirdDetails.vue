@@ -155,11 +155,14 @@
 
 
 <script>
-import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import axios from 'axios'
 import Chart from 'chart.js/auto'
 import SpectrogramModal from '@/components/SpectrogramModal.vue'
+import { useDateNavigation } from '@/composables/useDateNavigation'
+import { useChartHelpers } from '@/composables/useChartHelpers'
+import { useChartColors } from '@/composables/useChartColors'
 
 export default {
   name: 'BirdDetails',
@@ -203,12 +206,26 @@ export default {
       selectedSpectrogramUrl.value = null
     }
 
-    // State management
-    const selectedView = ref('month')
-    const currentAnchorDate = ref(new Date())
-    const isUpdating = ref(false)
+    // Use date navigation composable
+    const {
+      selectedView,
+      anchorDate: currentAnchorDate,
+      anchorDateString,
+      isUpdating,
+      dateDisplay: currentDateDisplay,
+      canGoForward,
+      navigatePrevious: navPrevious,
+      navigateNext: navNext,
+      changeView: changeViewBase,
+      getLocalDateString
+    } = useDateNavigation({ initialView: 'month' })
+
+    const { destroyChart } = useChartHelpers()
+    const { colorPalette } = useChartColors()
+
+    // Update queue for chart updates
     const updateQueue = ref([])
-    
+
     const viewOptions = [
       { value: 'day', label: 'Day' },
       { value: 'week', label: 'Week' },
@@ -216,53 +233,9 @@ export default {
       { value: '6month', label: '6 Month' },
       { value: 'year', label: 'Year' }
     ]
-    
-    // Computed properties for date display
-    const currentDateDisplay = computed(() => {
-      const date = currentAnchorDate.value
-      switch (selectedView.value) {
-        case 'day':
-          return date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
-        case 'week':
-          const weekStart = new Date(date)
-          weekStart.setDate(date.getDate() - date.getDay())
-          const weekEnd = new Date(weekStart)
-          weekEnd.setDate(weekStart.getDate() + 6)
-          return `${weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${weekEnd.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
-        case 'month':
-          return date.toLocaleDateString('en-US', { year: 'numeric', month: 'long' })
-        case '6month':
-          const start = date.getMonth() < 6 ? 0 : 6
-          const end = start + 5
-          return `${new Date(date.getFullYear(), start).toLocaleDateString('en-US', { month: 'short' })} - ${new Date(date.getFullYear(), end).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}`
-        case 'year':
-          return date.getFullYear().toString()
-      }
-    })
-    
-    const isNextDisabled = computed(() => {
-      const now = new Date()
-      const anchor = currentAnchorDate.value
-      
-      switch (selectedView.value) {
-        case 'day':
-          return anchor.toDateString() === now.toDateString()
-        case 'week':
-          const thisWeekStart = new Date(now)
-          thisWeekStart.setDate(now.getDate() - now.getDay())
-          const anchorWeekStart = new Date(anchor)
-          anchorWeekStart.setDate(anchor.getDate() - anchor.getDay())
-          return anchorWeekStart >= thisWeekStart
-        case 'month':
-          return anchor.getFullYear() === now.getFullYear() && anchor.getMonth() === now.getMonth()
-        case '6month':
-          const currentHalf = Math.floor(now.getMonth() / 6)
-          const anchorHalf = Math.floor(anchor.getMonth() / 6)
-          return anchor.getFullYear() === now.getFullYear() && anchorHalf === currentHalf
-        case 'year':
-          return anchor.getFullYear() === now.getFullYear()
-      }
-    })
+
+    // Inverted logic for template compatibility
+    const isNextDisabled = computed(() => !canGoForward.value)
 
     // Recordings pagination computed properties
     const totalPages = computed(() => Math.ceil(allRecordings.value.length / recordingsPerPage))
@@ -323,14 +296,6 @@ export default {
       fetchRecordings()
     }
 
-    // Helper function to format date in local timezone as YYYY-MM-DD
-    const formatDateForAPI = (date) => {
-      const year = date.getFullYear()
-      const month = String(date.getMonth() + 1).padStart(2, '0')
-      const day = String(date.getDate()).padStart(2, '0')
-      return `${year}-${month}-${day}`
-    }
-
     // Clean chart update function following Chart.js best practices
     const updateChart = async () => {
       // If already updating, queue this update
@@ -342,7 +307,7 @@ export default {
       isUpdating.value = true
 
       try {
-        const localDateString = formatDateForAPI(currentAnchorDate.value)
+        const localDateString = getLocalDateString(currentAnchorDate.value)
         console.log(`Updating chart for view: ${selectedView.value}, date: ${localDateString}`)
         
         const response = await axios.get(`${API_BASE_URL}/bird/${route.params.name}/detection_distribution`, {
@@ -361,11 +326,8 @@ export default {
           return
         }
 
-        // Destroy existing chart using Chart.js best practice
-        const existingChart = Chart.getChart(detectionChart.value)
-        if (existingChart) {
-          existingChart.destroy()
-        }
+        // Destroy existing chart using composable helper
+        destroyChart(detectionChart)
 
         const ctx = detectionChart.value.getContext('2d')
 
@@ -377,8 +339,8 @@ export default {
             datasets: [{
               label: 'Detections',
               data: response.data.data,
-              backgroundColor: '#74C69D',
-              borderColor: '#2D6A4F',
+              backgroundColor: colorPalette.secondary,
+              borderColor: colorPalette.primary,
               borderWidth: 1
             }]
           },
@@ -410,11 +372,11 @@ export default {
                 title: {
                   display: true,
                   text: 'Number of Detections',
-                  color: '#1B4332',
+                  color: colorPalette.text,
                   padding: 2
                 },
-                ticks: { 
-                  color: '#1B4332',
+                ticks: {
+                  color: colorPalette.text,
                   padding: 2
                 },
                 grid: {
@@ -426,11 +388,11 @@ export default {
                 title: {
                   display: true,
                   text: 'Time Period',
-                  color: '#1B4332',
+                  color: colorPalette.text,
                   padding: 2
                 },
                 ticks: {
-                  color: '#1B4332',
+                  color: colorPalette.text,
                   maxRotation: 45,
                   minRotation: 45,
                   autoSkip: selectedView.value === 'day' || selectedView.value === 'month' ? false : true,
@@ -465,96 +427,19 @@ export default {
       }
     }
     
-    // View change with intelligent date translation
+    // Wrapped navigation functions that trigger chart updates
     const changeView = (newView) => {
-      if (isUpdating.value || selectedView.value === newView) return
-      
-      const oldView = selectedView.value
-      const anchor = currentAnchorDate.value
-      
-      // Translate anchor date to new view
-      if (oldView !== newView) {
-        switch (newView) {
-          case 'day':
-            // Keep the same date
-            break
-          case 'week':
-            // Adjust to start of week
-            currentAnchorDate.value = new Date(anchor)
-            currentAnchorDate.value.setDate(anchor.getDate() - anchor.getDay())
-            break
-          case 'month':
-            // Adjust to first of month
-            currentAnchorDate.value = new Date(anchor.getFullYear(), anchor.getMonth(), 1)
-            break
-          case '6month':
-            // Adjust to start of 6-month period
-            const halfYear = Math.floor(anchor.getMonth() / 6) * 6
-            currentAnchorDate.value = new Date(anchor.getFullYear(), halfYear, 1)
-            break
-          case 'year':
-            // Adjust to January 1st
-            currentAnchorDate.value = new Date(anchor.getFullYear(), 0, 1)
-            break
-        }
-      }
-      
-      selectedView.value = newView
+      changeViewBase(newView)
       updateChart()
     }
-    
-    // Navigation functions
+
     const navigatePrevious = () => {
-      if (isUpdating.value) return
-      
-      const anchor = new Date(currentAnchorDate.value)
-      
-      switch (selectedView.value) {
-        case 'day':
-          anchor.setDate(anchor.getDate() - 1)
-          break
-        case 'week':
-          anchor.setDate(anchor.getDate() - 7)
-          break
-        case 'month':
-          anchor.setMonth(anchor.getMonth() - 1)
-          break
-        case '6month':
-          anchor.setMonth(anchor.getMonth() - 6)
-          break
-        case 'year':
-          anchor.setFullYear(anchor.getFullYear() - 1)
-          break
-      }
-      
-      currentAnchorDate.value = anchor
+      navPrevious()
       updateChart()
     }
-    
+
     const navigateNext = () => {
-      if (isNextDisabled.value || isUpdating.value) return
-      
-      const anchor = new Date(currentAnchorDate.value)
-      
-      switch (selectedView.value) {
-        case 'day':
-          anchor.setDate(anchor.getDate() + 1)
-          break
-        case 'week':
-          anchor.setDate(anchor.getDate() + 7)
-          break
-        case 'month':
-          anchor.setMonth(anchor.getMonth() + 1)
-          break
-        case '6month':
-          anchor.setMonth(anchor.getMonth() + 6)
-          break
-        case 'year':
-          anchor.setFullYear(anchor.getFullYear() + 1)
-          break
-      }
-      
-      currentAnchorDate.value = anchor
+      navNext()
       updateChart()
     }
 
@@ -580,14 +465,9 @@ export default {
     
     onUnmounted(() => {
       window.removeEventListener('resize', handleResize)
-      
-      // Clean up chart
-      if (detectionChart.value) {
-        const existingChart = Chart.getChart(detectionChart.value)
-        if (existingChart) {
-          existingChart.destroy()
-        }
-      }
+
+      // Clean up chart using composable helper
+      destroyChart(detectionChart)
     })
 
     return {
