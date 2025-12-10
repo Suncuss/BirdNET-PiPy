@@ -110,7 +110,9 @@
             class="bg-gray-50 p-4 rounded-lg shadow-sm">
             <div class="space-y-2">
               <img :src="`${API_BASE_URL}/spectrogram/${recording.spectrogram_filename}`"
-                :alt="`Spectrogram ${index + 1}`" class="w-full rounded-lg bg-gray-900">
+                :alt="`Spectrogram ${index + 1}`"
+                class="w-full rounded-lg bg-gray-900 cursor-pointer hover:opacity-90 transition-opacity"
+                @click="openSpectrogram(recording.spectrogram_filename)">
               <audio controls class="w-full rounded-lg shadow-sm">
                 <source :src="`${API_BASE_URL}/audio/${recording.audio_filename}`" type="audio/mpeg">
                 Your browser does not support the audio element.
@@ -140,6 +142,14 @@
       </div>
 
     </div>
+
+    <!-- Spectrogram Modal -->
+    <SpectrogramModal
+      :is-visible="!!selectedSpectrogramUrl"
+      :image-url="selectedSpectrogramUrl || ''"
+      alt="Spectrogram"
+      @close="closeSpectrogram"
+    />
   </div>
 </template>
 
@@ -149,9 +159,13 @@ import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import axios from 'axios'
 import Chart from 'chart.js/auto'
+import SpectrogramModal from '@/components/SpectrogramModal.vue'
 
 export default {
   name: 'BirdDetails',
+  components: {
+    SpectrogramModal
+  },
   setup() {
     const route = useRoute()
     const birdDetails = ref(null)
@@ -169,6 +183,7 @@ export default {
     const currentPage = ref(1)
     const recordingsPerPage = 4
     const isLoadingRecordings = ref(false)
+    const selectedSpectrogramUrl = ref(null)
 
     const birdImageData = ref({
       imageUrl: '/default_bird.png',
@@ -179,7 +194,15 @@ export default {
     })
 
     const API_BASE_URL = '/api'
-    
+
+    const openSpectrogram = (filename) => {
+      selectedSpectrogramUrl.value = `${API_BASE_URL}/spectrogram/${filename}`
+    }
+
+    const closeSpectrogram = () => {
+      selectedSpectrogramUrl.value = null
+    }
+
     // State management
     const selectedView = ref('month')
     const currentAnchorDate = ref(new Date())
@@ -594,6 +617,10 @@ export default {
       totalPages,
       currentPageRecordings,
       onSortChange,
+      // Spectrogram modal
+      selectedSpectrogramUrl,
+      openSpectrogram,
+      closeSpectrogram,
     }
   }
 }

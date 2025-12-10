@@ -151,15 +151,12 @@
         </div>
 
         <!-- Spectrogram Modal -->
-        <div v-if="isSpectrogramModalVisible"
-            class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-20"
-            @click="isSpectrogramModalVisible = false">
-            <div class="bg-white p-4 rounded-lg" @click.stop>
-                <img :src="currentSpectrogramUrl" alt="Spectrogram" class="max-w-full h-auto">
-                <button @click="isSpectrogramModalVisible = false"
-                    class="mt-3 bg-red-500 text-white px-3 py-1 rounded lg:text-sm text-xs">Close</button>
-            </div>
-        </div>
+        <SpectrogramModal
+            :is-visible="isSpectrogramModalVisible"
+            :image-url="currentSpectrogramUrl"
+            alt="Spectrogram"
+            @close="isSpectrogramModalVisible = false"
+        />
 
     </div>
 </template>
@@ -174,8 +171,8 @@ import { library } from '@fortawesome/fontawesome-svg-core';
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome';
 import { faPlay, faPause, faCircleInfo, faExternalLinkAlt } from '@fortawesome/free-solid-svg-icons';
 
-
 import { useFetchBirdData } from '@/composables/useFetchBirdData';
+import SpectrogramModal from '@/components/SpectrogramModal.vue';
 
 library.add(faPlay, faPause, faCircleInfo, faExternalLinkAlt);
 Chart.register(MatrixController, MatrixElement)
@@ -183,7 +180,8 @@ Chart.register(MatrixController, MatrixElement)
 export default {
     name: 'Dashboard',
     components: {
-        FontAwesomeIcon
+        FontAwesomeIcon,
+        SpectrogramModal
     },
     setup() {
         const {
