@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  birdnet-server:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: python -m birdnet_service.birdnet_server
+    restart: unless-stopped
+    volumes:
+      - ./backend:/app
+      - ./data:/app/data
+      - ./data/flags:/app/data/flags
+    environment:
+      - PYTHONPATH=/app
+      - BIRDNET_SERVICE_PORT=5001
+      - LOG_FORMAT=human
+      - LOG_LEVEL=INFO
+    ports:
+      - "5001:5001"
+
+  main:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: python -m core.main
+    restart: unless-stopped
+    volumes:
+      - ./backend:/app
+      - ./data:/app/data
+      - ./data/flags:/app/data/flags
+      # PulseAudio socket for audio access
+      - /run/user/${UID:-1000}/pulse:/run/pulse:ro
+    environment:
+      - PYTHONPATH=/app
+      - PULSE_SERVER=unix:/run/pulse/native
+      - LOG_FORMAT=human
+      - LOG_LEVEL=INFO
+      # Since API is down, we might want to suppress some errors or just ignore them.
+      - API_HOST=dummy_host # It will fail DNS or connection, but handled in code.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - birdnet-server
+      # No dependency on API

@@ -149,12 +149,13 @@ class TestDatabaseQueryMethods:
     
     def test_get_detection_distribution_week_view(self, test_db_manager):
         """Test get_detection_distribution() for week view."""
-        anchor_date = '2024-01-15'  # Monday
+        # Use Jan 14, 2024 (Sunday) as anchor - this is the start of the week
+        anchor_date = '2024-01-14'  # Sunday
         species = 'American Robin'
-        
-        # Insert detections across the week
+
+        # Insert detections across the week (Sun Jan 14 - Sat Jan 20)
         for days_offset in range(7):
-            detection_date = datetime(2024, 1, 15) + timedelta(days=days_offset)
+            detection_date = datetime(2024, 1, 14) + timedelta(days=days_offset)
             detection = {
                 'timestamp': detection_date.isoformat(),
                 'group_timestamp': detection_date.isoformat(),
@@ -168,18 +169,18 @@ class TestDatabaseQueryMethods:
                 'overlap': 0.25
             }
             test_db_manager.insert_detection(detection)
-        
+
         result = test_db_manager.get_detection_distribution(species, 'week', anchor_date)
-        
+
         assert 'labels' in result
         assert 'data' in result
         assert len(result['labels']) == 7
         assert len(result['data']) == 7
-        
-        # Check labels format
-        assert result['labels'][0].startswith('Mon')
-        assert result['labels'][6].startswith('Sun')
-        
+
+        # Check labels format (Sunday-start week to match JavaScript's getDay())
+        assert result['labels'][0].startswith('Sun')
+        assert result['labels'][6].startswith('Sat')
+
         # Each day should have 1 detection
         assert all(count == 1 for count in result['data'])
     

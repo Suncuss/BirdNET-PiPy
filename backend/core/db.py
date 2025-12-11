@@ -515,7 +515,10 @@ class DatabaseManager:
                 
         elif view == 'week':
             # 7 days for the week containing the anchor date
-            week_start = anchor_date - datetime.timedelta(days=anchor_date.weekday())
+            # Use Sunday as week start (matching JavaScript's getDay() where Sunday=0)
+            # Python's weekday() returns Monday=0, so we convert: Sunday=6 -> 0, Mon=0 -> 1, etc.
+            days_since_sunday = (anchor_date.weekday() + 1) % 7
+            week_start = anchor_date - datetime.timedelta(days=days_since_sunday)
             labels = []
             for i in range(7):
                 day = week_start + datetime.timedelta(days=i)

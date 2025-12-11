@@ -138,36 +138,101 @@ export function useDateNavigation(options = {}) {
   }
 
   /**
+   * Get the best date within a period for zooming in.
+   * If today falls within the period, use today. Otherwise use the last day of the period.
+   * @param {Date} periodStart - Start of the period
+   * @param {Date} periodEnd - End of the period
+   * @returns {Date} Best date to use
+   */
+  const getBestDateInPeriod = (periodStart, periodEnd) => {
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+
+    const start = new Date(periodStart)
+    start.setHours(0, 0, 0, 0)
+
+    const end = new Date(periodEnd)
+    end.setHours(0, 0, 0, 0)
+
+    if (today >= start && today <= end) {
+      return new Date(today)
+    }
+    // If viewing past data, use the end of the period (most recent)
+    // If viewing future data (shouldn't happen but handle it), use start
+    return today > end ? new Date(end) : new Date(start)
+  }
+
+  /**
    * Change view and adjust anchor date appropriately.
+   * When zooming in (larger to smaller view), tries to include today if possible,
+   * otherwise uses the most recent date within the current view's range.
    * @param {string} newView - New view type
    */
   const changeView = (newView) => {
     if (isUpdating.value || selectedView.value === newView) return
 
-    const anchor = anchorDate.value
+    const anchor = new Date(anchorDate.value)
+    const oldView = selectedView.value
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
 
-    switch (newView) {
-      case 'day':
-        // Keep the same date
-        break
-      case 'week':
-        // Adjust to start of week (Sunday)
-        anchorDate.value = new Date(anchor)
-        anchorDate.value.setDate(anchor.getDate() - anchor.getDay())
-        break
-      case 'month':
-        // Adjust to first of month
-        anchorDate.value = new Date(anchor.getFullYear(), anchor.getMonth(), 1)
+    // Determine the current view's date range for smart date selection
+    let periodStart, periodEnd
+
+    switch (oldView) {
+      case 'year':
+        periodStart = new Date(anchor.getFullYear(), 0, 1)
+        periodEnd = new Date(anchor.getFullYear(), 11, 31)
         break
       case '6month': {
-        // Adjust to start of 6-month period
-        const halfYear = Math.floor(anchor.getMonth() / 6) * 6
-        anchorDate.value = new Date(anchor.getFullYear(), halfYear, 1)
+        const halfStart = anchor.getMonth() < 6 ? 0 : 6
+        periodStart = new Date(anchor.getFullYear(), halfStart, 1)
+        periodEnd = new Date(anchor.getFullYear(), halfStart + 5 + 1, 0) // Last day of 6th month
+        break
+      }
+      case 'month':
+        periodStart = new Date(anchor.getFullYear(), anchor.getMonth(), 1)
+        periodEnd = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0) // Last day of month
+        break
+      case 'week': {
+        periodStart = new Date(anchor)
+        periodStart.setDate(anchor.getDate() - anchor.getDay())
+        periodEnd = new Date(periodStart)
+        periodEnd.setDate(periodStart.getDate() + 6)
+        break
+      }
+      case 'day':
+      default:
+        periodStart = new Date(anchor)
+        periodEnd = new Date(anchor)
+        break
+    }
+
+    // Get the best date to use based on the current period
+    const bestDate = getBestDateInPeriod(periodStart, periodEnd)
+
+    // Now set the anchor date based on the new view
+    switch (newView) {
+      case 'day':
+        anchorDate.value = bestDate
+        break
+      case 'week': {
+        // Adjust to start of week (Sunday) containing the best date
+        const weekAnchor = new Date(bestDate)
+        weekAnchor.setDate(bestDate.getDate() - bestDate.getDay())
+        anchorDate.value = weekAnchor
+        break
+      }
+      case 'month':
+        anchorDate.value = new Date(bestDate.getFullYear(), bestDate.getMonth(), 1)
+        break
+      case '6month': {
+        const halfYear = Math.floor(bestDate.getMonth() / 6) * 6
+        anchorDate.value = new Date(bestDate.getFullYear(), halfYear, 1)
         break
       }
       case 'year':
-        // Adjust to January 1st
-        anchorDate.value = new Date(anchor.getFullYear(), 0, 1)
+        anchorDate.value = new Date(bestDate.getFullYear(), 0, 1)
         break
     }
 

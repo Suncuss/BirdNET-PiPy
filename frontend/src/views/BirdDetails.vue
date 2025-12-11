@@ -223,6 +223,33 @@ export default {
     const { destroyChart } = useChartHelpers()
     const { colorPalette } = useChartColors()
 
+    // Detect mobile portrait mode and return appropriate tick limits
+    const getMaxTicksLimit = (view) => {
+      const isMobilePortrait = window.innerWidth < 640 && window.innerHeight > window.innerWidth
+
+      if (isMobilePortrait) {
+        // Reduced tick density for mobile portrait
+        switch (view) {
+          case 'day': return 8      // Show every 3rd hour
+          case 'week': return 7     // Show all days
+          case 'month': return 10   // Show ~every 3rd day
+          case '6month': return 6   // Show one per month
+          case 'year': return 6     // Show every other month
+          default: return 10
+        }
+      }
+
+      // Default tick density for larger screens
+      switch (view) {
+        case 'day': return 24
+        case 'week': return 7
+        case 'month': return 31
+        case '6month': return 12
+        case 'year': return 12
+        default: return 12
+      }
+    }
+
     // Update queue for chart updates
     const updateQueue = ref([])
 
@@ -395,8 +422,8 @@ export default {
                   color: colorPalette.text,
                   maxRotation: 45,
                   minRotation: 45,
-                  autoSkip: selectedView.value === 'day' || selectedView.value === 'month' ? false : true,
-                  maxTicksLimit: selectedView.value === 'day' ? 24 : selectedView.value === 'month' ? 31 : 12,
+                  autoSkip: true,
+                  maxTicksLimit: getMaxTicksLimit(selectedView.value),
                   padding: 2
                 },
                 grid: {
@@ -447,13 +474,23 @@ export default {
       return date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
     }
 
-    // Handle window resize for Safari
+    // Handle window resize for Safari and orientation changes
     let resizeTimeout
+    let lastWidth = typeof window !== 'undefined' ? window.innerWidth : 0
     const handleResize = () => {
       clearTimeout(resizeTimeout)
       resizeTimeout = setTimeout(() => {
+        const currentWidth = window.innerWidth
+        const widthChanged = Math.abs(currentWidth - lastWidth) > 100
+
         if (detectionChartInstance.value) {
-          detectionChartInstance.value.resize()
+          // If significant width change (orientation change), rebuild chart for new tick density
+          if (widthChanged) {
+            lastWidth = currentWidth
+            updateChart()
+          } else {
+            detectionChartInstance.value.resize()
+          }
         }
       }, 250)
     }
