@@ -404,7 +404,11 @@ export default {
                 },
                 ticks: {
                   color: colorPalette.text,
-                  padding: 2
+                  padding: 2,
+                  callback: (value) => {
+                    const numericValue = Number(value)
+                    return Number.isInteger(numericValue) ? numericValue.toString() : ''
+                  }
                 },
                 grid: {
                   color: 'rgba(0, 0, 0, 0.1)',

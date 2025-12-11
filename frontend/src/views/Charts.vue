@@ -459,7 +459,13 @@ export default {
                                 text: 'Number of Detections',
                                 color: colorPalette.text
                             },
-                            ticks: { color: colorPalette.text }
+                            ticks: {
+                                color: colorPalette.text,
+                                callback: (value) => {
+                                    const numericValue = Number(value)
+                                    return Number.isInteger(numericValue) ? numericValue.toString() : ''
+                                }
+                            }
                         },
                         x: {
                             title: {
