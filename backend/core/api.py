@@ -553,6 +553,41 @@ def update_settings():
         }, exc_info=True)
         return jsonify({'error': str(e)}), 500
 
+@api.route('/api/system/storage', methods=['GET'])
+@log_api_request
+@handle_api_errors
+def get_system_storage():
+    """Get disk storage information for the data directory (matches df output)"""
+    data_path = os.path.join(BASE_DIR, 'data')
+
+    try:
+        # Use statvfs to match df's calculation (excludes reserved blocks)
+        stat = os.statvfs(data_path)
+        block_size = stat.f_frsize
+
+        total_bytes = stat.f_blocks * block_size
+        free_bytes = stat.f_bfree * block_size
+        avail_bytes = stat.f_bavail * block_size  # Available to non-root (what df shows)
+        used_bytes = total_bytes - free_bytes
+
+        total_gb = total_bytes / (1024 ** 3)
+        used_gb = used_bytes / (1024 ** 3)
+        avail_gb = avail_bytes / (1024 ** 3)
+
+        # Match df's percentage: used / (used + available)
+        percent_used = (used_bytes / (used_bytes + avail_bytes)) * 100
+
+        return jsonify({
+            'total_gb': round(total_gb, 1),
+            'used_gb': round(used_gb, 1),
+            'free_gb': round(avail_gb, 1),
+            'percent_used': round(percent_used, 0)
+        }), 200
+    except Exception as e:
+        logger.error("Failed to get storage info", extra={'error': str(e)})
+        return jsonify({'error': f'Failed to get storage info: {str(e)}'}), 500
+
+
 @api.route('/api/system/version', methods=['GET'])
 @log_api_request
 @handle_api_errors

@@ -180,7 +180,7 @@
           </div>
         </div>
 
-        <!-- System Updates - Simplified -->
+        <!-- System Updates -->
         <div class="bg-white rounded-lg shadow-sm border border-gray-100 p-5">
           <div class="flex items-center justify-between mb-4">
             <h2 class="text-base font-medium text-gray-800">System</h2>
@@ -243,6 +243,26 @@
             class="mt-3 p-2 text-xs rounded-lg text-center"
           >
             {{ systemUpdate.statusMessage.value }}
+          </div>
+        </div>
+
+        <!-- Storage -->
+        <div v-if="storage" class="bg-white rounded-lg shadow-sm border border-gray-100 p-5">
+          <h2 class="text-base font-medium text-gray-800 mb-4">Storage</h2>
+          <div class="flex justify-between items-center mb-2">
+            <span class="text-sm text-gray-600">Disk Usage</span>
+            <span class="text-sm font-medium text-gray-800">{{ storage.percent_used }}%</span>
+          </div>
+          <div class="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+            <div
+              class="h-full rounded-full transition-all duration-300"
+              :class="storage.percent_used >= 90 ? 'bg-red-500' : storage.percent_used >= 75 ? 'bg-yellow-500' : 'bg-green-500'"
+              :style="{ width: storage.percent_used + '%' }"
+            ></div>
+          </div>
+          <div class="flex justify-between mt-2 text-xs text-gray-500">
+            <span>{{ storage.used_gb }}GB used</span>
+            <span>{{ storage.free_gb }}GB free of {{ storage.total_gb }}GB</span>
           </div>
         </div>
 
@@ -456,6 +476,9 @@ export default {
     const recordingMode = ref('pulseaudio')
     const showUpdateConfirm = ref(false)
 
+    // Storage state
+    const storage = ref(null)
+
     // Auth-related state
     const authLoading = ref(false)
     const showChangePassword = ref(false)
@@ -497,6 +520,18 @@ export default {
 
     // System update composable
     const systemUpdate = useSystemUpdate()
+
+    // Load storage info
+    const loadStorageInfo = async () => {
+      try {
+        const response = await fetch('/api/system/storage')
+        if (response.ok) {
+          storage.value = await response.json()
+        }
+      } catch (error) {
+        console.error('Error loading storage info:', error)
+      }
+    }
 
     // Load settings from API with retry
     const loadSettings = async (retryCount = 0) => {
@@ -679,6 +714,7 @@ export default {
     // Load settings on component mount
     onMounted(() => {
       loadSettings()
+      loadStorageInfo()
       systemUpdate.loadVersionInfo()
       auth.checkAuthStatus()
     })
@@ -689,6 +725,7 @@ export default {
       saveStatus,
       recordingMode,
       showUpdateConfirm,
+      storage,
       saveSettings,
       resetToDefaults,
       onRecordingModeChange,
