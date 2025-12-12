@@ -30,9 +30,9 @@ def load_user_settings():
         },
         "storage": {
             "auto_cleanup_enabled": True,  # Enable automatic storage cleanup
-            "trigger_percent": 80,  # Start cleanup when disk usage exceeds this
-            "target_percent": 70,  # Free space until usage drops to this
-            "min_recordings_per_species": 60,  # Protect species with fewer recordings
+            "trigger_percent": 85,  # Start cleanup when disk usage exceeds this
+            "target_percent": 80,  # Free space until usage drops to this
+            "keep_per_species": 60,  # Keep top N recordings per species by confidence
             "check_interval_minutes": 30  # How often to check disk usage
         }
     }

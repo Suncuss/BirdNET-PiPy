@@ -4,35 +4,38 @@ Automatic storage management for BirdNET-PiPy that prevents disk space from fill
 
 ## Overview
 
-BirdNET-PiPy continuously generates audio recordings and spectrogram images for each bird detection. Over time, this can consume significant disk space. The storage cleanup feature automatically removes old files when disk usage exceeds a threshold, while preserving database records and protecting rare species.
+BirdNET-PiPy continuously generates audio recordings and spectrogram images for each bird detection. Over time, this can consume significant disk space. The storage cleanup feature automatically removes old files when disk usage exceeds a threshold, while preserving database records and keeping the best recordings for each species.
 
 ## How It Works
 
 1. **Monitoring**: A background thread checks disk usage every 30 minutes
-2. **Trigger**: When usage exceeds 80%, cleanup begins
-3. **Target**: Frees space until usage drops to 70%
-4. **Protection**: Species with ≤60 recordings are never touched
+2. **Trigger**: When usage exceeds 85%, cleanup begins
+3. **Target**: Frees space until usage drops to 80%
+4. **Protection**: For EVERY species, the top 60 recordings by confidence are always kept
 5. **Preservation**: Database records are kept; only audio and spectrogram files are deleted
+6. **Safety**: If disk is full with non-BirdNET data, cleanup stops when BirdNET candidates are exhausted (won't delete everything trying to reach an impossible target)
 
 ### Cleanup Algorithm
 
 ```
 1. Calculate bytes needed to free (current_used - target_used)
-2. Identify protected species (those with ≤60 recordings)
-3. Get all detections from non-protected species, ordered by timestamp (oldest first)
-4. Accumulate file sizes until target bytes reached
-5. Delete audio (.mp3) and spectrogram (.webp) files
-6. Database records remain intact
+2. For each species, identify recordings beyond top 60 by confidence
+3. Get these "beyond top 60" detections, ordered by timestamp (oldest first)
+4. SAFETY CHECK: Estimate if target is achievable with available data
+5. Accumulate file sizes until target bytes reached
+6. Delete audio (.mp3) and spectrogram (.webp) files
+7. Database records remain intact
+8. Stop when target reached OR candidates exhausted (whichever first)
 ```
 
 ### What Gets Deleted
 
 | Item | Deleted? |
 |------|----------|
-| Audio files (.mp3) | Yes |
-| Spectrogram images (.webp) | Yes |
+| Audio files (.mp3) beyond top 60/species | Yes |
+| Spectrogram images (.webp) beyond top 60/species | Yes |
+| Top 60 recordings per species (by confidence) | No |
 | Database records | No |
-| Protected species files | No |
 
 ## Configuration
 
@@ -42,9 +45,9 @@ Storage settings can be configured in `data/config/user_settings.json`:
 {
   "storage": {
     "auto_cleanup_enabled": true,
-    "trigger_percent": 80,
-    "target_percent": 70,
-    "min_recordings_per_species": 60,
+    "trigger_percent": 85,
+    "target_percent": 80,
+    "keep_per_species": 60,
     "check_interval_minutes": 30
   }
 }
@@ -55,18 +58,18 @@ Storage settings can be configured in `data/config/user_settings.json`:
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `auto_cleanup_enabled` | `true` | Enable/disable automatic cleanup |
-| `trigger_percent` | `80` | Start cleanup when disk usage exceeds this percentage |
-| `target_percent` | `70` | Free space until usage drops to this percentage |
-| `min_recordings_per_species` | `60` | Protect species with fewer than this many recordings |
+| `trigger_percent` | `85` | Start cleanup when disk usage exceeds this percentage |
+| `target_percent` | `80` | Free space until usage drops to this percentage |
+| `keep_per_species` | `60` | Keep top N recordings per species by confidence |
 | `check_interval_minutes` | `30` | How often to check disk usage |
 
-## Protected Species
+## Per-Species Protection
 
-Species with fewer recordings than `min_recordings_per_species` (default: 60) are automatically protected. This ensures rare sightings are preserved.
+For EVERY species, the top N recordings by confidence are always protected (`keep_per_species`, default: 60). This ensures your best recordings are never deleted.
 
 **Example**: If you have:
-- American Robin: 500 detections → eligible for cleanup
-- Bald Eagle: 4 detections → protected (all files kept)
+- American Robin: 500 detections → keeps top 60 by confidence, 440 eligible for cleanup
+- Bald Eagle: 4 detections → all 4 kept (fewer than 60)
 
 ## Storage Locations
 

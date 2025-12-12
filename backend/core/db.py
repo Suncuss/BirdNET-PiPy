@@ -679,27 +679,38 @@ class DatabaseManager:
 
         return {row['common_name']: row['count'] for row in results}
 
-    def get_cleanup_candidates(self, protected_species, limit=None):
+    def get_cleanup_candidates(self, keep_per_species=60, limit=None):
         """Get detections eligible for cleanup, oldest first.
 
+        For each species, keeps the top N recordings by confidence.
+        Only returns recordings beyond the top N for each species.
+
         Args:
-            protected_species: List of species names to exclude from cleanup
+            keep_per_species: Number of top recordings to keep per species (by confidence)
             limit: Optional max number of records to return
 
         Returns:
             List of dicts with: id, common_name, confidence, timestamp
             Ordered by timestamp ASC (oldest first)
         """
-        if not protected_species:
-            protected_species = []
-
-        # Build query with exclusion list
-        placeholders = ','.join('?' * len(protected_species)) if protected_species else "''"
-
+        # Use window function to rank recordings within each species by confidence
+        # Only return recordings ranked beyond keep_per_species
         query = f"""
+        WITH RankedDetections AS (
+            SELECT
+                id,
+                common_name,
+                confidence,
+                timestamp,
+                ROW_NUMBER() OVER (
+                    PARTITION BY common_name
+                    ORDER BY confidence DESC
+                ) as confidence_rank
+            FROM detections
+        )
         SELECT id, common_name, confidence, timestamp
-        FROM detections
-        WHERE common_name NOT IN ({placeholders})
+        FROM RankedDetections
+        WHERE confidence_rank > ?
         ORDER BY timestamp ASC
         """
 
@@ -708,13 +719,13 @@ class DatabaseManager:
 
         with self.get_db_connection() as conn:
             cur = conn.cursor()
-            cur.execute(query, protected_species)
+            cur.execute(query, (keep_per_species,))
             results = cur.fetchall()
 
         candidates = [dict(row) for row in results]
 
         logger.debug("Cleanup candidates retrieved", extra={
-            'protected_species_count': len(protected_species),
+            'keep_per_species': keep_per_species,
             'candidates_count': len(candidates)
         })
 

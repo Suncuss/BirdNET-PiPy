@@ -94,34 +94,56 @@ class TestGetSpeciesCounts:
 class TestGetCleanupCandidates:
     """Tests for db.get_cleanup_candidates()"""
 
-    def test_excludes_protected_species(self, populated_db_for_cleanup):
-        """Should not return detections from protected species."""
-        protected = ['Rare Bird', 'Very Rare Bird']
-        candidates = populated_db_for_cleanup.get_cleanup_candidates(protected)
+    def test_keeps_top_n_per_species(self, populated_db_for_cleanup):
+        """Should not return top N recordings by confidence for each species."""
+        # With keep_per_species=60:
+        # - Common Bird (100 detections): 40 should be candidates
+        # - Rare Bird (50 detections): 0 candidates (all within limit)
+        # - Very Rare Bird (10 detections): 0 candidates (all within limit)
+        candidates = populated_db_for_cleanup.get_cleanup_candidates(keep_per_species=60)
 
         species_in_candidates = set(c['common_name'] for c in candidates)
         assert 'Common Bird' in species_in_candidates
-        assert 'Rare Bird' not in species_in_candidates
-        assert 'Very Rare Bird' not in species_in_candidates
+        assert 'Rare Bird' not in species_in_candidates  # Only 50, all kept
+        assert 'Very Rare Bird' not in species_in_candidates  # Only 10, all kept
+
+        # Should have exactly 40 candidates (100 - 60 from Common Bird)
+        assert len(candidates) == 40
 
     def test_returns_oldest_first(self, populated_db_for_cleanup):
         """Should order results by timestamp ascending (oldest first)."""
-        candidates = populated_db_for_cleanup.get_cleanup_candidates([])
+        candidates = populated_db_for_cleanup.get_cleanup_candidates(keep_per_species=60)
 
         timestamps = [c['timestamp'] for c in candidates]
         assert timestamps == sorted(timestamps)
 
     def test_respects_limit(self, populated_db_for_cleanup):
         """Should respect the limit parameter."""
-        candidates = populated_db_for_cleanup.get_cleanup_candidates([], limit=10)
+        candidates = populated_db_for_cleanup.get_cleanup_candidates(keep_per_species=60, limit=10)
         assert len(candidates) == 10
 
-    def test_empty_protected_list(self, populated_db_for_cleanup):
-        """Should return all species when protected list is empty."""
-        candidates = populated_db_for_cleanup.get_cleanup_candidates([])
+    def test_no_candidates_when_all_within_limit(self, test_db_manager):
+        """Should return empty when all species have fewer than keep_per_species."""
+        # Insert only 30 detections for one species
+        from datetime import datetime, timedelta
+        base_time = datetime(2024, 1, 15, 10, 0, 0)
+        for i in range(30):
+            detection = {
+                'timestamp': (base_time - timedelta(hours=i)).isoformat(),
+                'group_timestamp': (base_time - timedelta(hours=i)).isoformat(),
+                'scientific_name': 'Testus birdus',
+                'common_name': 'Test Bird',
+                'confidence': 0.75 + (i % 20) * 0.01,
+                'latitude': 40.7128,
+                'longitude': -74.0060,
+                'cutoff': 0.5,
+                'sensitivity': 0.75,
+                'overlap': 0.25
+            }
+            test_db_manager.insert_detection(detection)
 
-        species_in_candidates = set(c['common_name'] for c in candidates)
-        assert len(species_in_candidates) == 3
+        candidates = test_db_manager.get_cleanup_candidates(keep_per_species=60)
+        assert len(candidates) == 0
 
 
 class TestGetDiskUsage:
@@ -171,31 +193,36 @@ class TestGetDetectionFiles:
                 assert '85' in paths['audio_path']  # Confidence as percentage
 
 
-class TestGetProtectedSpecies:
-    """Tests for storage_manager.get_protected_species()"""
+class TestEstimateDeletableSize:
+    """Tests for storage_manager.estimate_deletable_size()"""
 
-    def test_protects_species_under_threshold(self, populated_db_for_cleanup):
-        """Species with count <= min_count should be protected."""
+    def test_estimates_size_correctly(self, populated_db_for_cleanup):
+        """Should estimate deletable size based on candidate count."""
         with patch('config.settings.BASE_DIR', '/tmp'):
             with patch('config.settings.user_settings', {'storage': {}}):
-                from core.storage_manager import get_protected_species
+                from core.storage_manager import estimate_deletable_size
 
-                # With threshold of 60
-                protected = get_protected_species(populated_db_for_cleanup, min_count=60)
+                estimated_bytes, count = estimate_deletable_size(
+                    populated_db_for_cleanup, keep_per_species=60
+                )
 
-                assert 'Rare Bird' in protected  # 50 detections
-                assert 'Very Rare Bird' in protected  # 10 detections
-                assert 'Common Bird' not in protected  # 100 detections
+                # Should have 40 candidates (100 - 60 from Common Bird)
+                assert count == 40
+                # Estimated at ~300KB each
+                assert estimated_bytes == 40 * 300 * 1024
 
-    def test_all_species_protected_if_all_under_threshold(self, populated_db_for_cleanup):
-        """If all species under threshold, all should be protected."""
+    def test_returns_zero_when_no_candidates(self, test_db_manager):
+        """Should return zero when all within keep limit."""
         with patch('config.settings.BASE_DIR', '/tmp'):
             with patch('config.settings.user_settings', {'storage': {}}):
-                from core.storage_manager import get_protected_species
+                from core.storage_manager import estimate_deletable_size
 
-                protected = get_protected_species(populated_db_for_cleanup, min_count=200)
+                estimated_bytes, count = estimate_deletable_size(
+                    test_db_manager, keep_per_species=60
+                )
 
-                assert len(protected) == 3
+                assert count == 0
+                assert estimated_bytes == 0
 
 
 class TestDeleteDetectionFiles:
@@ -273,53 +300,94 @@ class TestCleanupStorage:
         """Should not delete anything if already below target."""
         with patch('config.settings.BASE_DIR', '/tmp'):
             with patch('config.settings.user_settings', {'storage': {}}):
-                # Mock disk usage at 50% (below 70% target)
+                # Mock disk usage at 70% (below 80% target)
                 with patch('core.storage_manager.get_disk_usage') as mock_usage:
                     mock_usage.return_value = {
                         'total_bytes': 100 * 1024**3,
-                        'used_bytes': 50 * 1024**3,
-                        'free_bytes': 50 * 1024**3,
-                        'percent_used': 50.0
+                        'used_bytes': 70 * 1024**3,
+                        'free_bytes': 30 * 1024**3,
+                        'percent_used': 70.0
                     }
 
                     from core.storage_manager import cleanup_storage
 
-                    result = cleanup_storage(populated_db_for_cleanup, target_percent=70)
+                    result = cleanup_storage(populated_db_for_cleanup, target_percent=80)
 
                     assert result['files_deleted'] == 0
                     assert result['bytes_freed'] == 0
+                    assert result['target_reached'] == True
 
-    def test_cleanup_deletes_oldest_first(self, populated_db_for_cleanup):
-        """Should delete oldest files first."""
+    def test_cleanup_respects_keep_per_species(self, populated_db_for_cleanup):
+        """Should keep top N recordings per species by confidence."""
         with patch('config.settings.BASE_DIR', '/tmp'):
             with patch('config.settings.EXTRACTED_AUDIO_DIR', '/tmp/audio'):
                 with patch('config.settings.SPECTROGRAM_DIR', '/tmp/spectrograms'):
                     with patch('config.settings.user_settings', {'storage': {}}):
-                        # Mock disk usage at 85% (above 80% trigger)
+                        # Mock disk usage at 90%
                         with patch('core.storage_manager.get_disk_usage') as mock_usage:
                             mock_usage.return_value = {
                                 'total_bytes': 100 * 1024**3,
-                                'used_bytes': 85 * 1024**3,
-                                'free_bytes': 15 * 1024**3,
-                                'percent_used': 85.0
+                                'used_bytes': 90 * 1024**3,
+                                'free_bytes': 10 * 1024**3,
+                                'percent_used': 90.0
                             }
 
-                            # Mock file operations
                             with patch('core.storage_manager.get_file_size') as mock_size:
-                                mock_size.return_value = 1024**3  # 1GB per file
+                                mock_size.return_value = 300 * 1024  # 300KB per file
 
                                 with patch('core.storage_manager.delete_detection_files') as mock_delete:
                                     mock_delete.return_value = {
                                         'deleted_audio': True,
                                         'deleted_spectrogram': True,
-                                        'bytes_freed': 1024**3
+                                        'bytes_freed': 300 * 1024
                                     }
 
                                     from core.storage_manager import cleanup_storage
 
-                                    result = cleanup_storage(populated_db_for_cleanup, target_percent=70)
+                                    result = cleanup_storage(
+                                        populated_db_for_cleanup,
+                                        target_percent=80,
+                                        keep_per_species=60
+                                    )
 
-                                    # Should have attempted to free 15GB (85% - 70%)
-                                    # With 1GB per file, should delete ~15 files
-                                    assert result['files_deleted'] > 0
-                                    assert mock_delete.called
+                                    # Should only delete from candidates (40 available)
+                                    # Not all 160 detections
+                                    assert result['files_deleted'] <= 40
+
+    def test_warns_when_target_unachievable(self, populated_db_for_cleanup):
+        """Should set target_achievable=False when BirdNET data insufficient."""
+        with patch('config.settings.BASE_DIR', '/tmp'):
+            with patch('config.settings.EXTRACTED_AUDIO_DIR', '/tmp/audio'):
+                with patch('config.settings.SPECTROGRAM_DIR', '/tmp/spectrograms'):
+                    with patch('config.settings.user_settings', {'storage': {}}):
+                        # Mock disk usage at 90% - needs 10GB to reach 80%
+                        with patch('core.storage_manager.get_disk_usage') as mock_usage:
+                            mock_usage.return_value = {
+                                'total_bytes': 100 * 1024**3,
+                                'used_bytes': 90 * 1024**3,
+                                'free_bytes': 10 * 1024**3,
+                                'percent_used': 90.0
+                            }
+
+                            # But only 40 candidates * 300KB = 12MB available
+                            with patch('core.storage_manager.get_file_size') as mock_size:
+                                mock_size.return_value = 300 * 1024
+
+                                with patch('core.storage_manager.delete_detection_files') as mock_delete:
+                                    mock_delete.return_value = {
+                                        'deleted_audio': True,
+                                        'deleted_spectrogram': True,
+                                        'bytes_freed': 300 * 1024
+                                    }
+
+                                    from core.storage_manager import cleanup_storage
+
+                                    result = cleanup_storage(
+                                        populated_db_for_cleanup,
+                                        target_percent=80,
+                                        keep_per_species=60
+                                    )
+
+                                    # Should flag that target is not achievable
+                                    assert result['target_achievable'] == False
+                                    assert result['target_reached'] == False
