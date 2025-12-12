@@ -27,6 +27,13 @@ def load_user_settings():
             "min_freq_khz": 0,
             "max_dbfs": 0,
             "min_dbfs": -120
+        },
+        "storage": {
+            "auto_cleanup_enabled": True,  # Enable automatic storage cleanup
+            "trigger_percent": 80,  # Start cleanup when disk usage exceeds this
+            "target_percent": 70,  # Free space until usage drops to this
+            "min_recordings_per_species": 60,  # Protect species with fewer recordings
+            "check_interval_minutes": 30  # How often to check disk usage
         }
     }
     

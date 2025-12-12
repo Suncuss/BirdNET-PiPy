@@ -652,7 +652,7 @@ class DatabaseManager:
             cur = conn.cursor()
             cur.execute(query)
             results = cur.fetchall()
-            
+
         return [
             {
                 'common_name': row['common_name'],
@@ -660,3 +660,62 @@ class DatabaseManager:
             }
             for row in results
         ]
+
+    def get_species_counts(self):
+        """Get detection count for each species.
+
+        Returns:
+            dict: {common_name: count} for all species
+        """
+        query = """
+        SELECT common_name, COUNT(*) as count
+        FROM detections
+        GROUP BY common_name
+        """
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(query)
+            results = cur.fetchall()
+
+        return {row['common_name']: row['count'] for row in results}
+
+    def get_cleanup_candidates(self, protected_species, limit=None):
+        """Get detections eligible for cleanup, oldest first.
+
+        Args:
+            protected_species: List of species names to exclude from cleanup
+            limit: Optional max number of records to return
+
+        Returns:
+            List of dicts with: id, common_name, confidence, timestamp
+            Ordered by timestamp ASC (oldest first)
+        """
+        if not protected_species:
+            protected_species = []
+
+        # Build query with exclusion list
+        placeholders = ','.join('?' * len(protected_species)) if protected_species else "''"
+
+        query = f"""
+        SELECT id, common_name, confidence, timestamp
+        FROM detections
+        WHERE common_name NOT IN ({placeholders})
+        ORDER BY timestamp ASC
+        """
+
+        if limit is not None:
+            query += f" LIMIT {int(limit)}"
+
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(query, protected_species)
+            results = cur.fetchall()
+
+        candidates = [dict(row) for row in results]
+
+        logger.debug("Cleanup candidates retrieved", extra={
+            'protected_species_count': len(protected_species),
+            'candidates_count': len(candidates)
+        })
+
+        return candidates

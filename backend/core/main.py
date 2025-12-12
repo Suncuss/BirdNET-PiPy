@@ -7,6 +7,7 @@ from core.db import DatabaseManager
 from core.utils import generate_spectrogram, trim_audio, select_audio_chunks, convert_wav_to_mp3, sanitize_url
 from core.audio_manager import BaseRecorder, create_recorder
 from core.logging_config import setup_logging, get_logger
+from core.storage_manager import storage_monitor_loop
 from version import __version__, DISPLAY_NAME
 
 import os
@@ -461,6 +462,15 @@ if __name__ == "__main__":
     processing_thread = threading.Thread(target=process_audio_files, name="ProcessingThread")
     processing_thread.start()
     logger.info("Processing thread started")
+
+    # Start the storage monitor thread
+    storage_thread = threading.Thread(
+        target=storage_monitor_loop,
+        args=(stop_flag, db_manager),
+        name="StorageThread"
+    )
+    storage_thread.start()
+    logger.info("Storage monitor thread started")
 
     try:
         while not stop_flag.is_set():
