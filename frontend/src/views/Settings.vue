@@ -256,7 +256,7 @@
           <div class="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
             <div
               class="h-full rounded-full transition-all duration-300"
-              :class="storage.percent_used >= 90 ? 'bg-red-500' : storage.percent_used >= 75 ? 'bg-yellow-500' : 'bg-green-500'"
+              :class="storage.percent_used >= 75 ? 'bg-orange-500' : 'bg-green-500'"
               :style="{ width: storage.percent_used + '%' }"
             ></div>
           </div>
