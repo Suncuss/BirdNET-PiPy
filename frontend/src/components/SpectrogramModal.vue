@@ -12,24 +12,26 @@
       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70"
       @click.self="close"
     >
-      <div class="relative bg-gray-900 rounded-lg shadow-xl overflow-hidden">
-        <!-- Close button -->
+      <div class="relative flex items-start gap-2">
+        <!-- Image container -->
+        <div class="bg-gray-900 rounded-lg shadow-xl overflow-hidden">
+          <img
+            :src="imageUrl"
+            :alt="alt"
+            class="w-full max-h-[85vh] object-contain"
+          >
+        </div>
+
+        <!-- Close button (outside image) -->
         <button
           @click="close"
-          class="absolute top-1 right-1 sm:top-2 sm:right-2 z-10 p-0.5 sm:p-1 rounded-full bg-green-900/40 text-gray-200 hover:bg-green-800/60 hover:text-white transition-colors focus:outline-none"
+          class="flex-shrink-0 p-1 sm:p-1.5 rounded-full bg-gray-800 text-gray-200 hover:bg-gray-700 hover:text-white transition-colors focus:outline-none"
           title="Close"
         >
-          <svg class="h-3.5 w-3.5 sm:h-4 sm:w-4" fill="none" viewBox="0 0 24 24" stroke-width="3" stroke="currentColor">
+          <svg class="h-4 w-4 sm:h-5 sm:w-5" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
-
-        <!-- Image container -->
-        <img
-          :src="imageUrl"
-          :alt="alt"
-          class="w-full max-h-[85vh] object-contain"
-        >
       </div>
     </div>
   </Transition>
