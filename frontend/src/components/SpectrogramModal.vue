@@ -12,7 +12,7 @@
       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70"
       @click.self="close"
     >
-      <div class="relative flex items-start gap-2">
+      <div class="relative max-w-full">
         <!-- Image container -->
         <div class="bg-gray-900 rounded-lg shadow-xl overflow-hidden">
           <img
@@ -22,10 +22,10 @@
           >
         </div>
 
-        <!-- Close button (outside image) -->
+        <!-- Close button (positioned outside top-right corner) -->
         <button
           @click="close"
-          class="flex-shrink-0 p-1 sm:p-1.5 rounded-full bg-gray-800 text-gray-200 hover:bg-gray-700 hover:text-white transition-colors focus:outline-none"
+          class="absolute -top-2 -right-2 sm:-top-3 sm:-right-3 p-1 sm:p-1.5 rounded-full bg-gray-800 text-gray-200 hover:bg-gray-700 hover:text-white transition-colors focus:outline-none shadow-lg"
           title="Close"
         >
           <svg class="h-4 w-4 sm:h-5 sm:w-5" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
