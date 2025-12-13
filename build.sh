@@ -13,6 +13,12 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 
+# Low memory threshold (1GB in KB)
+LOW_MEMORY_THRESHOLD_KB=1048576
+# Swap size for low-memory builds (2GB)
+SWAP_SIZE_MB=2048
+SWAP_FILE="/swapfile"
+
 # Function to print colored output
 print_status() {
     echo -e "${GREEN}[BUILD]${NC} $1"
@@ -24,6 +30,96 @@ print_warning() {
 
 print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Detect total RAM in KB
+get_total_ram_kb() {
+    grep MemTotal /proc/meminfo | awk '{print $2}'
+}
+
+# Check if system is low memory (< 1GB)
+is_low_memory() {
+    local ram_kb=$(get_total_ram_kb)
+    [ "$ram_kb" -lt "$LOW_MEMORY_THRESHOLD_KB" ]
+}
+
+# Get current swap size in MB
+get_swap_size_mb() {
+    free -m | awk '/Swap:/ {print $2}'
+}
+
+# Create or extend swap for low-memory builds
+setup_build_swap() {
+    local current_swap=$(get_swap_size_mb)
+    local needed_swap=$SWAP_SIZE_MB
+
+    if [ "$current_swap" -ge "$needed_swap" ]; then
+        print_status "Sufficient swap already available (${current_swap}MB)"
+        return 0
+    fi
+
+    print_warning "Low memory detected. Setting up swap for build..."
+    print_status "Current swap: ${current_swap}MB, creating ${needed_swap}MB swap file..."
+
+    # Check if we can create swap (need sudo/root)
+    if [ "$EUID" -ne 0 ]; then
+        print_warning "Cannot create swap without root privileges."
+        print_warning "For low-memory systems, run: sudo ./build.sh"
+        print_warning "Continuing without additional swap (build may fail)..."
+        return 1
+    fi
+
+    # Check if swap file already exists
+    if [ -f "$SWAP_FILE" ]; then
+        # Disable existing swap file first
+        swapoff "$SWAP_FILE" 2>/dev/null || true
+        rm -f "$SWAP_FILE"
+    fi
+
+    # Create swap file
+    dd if=/dev/zero of="$SWAP_FILE" bs=1M count="$needed_swap" status=progress
+    chmod 600 "$SWAP_FILE"
+    mkswap "$SWAP_FILE"
+    swapon "$SWAP_FILE"
+
+    print_status "Swap file created and enabled (${needed_swap}MB)"
+    return 0
+}
+
+# Build images sequentially for low-memory systems
+build_sequential() {
+    print_status "Building images sequentially (low-memory mode)..."
+
+    # Disable BuildKit - legacy builder uses less memory during export
+    export DOCKER_BUILDKIT=0
+    print_status "BuildKit disabled for memory efficiency"
+
+    # Build order: smallest/fastest first, largest last
+    local services=("icecast" "frontend" "birdnet-server" "api" "main")
+
+    # Note: birdnet-server, api, and main share the same image (backend/Dockerfile)
+    # Docker will cache after the first build
+    local built_backend=false
+
+    for service in "${services[@]}"; do
+        print_status "Building $service..."
+
+        # For backend services, only build once (they share the same Dockerfile)
+        if [[ "$service" == "birdnet-server" || "$service" == "api" || "$service" == "main" ]]; then
+            if [ "$built_backend" = false ]; then
+                docker compose build --no-cache "$service"
+                built_backend=true
+            else
+                print_status "Skipping $service (shares image with birdnet-server)"
+            fi
+        else
+            docker compose build "$service"
+        fi
+
+        # Clear build cache between images to free memory
+        print_status "Clearing build cache..."
+        docker builder prune -f 2>/dev/null || true
+    done
 }
 
 # Function to generate version.json with git information
@@ -67,21 +163,31 @@ show_usage() {
     echo ""
     echo "Options:"
     echo "  --test        Run backend tests before building"
+    echo "  --low-memory  Force low-memory build mode (sequential, no BuildKit)"
     echo "  --help        Show this help message"
     echo ""
     echo "Default: Builds all Docker images (no deployment)"
     echo ""
     echo "Note: Frontend is built inside Docker (no Node.js needed on host)"
     echo "For frontend dev with hot-reload: cd frontend && npm run dev"
+    echo ""
+    echo "Low-memory mode is auto-enabled on systems with <1GB RAM."
+    echo "For Pi Zero 2W, run with sudo to enable automatic swap creation:"
+    echo "  sudo ./build.sh"
 }
 
 # Parse command line arguments
 RUN_TESTS=false
+FORCE_LOW_MEMORY=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         --test)
             RUN_TESTS=true
+            shift
+            ;;
+        --low-memory)
+            FORCE_LOW_MEMORY=true
             shift
             ;;
         --help)
@@ -115,9 +221,29 @@ fi
 # Generate version.json before Docker build
 generate_version_info
 
-# Build Docker images (includes frontend build inside container)
-print_status "Building Docker images..."
-docker compose build
+# Detect system resources and choose build strategy
+RAM_KB=$(get_total_ram_kb)
+RAM_MB=$((RAM_KB / 1024))
+print_status "Detected RAM: ${RAM_MB}MB"
+
+if is_low_memory || [ "$FORCE_LOW_MEMORY" = true ]; then
+    if [ "$FORCE_LOW_MEMORY" = true ]; then
+        print_status "Low-memory mode forced via --low-memory flag"
+    else
+        print_warning "Low memory system detected (<1GB RAM)"
+    fi
+    print_status "Using low-memory build mode (sequential builds, BuildKit disabled)"
+
+    # Try to set up swap for the build
+    setup_build_swap || true
+
+    # Build sequentially
+    build_sequential
+else
+    # Standard parallel build
+    print_status "Building Docker images..."
+    docker compose build
+fi
 
 if [ $? -eq 0 ]; then
     print_status "Docker images built successfully!"

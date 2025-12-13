@@ -192,15 +192,50 @@ show_usage() {
 }
 
 # ============================================================================
+# Prerequisites Installation (Batched for speed)
+# ============================================================================
+
+# Install all prerequisites in one batch to minimize apt-get update calls
+install_prerequisites() {
+    print_status "Checking prerequisites..."
+
+    local packages_to_install=()
+
+    # Git (needed for clone/pull)
+    if ! command -v git &> /dev/null; then
+        packages_to_install+=("git")
+    fi
+
+    # Docker prerequisites (only if Docker not installed)
+    if ! command -v docker &> /dev/null; then
+        # These are needed to add Docker repository
+        packages_to_install+=("ca-certificates" "curl" "gnupg" "lsb-release")
+    fi
+
+    # PulseAudio (needed for audio)
+    if ! command -v pulseaudio &> /dev/null; then
+        packages_to_install+=("pulseaudio" "pulseaudio-utils" "alsa-utils")
+    fi
+
+    if [ ${#packages_to_install[@]} -gt 0 ]; then
+        print_status "Installing prerequisites: ${packages_to_install[*]}"
+        apt-get update
+        apt-get install -y "${packages_to_install[@]}"
+        print_status "Prerequisites installed"
+    else
+        print_status "All prerequisites already installed, skipping apt-get update"
+    fi
+}
+
+# ============================================================================
 # Stage 1: Clone Repository Logic
 # ============================================================================
 
-# Check prerequisites for cloning
+# Check if git is available (should be installed by install_prerequisites)
 check_git() {
     if ! command -v git &> /dev/null; then
-        print_status "Installing git..."
-        apt-get update
-        apt-get install -y git
+        print_error "Git not installed. This should not happen."
+        exit 1
     fi
 }
 
@@ -253,12 +288,12 @@ clone_repository() {
             exit 1
         fi
     else
-        # Clone fresh
-        git clone -b $REPO_BRANCH "$REPO_URL" "$INSTALL_DIR" || {
+        # Clone fresh (shallow clone for speed - full history not needed)
+        git clone --depth 1 -b $REPO_BRANCH "$REPO_URL" "$INSTALL_DIR" || {
             print_error "Failed to clone repository"
             exit 1
         }
-        print_status "Repository cloned to $INSTALL_DIR"
+        print_status "Repository cloned to $INSTALL_DIR (shallow clone)"
 
         # Fix ownership after clone
         get_actual_uid_gid
@@ -325,30 +360,13 @@ check_docker_compose() {
     fi
 }
 
-# Check if PulseAudio is installed
-check_pulseaudio() {
-    if command -v pulseaudio &> /dev/null; then
-        print_status "PulseAudio is already installed"
-        return 0
-    else
-        return 1
-    fi
-}
-
 # Install Docker using official method
 install_docker() {
     print_status "Installing Docker..."
     print_info "This may take a few minutes..."
 
-    # Update package index
-    apt-get update
-
-    # Install prerequisites
-    apt-get install -y \
-        ca-certificates \
-        curl \
-        gnupg \
-        lsb-release
+    # Prerequisites (ca-certificates, curl, gnupg, lsb-release) are already
+    # installed by install_prerequisites() - no apt-get update needed here
 
     # Add Docker's official GPG key
     install -m 0755 -d /etc/apt/keyrings
@@ -410,17 +428,13 @@ verify_docker() {
 # Application Setup (Ported from deployment/install-service.sh)
 # ============================================================================
 
-# Install PulseAudio for audio multiplexing
-install_pulseaudio() {
+# Configure PulseAudio for audio multiplexing
+# Note: PulseAudio packages are installed by install_prerequisites()
+configure_pulseaudio() {
     print_info ""
     print_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     print_info "PulseAudio Setup (Required for audio recording)"
     print_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-    print_status "Installing PulseAudio..."
-
-    apt-get update
-    apt-get install -y pulseaudio pulseaudio-utils alsa-utils
 
     # Copy PulseAudio configuration files
     print_status "Configuring PulseAudio for system-wide mode..."
@@ -460,9 +474,51 @@ install_pulseaudio() {
     print_info "PulseAudio will be started by birdnet-service.sh"
 }
 
+# Check if system has low memory and set up swap if needed
+setup_build_swap() {
+    local ram_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+    local ram_mb=$((ram_kb / 1024))
+    local swap_mb=$(free -m | awk '/Swap:/ {print $2}')
+    local needed_swap=2048
+    local swap_file="/swapfile"
+
+    print_status "System RAM: ${ram_mb}MB, Swap: ${swap_mb}MB"
+
+    # Only set up swap for low memory systems (<1GB)
+    if [ "$ram_kb" -ge 1048576 ]; then
+        return 0
+    fi
+
+    print_warning "Low memory system detected (<1GB RAM)"
+
+    if [ "$swap_mb" -ge "$needed_swap" ]; then
+        print_status "Sufficient swap already available"
+        return 0
+    fi
+
+    print_status "Creating ${needed_swap}MB swap file for Docker build..."
+
+    # Remove existing swap file if present
+    if [ -f "$swap_file" ]; then
+        swapoff "$swap_file" 2>/dev/null || true
+        rm -f "$swap_file"
+    fi
+
+    # Create swap file
+    dd if=/dev/zero of="$swap_file" bs=1M count="$needed_swap" status=progress
+    chmod 600 "$swap_file"
+    mkswap "$swap_file"
+    swapon "$swap_file"
+
+    print_status "Swap file created and enabled"
+}
+
 # Build Docker images
 build_application() {
     print_status "Building BirdNET-PiPy application..."
+
+    # Set up swap for low-memory systems (we have root here)
+    setup_build_swap
 
     get_actual_uid_gid
     print_status "Building as user $ACTUAL_USER (UID:$ACTUAL_UID, GID:$ACTUAL_GID)..."
@@ -728,6 +784,10 @@ main() {
     detect_platform
     check_root
 
+    # Install all prerequisites in one batch (git, docker prereqs, pulseaudio)
+    # This minimizes apt-get update calls for faster installation
+    install_prerequisites
+
     # Stage 1: Clone if needed (remote execution)
     if [ "$IS_LOCAL_INSTALL" = false ]; then
         print_status "Running in remote mode (clone required)"
@@ -755,12 +815,8 @@ main() {
         print_status "Docker and Docker Compose are already installed, skipping..."
     fi
 
-    # PulseAudio setup
-    if ! check_pulseaudio; then
-        install_pulseaudio
-    else
-        print_status "PulseAudio is already configured, skipping installation..."
-    fi
+    # PulseAudio configuration (packages already installed by install_prerequisites)
+    configure_pulseaudio
 
     # Application setup
     fix_data_permissions
