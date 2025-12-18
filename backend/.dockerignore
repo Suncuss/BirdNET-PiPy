@@ -1,0 +1,72 @@
+# backend/.dockerignore - Optimizes backend Docker builds
+# Excludes files not needed in the backend Docker image
+
+# ============================================
+# Python Cache & Artifacts
+# ============================================
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+dist/
+build/
+
+# ============================================
+# Testing & Coverage
+# Note: Tests are mounted via volume at runtime,
+# so excluding them from the image is safe and faster
+# ============================================
+tests/
+.pytest_cache
+htmlcov
+.coverage
+.coverage.*
+*.cover
+.hypothesis
+
+# ============================================
+# Development Files
+# ============================================
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# ============================================
+# Logs & Temporary Files
+# ============================================
+*.log
+*.tmp
+.cache
+
+# ============================================
+# Environment Files
+# ============================================
+.env
+.env.local
+.env.*.local
+
+# ============================================
+# Git (not needed in container)
+# ============================================
+.git
+.gitignore
+.gitattributes
+
+# ============================================
+# Documentation (not needed in container)
+# ============================================
+*.md
+!README.md
+
+# ============================================
+# Docker-related (avoid recursion)
+# ============================================
+Dockerfile*
+.dockerignore
+docker-test.sh

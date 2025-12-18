@@ -1,0 +1,61 @@
+# Ignore data directory (contains audio, db, and spectrograms)
+/data/
+backend/data/
+
+
+# Ignore setup directory (contains requirement.txt)
+/setup/
+
+# Test artifacts
+.pytest_cache/
+htmlcov/
+.coverage
+*.cover
+.hypothesis/
+backend/.pytest_cache/
+backend/htmlcov/
+backend/.coverage
+frontend/coverage/
+
+# Ignore Node.js dependencies
+/frontend/node_modules/
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore build output
+/frontend/dist/
+
+# Ignore AGENTS.md
+AGENTS.md
+
+# Ignore claude code settings
+.claude/
+
+# Ignore VS Code settings
+.vscode/
+
+# Ignore macOS system files
+.DS_Store
+
+# Ignore environment files
+.env
+.env.*
+
+# Ignore logs
+*.log
+
+# Ignore database files (if not using SQLite, adjust as needed)
+*.sqlite3
+
+# Note: package-lock.json IS committed for reproducible Docker builds
+
+# Ignore Python virtual environment
+venv/
+.venv/
+
+# Local/internal documentation not meant for the repo
+internal_docs/

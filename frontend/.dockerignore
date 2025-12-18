@@ -1,0 +1,75 @@
+# frontend/.dockerignore - Optimizes frontend Docker builds
+# Excludes files not needed in the frontend Docker image
+
+# ============================================
+# Node.js Dependencies & Cache
+# Note: node_modules is rebuilt inside Docker via npm install,
+# so excluding it from build context is safe and much faster
+# ============================================
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.npm
+.yarn
+
+# ============================================
+# Build Artifacts
+# Note: dist/ is generated during Docker build,
+# so sending it to build context is redundant
+# ============================================
+dist
+dist-ssr
+build
+
+# ============================================
+# Development Cache & Config
+# ============================================
+.vite
+.cache
+.temp
+*.local
+
+# ============================================
+# Development Files
+# ============================================
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ============================================
+# Testing
+# ============================================
+coverage
+.nyc_output
+test-results
+
+# ============================================
+# Environment Files
+# ============================================
+.env
+.env.local
+.env.*.local
+
+# ============================================
+# Git (not needed in container)
+# ============================================
+.git
+.gitignore
+.gitattributes
+
+# ============================================
+# Documentation (not needed in container)
+# ============================================
+*.md
+!README.md
+
+# ============================================
+# Docker-related (avoid recursion)
+# ============================================
+Dockerfile*
+.dockerignore

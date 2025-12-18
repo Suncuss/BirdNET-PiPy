@@ -1,0 +1,111 @@
+services:
+  birdnet-server:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+    command: python -m birdnet_service.birdnet_server
+    restart: unless-stopped
+    volumes:
+      - ./backend:/app
+      - ./data:/app/data
+      - ./data/flags:/app/data/flags
+    environment:
+      - PYTHONPATH=/app
+      - BIRDNET_SERVICE_PORT=5001
+      - LOG_FORMAT=human
+      - LOG_LEVEL=INFO
+      - TZ=${TZ:-}
+    ports:
+      - "127.0.0.1:5001:5001"
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+    command: python -m core.api
+    restart: unless-stopped
+    volumes:
+      - ./backend:/app
+      - ./data:/app/data
+      - ./data/flags:/app/data/flags
+    environment:
+      - PYTHONPATH=/app
+      - API_PORT=5002
+      - LOG_FORMAT=human
+      - LOG_LEVEL=INFO
+      - TZ=${TZ:-}
+    ports:
+      # Bind to localhost only - nginx proxies external requests via docker network
+      # This prevents direct access to internal endpoints like /api/broadcast/detection
+      - "127.0.0.1:5002:5002"
+
+  main:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+    command: python -m core.main
+    restart: unless-stopped
+    volumes:
+      - ./backend:/app
+      - ./data:/app/data
+      - ./data/flags:/app/data/flags
+      # PulseAudio socket for audio access
+      # birdnet-service.sh ensures /run/pulse/native exists (system-wide or symlink to user socket)
+      - /run/pulse:/run/pulse:ro
+    environment:
+      - PYTHONPATH=/app
+      - PULSE_SERVER=unix:/run/pulse/native
+      - LOG_FORMAT=human
+      - LOG_LEVEL=INFO
+      - TZ=${TZ:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - birdnet-server
+      - api
+
+  icecast:
+    build:
+      context: ./deployment/audio
+      dockerfile: Dockerfile
+      args:
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+    restart: unless-stopped
+    volumes:
+      # PulseAudio socket for audio access
+      # birdnet-service.sh ensures /run/pulse/native exists (system-wide or symlink to user socket)
+      - /run/pulse:/run/pulse:ro
+      # User settings for RTSP URL configuration
+      - ./data:/app/data:ro
+    environment:
+      - PULSE_SERVER=unix:/run/pulse/native
+      - ICECAST_PASSWORD=${ICECAST_PASSWORD:-}
+      - STREAM_BITRATE=${STREAM_BITRATE:-320k}
+      - TZ=${TZ:-}
+    ports:
+      # Bind to localhost only - nginx proxies /stream/ requests via docker network
+      # This enforces authentication via nginx auth_request
+      - "127.0.0.1:8888:8888"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    environment:
+      - TZ=${TZ:-}
+    depends_on:
+      - api
+    

@@ -1,0 +1,35 @@
+#!/usr/bin/pulseaudio -nF
+#
+# PulseAudio system-wide configuration for BirdNet-PiPy
+# This runs PulseAudio as a system service to share audio with Docker containers
+#
+
+# Load essential modules - fail if these don't load
+.fail
+
+# Device detection - auto-detect sound cards
+load-module module-udev-detect
+
+# Create a default sink (output) even if no hardware output exists
+# This prevents errors when no speakers are connected
+load-module module-always-sink
+
+# Allow anonymous connections from local users (for Docker containers)
+# Socket will be at /run/pulse/native
+load-module module-native-protocol-unix auth-anonymous=true socket=/run/pulse/native
+
+# Optional: Enable TCP connections (uncomment if needed for network access)
+# load-module module-native-protocol-tcp auth-ip-acl=127.0.0.1;172.17.0.0/16 auth-anonymous=true
+
+# Automatically restore volume levels
+load-module module-device-restore
+load-module module-stream-restore
+load-module module-card-restore
+
+# Don't fail on optional settings below
+.nofail
+
+# Default source is auto-selected by PulseAudio when there's only one input device.
+# If you have multiple input devices and need to specify one, uncomment and edit:
+#   pactl list sources short    # Run this to find your device name
+#   set-default-source alsa_input.usb-YOUR_DEVICE_NAME-00.mono-fallback

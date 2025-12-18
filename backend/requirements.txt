@@ -1,0 +1,31 @@
+
+# Web framework and extensions
+Flask==3.1.1
+Flask-Cors==6.0.0
+Flask-SocketIO==5.5.1
+
+# Authentication
+bcrypt==4.2.1
+
+# Data processing and analysis
+numpy==1.26.4  # Keep 1.26.x for compatibility with TensorFlow Lite
+scipy==1.15.3
+
+# Audio processing
+pydub==0.25.1
+
+# Machine Learning
+tflite-runtime==2.14.0  # Keep stable version for model compatibility
+
+# Requests
+requests>=2.32.4
+
+# Visualization
+matplotlib==3.10.3
+Pillow>=10.4.0
+
+# File system monitoring
+watchdog==6.0.0
+
+# Audio conversion (system dependency, not installable via pip)
+sox==1.5.0
