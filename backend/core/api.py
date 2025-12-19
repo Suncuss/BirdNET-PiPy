@@ -469,6 +469,73 @@ def delete_detection(detection_id):
     })
 
 
+@api.route('/api/detections/batch', methods=['DELETE'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def delete_detections_batch():
+    """Delete multiple detections and their associated files.
+
+    Requires authentication.
+    Request body: { "ids": [1, 2, 3, ...] }
+    Max 100 items per request.
+    """
+    data = request.json
+    if not data or 'ids' not in data:
+        return jsonify({'error': 'Missing ids array'}), 400
+
+    ids = data['ids']
+    if not isinstance(ids, list):
+        return jsonify({'error': 'ids must be an array'}), 400
+
+    if len(ids) == 0:
+        return jsonify({'error': 'ids array is empty'}), 400
+
+    if len(ids) > 100:
+        return jsonify({'error': 'Maximum 100 items per batch'}), 400
+
+    deleted = []
+    failed = []
+
+    for detection_id in ids:
+        if not isinstance(detection_id, int):
+            failed.append({'id': detection_id, 'error': 'Invalid ID type'})
+            continue
+
+        detection = db_manager.delete_detection(detection_id)
+        if not detection:
+            failed.append({'id': detection_id, 'error': 'Not found'})
+            continue
+
+        # Clean up associated files
+        audio_path = os.path.join(EXTRACTED_AUDIO_DIR, detection['audio_filename'])
+        spectrogram_path = os.path.join(SPECTROGRAM_DIR, detection['spectrogram_filename'])
+
+        for file_path in [audio_path, spectrogram_path]:
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except OSError as e:
+                    logger.warning("Failed to delete file", extra={
+                        'file': file_path,
+                        'error': str(e)
+                    })
+
+        deleted.append(detection_id)
+
+    logger.info("Batch deletion completed", extra={
+        'deleted_count': len(deleted),
+        'failed_count': len(failed)
+    })
+
+    return jsonify({
+        'deleted': len(deleted),
+        'failed': len(failed),
+        'deleted_ids': deleted,
+        'errors': failed
+    })
+
+
 # Cache for available species (loaded from model labels file)
 _available_species_cache = None
 

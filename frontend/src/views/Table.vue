@@ -122,9 +122,9 @@
 
 	      <!-- Data -->
 	      <template v-else>
-	        <!-- Sort Controls -->
-	        <div class="flex items-center gap-2 px-4 py-3 bg-gray-50 border-b border-gray-200">
-	          <button
+        <!-- Sort Controls -->
+        <div class="flex items-center gap-2 px-4 py-3 bg-gray-50 border-b border-gray-200">
+          <button
             v-for="sort in SORT_OPTIONS"
             :key="sort.field"
             @click="toggleSort(sort.field)"
@@ -137,8 +137,32 @@
             <span v-if="sortField === sort.field" class="text-[10px]">
               {{ sortOrder === 'desc' ? '▼' : '▲' }}
             </span>
-	          </button>
-	        </div>
+          </button>
+        </div>
+
+        <!-- Batch Action Bar -->
+        <div
+          v-if="selectedCount > 0"
+          class="flex items-center justify-between px-4 py-3 bg-blue-50 border-b border-blue-200"
+        >
+          <span class="text-sm font-medium text-blue-800">
+            {{ selectedCount }} item{{ selectedCount === 1 ? '' : 's' }} selected
+          </span>
+          <div class="flex items-center gap-2">
+            <button
+              @click="clearSelection"
+              class="px-3 py-1.5 text-xs font-medium text-gray-600 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+            >
+              Clear
+            </button>
+            <button
+              @click="confirmBatchDelete"
+              class="px-3 py-1.5 text-xs font-medium text-white bg-red-600 rounded-md hover:bg-red-700 transition-colors"
+            >
+              Delete Selected
+            </button>
+          </div>
+        </div>
 	
 	        <div
 	          v-if="actionError"
@@ -157,50 +181,67 @@
 	          </button>
 	        </div>
 
-		        <!-- Mobile: Card List -->
-		        <div class="lg:hidden divide-y divide-gray-100">
-		          <div
-	            v-for="detection in detections"
-	            :key="detection.id"
-	            class="p-4 hover:bg-gray-50 transition-colors"
-	          >
-            <div class="flex items-start justify-between gap-3">
-              <div class="flex-1 min-w-0">
-                <router-link
-                  :to="{ name: 'BirdDetails', params: { name: detection.common_name } }"
-                  class="font-medium text-gray-900 hover:text-green-600 transition-colors"
+        <!-- Mobile: Card List -->
+        <div class="lg:hidden divide-y divide-gray-100">
+          <div
+            v-for="detection in detections"
+            :key="detection.id"
+            class="p-4 hover:bg-gray-50 transition-colors"
+            :class="{ 'bg-blue-50': isSelected(detection.id) }"
+          >
+            <div class="flex items-start gap-3">
+              <input
+                type="checkbox"
+                :checked="isSelected(detection.id)"
+                @change="toggleSelection(detection.id)"
+                class="mt-1 h-4 w-4 rounded border-gray-300 text-green-600 focus:ring-green-500"
+              />
+              <div class="flex-1 min-w-0 flex items-start justify-between gap-3">
+                <div class="flex-1 min-w-0">
+                  <router-link
+                    :to="{ name: 'BirdDetails', params: { name: detection.common_name } }"
+                    class="font-medium text-gray-900 hover:text-green-600 transition-colors"
+                  >
+                    {{ detection.common_name }}
+                  </router-link>
+                  <p class="text-xs text-gray-500 italic">{{ detection.scientific_name }}</p>
+                  <p class="text-xs text-gray-500 mt-1">
+                    {{ formatDateTime(detection.timestamp) }}
+                  </p>
+                </div>
+              <div class="flex flex-col items-end gap-2">
+                <span
+                  class="text-sm font-bold"
+                  :class="getConfidenceColor(detection.confidence)"
                 >
-                  {{ detection.common_name }}
-                </router-link>
-                <p class="text-xs text-gray-500 italic">{{ detection.scientific_name }}</p>
-                <p class="text-xs text-gray-500 mt-1">
-                  {{ formatDateTime(detection.timestamp) }}
-                </p>
+                  {{ formatConfidence(detection.confidence) }}
+                </span>
+                <DetectionActions
+                  :detection="detection"
+                  :is-playing="currentPlayingId === detection.id"
+                  @toggle-play="togglePlayAudio"
+                  @spectrogram="showSpectrogram"
+                  @delete="confirmDelete"
+                />
               </div>
-	              <div class="flex flex-col items-end gap-2">
-	                <span
-	                  class="text-sm font-bold"
-	                  :class="getConfidenceColor(detection.confidence)"
-	                >
-	                  {{ formatConfidence(detection.confidence) }}
-	                </span>
-	                <DetectionActions
-	                  :detection="detection"
-	                  :is-playing="currentPlayingId === detection.id"
-	                  @toggle-play="togglePlayAudio"
-	                  @spectrogram="showSpectrogram"
-	                  @delete="confirmDelete"
-	                />
-	              </div>
-	            </div>
-	          </div>
-	        </div>
+              </div>
+            </div>
+          </div>
+        </div>
 
-	        <!-- Desktop: Table -->
-	        <div class="hidden lg:block overflow-x-auto">
-	          <table class="min-w-full">
+        <!-- Desktop: Table -->
+        <div class="hidden lg:block overflow-x-auto">
+          <table class="min-w-full">
             <thead class="bg-gray-50 border-b border-gray-200">
               <tr>
+                <th class="w-12 px-4 py-3">
+                  <input
+                    type="checkbox"
+                    :checked="allSelected"
+                    @change="toggleSelectAll"
+                    class="h-4 w-4 rounded border-gray-300 text-green-600 focus:ring-green-500"
+                  />
+                </th>
                 <th class="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                   Date & Time
                 </th>
@@ -220,7 +261,16 @@
                 v-for="detection in detections"
                 :key="detection.id"
                 class="hover:bg-gray-50 transition-colors"
+                :class="{ 'bg-blue-50': isSelected(detection.id) }"
               >
+                <td class="w-12 px-4 py-4">
+                  <input
+                    type="checkbox"
+                    :checked="isSelected(detection.id)"
+                    @change="toggleSelection(detection.id)"
+                    class="h-4 w-4 rounded border-gray-300 text-green-600 focus:ring-green-500"
+                  />
+                </td>
                 <td class="px-6 py-4 whitespace-nowrap">
                   <div class="text-sm text-gray-900">{{ formatDate(detection.timestamp) }}</div>
                   <div class="text-xs text-gray-500">{{ formatTime(detection.timestamp) }}</div>
@@ -329,18 +379,25 @@
       @close="isSpectrogramModalVisible = false"
     />
 
-	    <!-- Delete Confirmation Modal -->
-	    <Teleport to="body">
-	      <div
-	        v-if="showDeleteModal"
-	        class="fixed inset-0 z-50 flex items-center justify-center p-4"
-	      >
-	        <div class="fixed inset-0 bg-black/50" @click="handleDeleteBackdropClick"></div>
-	        <div class="relative bg-white rounded-lg shadow-xl max-w-sm w-full p-6">
-	          <h3 class="text-lg font-semibold text-gray-900 mb-2">Delete Detection</h3>
-	          <p class="text-gray-600 mb-6">
-	            Delete this <strong>{{ detectionToDelete?.common_name }}</strong> detection from {{ formatDate(detectionToDelete?.timestamp) }}?
-	          </p>
+    <!-- Delete Confirmation Modal -->
+    <Teleport to="body">
+      <div
+        v-if="showDeleteModal"
+        class="fixed inset-0 z-50 flex items-center justify-center p-4"
+      >
+        <div class="fixed inset-0 bg-black/50" @click="handleDeleteBackdropClick"></div>
+        <div class="relative bg-white rounded-lg shadow-xl max-w-sm w-full p-6">
+          <h3 class="text-lg font-semibold text-gray-900 mb-2">
+            {{ isBatchDelete ? 'Delete Detections' : 'Delete Detection' }}
+          </h3>
+          <p class="text-gray-600 mb-6">
+            <template v-if="isBatchDelete">
+              Delete <strong>{{ selectedCount }}</strong> selected detection{{ selectedCount === 1 ? '' : 's' }}? This cannot be undone.
+            </template>
+            <template v-else>
+              Delete this <strong>{{ detectionToDelete?.common_name }}</strong> detection from {{ formatDate(detectionToDelete?.timestamp) }}?
+            </template>
+          </p>
 	          <div class="flex justify-end gap-3">
 	            <button
 	              @click="cancelDelete"
@@ -391,27 +448,34 @@ const {
   currentPage,
   perPage,
   totalItems,
-	  totalPages,
-	  isLoading,
-	  error,
-	  actionError,
-	  selectedSpecies,
-	  hasActiveFilters,
-	  sortField,
-	  sortOrder,
-	  hasNextPage,
-	  hasPrevPage,
-	  fetchDetections,
-	  deleteDetection,
-	  clearActionError,
-	  goToPage,
-	  nextPage,
-	  prevPage,
-	  setFilters,
-	  clearFilters,
-	  toggleSort,
-	  setPerPage
-	} = useTableData()
+  totalPages,
+  isLoading,
+  error,
+  actionError,
+  selectedSpecies,
+  hasActiveFilters,
+  sortField,
+  sortOrder,
+  selectedCount,
+  allSelected,
+  hasNextPage,
+  hasPrevPage,
+  fetchDetections,
+  deleteDetection,
+  deleteSelected,
+  toggleSelection,
+  isSelected,
+  toggleSelectAll,
+  clearSelection,
+  clearActionError,
+  goToPage,
+  nextPage,
+  prevPage,
+  setFilters,
+  clearFilters,
+  toggleSort,
+  setPerPage
+} = useTableData()
 
 // --- State ---
 
@@ -449,6 +513,7 @@ const currentSpectrogramUrl = ref('')
 const showDeleteModal = ref(false)
 const detectionToDelete = ref(null)
 const isDeleting = ref(false)
+const isBatchDelete = ref(false)
 
 // --- Helper Functions: Formatting ---
 
@@ -596,31 +661,51 @@ const handleClearFilters = () => {
 // --- Delete Logic ---
 
 const confirmDelete = (detection) => {
+  isBatchDelete.value = false
   detectionToDelete.value = detection
   showDeleteModal.value = true
 }
 
-	const cancelDelete = () => {
-	  if (isDeleting.value) return
-	  showDeleteModal.value = false
-	  detectionToDelete.value = null
-	}
-	
-	const handleDeleteBackdropClick = () => {
-	  if (isDeleting.value) return
-	  cancelDelete()
-	}
+const confirmBatchDelete = () => {
+  if (selectedCount.value === 0) return
+  isBatchDelete.value = true
+  detectionToDelete.value = null
+  showDeleteModal.value = true
+}
+
+const cancelDelete = () => {
+  if (isDeleting.value) return
+  showDeleteModal.value = false
+  detectionToDelete.value = null
+  isBatchDelete.value = false
+}
+
+const handleDeleteBackdropClick = () => {
+  if (isDeleting.value) return
+  cancelDelete()
+}
 
 const executeDelete = async () => {
-  if (!detectionToDelete.value) return
-
   isDeleting.value = true
-  const success = await deleteDetection(detectionToDelete.value.id)
-  isDeleting.value = false
 
-  if (success) {
-    showDeleteModal.value = false
-    detectionToDelete.value = null
+  if (isBatchDelete.value) {
+    const result = await deleteSelected()
+    isDeleting.value = false
+    if (result.success) {
+      showDeleteModal.value = false
+      isBatchDelete.value = false
+    }
+  } else {
+    if (!detectionToDelete.value) {
+      isDeleting.value = false
+      return
+    }
+    const success = await deleteDetection(detectionToDelete.value.id)
+    isDeleting.value = false
+    if (success) {
+      showDeleteModal.value = false
+      detectionToDelete.value = null
+    }
   }
 }
 

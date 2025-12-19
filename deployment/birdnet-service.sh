@@ -233,10 +233,18 @@ perform_system_update() {
 
     cd "$PROJECT_ROOT"
 
-    # Step 1: Fetch latest and check if update needed
+    # Step 1: Stop containers IMMEDIATELY so frontend can detect update in progress
+    # This must happen before any network calls (git fetch) to ensure the frontend
+    # sees the service go down within the expected timeout window
+    log_info "Stopping Docker containers..."
+    docker compose down || true
+
+    # Step 2: Fetch latest and check if update needed
     log_info "Fetching latest code from origin/main..."
     if ! git fetch origin main 2>&1; then
         log_error "Git fetch failed - network issue or invalid remote"
+        log_info "Restarting containers with current code..."
+        docker compose up -d || true
         rm -f "$UPDATE_FLAG_FILE"
         return 1
     fi
@@ -246,16 +254,14 @@ perform_system_update() {
 
     if [ "$LOCAL" = "$REMOTE" ]; then
         log_info "Already up to date, no update needed"
+        log_info "Restarting containers..."
+        docker compose up -d || true
         rm -f "$UPDATE_FLAG_FILE"
         return 0
     fi
 
     COMMITS_BEHIND=$(git rev-list --count HEAD..origin/main)
     log_info "Update available: $COMMITS_BEHIND commits behind origin/main"
-
-    # Step 2: Stop containers so frontend can detect update is in progress
-    log_info "Stopping Docker containers..."
-    docker compose down || true
 
     # Step 3: Sync to latest code (reset to origin/main)
     # Using reset instead of pull - works even if repo history changes

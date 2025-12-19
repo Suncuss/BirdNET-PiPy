@@ -32,6 +32,9 @@ export function useTableData() {
   const sortField = ref('timestamp')
   const sortOrder = ref('desc')
 
+  // Selection state
+  const selectedIds = ref(new Set())
+
   // Computed for pagination info
   const hasNextPage = computed(() => currentPage.value < totalPages.value)
   const hasPrevPage = computed(() => currentPage.value > 1)
@@ -39,6 +42,13 @@ export function useTableData() {
   // Computed for active filters
   const hasActiveFilters = computed(() =>
     !!(startDate.value || endDate.value || selectedSpecies.value)
+  )
+
+  // Computed for selection
+  const selectedCount = computed(() => selectedIds.value.size)
+  const allSelected = computed(() =>
+    detections.value.length > 0 &&
+    detections.value.every(d => selectedIds.value.has(d.id))
   )
 
   /**
@@ -134,6 +144,95 @@ export function useTableData() {
         actionError.value = 'Failed to delete detection. Please try again.'
       }
       return false
+    }
+  }
+
+  /**
+   * Toggle selection for a single detection.
+   * @param {number} id - Detection ID
+   */
+  function toggleSelection(id) {
+    const newSet = new Set(selectedIds.value)
+    if (newSet.has(id)) {
+      newSet.delete(id)
+    } else {
+      newSet.add(id)
+    }
+    selectedIds.value = newSet
+  }
+
+  /**
+   * Check if a detection is selected.
+   * @param {number} id - Detection ID
+   * @returns {boolean}
+   */
+  function isSelected(id) {
+    return selectedIds.value.has(id)
+  }
+
+  /**
+   * Toggle select all on current page.
+   */
+  function toggleSelectAll() {
+    if (allSelected.value) {
+      // Deselect all on current page
+      const newSet = new Set(selectedIds.value)
+      detections.value.forEach(d => newSet.delete(d.id))
+      selectedIds.value = newSet
+    } else {
+      // Select all on current page
+      const newSet = new Set(selectedIds.value)
+      detections.value.forEach(d => newSet.add(d.id))
+      selectedIds.value = newSet
+    }
+  }
+
+  /**
+   * Clear all selections.
+   */
+  function clearSelection() {
+    selectedIds.value = new Set()
+  }
+
+  /**
+   * Delete all selected detections.
+   * @returns {Promise<{success: boolean, deleted: number, failed: number}>}
+   */
+  async function deleteSelected() {
+    if (selectedIds.value.size === 0) {
+      return { success: false, deleted: 0, failed: 0 }
+    }
+
+    logger.info('Batch deleting detections', { count: selectedIds.value.size })
+    actionError.value = null
+
+    try {
+      const ids = Array.from(selectedIds.value)
+      const response = await api.delete('/detections/batch', { data: { ids } })
+      logger.api('DELETE', '/detections/batch', { ids }, response)
+
+      const { deleted, failed } = response.data
+
+      if (deleted > 0) {
+        logger.info('Batch deletion successful', { deleted, failed })
+        clearSelection()
+        await fetchDetections()
+      }
+
+      if (failed > 0) {
+        actionError.value = `Deleted ${deleted} detection(s), but ${failed} failed.`
+      }
+
+      return { success: deleted > 0, deleted, failed }
+    } catch (err) {
+      logger.error('Failed to batch delete detections', err)
+
+      if (err.response?.status === 401) {
+        actionError.value = 'Authentication required to delete detections.'
+      } else {
+        actionError.value = 'Failed to delete detections. Please try again.'
+      }
+      return { success: false, deleted: 0, failed: selectedIds.value.size }
     }
   }
 
@@ -258,6 +357,11 @@ export function useTableData() {
     sortField,
     sortOrder,
 
+    // Selection
+    selectedIds,
+    selectedCount,
+    allSelected,
+
     // Pagination
     hasNextPage,
     hasPrevPage,
@@ -265,6 +369,11 @@ export function useTableData() {
     // Methods
     fetchDetections,
     deleteDetection,
+    deleteSelected,
+    toggleSelection,
+    isSelected,
+    toggleSelectAll,
+    clearSelection,
     goToPage,
     nextPage,
     prevPage,

@@ -344,6 +344,18 @@
           </div>
         </div>
 
+        <!-- Data Management -->
+        <div class="bg-white rounded-lg shadow-sm border border-gray-100 p-5">
+          <h2 class="text-base font-medium text-gray-800 mb-4">Data</h2>
+          <p class="text-sm text-gray-600 mb-3">View and manage all bird detections stored in the database.</p>
+          <router-link
+            to="/table"
+            class="block w-full py-2 text-sm text-center text-gray-600 hover:text-gray-800 hover:bg-gray-50 border border-gray-200 rounded-lg transition-colors"
+          >
+            View Detections
+          </router-link>
+        </div>
+
         <!-- System Updates -->
         <div class="bg-white rounded-lg shadow-sm border border-gray-100 p-5">
           <div class="flex items-center justify-between mb-4">

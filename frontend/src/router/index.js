@@ -32,7 +32,8 @@ const routes = [
   {
     path: '/table',
     name: 'Table',
-    component: () => import('../views/Table.vue')
+    component: () => import('../views/Table.vue'),
+    meta: { requiresAuth: true }
   },
   {
     path: '/bird/:name',
