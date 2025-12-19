@@ -550,6 +550,14 @@
             <p class="text-sm text-gray-600 mb-4">
               This will restart all services. Detection will pause briefly during the update.
             </p>
+            <!-- Update Note from deployment/UPDATE_NOTES.json -->
+            <div
+              v-if="systemUpdate.updateInfo.value?.update_note"
+              class="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg"
+            >
+              <p class="text-sm text-amber-800 font-medium mb-1">Important</p>
+              <p class="text-sm text-amber-700">{{ systemUpdate.updateInfo.value.update_note }}</p>
+            </div>
             <div class="flex gap-3">
               <button
                 @click="showUpdateConfirm = false"

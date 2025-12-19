@@ -287,3 +287,287 @@ class TestVersionHelpers:
             assert error is None
             assert result['sha'] == 'abc1234'
             assert result['message'] == 'Latest commit message'
+
+
+class TestUpdateNotes:
+    """Test update notes functionality"""
+
+    def test_fetch_update_notes_success(self):
+        """Test fetching UPDATE_NOTES.json with message"""
+        import requests
+
+        with patch('core.api.requests.get') as mock_get:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {
+                'message': 'Port changed from 8080 to 80!',
+                'show_to_versions_before': 'abc1234'
+            }
+            mock_response.raise_for_status.return_value = None
+            mock_get.return_value = mock_response
+
+            from core.api import fetch_update_notes
+            result = fetch_update_notes('main')
+
+            assert result is not None
+            assert result['message'] == 'Port changed from 8080 to 80!'
+            assert result['show_to_versions_before'] == 'abc1234'
+
+    def test_fetch_update_notes_empty_message(self):
+        """Test fetching UPDATE_NOTES.json with null/empty message returns None"""
+        with patch('core.api.requests.get') as mock_get:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {
+                'message': None,
+                'show_to_versions_before': None
+            }
+            mock_response.raise_for_status.return_value = None
+            mock_get.return_value = mock_response
+
+            from core.api import fetch_update_notes
+            result = fetch_update_notes('main')
+
+            assert result is None
+
+    def test_fetch_update_notes_file_not_found(self):
+        """Test fetching UPDATE_NOTES.json when file doesn't exist"""
+        with patch('core.api.requests.get') as mock_get:
+            mock_response = MagicMock()
+            mock_response.status_code = 404
+            mock_get.return_value = mock_response
+
+            from core.api import fetch_update_notes
+            result = fetch_update_notes('main')
+
+            assert result is None
+
+    def test_fetch_update_notes_network_error(self):
+        """Test fetching UPDATE_NOTES.json handles network errors"""
+        import requests
+
+        with patch('core.api.requests.get') as mock_get:
+            mock_get.side_effect = requests.exceptions.ConnectionError('Network error')
+
+            from core.api import fetch_update_notes
+            result = fetch_update_notes('main')
+
+            assert result is None
+
+    def test_fetch_update_notes_invalid_json(self):
+        """Test fetching UPDATE_NOTES.json handles invalid JSON"""
+        import json
+
+        with patch('core.api.requests.get') as mock_get:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.side_effect = json.JSONDecodeError('Invalid JSON', '', 0)
+            mock_response.raise_for_status.return_value = None
+            mock_get.return_value = mock_response
+
+            from core.api import fetch_update_notes
+            result = fetch_update_notes('main')
+
+            assert result is None
+
+    def test_should_show_update_note_no_data(self):
+        """Test should_show_update_note returns False for None data"""
+        from core.api import should_show_update_note
+        assert should_show_update_note('abc1234', None) is False
+
+    def test_should_show_update_note_empty_message(self):
+        """Test should_show_update_note returns False for empty message"""
+        from core.api import should_show_update_note
+        assert should_show_update_note('abc1234', {'message': '', 'show_to_versions_before': None}) is False
+
+    def test_should_show_update_note_no_version_targeting(self):
+        """Test should_show_update_note returns True when no version targeting"""
+        from core.api import should_show_update_note
+        result = should_show_update_note('abc1234', {
+            'message': 'Important update!',
+            'show_to_versions_before': None
+        })
+        assert result is True
+
+    def test_should_show_update_note_user_behind_target(self):
+        """Test should_show_update_note returns True when user is behind target version
+
+        When user is on an older version, comparing current...target returns:
+        - status: 'ahead' (target is ahead of current)
+        - ahead_by > 0
+        """
+        with patch('core.api.get_commits_comparison') as mock_compare:
+            mock_compare.return_value = ({
+                'status': 'ahead',
+                'behind_by': 0,
+                'ahead_by': 5,
+                'commits': []
+            }, None)
+
+            from core.api import should_show_update_note
+            result = should_show_update_note('old_commit', {
+                'message': 'Port changed!',
+                'show_to_versions_before': 'newer_commit'
+            })
+            assert result is True
+
+    def test_should_show_update_note_user_ahead_of_target(self):
+        """Test should_show_update_note returns False when user is ahead of target version
+
+        When user is on a newer version, comparing current...target returns:
+        - status: 'behind' (target is behind current)
+        - behind_by > 0
+        """
+        with patch('core.api.get_commits_comparison') as mock_compare:
+            mock_compare.return_value = ({
+                'status': 'behind',
+                'behind_by': 3,
+                'ahead_by': 0,
+                'commits': []
+            }, None)
+
+            from core.api import should_show_update_note
+            result = should_show_update_note('newer_commit', {
+                'message': 'Port changed!',
+                'show_to_versions_before': 'older_commit'
+            })
+            assert result is False
+
+    def test_should_show_update_note_identical_commits(self):
+        """Test should_show_update_note returns False when user is at exact target version
+
+        'show_to_versions_before' means strictly before, not at or before.
+        """
+        with patch('core.api.get_commits_comparison') as mock_compare:
+            mock_compare.return_value = ({
+                'status': 'identical',
+                'behind_by': 0,
+                'ahead_by': 0,
+                'commits': []
+            }, None)
+
+            from core.api import should_show_update_note
+            result = should_show_update_note('abc1234', {
+                'message': 'Port changed!',
+                'show_to_versions_before': 'abc1234'
+            })
+            assert result is False
+
+    def test_should_show_update_note_diverged_commits(self):
+        """Test should_show_update_note returns True when commits diverged (safe default)"""
+        with patch('core.api.get_commits_comparison') as mock_compare:
+            mock_compare.return_value = ({
+                'status': 'diverged',
+                'behind_by': 2,
+                'ahead_by': 3,
+                'commits': []
+            }, None)
+
+            from core.api import should_show_update_note
+            result = should_show_update_note('abc1234', {
+                'message': 'Port changed!',
+                'show_to_versions_before': 'def5678'
+            })
+            # Should return True to be safe when commits diverged
+            assert result is True
+
+    def test_should_show_update_note_comparison_error(self):
+        """Test should_show_update_note returns True when comparison fails (safe default)"""
+        with patch('core.api.get_commits_comparison') as mock_compare:
+            mock_compare.return_value = (None, 'Comparison failed')
+
+            from core.api import should_show_update_note
+            result = should_show_update_note('abc1234', {
+                'message': 'Port changed!',
+                'show_to_versions_before': 'def5678'
+            })
+            # Should return True to be safe when comparison fails
+            assert result is True
+
+
+class TestUpdateCheckWithNotes:
+    """Test update-check endpoint includes update notes"""
+
+    SAMPLE_VERSION_INFO = {
+        'commit': '1a081f5',
+        'commit_date': '2025-11-28T08:49:00Z',
+        'branch': 'develop',
+        'remote_url': 'https://github.com/Suncuss/BirdNET-PiPy',
+        'build_time': '2025-11-28T10:00:00Z'
+    }
+
+    def test_update_check_includes_update_note(self, api_client):
+        """Test update-check includes update_note when available"""
+        with patch('core.api.load_version_info') as mock_load, \
+             patch('core.api.get_commits_comparison') as mock_compare, \
+             patch('core.api.get_latest_remote_commit') as mock_latest, \
+             patch('core.api.fetch_update_notes') as mock_notes, \
+             patch('core.api.should_show_update_note') as mock_should_show:
+
+            mock_load.return_value = self.SAMPLE_VERSION_INFO
+            # Note: status 'ahead' means remote is ahead of local (update available)
+            mock_compare.return_value = ({
+                'ahead_by': 5,
+                'behind_by': 0,
+                'status': 'ahead',
+                'commits': [{'hash': '2b192g6', 'message': 'feat: new feature', 'date': '2025-11-29T10:00:00Z'}],
+                'target_commit': '2b192g6'
+            }, None)
+            mock_latest.return_value = ({'sha': '2b192g6', 'message': 'feat: new feature', 'date': '2025-11-29T10:00:00Z'}, None)
+            mock_notes.return_value = {'message': 'Port changed to 80!', 'show_to_versions_before': 'abc123'}
+            mock_should_show.return_value = True
+
+            response = api_client.get('/api/system/update-check')
+            assert response.status_code == 200
+            data = response.get_json()
+            assert data['update_available'] is True
+            assert data['update_note'] == 'Port changed to 80!'
+
+    def test_update_check_no_update_note_when_not_applicable(self, api_client):
+        """Test update-check has null update_note when note doesn't apply"""
+        with patch('core.api.load_version_info') as mock_load, \
+             patch('core.api.get_commits_comparison') as mock_compare, \
+             patch('core.api.get_latest_remote_commit') as mock_latest, \
+             patch('core.api.fetch_update_notes') as mock_notes, \
+             patch('core.api.should_show_update_note') as mock_should_show:
+
+            mock_load.return_value = self.SAMPLE_VERSION_INFO
+            # Note: status 'ahead' means remote is ahead of local (update available)
+            mock_compare.return_value = ({
+                'ahead_by': 5,
+                'behind_by': 0,
+                'status': 'ahead',
+                'commits': [{'hash': '2b192g6', 'message': 'feat: new feature', 'date': '2025-11-29T10:00:00Z'}],
+                'target_commit': '2b192g6'
+            }, None)
+            mock_latest.return_value = ({'sha': '2b192g6', 'message': 'feat: new feature', 'date': '2025-11-29T10:00:00Z'}, None)
+            mock_notes.return_value = {'message': 'Port changed to 80!', 'show_to_versions_before': 'old123'}
+            mock_should_show.return_value = False
+
+            response = api_client.get('/api/system/update-check')
+            assert response.status_code == 200
+            data = response.get_json()
+            assert data['update_available'] is True
+            assert data['update_note'] is None
+
+    def test_update_check_no_update_note_when_up_to_date(self, api_client):
+        """Test update-check has null update_note when no update available"""
+        with patch('core.api.load_version_info') as mock_load, \
+             patch('core.api.get_commits_comparison') as mock_compare, \
+             patch('core.api.get_latest_remote_commit') as mock_latest:
+
+            mock_load.return_value = {**self.SAMPLE_VERSION_INFO, 'branch': 'main'}
+            mock_compare.return_value = ({
+                'ahead_by': 0,
+                'behind_by': 0,
+                'status': 'identical',
+                'commits': [],
+                'target_commit': '1a081f5'
+            }, None)
+            mock_latest.return_value = ({'sha': '1a081f5', 'message': 'current', 'date': '2025-11-28T08:49:00Z'}, None)
+
+            response = api_client.get('/api/system/update-check')
+            assert response.status_code == 200
+            data = response.get_json()
+            assert data['update_available'] is False
+            assert data['update_note'] is None

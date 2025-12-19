@@ -757,6 +757,88 @@ def get_latest_remote_commit(branch='main'):
         'date': data['commit']['committer']['date']
     }, None
 
+def fetch_update_notes(branch='main'):
+    """Fetch deployment/UPDATE_NOTES.json from remote repository
+
+    Returns:
+        dict: Update notes with 'message' and 'show_to_versions_before' fields
+        None: If file not found or empty/invalid
+    """
+    url = f"https://raw.githubusercontent.com/{GITHUB_OWNER}/{GITHUB_REPO}/{branch}/deployment/UPDATE_NOTES.json"
+
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code == 404:
+            logger.debug("UPDATE_NOTES.json not found in remote repository")
+            return None
+        response.raise_for_status()
+
+        data = response.json()
+        message = data.get('message')
+
+        # Return None if no message (same behavior as before)
+        if not message:
+            return None
+
+        return {
+            'message': message,
+            'show_to_versions_before': data.get('show_to_versions_before')
+        }
+    except requests.exceptions.RequestException as e:
+        logger.warning("Failed to fetch UPDATE_NOTES.json", extra={'error': str(e)})
+        return None
+    except json.JSONDecodeError:
+        logger.warning("Invalid JSON in UPDATE_NOTES.json")
+        return None
+
+def should_show_update_note(current_commit, note_data):
+    """Determine if update note should be shown based on version targeting
+
+    Args:
+        current_commit: User's current commit hash
+        note_data: Dict with 'message' and 'show_to_versions_before'
+
+    Returns:
+        bool: True if note should be shown
+    """
+    if not note_data or not note_data.get('message'):
+        return False
+
+    target_commit = note_data.get('show_to_versions_before')
+
+    # If no version targeting, always show
+    if not target_commit:
+        return True
+
+    # Compare commits: GET /compare/{current_commit}...{target_commit}
+    # GitHub API semantics:
+    #   - status 'ahead': target is ahead of current (user is on older version)
+    #   - status 'behind': target is behind current (user is on newer version)
+    #   - status 'identical': commits are the same
+    #   - status 'diverged': branches diverged, can't determine order
+    #   - ahead_by: how many commits target is ahead of current
+    comparison, error = get_commits_comparison(current_commit, target_commit)
+
+    if error:
+        # If comparison fails (e.g., commit not found), show the message to be safe
+        logger.warning("Could not compare commits for update note", extra={
+            'current_commit': current_commit,
+            'target_commit': target_commit,
+            'error': error
+        })
+        return True
+
+    status = comparison.get('status', '')
+    ahead_by = comparison.get('ahead_by', 0)
+
+    # Handle diverged case: can't determine order, show to be safe
+    if status == 'diverged':
+        return True
+
+    # Show if user is strictly BEFORE the target (target is ahead of user)
+    # 'identical' means user is AT the target commit - don't show (they already have it)
+    return status == 'ahead' or ahead_by > 0
+
 def save_user_settings(settings_dict):
     """Save settings to JSON file atomically"""
     json_path = os.path.join(BASE_DIR, 'data', 'config', 'user_settings.json')
@@ -972,6 +1054,13 @@ def check_for_updates():
                     'fresh_sync': fresh_sync
                 })
 
+                # Fetch update notes if update is available
+                update_note = None
+                if update_available:
+                    note_data = fetch_update_notes(target_branch)
+                    if should_show_update_note(current_commit, note_data):
+                        update_note = note_data.get('message')
+
                 return jsonify({
                     'update_available': update_available,
                     'current_commit': current_commit,
@@ -980,7 +1069,8 @@ def check_for_updates():
                     'current_branch': current_branch,
                     'target_branch': target_branch,
                     'preview_commits': [],  # No commit history available
-                    'fresh_sync': fresh_sync
+                    'fresh_sync': fresh_sync,
+                    'update_note': update_note
                 }), 200
             else:
                 logger.error("GitHub API comparison failed", extra={'error': error})
@@ -1008,6 +1098,13 @@ def check_for_updates():
                 'remote_message': remote_info.get('message', 'N/A')
             })
 
+        # Fetch update notes if update is available
+        update_note = None
+        if update_available:
+            note_data = fetch_update_notes(target_branch)
+            if should_show_update_note(current_commit, note_data):
+                update_note = note_data.get('message')
+
         return jsonify({
             'update_available': update_available,
             'current_commit': current_commit,
@@ -1016,7 +1113,8 @@ def check_for_updates():
             'current_branch': current_branch,
             'target_branch': target_branch,
             'preview_commits': comparison['commits'],
-            'fresh_sync': fresh_sync
+            'fresh_sync': fresh_sync,
+            'update_note': update_note
         }), 200
 
     except Exception as e:
