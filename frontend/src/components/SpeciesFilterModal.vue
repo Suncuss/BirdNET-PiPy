@@ -136,6 +136,10 @@ export default {
     restartError: {
       type: String,
       default: ''
+    },
+    speciesList: {
+      type: Array,
+      default: null
     }
   },
   emits: ['update:modelValue', 'close'],
@@ -189,8 +193,14 @@ export default {
       }
     }
 
-    // Load available species
+    // Load available species (use prop if provided, otherwise fetch)
     const loadSpecies = async () => {
+      if (props.speciesList && props.speciesList.length > 0) {
+        allSpecies.value = props.speciesList
+        totalSpecies.value = props.speciesList.length
+        return
+      }
+
       loading.value = true
       try {
         const { data } = await api.get('/species/available')

@@ -291,7 +291,7 @@
                       :key="species"
                       class="px-2 py-0.5 text-xs bg-blue-100 text-blue-700 rounded-full"
                     >
-                      {{ species }}
+                      {{ getCommonName(species) }}
                     </span>
                     <span v-if="settings.species_filter.allowed_species.length > 5" class="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded-full">
                       +{{ settings.species_filter.allowed_species.length - 5 }} more
@@ -320,7 +320,7 @@
                       :key="species"
                       class="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded-full"
                     >
-                      {{ species }}
+                      {{ getCommonName(species) }}
                     </span>
                     <span v-if="settings.species_filter.blocked_species.length > 5" class="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded-full">
                       +{{ settings.species_filter.blocked_species.length - 5 }} more
@@ -571,6 +571,7 @@
         :title="speciesFilterModalConfig.title"
         :description="speciesFilterModalConfig.description"
         v-model="speciesFilterModalConfig.list"
+        :speciesList="speciesList"
         :onSave="saveSpeciesFilter"
         :isRestarting="serviceRestart.isRestarting.value"
         :restartMessage="serviceRestart.restartMessage.value"
@@ -610,6 +611,10 @@ export default {
 
     // Storage state
     const storage = ref(null)
+
+    // Species list (shared with SpeciesFilterModal)
+    const speciesList = ref([])
+    const speciesNameMap = ref({})
 
     // Advanced settings toggle
     const showAdvancedSettings = ref(false)
@@ -677,6 +682,27 @@ export default {
       } catch (error) {
         console.error('Error loading storage info:', error)
       }
+    }
+
+    // Load species list (shared with SpeciesFilterModal)
+    const loadSpeciesList = async () => {
+      try {
+        const { data } = await api.get('/species/available')
+        speciesList.value = data.species
+        // Build name map for display
+        const map = {}
+        for (const species of data.species) {
+          map[species.scientific_name] = species.common_name
+        }
+        speciesNameMap.value = map
+      } catch (error) {
+        console.error('Error loading species list:', error)
+      }
+    }
+
+    // Get common name for a scientific name (fallback to scientific if not found)
+    const getCommonName = (scientificName) => {
+      return speciesNameMap.value[scientificName] || scientificName
     }
 
     // Load settings from API with retry
@@ -910,6 +936,7 @@ export default {
     onMounted(() => {
       loadSettings()
       loadStorageInfo()
+      loadSpeciesList()
       systemUpdate.loadVersionInfo()
       auth.checkAuthStatus()
     })
@@ -949,10 +976,12 @@ export default {
       // Species filter
       showSpeciesFilterModal,
       speciesFilterModalConfig,
+      speciesList,
       openFilterModal,
       closeFilterModal,
       updateFilterList,
-      saveSpeciesFilter
+      saveSpeciesFilter,
+      getCommonName
     }
   }
 }
