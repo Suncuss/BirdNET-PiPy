@@ -57,7 +57,20 @@
 
         <!-- Selected Count & Actions -->
         <div class="p-4 border-t border-gray-200 bg-gray-50 rounded-b-xl">
-          <div class="flex items-center justify-between">
+          <!-- Restart/Save Status -->
+          <RestartStatus
+            v-if="hasStatus"
+            variant="inline"
+            :isRestarting="isRestarting"
+            :restartMessage="restartMessage"
+            :restartError="restartError"
+            :saveError="saveError"
+            @dismiss="handleDismiss"
+            @retry="saveAndClose"
+          />
+
+          <!-- Normal Actions -->
+          <div v-else class="flex items-center justify-between">
             <div class="text-sm text-gray-600">
               <span class="font-medium">{{ selectedSpecies.length }}</span> species selected
               <span v-if="totalSpecies" class="text-gray-400">of {{ totalSpecies }} available</span>
@@ -66,14 +79,16 @@
               <button
                 @click="$emit('close')"
                 class="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                :disabled="saving"
               >
                 Cancel
               </button>
               <button
                 @click="saveAndClose"
-                class="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+                class="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors disabled:bg-gray-400"
+                :disabled="saving"
               >
-                Save
+                {{ saving ? 'Saving...' : 'Save' }}
               </button>
             </div>
           </div>
@@ -86,9 +101,13 @@
 <script>
 import { ref, computed, onMounted, watch } from 'vue'
 import api from '@/services/api'
+import RestartStatus from '@/components/RestartStatus.vue'
 
 export default {
   name: 'SpeciesFilterModal',
+  components: {
+    RestartStatus
+  },
   props: {
     title: {
       type: String,
@@ -101,15 +120,38 @@ export default {
     modelValue: {
       type: Array,
       default: () => []
+    },
+    onSave: {
+      type: Function,
+      default: null
+    },
+    isRestarting: {
+      type: Boolean,
+      default: false
+    },
+    restartMessage: {
+      type: String,
+      default: ''
+    },
+    restartError: {
+      type: String,
+      default: ''
     }
   },
   emits: ['update:modelValue', 'close'],
   setup(props, { emit }) {
     const loading = ref(false)
+    const saving = ref(false)
+    const saveError = ref('')
     const searchQuery = ref('')
     const allSpecies = ref([])
     const totalSpecies = ref(0)
     const selectedSpecies = ref([...props.modelValue])
+
+    // Check if any status should be shown (restart progress, restart error, or save error)
+    const hasStatus = computed(() => {
+      return (props.isRestarting && props.restartMessage) || props.restartError || saveError.value
+    })
 
     // Debounce search
     let searchTimeout = null
@@ -162,8 +204,30 @@ export default {
     }
 
     // Save and close
-    const saveAndClose = () => {
+    const saveAndClose = async () => {
       emit('update:modelValue', [...selectedSpecies.value])
+
+      // If onSave callback is provided, call it and wait for restart
+      if (props.onSave) {
+        saving.value = true
+        saveError.value = ''
+        try {
+          await props.onSave([...selectedSpecies.value])
+          // Page will reload after restart, modal closes automatically
+        } catch (error) {
+          console.error('Error saving species filter:', error)
+          saveError.value = 'Failed to save. Please try again.'
+          saving.value = false
+        }
+      } else {
+        // Legacy behavior: just close
+        emit('close')
+      }
+    }
+
+    // Handle dismiss from RestartStatus component
+    const handleDismiss = () => {
+      saveError.value = ''
       emit('close')
     }
 
@@ -178,6 +242,9 @@ export default {
 
     return {
       loading,
+      saving,
+      saveError,
+      hasStatus,
       searchQuery,
       filteredSpecies,
       totalSpecies,
@@ -185,7 +252,8 @@ export default {
       debouncedSearch,
       isSelected,
       toggleSpecies,
-      saveAndClose
+      saveAndClose,
+      handleDismiss
     }
   }
 }
