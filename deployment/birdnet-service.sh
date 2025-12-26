@@ -100,6 +100,30 @@ setup_audio_socket() {
     local system_pulse_dir="/run/pulse"
     local system_socket="$system_pulse_dir/native"
 
+    # Detect Desktop/PipeWire system and wait for user socket if needed
+    # On Desktop with auto-login, PipeWire starts after the user session begins
+    # We wait for it rather than falling back to system-wide PA (which may not be installed)
+    if command -v pipewire &> /dev/null && ! command -v pulseaudio &> /dev/null; then
+        # PipeWire-only system (Desktop without PA fallback)
+        log_info "PipeWire detected without PulseAudio fallback, waiting for user audio socket..."
+        local wait_time=0
+        local max_wait=60  # Wait up to 60 seconds for auto-login + PipeWire
+
+        while [ ! -S "$user_socket" ]; do
+            if [ $wait_time -ge $max_wait ]; then
+                log_error "User audio socket not available after ${max_wait}s"
+                log_error "Ensure auto-login is enabled for audio to work on Desktop"
+                return 1
+            fi
+            sleep 2
+            wait_time=$((wait_time + 2))
+            if [ $((wait_time % 10)) -eq 0 ]; then
+                log_info "Waiting for PipeWire socket... (${wait_time}s/${max_wait}s)"
+            fi
+        done
+        log_info "PipeWire socket ready after ${wait_time}s"
+    fi
+
     # Case 1: User-mode socket exists (Pi OS Desktop with PipeWire)
     if [ -S "$user_socket" ]; then
         log_info "User-mode audio socket found at $user_socket"

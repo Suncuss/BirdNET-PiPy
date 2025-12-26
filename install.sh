@@ -594,6 +594,10 @@ Documentation=https://github.com/Suncuss/BirdNET-PiPy
 After=docker.service network.target
 Requires=docker.service
 
+# Rate limiting: max 5 restarts in 5 minutes to prevent infinite loops
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
 [Service]
 Type=simple
 User=$ACTUAL_USER
@@ -606,10 +610,6 @@ StandardError=journal
 # After a successful update, the service exits and systemd restarts it with new code
 Restart=always
 RestartSec=10
-
-# Rate limiting: max 5 restarts in 5 minutes to prevent infinite loops
-StartLimitBurst=5
-StartLimitIntervalSec=300
 
 # Environment variables
 Environment=TZ=$TZ
