@@ -206,10 +206,6 @@ cleanup_orphaned_containers() {
 
     # Remove any stopped containers from this project
     docker compose down --remove-orphans 2>/dev/null || true
-
-    # Clean up any dangling container tasks (fixes "AlreadyExists" error)
-    # This can happen if containers were killed ungracefully
-    docker container prune -f 2>/dev/null || true
 }
 
 # Function to start Docker containers
@@ -288,6 +284,15 @@ perform_system_update() {
     log_info "Update available: $COMMITS_BEHIND commits behind origin/main"
 
     # Step 3: Sync to latest code (reset to origin/main)
+    # Check for local modifications and warn before discarding
+    if ! git diff --quiet HEAD 2>/dev/null || ! git diff --cached --quiet HEAD 2>/dev/null; then
+        log_warning "Local modifications detected - these will be discarded by the update:"
+        git status --short 2>/dev/null | while read line; do
+            log_warning "  $line"
+        done
+        log_warning "Note: The install directory is not intended for local customizations"
+    fi
+
     # Using reset instead of pull - works even if repo history changes
     log_info "Syncing to origin/main..."
     if ! git reset --hard origin/main 2>&1; then

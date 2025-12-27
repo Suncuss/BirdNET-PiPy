@@ -839,6 +839,15 @@ prompt_reboot() {
     print_info "  - PulseAudio configuration"
     print_info "  - Swap file activation"
     echo ""
+
+    # Check if running interactively (TTY available)
+    # Non-interactive installs (e.g., curl | sudo bash) should not auto-reboot
+    if [ ! -t 0 ]; then
+        print_warning "Non-interactive install detected - skipping automatic reboot"
+        print_info "Please reboot manually when ready: sudo reboot"
+        return 0
+    fi
+
     print_status "System will reboot in 10 seconds. Press Ctrl+C to cancel..."
 
     for i in 10 9 8 7 6 5 4 3 2 1; do
