@@ -11,6 +11,10 @@
 set -e
 set -o pipefail
 
+# Ignore SIGHUP so installation continues if SSH session disconnects
+# User can reconnect and tail /var/log/birdnet-pipy-install.log to monitor progress
+trap '' HUP
+
 # ============================================================================
 # Configuration & Constants
 # ============================================================================
@@ -831,32 +835,16 @@ show_completion_message() {
     print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 }
 
-# Prompt for reboot with countdown
+# Reboot system after installation
 prompt_reboot() {
     echo ""
-    print_warning "A reboot is recommended to ensure all changes take effect:"
+    print_warning "A reboot is required to ensure all changes take effect:"
     print_info "  - Docker group membership"
     print_info "  - PulseAudio configuration"
     print_info "  - Swap file activation"
     echo ""
-
-    # Check if running interactively (TTY available)
-    # Non-interactive installs (e.g., curl | sudo bash) should not auto-reboot
-    if [ ! -t 0 ]; then
-        print_warning "Non-interactive install detected - skipping automatic reboot"
-        print_info "Please reboot manually when ready: sudo reboot"
-        return 0
-    fi
-
-    print_status "System will reboot in 10 seconds. Press Ctrl+C to cancel..."
-
-    for i in 10 9 8 7 6 5 4 3 2 1; do
-        echo -ne "\r  Rebooting in ${i}s... (Ctrl+C to cancel) "
-        sleep 1
-    done
-
-    echo ""
     print_status "Rebooting now..."
+    sleep 2  # Brief pause to ensure output is flushed
     reboot
 }
 
