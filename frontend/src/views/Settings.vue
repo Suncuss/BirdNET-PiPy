@@ -37,7 +37,7 @@
       <div class="space-y-4">
         <!-- Location & Audio Source -->
         <div class="bg-white rounded-lg shadow-sm border border-gray-100 p-5">
-          <h2 class="text-base font-medium text-gray-800 mb-4">Location & Audio</h2>
+          <h2 class="text-base font-medium text-gray-800 mb-3">Location & Audio</h2>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <!-- Location -->
             <div class="space-y-3">
@@ -108,7 +108,7 @@
 
         <!-- Storage -->
         <div v-if="storage" class="bg-white rounded-lg shadow-sm border border-gray-100 p-5">
-          <h2 class="text-base font-medium text-gray-800 mb-4">Storage</h2>
+          <h2 class="text-base font-medium text-gray-800 mb-3">Storage</h2>
           <div class="flex justify-between items-center mb-2">
             <span class="text-sm text-gray-600">Disk Usage</span>
             <span class="text-sm font-medium text-gray-800">{{ storage.percent_used }}%</span>
@@ -129,10 +129,10 @@
 
         <!-- Security Settings -->
         <div class="bg-white rounded-lg shadow-sm border border-gray-100 p-5">
-          <h2 class="text-base font-medium text-gray-800 mb-4">Security</h2>
+          <h2 class="text-base font-medium text-gray-800 mb-3">Security</h2>
 
           <!-- Auth Toggle -->
-          <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center justify-between mb-3">
             <div>
               <label class="text-sm text-gray-600">Require Authentication</label>
               <p class="text-xs text-gray-400">Protect settings and audio stream with password</p>
@@ -151,7 +151,7 @@
           </div>
 
           <!-- Change Password (when auth enabled and setup complete) -->
-          <div v-if="auth.authStatus.value.authEnabled && auth.authStatus.value.setupComplete" class="mb-4">
+          <div v-if="auth.authStatus.value.authEnabled && auth.authStatus.value.setupComplete" class="mb-3">
             <button
               @click="showChangePassword = true"
               class="text-sm text-blue-600 hover:text-blue-800"
@@ -161,7 +161,7 @@
           </div>
 
           <!-- Auth Error Message -->
-          <div v-if="auth.error.value" class="mb-4 p-2 bg-red-50 text-red-600 text-xs rounded-lg">
+          <div v-if="auth.error.value" class="mb-3 p-2 bg-red-50 text-red-600 text-xs rounded-lg">
             {{ auth.error.value }}
           </div>
 
@@ -335,7 +335,7 @@
 
         <!-- Data Management -->
         <div class="bg-white rounded-lg shadow-sm border border-gray-100 p-5">
-          <h2 class="text-base font-medium text-gray-800 mb-4">Data</h2>
+          <h2 class="text-base font-medium text-gray-800 mb-1">Data</h2>
           <p class="text-sm text-gray-600 mb-3">View and manage all bird detections stored in the database.</p>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <router-link
@@ -356,7 +356,7 @@
 
         <!-- System Updates -->
         <div class="bg-white rounded-lg shadow-sm border border-gray-100 p-5">
-          <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center justify-between mb-3">
             <h2 class="text-base font-medium text-gray-800">System</h2>
             <div v-if="systemUpdate.versionInfo.value" class="flex items-center gap-2 text-xs text-gray-500">
               <span class="font-mono">{{ systemUpdate.versionInfo.value.current_commit }}</span>
@@ -365,7 +365,7 @@
           </div>
 
           <!-- Update Available -->
-          <div v-if="systemUpdate.updateAvailable.value && systemUpdate.updateInfo.value" class="mb-4 p-3 bg-blue-50 rounded-lg">
+          <div v-if="systemUpdate.updateAvailable.value && systemUpdate.updateInfo.value" class="mb-3 p-3 bg-blue-50 rounded-lg">
             <div class="flex items-center justify-between">
               <div>
                 <p class="text-sm font-medium text-blue-800">Update available</p>
