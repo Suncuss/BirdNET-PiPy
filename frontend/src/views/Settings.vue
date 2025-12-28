@@ -337,12 +337,21 @@
         <div class="bg-white rounded-lg shadow-sm border border-gray-100 p-5">
           <h2 class="text-base font-medium text-gray-800 mb-4">Data</h2>
           <p class="text-sm text-gray-600 mb-3">View and manage all bird detections stored in the database.</p>
-          <router-link
-            to="/table"
-            class="block w-full py-2 text-sm text-center text-gray-600 hover:text-gray-800 hover:bg-gray-50 border border-gray-200 rounded-lg transition-colors"
-          >
-            View Detections
-          </router-link>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <router-link
+              to="/table"
+              class="block py-2 text-sm text-center text-gray-600 hover:text-gray-800 hover:bg-gray-50 border border-gray-200 rounded-lg transition-colors"
+            >
+              View Detections
+            </router-link>
+            <button
+              @click="exportCSV"
+              :disabled="exporting"
+              class="py-2 text-sm text-center text-gray-600 hover:text-gray-800 hover:bg-gray-50 border border-gray-200 rounded-lg transition-colors disabled:text-gray-400 disabled:hover:bg-transparent"
+            >
+              {{ exporting ? 'Exporting...' : 'Export as CSV' }}
+            </button>
+          </div>
         </div>
 
         <!-- System Updates -->
@@ -587,7 +596,7 @@ import { ref, onMounted } from 'vue'
 import { useSystemUpdate } from '@/composables/useSystemUpdate'
 import { useServiceRestart } from '@/composables/useServiceRestart'
 import { useAuth } from '@/composables/useAuth'
-import api from '@/services/api'
+import api, { createLongRequest } from '@/services/api'
 import SpeciesFilterModal from '@/components/SpeciesFilterModal.vue'
 import RestartStatus from '@/components/RestartStatus.vue'
 
@@ -611,6 +620,9 @@ export default {
 
     // Storage state
     const storage = ref(null)
+
+    // Export state
+    const exporting = ref(false)
 
     // Species list (shared with SpeciesFilterModal)
     const speciesList = ref([])
@@ -857,6 +869,45 @@ export default {
       }
     }
 
+    // Export detections as CSV
+    const exportCSV = async () => {
+      try {
+        exporting.value = true
+        // Use long timeout (5 min) for large exports
+        const longApi = createLongRequest()
+        const response = await longApi.get('/detections/export', {
+          responseType: 'blob'
+        })
+
+        // Create download link
+        const blob = new Blob([response.data], { type: 'text/csv' })
+        const url = window.URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = url
+
+        // Extract filename from Content-Disposition header or use default
+        const contentDisposition = response.headers['content-disposition']
+        let filename = 'birdnet_detections.csv'
+        if (contentDisposition) {
+          const match = contentDisposition.match(/filename=(.+)/)
+          if (match) {
+            filename = match[1]
+          }
+        }
+
+        link.setAttribute('download', filename)
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        window.URL.revokeObjectURL(url)
+      } catch (error) {
+        console.error('Error exporting CSV:', error)
+        showStatus('error', 'Failed to export data')
+      } finally {
+        exporting.value = false
+      }
+    }
+
     // Handle auth toggle
     const handleAuthToggle = async () => {
       const newState = !auth.authStatus.value.authEnabled
@@ -948,6 +999,8 @@ export default {
       recordingMode,
       showUpdateConfirm,
       storage,
+      exporting,
+      exportCSV,
       saveSettings,
       resetToDefaults,
       onRecordingModeChange,

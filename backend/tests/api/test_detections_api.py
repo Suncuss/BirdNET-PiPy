@@ -502,3 +502,176 @@ class TestDetectionsDatabaseMethods:
         """Test deleting non-existent detection returns None."""
         result = real_db_manager.delete_detection(99999)
         assert result is None
+
+
+class TestExportDetectionsAPI:
+    """Tests for GET /api/detections/export endpoint."""
+
+    def test_export_blocked_when_auth_enabled(self, api_client, real_db_manager):
+        """Test that export returns 401 when auth is enabled but not authenticated."""
+        # Enable auth
+        with patch('core.auth.is_auth_enabled', return_value=True):
+            response = api_client.get('/api/detections/export')
+            assert response.status_code == 401
+
+    def test_export_allowed_when_auth_disabled(self, api_client, real_db_manager):
+        """Test that export works when auth is disabled."""
+        # Auth disabled (default) - should work
+        response = api_client.get('/api/detections/export')
+        assert response.status_code == 200
+        assert response.content_type == 'text/csv; charset=utf-8'
+
+    def test_export_csv_format(self, api_client, real_db_manager):
+        """Test that export returns valid CSV format."""
+        real_db_manager.insert_detection({
+            'timestamp': '2024-01-15T10:30:00',
+            'group_timestamp': '2024-01-15T10:30:00',
+            'common_name': 'American Robin',
+            'scientific_name': 'Turdus migratorius',
+            'confidence': 0.85,
+            'latitude': 40.7128,
+            'longitude': -74.0060,
+            'cutoff': 0.5,
+            'sensitivity': 0.75,
+            'overlap': 0.25
+        })
+
+        response = api_client.get('/api/detections/export')
+        assert response.status_code == 200
+        assert response.content_type == 'text/csv; charset=utf-8'
+
+        # Check Content-Disposition header
+        assert 'attachment' in response.headers.get('Content-Disposition', '')
+        assert 'birdnet_detections_' in response.headers.get('Content-Disposition', '')
+        assert '.csv' in response.headers.get('Content-Disposition', '')
+
+        # Parse CSV content
+        csv_content = response.data.decode('utf-8')
+        lines = csv_content.strip().split('\n')
+
+        # Should have header + 1 data row
+        assert len(lines) == 2
+
+        # Check header includes all expected fields
+        header = lines[0]
+        assert 'id' in header
+        assert 'timestamp' in header
+        assert 'group_timestamp' in header
+        assert 'scientific_name' in header
+        assert 'common_name' in header
+        assert 'confidence' in header
+
+    def test_export_csv_with_multiple_detections(self, api_client, real_db_manager):
+        """Test export with multiple detections."""
+        for i in range(5):
+            real_db_manager.insert_detection({
+                'timestamp': f'2024-01-15T10:{i:02d}:00',
+                'group_timestamp': f'2024-01-15T10:{i:02d}:00',
+                'common_name': 'American Robin',
+                'scientific_name': 'Turdus migratorius',
+                'confidence': 0.80 + i * 0.01,
+                'latitude': 40.7128,
+                'longitude': -74.0060,
+                'cutoff': 0.5,
+                'sensitivity': 0.75,
+                'overlap': 0.25
+            })
+
+        response = api_client.get('/api/detections/export')
+        assert response.status_code == 200
+
+        csv_content = response.data.decode('utf-8')
+        lines = csv_content.strip().split('\n')
+        assert len(lines) == 6  # Header + 5 data rows
+
+    def test_export_csv_filter_by_species(self, api_client, real_db_manager):
+        """Test export with species filter."""
+        for common, scientific in [('Robin', 'Turdus'), ('Jay', 'Cyanocitta')]:
+            for i in range(3):
+                real_db_manager.insert_detection({
+                    'timestamp': f'2024-01-15T10:{i:02d}:00',
+                    'group_timestamp': f'2024-01-15T10:{i:02d}:00',
+                    'common_name': common,
+                    'scientific_name': scientific,
+                    'confidence': 0.85,
+                    'latitude': 40.7128,
+                    'longitude': -74.0060,
+                    'cutoff': 0.5,
+                    'sensitivity': 0.75,
+                    'overlap': 0.25
+                })
+
+        response = api_client.get('/api/detections/export?species=Robin')
+        assert response.status_code == 200
+
+        csv_content = response.data.decode('utf-8')
+        lines = csv_content.strip().split('\n')
+        assert len(lines) == 4  # Header + 3 Robin rows
+
+    def test_export_csv_invalid_date_format(self, api_client, real_db_manager):
+        """Test that invalid date format returns 400."""
+        response = api_client.get('/api/detections/export?start_date=invalid')
+        assert response.status_code == 400
+        data = response.get_json()
+        assert 'error' in data
+
+
+class TestExportDetectionsDatabaseMethods:
+    """Tests for the get_all_detections_for_export database method."""
+
+    def test_get_all_detections_for_export_basic(self, real_db_manager):
+        """Test basic fetch of all detections."""
+        for i in range(5):
+            real_db_manager.insert_detection({
+                'timestamp': f'2024-01-15T10:{i:02d}:00',
+                'group_timestamp': f'2024-01-15T10:{i:02d}:00',
+                'common_name': 'Robin',
+                'scientific_name': 'Turdus migratorius',
+                'confidence': 0.85,
+                'latitude': 40.7128,
+                'longitude': -74.0060,
+                'cutoff': 0.5,
+                'sensitivity': 0.75,
+                'overlap': 0.25
+            })
+
+        detections = real_db_manager.get_all_detections_for_export()
+        assert len(detections) == 5
+
+        # Check all expected fields are present
+        for detection in detections:
+            assert 'id' in detection
+            assert 'timestamp' in detection
+            assert 'group_timestamp' in detection
+            assert 'common_name' in detection
+
+    def test_get_all_detections_for_export_with_filters(self, real_db_manager):
+        """Test fetch with filters."""
+        for date in ['2024-01-10', '2024-01-15']:
+            for species in ['Robin', 'Jay']:
+                real_db_manager.insert_detection({
+                    'timestamp': f'{date}T10:00:00',
+                    'group_timestamp': f'{date}T10:00:00',
+                    'common_name': species,
+                    'scientific_name': f'{species} scientific',
+                    'confidence': 0.85,
+                    'latitude': 40.7128,
+                    'longitude': -74.0060,
+                    'cutoff': 0.5,
+                    'sensitivity': 0.75,
+                    'overlap': 0.25
+                })
+
+        # Filter by species
+        robin_detections = real_db_manager.get_all_detections_for_export(species='Robin')
+        assert len(robin_detections) == 2
+
+        # Filter by date
+        jan15_detections = real_db_manager.get_all_detections_for_export(
+            start_date='2024-01-14', end_date='2024-01-16')
+        assert len(jan15_detections) == 2
+
+    def test_get_all_detections_for_export_empty(self, real_db_manager):
+        """Test fetch on empty database."""
+        detections = real_db_manager.get_all_detections_for_export()
+        assert len(detections) == 0

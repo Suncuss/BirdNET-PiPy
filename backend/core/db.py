@@ -865,6 +865,81 @@ class DatabaseManager:
 
         return detections, total_count
 
+    def get_all_detections_for_export(self, start_date=None, end_date=None, species=None):
+        """Get all detection records for CSV export.
+
+        Fetches all matching rows in a single query. This is simpler and avoids
+        consistency issues with batched LIMIT/OFFSET (where concurrent inserts
+        can cause skipped or duplicate rows).
+
+        For typical Raspberry Pi deployments with thousands of detections,
+        this approach is efficient and the memory footprint is minimal.
+
+        Args:
+            start_date: Start date filter (YYYY-MM-DD)
+            end_date: End date filter (YYYY-MM-DD)
+            species: Filter by common_name
+
+        Returns:
+            list: All detection records matching the filters
+        """
+        # Build WHERE conditions
+        conditions = []
+        params = []
+
+        if start_date:
+            start_date_iso = f"{start_date}T00:00:00"
+            conditions.append("timestamp >= ?")
+            params.append(start_date_iso)
+
+        if end_date:
+            end_date_iso = f"{end_date}T23:59:59"
+            conditions.append("timestamp <= ?")
+            params.append(end_date_iso)
+
+        if species:
+            conditions.append("common_name = ?")
+            params.append(species)
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+        query = f"""
+        SELECT
+            id,
+            timestamp,
+            group_timestamp,
+            scientific_name,
+            common_name,
+            confidence,
+            latitude,
+            longitude,
+            cutoff,
+            sensitivity,
+            overlap,
+            week
+        FROM detections
+        WHERE {where_clause}
+        ORDER BY timestamp DESC, id DESC
+        """
+
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(query, params)
+            rows = cur.fetchall()
+
+        detections = [dict(row) for row in rows]
+
+        logger.debug("Detections exported", extra={
+            'count': len(detections),
+            'filters': {
+                'start_date': start_date,
+                'end_date': end_date,
+                'species': species
+            }
+        })
+
+        return detections
+
     def get_detection_by_id(self, detection_id):
         """Get a single detection by ID.
 

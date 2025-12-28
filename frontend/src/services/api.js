@@ -49,19 +49,35 @@ api.interceptors.response.use(
 
 /**
  * Create an axios instance with a longer timeout for long-running operations.
- * Use for system updates, large data imports, etc.
+ * Use for system updates, large data exports, etc.
+ *
+ * Includes the same 401 interceptor as the default api instance for
+ * consistent auth handling.
  *
  * @param {number} timeout - Timeout in milliseconds (default: 5 minutes)
  * @returns {import('axios').AxiosInstance}
  */
 export function createLongRequest(timeout = LONG_TIMEOUT) {
-  return axios.create({
+  const instance = axios.create({
     baseURL: '/api',
     timeout,
     headers: {
       'Content-Type': 'application/json'
     }
   })
+
+  // Add same 401 interceptor for consistent auth handling
+  instance.interceptors.response.use(
+    (response) => response,
+    (error) => {
+      if (error.response?.status === 401) {
+        window.dispatchEvent(new CustomEvent('auth:required'))
+      }
+      return Promise.reject(error)
+    }
+  )
+
+  return instance
 }
 
 // Export both default and named for flexibility

@@ -23,7 +23,7 @@ from core.auth import (
 )
 from version import __version__, DISPLAY_NAME
 
-from flask import Flask, Blueprint, jsonify, request
+from flask import Flask, Blueprint, jsonify, request, Response
 from flask_socketio import SocketIO, emit
 from datetime import datetime, timedelta
 import os
@@ -31,6 +31,8 @@ import json
 import requests
 import time
 import re
+import csv
+import io
 
 # Setup logging
 setup_logging('api')
@@ -422,6 +424,77 @@ def get_detections():
             'has_prev': page > 1
         }
     })
+
+
+@api.route('/api/detections/export', methods=['GET'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def export_detections_csv():
+    """Export all detections as CSV file.
+
+    Requires authentication.
+
+    Query params (optional):
+    - start_date: Start date filter (YYYY-MM-DD)
+    - end_date: End date filter (YYYY-MM-DD)
+    - species: Filter by common_name
+    """
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    species = request.args.get('species')
+
+    # Validate date formats if provided
+    for date_param, date_value in [('start_date', start_date), ('end_date', end_date)]:
+        if date_value:
+            try:
+                datetime.strptime(date_value, '%Y-%m-%d')
+            except ValueError:
+                return jsonify({'error': f'Invalid {date_param} format. Use YYYY-MM-DD'}), 400
+
+    # Fetch all detections
+    detections = db_manager.get_all_detections_for_export(
+        start_date=start_date,
+        end_date=end_date,
+        species=species
+    )
+
+    # Build CSV in memory
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Write header
+    writer.writerow([
+        'id', 'timestamp', 'group_timestamp', 'scientific_name', 'common_name',
+        'confidence', 'latitude', 'longitude', 'cutoff', 'sensitivity', 'overlap', 'week'
+    ])
+
+    # Write data rows
+    for detection in detections:
+        writer.writerow([
+            detection.get('id', ''),
+            detection.get('timestamp', ''),
+            detection.get('group_timestamp', ''),
+            detection.get('scientific_name', ''),
+            detection.get('common_name', ''),
+            detection.get('confidence', ''),
+            detection.get('latitude', ''),
+            detection.get('longitude', ''),
+            detection.get('cutoff', ''),
+            detection.get('sensitivity', ''),
+            detection.get('overlap', ''),
+            detection.get('week', '')
+        ])
+
+    # Generate filename with timestamp
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    filename = f'birdnet_detections_{timestamp}.csv'
+
+    return Response(
+        output.getvalue(),
+        mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename={filename}'}
+    )
 
 
 @api.route('/api/detections/<int:detection_id>', methods=['DELETE'])
