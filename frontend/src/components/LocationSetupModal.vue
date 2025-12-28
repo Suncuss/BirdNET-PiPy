@@ -25,36 +25,7 @@
           {{ errorMessage }}
         </div>
 
-        <!-- Option 1: Use Current Location -->
-        <div class="mb-4">
-          <button
-            @click="useCurrentLocation"
-            :disabled="geolocating"
-            class="w-full flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-semibold py-2 px-4 rounded-lg shadow transition-colors focus:outline-none focus:ring-2 focus:ring-green-300"
-          >
-            <svg v-if="!geolocating" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
-              <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
-            </svg>
-            <svg v-else class="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-            </svg>
-            {{ geolocating ? 'Getting location...' : 'Use My Current Location' }}
-          </button>
-        </div>
-
-        <!-- Divider -->
-        <div class="relative my-4">
-          <div class="absolute inset-0 flex items-center">
-            <div class="w-full border-t border-gray-300"></div>
-          </div>
-          <div class="relative flex justify-center text-sm">
-            <span class="bg-white px-2 text-gray-500">or search by address</span>
-          </div>
-        </div>
-
-        <!-- Option 2: Address Search -->
+        <!-- Option 1: Address Search -->
         <div class="mb-4">
           <div class="flex gap-2">
             <input
@@ -102,7 +73,7 @@
           </div>
         </div>
 
-        <!-- Option 3: Manual Entry -->
+        <!-- Option 2: Manual Entry -->
         <div class="grid grid-cols-2 gap-4 mb-6">
           <div>
             <label for="latitude" class="block text-sm font-medium text-gray-700 mb-1">Latitude</label>
@@ -192,7 +163,6 @@ export default {
     const searchQuery = ref('')
     const searchResults = ref([])
     const errorMessage = ref('')
-    const geolocating = ref(false)
     const searching = ref(false)
     const saving = ref(false)
 
@@ -205,71 +175,6 @@ export default {
     })
 
     // Methods
-    const useCurrentLocation = async () => {
-      if (!navigator.geolocation) {
-        errorMessage.value = 'Geolocation is not supported by your browser'
-        return
-      }
-
-      geolocating.value = true
-      errorMessage.value = ''
-
-      try {
-        const position = await new Promise((resolve, reject) => {
-          navigator.geolocation.getCurrentPosition(resolve, reject, {
-            enableHighAccuracy: true,
-            timeout: 10000,
-            maximumAge: 0
-          })
-        })
-
-        // Round to 2 decimal places (sufficient precision for BirdNET species filtering)
-        latitude.value = Math.round(position.coords.latitude * 100) / 100
-        longitude.value = Math.round(position.coords.longitude * 100) / 100
-        locationName.value = 'Current location'
-
-        // Try to get a readable name via reverse geocoding
-        reverseGeocode(latitude.value, longitude.value)
-      } catch (error) {
-        console.error('Geolocation error:', error)
-        if (error.code === 1) {
-          errorMessage.value = 'Location access denied. Please enable location permissions or enter manually.'
-        } else if (error.code === 2) {
-          errorMessage.value = 'Unable to determine location. Please try again or enter manually.'
-        } else if (error.code === 3) {
-          errorMessage.value = 'Location request timed out. Please try again or enter manually.'
-        } else {
-          errorMessage.value = 'Failed to get location. Please enter manually.'
-        }
-      } finally {
-        geolocating.value = false
-      }
-    }
-
-    const reverseGeocode = async (lat, lon) => {
-      try {
-        const response = await fetch(
-          `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`,
-          {
-            headers: {
-              'User-Agent': 'BirdNET-PiPy/1.0 (https://github.com/Suncuss/BirdNET-PiPy)'
-            }
-          }
-        )
-        if (response.ok) {
-          const data = await response.json()
-          if (data.display_name) {
-            // Shorten the display name to city/region
-            const parts = data.display_name.split(', ')
-            locationName.value = parts.slice(0, 3).join(', ')
-          }
-        }
-      } catch (error) {
-        // Silently fail - we already have coordinates
-        console.warn('Reverse geocoding failed:', error)
-      }
-    }
-
     const searchAddress = async () => {
       if (!searchQuery.value.trim()) return
 
@@ -378,11 +283,9 @@ export default {
       searchQuery,
       searchResults,
       errorMessage,
-      geolocating,
       searching,
       saving,
       isValidLocation,
-      useCurrentLocation,
       searchAddress,
       selectSearchResult,
       saveLocation,

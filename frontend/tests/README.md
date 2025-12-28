@@ -118,7 +118,7 @@ Tests for reusable Vue components.
 | File | Tests | Description |
 |------|-------|-------------|
 | `LoginModal.test.js` | ~15 | Login forms, setup flows, password validation, error handling |
-| `LocationSetupModal.test.js` | ~12 | Coordinate entry, geolocation, address search, save/skip actions |
+| `LocationSetupModal.test.js` | ~12 | Coordinate entry, address search, save/skip actions |
 | `UpdateManager.test.js` | ~5 | Version display, update detection, update application |
 
 ### Composable Tests (`composables/`)

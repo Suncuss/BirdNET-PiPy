@@ -56,8 +56,8 @@ describe('LocationSetupModal', () => {
 
     it('displays all input options', () => {
       const wrapper = mountModal()
-      expect(wrapper.text()).toContain('Use My Current Location')
-      expect(wrapper.text()).toContain('or search by address')
+      // Address search input with placeholder
+      expect(wrapper.find('input[placeholder*="City"]').exists()).toBe(true)
       expect(wrapper.text()).toContain('or enter coordinates manually')
     })
 
@@ -189,9 +189,9 @@ describe('LocationSetupModal', () => {
       // Directly set the search query through the component
       await wrapper.find('input[placeholder*="City"]').setValue('NonexistentPlace12345')
 
-      // Find and click the search button
+      // Find and click the search button (first button after removing geolocation)
       const buttons = wrapper.findAll('button')
-      const searchButton = buttons[1] // Second button is the search button
+      const searchButton = buttons[0] // First button is now the search button
       await searchButton.trigger('click')
       await flushPromises()
 
@@ -199,11 +199,4 @@ describe('LocationSetupModal', () => {
     })
   })
 
-  describe('Browser Geolocation', () => {
-    it('shows geolocation button', () => {
-      const wrapper = mountModal()
-      const geoButton = wrapper.findAll('button').find(b => b.text().includes('Use My Current Location'))
-      expect(geoButton).toBeTruthy()
-    })
-  })
 })
