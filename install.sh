@@ -778,6 +778,9 @@ cleanup_on_error() {
         echo "  tail -100 $LOG_FILE    # Last 100 lines"
         echo "  less $LOG_FILE         # Full log"
         echo ""
+        print_info "TIP: It's safe to re-run the installation command - it will"
+        print_info "     pick up where it left off and usually fixes the issue."
+        echo ""
         print_info "For help, visit: https://github.com/Suncuss/BirdNET-PiPy/issues"
         print_info "Include the log file when reporting issues"
     fi
