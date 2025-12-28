@@ -81,14 +81,21 @@ For detailed logs, advanced configuration, and architecture details, see the **[
 
 ### Web Interface
 
-Open your browser and navigate to:
+Access the dashboard from any device on the same network:
 
+**Using hostname (mDNS):**
 ```
-http://<raspberry-pi-ip>
+http://<hostname>.local
 ```
+For example, if your Pi's hostname is `raspberrypi`, use `http://raspberrypi.local`
 
-Or from the Pi directly:
+**Using IP address:**
+```
+http://<ip-address>
+```
+Find your Pi's IP by running `hostname -I` on the Pi.
 
+**From the Pi directly:**
 ```
 http://localhost
 ```
