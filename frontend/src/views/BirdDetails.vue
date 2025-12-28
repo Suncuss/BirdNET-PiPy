@@ -21,7 +21,7 @@
           </p>
         </div>
         <div class="p-6 space-y-2">
-          <p><span class="font-semibold text-gray-700">Total Visits:</span> {{ totalVisits }}</p>
+          <p><span class="font-semibold text-gray-700">Total Detections:</span> {{ totalVisits }}</p>
           <p><span class="font-semibold text-gray-700">First Detected:</span> {{ formatDate(firstDetected) }}</p>
           <p><span class="font-semibold text-gray-700">Last Detected:</span> {{ formatDate(lastDetected) }}</p>
           <p><span class="font-semibold text-gray-700">Most Activity Time:</span> {{ peakActivityTime }}</p>
