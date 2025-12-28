@@ -375,7 +375,7 @@ def configure_session(app):
 
     # Secure flag = False: cookies sent over both HTTP and HTTPS
     # This works for:
-    # - Local HTTP access (http://pi:8080) - the common case
+    # - Local HTTP access (http://pi) - the common case
     # - Behind HTTPS proxy (ngrok, Cloudflare, etc.) - browser sees HTTPS, sends cookie
     # Setting True would break local HTTP access with no real benefit for this app.
     app.config['SESSION_COOKIE_SECURE'] = False

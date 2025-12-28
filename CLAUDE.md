@@ -137,7 +137,7 @@ git push origin dev
 ## Development Notes
 
 - Services communicate via HTTP APIs via nginx reverse proxy
-- Frontend is built inside Docker and served by nginx on port 8080
+- Frontend is built inside Docker and served by nginx on port 80
 - Nginx proxies /api/ requests to the API container and /socket.io/ for WebSockets
 - Database and audio files stored in `./data/` directory
 - Real-time updates use WebSocket connections via Flask-SocketIO

@@ -6,7 +6,7 @@ BirdNET-PiPy uses a containerized microservices architecture with five Docker co
 
 | Container | Port | Technology | Purpose |
 |-----------|------|------------|---------|
-| **frontend** | 8080 | Nginx + Vue.js 3 | Web dashboard, SPA routing, API/stream proxy |
+| **frontend** | 80 | Nginx + Vue.js 3 | Web dashboard, SPA routing, API/stream proxy |
 | **api** | 5002 | Flask + Socket.IO | REST API, WebSocket events, database access |
 | **birdnet-server** | 5001 | TensorFlow Lite | AI model inference, species detection |
 | **main** | - | Python + FFmpeg | Audio recording, analysis orchestration |
@@ -17,7 +17,7 @@ BirdNET-PiPy uses a containerized microservices architecture with five Docker co
 ```
 ┌──────────────────┐      ┌──────────────────┐      ┌──────────────────┐
 │     frontend     │      │       main       │      │     icecast      │
-│      :8080       │      │                  │      │      :8888       │
+│       :80        │      │                  │      │      :8888       │
 ├──────────────────┤      ├──────────────────┤      ├──────────────────┤
 │ Nginx + Vue.js 3 │      │   Main Loop      │      │ FFmpeg + Icecast │
 │ Serves UI        │      │   Recording      │      │   Livestream     │

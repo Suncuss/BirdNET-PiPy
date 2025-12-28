@@ -6,7 +6,7 @@ set -e
 # Configuration
 DOCKER_IMAGE_NAME="birdnet-pipy-frontend"
 CONTAINER_NAME="birdnet-pipy-frontend-container"
-HOST_PORT=8080
+HOST_PORT=80
 CONTAINER_PORT=80
 
 # Function to check if a container is running

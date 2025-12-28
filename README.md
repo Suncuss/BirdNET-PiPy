@@ -19,7 +19,7 @@ Run the automated installer:
 curl -fsSL https://raw.githubusercontent.com/Suncuss/BirdNET-PiPy/main/install.sh | sudo bash
 ```
 
-Once installed, access the dashboard at: **`http://<hostname>:8080`**
+Once installed, access the dashboard at: **`http://<hostname>`**
 
 
 ## Documentation

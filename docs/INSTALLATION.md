@@ -84,13 +84,13 @@ For detailed logs, advanced configuration, and architecture details, see the **[
 Open your browser and navigate to:
 
 ```
-http://<raspberry-pi-ip>:8080
+http://<raspberry-pi-ip>
 ```
 
 Or from the Pi directly:
 
 ```
-http://localhost:8080
+http://localhost
 ```
 
 ---

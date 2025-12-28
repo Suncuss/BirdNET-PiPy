@@ -808,7 +808,7 @@ show_completion_message() {
     echo "  sudo journalctl -u $SERVICE_NAME -f    # View logs"
     echo ""
     print_info "Application Access:"
-    echo "  - Frontend: http://localhost:8080"
+    echo "  - Frontend: http://localhost"
     echo "  - API: http://localhost:5002"
     echo "  - BirdNet Service: http://localhost:5001"
     echo "  - Live Audio Stream: http://localhost:8888/stream.mp3"
