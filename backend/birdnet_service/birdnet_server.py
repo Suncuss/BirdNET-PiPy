@@ -110,7 +110,7 @@ def get_probable_species_for_location(lat, lon, week, meta_model, labels):
     return local_species
 
 
-def detect_species_in_audio(model, audio_input, labels, sensitivity, cutoff):
+def detect_species_in_audio(model, audio_input, labels, sensitivity, cutoff, chunk_index=None):
 
     model_input = np.array(np.expand_dims(audio_input, 0), dtype='float32')
     model.set_tensor(model_loader.input_layer_index, model_input)
@@ -119,6 +119,17 @@ def detect_species_in_audio(model, audio_input, labels, sensitivity, cutoff):
     model_output = model.get_tensor(model_loader.output_layer_index)[0].copy()
 
     model_output = custom_sigmoid(model_output, sensitivity)
+
+    # Log top 3 raw confidence scores before cutoff filtering
+    raw_scores = list(zip(labels, model_output))
+    raw_scores_sorted = sorted(raw_scores, key=lambda x: x[1], reverse=True)[:3]
+    top3_info = [(s[0].split('_')[1] if '_' in s[0] else s[0], round(float(s[1]) * 100, 1)) for s in raw_scores_sorted]
+    chunk_str = f"Chunk {chunk_index}" if chunk_index is not None else "Chunk"
+    logger.info(f"{chunk_str} raw model output", extra={
+        'top3': top3_info,
+        'cutoff': round(cutoff * 100, 1)
+    })
+
     model_output = np.where(model_output >= cutoff, model_output, 0)
     model_output = dict(zip(labels, model_output))
     model_output = {k: v for k, v in model_output.items() if v != 0}
@@ -342,7 +353,7 @@ def process_audio_file(model, meta_model, audio_file_path, labels, lat, lon, wee
     inference_start = time.time()
     for chunk_index, audio_chunk in enumerate(audio_chunks):
         species_in_audio_chunk = detect_species_in_audio(
-            model, audio_chunk, labels, sensitivity, cutoff)
+            model, audio_chunk, labels, sensitivity, cutoff, chunk_index=chunk_index)
 
         if species_in_audio_chunk:
             chunks_with_detections += 1
