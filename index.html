@@ -446,7 +446,24 @@
         function copyCode() {
             const code = document.getElementById('install-code').textContent;
             navigator.clipboard.writeText(code);
-            alert('Copied to clipboard!');
+
+            // Show "Copied!" feedback on the button
+            const btn = event.currentTarget;
+            const originalHTML = btn.innerHTML;
+            btn.innerHTML = `
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                </svg>
+                Copied!
+            `;
+            btn.classList.remove('text-gray-400');
+            btn.classList.add('text-green-400');
+
+            setTimeout(() => {
+                btn.innerHTML = originalHTML;
+                btn.classList.remove('text-green-400');
+                btn.classList.add('text-gray-400');
+            }, 2000);
         }
 
         // Story expand functionality (one-way)
