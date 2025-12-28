@@ -811,11 +811,11 @@ show_completion_message() {
     echo "  sudo systemctl restart $SERVICE_NAME   # Restart service"
     echo "  sudo journalctl -u $SERVICE_NAME -f    # View logs"
     echo ""
-    print_info "Application Access:"
-    echo "  - Frontend: http://localhost"
-    echo "  - API: http://localhost:5002"
-    echo "  - BirdNet Service: http://localhost:5001"
-    echo "  - Live Audio Stream: http://localhost:8888/stream.mp3"
+    print_info "Access the Dashboard:"
+    local hostname=$(hostname)
+    local ip_addr=$(hostname -I | awk '{print $1}')
+    echo "  http://${hostname}.local"
+    [ -n "$ip_addr" ] && echo "  http://${ip_addr}"
     echo ""
     print_info "Audio Services:"
     echo "  pulseaudio --check && echo Running       # Check PulseAudio"
