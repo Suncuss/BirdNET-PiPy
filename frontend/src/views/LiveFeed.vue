@@ -88,6 +88,9 @@ export default {
 
         initAudioContext()
         // Force a fresh connection so Start jumps to the live head instead of buffered audio.
+        // Reset src to force a new HTTP connection (load() alone reuses cached connection)
+        audioElement.value.src = ''
+        audioElement.value.src = streamUrl.value
         audioElement.value.load()
         await audioContext.resume()
         await audioElement.value.play()
