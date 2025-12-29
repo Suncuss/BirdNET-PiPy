@@ -246,81 +246,41 @@ restart_containers() {
 }
 
 # Function to perform system update
+# Delegates to install.sh --update which handles:
+# - Git sync (fetch + reset)
+# - Docker image builds
+# - System config updates (PulseAudio, systemd, sudoers)
 perform_system_update() {
     log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log_info "System update requested"
+    log_info "System update requested, delegating to install.sh..."
     log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-    cd "$PROJECT_ROOT"
-
-    # Step 1: Stop containers IMMEDIATELY so frontend can detect update in progress
-    # This must happen before any network calls (git fetch) to ensure the frontend
-    # sees the service go down within the expected timeout window
-    log_info "Stopping Docker containers..."
-    docker compose down || true
-
-    # Step 2: Fetch latest and check if update needed
-    log_info "Fetching latest code from origin/main..."
-    if ! git fetch origin main 2>&1; then
-        log_error "Git fetch failed - network issue or invalid remote"
-        log_info "Restarting containers with current code..."
-        docker compose up -d || true
-        rm -f "$UPDATE_FLAG_FILE"
-        return 1
-    fi
-
-    LOCAL=$(git rev-parse HEAD)
-    REMOTE=$(git rev-parse origin/main)
-
-    if [ "$LOCAL" = "$REMOTE" ]; then
-        log_info "Already up to date, no update needed"
-        log_info "Restarting containers..."
-        docker compose up -d || true
-        rm -f "$UPDATE_FLAG_FILE"
-        return 0
-    fi
-
-    COMMITS_BEHIND=$(git rev-list --count HEAD..origin/main)
-    log_info "Update available: $COMMITS_BEHIND commits behind origin/main"
-
-    # Step 3: Sync to latest code (reset to origin/main)
-    # Check for local modifications and warn before discarding
-    if ! git diff --quiet HEAD 2>/dev/null || ! git diff --cached --quiet HEAD 2>/dev/null; then
-        log_warning "Local modifications detected - these will be discarded by the update:"
-        git status --short 2>/dev/null | while read line; do
-            log_warning "  $line"
-        done
-        log_warning "Note: The install directory is not intended for local customizations"
-    fi
-
-    # Using reset instead of pull - works even if repo history changes
-    log_info "Syncing to origin/main..."
-    if ! git reset --hard origin/main 2>&1; then
-        log_error "Git reset failed! Restarting containers with current code..."
-        docker compose up -d || true
-        rm -f "$UPDATE_FLAG_FILE"
-        return 1
-    fi
-
-    # Step 4: Build new images
-    log_info "Running build script..."
-    if ! "$PROJECT_ROOT/build.sh"; then
-        log_error "Build failed! Restarting containers with previous images..."
-        docker compose up -d || true
-        rm -f "$UPDATE_FLAG_FILE"
-        return 1
-    fi
-
-    # Step 5: Exit to trigger service restart
-    # systemd (Restart=always) will restart the service with the new code.
-    # The new script will start containers with the newly built images.
-    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    log_info "Build complete! Applied $COMMITS_BEHIND commits from origin/main"
-    log_info "Exiting to restart service with updated code..."
-    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
+    # Remove update flag before calling install.sh
+    # (install.sh handles its own exit/restart flow)
     rm -f "$UPDATE_FLAG_FILE"
-    exit 0
+
+    # Delegate to install.sh --update (runs as root via sudo)
+    # This handles: git sync, build, system configs, exit for restart
+    local exit_code=0
+    sudo "$PROJECT_ROOT/install.sh" --update || exit_code=$?
+
+    if [ $exit_code -eq 0 ]; then
+        # install.sh exits with 0 after successful update
+        # systemd will restart this service with new code
+        exit 0
+    else
+        # Check if this was a sudo permission failure
+        if [ $exit_code -eq 1 ] && ! sudo -n true 2>/dev/null; then
+            log_error "Update failed: sudo permission denied"
+            log_error "Sudoers may not be configured for install.sh --update"
+            log_error "Fix by running: cd $PROJECT_ROOT && sudo ./install.sh"
+        else
+            # install.sh handles container restart on failure internally
+            log_error "Update failed (exit code: $exit_code)"
+            log_error "Check logs: /var/log/birdnet-pipy-install.log"
+        fi
+        return 1
+    fi
 }
 
 # Function to enable swap if it exists (for low-memory systems)

@@ -56,13 +56,29 @@ You can trigger maintenance tasks by touching flag files, avoiding full reboots.
 | Trigger File | Action | Description |
 |--------------|--------|-------------|
 | `data/flags/restart-backend` | **Restart** | Restarts all Docker containers. Useful after config changes. |
-| `data/flags/update-requested` | **Update** | 1. Stops service<br>2. `git pull`<br>3. `docker build`<br>4. Restarts |
+| `data/flags/update-requested` | **Update** | Runs `install.sh --update` which syncs code, rebuilds images, and updates system configs. |
 
 **Example:**
 ```bash
 # Trigger an update
 touch ~/BirdNET-PiPy/data/flags/update-requested
 ```
+
+### Update Flow Details
+
+When an update is triggered, `install.sh --update` performs:
+1. Stops Docker containers
+2. Fetches and syncs to `origin/main` (git fetch + reset)
+3. Rebuilds Docker images
+4. Updates system configs (PulseAudio, systemd service, sudoers)
+5. Exits for systemd to restart the service
+
+**Manual update:**
+```bash
+cd ~/BirdNET-PiPy && sudo ./install.sh --update
+```
+
+**Note:** For existing installations before this feature was added, run `sudo ./install.sh` once to update the sudoers configuration for automatic updates.
 
 ---
 

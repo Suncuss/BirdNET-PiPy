@@ -61,6 +61,7 @@ NC='\033[0m' # No Color
 
 # Command-line options
 CUSTOM_INSTALL_DIR=""
+UPDATE_MODE=false
 
 # ============================================================================
 # Logging Functions
@@ -191,6 +192,7 @@ show_usage() {
     echo ""
     echo "Options:"
     echo "  --install-dir DIR    Installation directory (default: /home/\$USER/BirdNET-PiPy)"
+    echo "  --update             Update existing installation (git sync + build + config)"
     echo "  --help               Show this help message"
     echo ""
     echo "Examples:"
@@ -199,6 +201,9 @@ show_usage() {
     echo ""
     echo "  # Custom installation directory"
     echo "  sudo ./install.sh --install-dir /home/pi/BirdNET"
+    echo ""
+    echo "  # Update existing installation"
+    echo "  sudo ./install.sh --update"
 }
 
 # ============================================================================
@@ -682,6 +687,9 @@ $ACTUAL_USER ALL=(ALL) NOPASSWD: $RM_BIN -f /run/pulse/native
 
 # Enable swap (optional, only if /swapfile-birdnet-pipy exists)
 $ACTUAL_USER ALL=(ALL) NOPASSWD: $SWAPON_BIN /swapfile-birdnet-pipy
+
+# System update via install.sh --update
+$ACTUAL_USER ALL=(ALL) NOPASSWD: $PROJECT_ROOT/install.sh --update
 EOF
 
     # Sudoers files must be 440 and owned by root
@@ -696,6 +704,102 @@ EOF
         rm -f "$SUDOERS_FILE"
         print_warning "Service may require manual sudo password entry for audio"
     fi
+}
+
+# ============================================================================
+# Update Mode Functions
+# ============================================================================
+
+# Helper function to restart containers on failure during update
+restart_containers_on_failure() {
+    print_status "Restarting containers with current code..."
+    cd "$PROJECT_ROOT"
+    docker compose up -d || true
+}
+
+# Perform system update (called when --update flag is used)
+# This handles: git sync, build, and system config updates
+perform_update() {
+    print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    print_status "BirdNET-PiPy System Update"
+    print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    cd "$PROJECT_ROOT"
+
+    # Step 1: Stop containers IMMEDIATELY so frontend can detect update in progress
+    print_status "Stopping Docker containers..."
+    docker compose down || true
+
+    # Step 2: Fetch latest and check if update needed
+    print_status "Fetching latest code from origin/main..."
+    if ! git fetch origin main 2>&1; then
+        print_error "Git fetch failed - network issue or invalid remote"
+        restart_containers_on_failure
+        exit 1
+    fi
+
+    LOCAL=$(git rev-parse HEAD)
+    REMOTE=$(git rev-parse origin/main)
+
+    if [ "$LOCAL" = "$REMOTE" ]; then
+        print_status "Already up to date, no code changes needed"
+        print_status "Updating system configurations..."
+        # Still update system configs even if code is current
+        # (user may have run this to fix missing configs)
+        configure_pulseaudio
+        create_service_file
+        install_service
+        setup_sudoers
+        print_status "Restarting containers..."
+        docker compose up -d || true
+        print_status "Update complete (no code changes)"
+        exit 0
+    fi
+
+    COMMITS_BEHIND=$(git rev-list --count HEAD..origin/main)
+    print_status "Update available: $COMMITS_BEHIND commits behind origin/main"
+
+    # Step 3: Check for local modifications and warn
+    if ! git diff --quiet HEAD 2>/dev/null || ! git diff --cached --quiet HEAD 2>/dev/null; then
+        print_warning "Local modifications detected - these will be discarded:"
+        git status --short 2>/dev/null | head -10
+        print_warning "Note: The install directory is not intended for local customizations"
+    fi
+
+    # Step 4: Sync to latest code (reset to origin/main)
+    print_status "Syncing to origin/main..."
+    if ! git reset --hard origin/main 2>&1; then
+        print_error "Git reset failed!"
+        restart_containers_on_failure
+        exit 1
+    fi
+
+    # Fix ownership after git operations
+    get_actual_uid_gid
+    chown -R $ACTUAL_USER:$ACTUAL_USER "$PROJECT_ROOT"
+
+    # Step 5: Build new images (as actual user)
+    print_status "Building application..."
+    if ! build_application; then
+        print_error "Build failed!"
+        restart_containers_on_failure
+        exit 1
+    fi
+
+    # Step 6: Update system configurations (root operations)
+    print_status "Updating system configurations..."
+    configure_pulseaudio
+    create_service_file
+    install_service
+    setup_sudoers
+
+    # Step 7: Success - exit for systemd restart
+    print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    print_status "Update complete! Applied $COMMITS_BEHIND commits from origin/main"
+    print_status "Exiting to restart service with updated code..."
+    print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    exit 0
 }
 
 # ============================================================================
@@ -868,6 +972,10 @@ main() {
                 CUSTOM_INSTALL_DIR="$2"
                 shift 2
                 ;;
+            --update)
+                UPDATE_MODE=true
+                shift
+                ;;
             --help)
                 show_usage
                 exit 0
@@ -883,6 +991,22 @@ main() {
     # Platform and permission checks
     detect_platform
     check_root
+
+    # Handle update mode early (before any installation steps)
+    if [ "$UPDATE_MODE" = true ]; then
+        # Update mode requires running from existing installation
+        if [ "$IS_LOCAL_INSTALL" = false ]; then
+            print_error "--update requires running from existing installation"
+            print_info "Run from: /path/to/BirdNET-PiPy/install.sh --update"
+            exit 1
+        fi
+
+        # Detect timezone for systemd service file
+        detect_timezone
+
+        # Perform update and exit (never returns)
+        perform_update
+    fi
 
     # Install all prerequisites in one batch (git, docker prereqs, pulseaudio)
     # This minimizes apt-get update calls for faster installation
