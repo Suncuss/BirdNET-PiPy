@@ -87,6 +87,8 @@ export default {
         statusMessage.value = 'Initializing audio...'
 
         initAudioContext()
+        // Force a fresh connection so Start jumps to the live head instead of buffered audio.
+        audioElement.value.load()
         await audioContext.resume()
         await audioElement.value.play()
         statusMessage.value = 'Icecast stream connected'
@@ -108,7 +110,6 @@ export default {
     const stopAudio = async () => {
       try {
         await audioElement.value.pause()
-        audioElement.value.currentTime = 0
         statusMessage.value = 'Audio stopped'
         console.log('Audio playback stopped successfully')
       } catch (error) {
