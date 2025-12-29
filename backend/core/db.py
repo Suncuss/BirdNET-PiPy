@@ -2,6 +2,7 @@ from config.settings import DATABASE_PATH, DATABASE_SCHEMA
 from core.logging_config import get_logger
 from core.utils import build_detection_filenames
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -46,7 +47,16 @@ class DatabaseManager:
         with self.get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.executescript(DATABASE_SCHEMA)
-            
+
+            # Auto-migrate: add 'extra' column if missing (for existing databases)
+            cursor.execute("PRAGMA table_info(detections)")
+            existing_columns = {row[1] for row in cursor.fetchall()}
+
+            if 'extra' not in existing_columns:
+                cursor.execute("ALTER TABLE detections ADD COLUMN extra TEXT DEFAULT '{}'")
+                cursor.execute("UPDATE detections SET extra = '{}' WHERE extra IS NULL")
+                logger.info("Migrated database: added 'extra' column to detections table")
+
             conn.commit()
 
     def database_exists(self):
@@ -56,10 +66,17 @@ class DatabaseManager:
             return cursor.fetchone() is not None
 
     def insert_detection(self, detection):
+        # Handle extra field - default to empty JSON object
+        extra = detection.get('extra', {})
+        if extra is None:
+            extra = {}
+        if isinstance(extra, dict):
+            extra = json.dumps(extra)
+
         query = """
-        INSERT INTO detections (timestamp, group_timestamp, scientific_name, common_name, confidence, 
-                                latitude, longitude, cutoff, sensitivity, overlap)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO detections (timestamp, group_timestamp, scientific_name, common_name, confidence,
+                                latitude, longitude, cutoff, sensitivity, overlap, extra)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         with self.get_db_connection() as conn:
             cur = conn.cursor()
@@ -73,7 +90,8 @@ class DatabaseManager:
                 detection['longitude'],
                 detection['cutoff'],
                 detection['sensitivity'],
-                detection['overlap']
+                detection['overlap'],
+                extra
             ))
             conn.commit()
             return cur.lastrowid
@@ -96,7 +114,8 @@ class DatabaseManager:
             cutoff,
             sensitivity,
             overlap,
-            week
+            week,
+            extra
         FROM detections
         WHERE id IN (
             SELECT id FROM (
@@ -119,6 +138,9 @@ class DatabaseManager:
             for row in rows:
                 detection = dict(row)
 
+                # Parse extra JSON field
+                detection['extra'] = self._parse_extra(detection.get('extra'))
+
                 # Generate standardized filenames using utility function
                 filenames = build_detection_filenames(
                     detection['common_name'],
@@ -131,7 +153,7 @@ class DatabaseManager:
                 detection['spectrogram_file_name'] = filenames['spectrogram_filename']
 
                 detections.append(detection)
-            
+
             return detections
 
     def get_detections_by_date_range(self, start_date, end_date, unique=False):
@@ -177,8 +199,12 @@ class DatabaseManager:
                 cur.execute(query, (start_date_iso, end_date_iso))
             
             rows = cur.fetchall()
-            results = [dict(row) for row in rows]
-            
+            results = []
+            for row in rows:
+                detection = dict(row)
+                detection['extra'] = self._parse_extra(detection.get('extra'))
+                results.append(detection)
+
             query_time = time.time() - start_time
             logger.debug("Date range query completed", extra={
                 'results_count': len(results),
@@ -389,7 +415,12 @@ class DatabaseManager:
             cur = conn.cursor()
             cur.execute(query, (limit,))
             rows = cur.fetchall()
-            return [dict(row) for row in rows]
+            results = []
+            for row in rows:
+                detection = dict(row)
+                detection['extra'] = self._parse_extra(detection.get('extra'))
+                results.append(detection)
+            return results
 
 
 
@@ -441,7 +472,7 @@ class DatabaseManager:
         # LIMIT is parameterized using -1 for unlimited (SQLite treats negative LIMIT as no limit)
         if sort == 'best':
             query = """
-            SELECT id, timestamp, common_name, confidence
+            SELECT id, timestamp, common_name, confidence, extra
             FROM detections
             WHERE common_name = ?
             ORDER BY confidence DESC
@@ -449,7 +480,7 @@ class DatabaseManager:
             """
         else:  # default to 'recent'
             query = """
-            SELECT id, timestamp, common_name, confidence
+            SELECT id, timestamp, common_name, confidence, extra
             FROM detections
             WHERE common_name = ?
             ORDER BY timestamp DESC
@@ -467,6 +498,9 @@ class DatabaseManager:
         recordings = []
         for row in rows:
             record = dict(row)
+
+            # Parse extra JSON field
+            record['extra'] = self._parse_extra(record.get('extra'))
 
             # Generate standardized filenames using utility function
             filenames = build_detection_filenames(
@@ -815,7 +849,8 @@ class DatabaseManager:
             cutoff,
             sensitivity,
             overlap,
-            week
+            week,
+            extra
         FROM detections
         WHERE {where_clause}
         ORDER BY {sort} {order}
@@ -837,6 +872,9 @@ class DatabaseManager:
         detections = []
         for row in rows:
             detection = dict(row)
+
+            # Parse extra JSON field
+            detection['extra'] = self._parse_extra(detection.get('extra'))
 
             # Generate standardized filenames using utility function
             filenames = build_detection_filenames(
@@ -916,7 +954,8 @@ class DatabaseManager:
             cutoff,
             sensitivity,
             overlap,
-            week
+            week,
+            extra
         FROM detections
         WHERE {where_clause}
         ORDER BY timestamp DESC, id DESC
@@ -927,6 +966,7 @@ class DatabaseManager:
             cur.execute(query, params)
             rows = cur.fetchall()
 
+        # For export, keep extra as raw JSON string (not parsed)
         detections = [dict(row) for row in rows]
 
         logger.debug("Detections exported", extra={
@@ -962,7 +1002,8 @@ class DatabaseManager:
             cutoff,
             sensitivity,
             overlap,
-            week
+            week,
+            extra
         FROM detections
         WHERE id = ?
         """
@@ -973,6 +1014,7 @@ class DatabaseManager:
 
         if row:
             detection = dict(row)
+            detection['extra'] = self._parse_extra(detection.get('extra'))
             filenames = build_detection_filenames(
                 detection['common_name'],
                 detection['confidence'],
@@ -1016,3 +1058,99 @@ class DatabaseManager:
             return detection
 
         return None
+
+    # -------------------------------------------------------------------------
+    # Extra field helpers
+    # -------------------------------------------------------------------------
+
+    def _parse_extra(self, extra_raw):
+        """Parse the extra JSON field from a database value into a dict.
+
+        Args:
+            extra_raw: Raw value from database (string, None, or already dict)
+
+        Returns:
+            dict: Parsed JSON object, or empty dict if invalid/missing
+        """
+        if extra_raw is None:
+            return {}
+        if isinstance(extra_raw, dict):
+            return extra_raw
+        try:
+            return json.loads(extra_raw)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
+    def get_extra_field(self, detection_id, field_name, default=None):
+        """Get a specific field from a detection's extra JSON.
+
+        Args:
+            detection_id: The detection ID
+            field_name: Key to retrieve from extra JSON
+            default: Value to return if field doesn't exist
+
+        Returns:
+            The field value or default
+        """
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT extra FROM detections WHERE id = ?", (detection_id,))
+            row = cur.fetchone()
+            if row:
+                extra = self._parse_extra(row['extra'])
+                return extra.get(field_name, default)
+            return default
+
+    def update_extra_field(self, detection_id, field_name, value):
+        """Update a specific field in a detection's extra JSON.
+
+        Args:
+            detection_id: The detection ID
+            field_name: Key to update in extra JSON
+            value: Value to set
+
+        Returns:
+            bool: True if updated, False if detection not found
+        """
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+
+            # Get current extra
+            cur.execute("SELECT extra FROM detections WHERE id = ?", (detection_id,))
+            row = cur.fetchone()
+
+            if not row:
+                return False
+
+            # Parse, update, and save
+            extra = self._parse_extra(row['extra'])
+            extra[field_name] = value
+
+            cur.execute(
+                "UPDATE detections SET extra = ? WHERE id = ?",
+                (json.dumps(extra), detection_id)
+            )
+            conn.commit()
+            return True
+
+    def set_extra(self, detection_id, extra_dict):
+        """Replace the entire extra JSON for a detection.
+
+        Args:
+            detection_id: The detection ID
+            extra_dict: Dict to set as extra (replaces existing)
+
+        Returns:
+            bool: True if updated, False if detection not found
+        """
+        if not isinstance(extra_dict, dict):
+            raise ValueError("extra_dict must be a dictionary")
+
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE detections SET extra = ? WHERE id = ?",
+                (json.dumps(extra_dict), detection_id)
+            )
+            conn.commit()
+            return cur.rowcount > 0

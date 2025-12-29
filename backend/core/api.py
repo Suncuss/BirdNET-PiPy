@@ -466,11 +466,16 @@ def export_detections_csv():
     # Write header
     writer.writerow([
         'id', 'timestamp', 'group_timestamp', 'scientific_name', 'common_name',
-        'confidence', 'latitude', 'longitude', 'cutoff', 'sensitivity', 'overlap', 'week'
+        'confidence', 'latitude', 'longitude', 'cutoff', 'sensitivity', 'overlap', 'week', 'extra'
     ])
 
     # Write data rows
     for detection in detections:
+        # Handle extra field - ensure NULL/None becomes '{}'
+        extra_value = detection.get('extra')
+        if extra_value is None:
+            extra_value = '{}'
+
         writer.writerow([
             detection.get('id', ''),
             detection.get('timestamp', ''),
@@ -483,7 +488,8 @@ def export_detections_csv():
             detection.get('cutoff', ''),
             detection.get('sensitivity', ''),
             detection.get('overlap', ''),
-            detection.get('week', '')
+            detection.get('week', ''),
+            extra_value
         ])
 
     # Generate filename with timestamp

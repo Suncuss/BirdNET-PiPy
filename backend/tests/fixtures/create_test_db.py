@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS detections (
     cutoff DECIMAL(4,3) CHECK(cutoff > 0 AND cutoff <= 1),
     sensitivity DECIMAL(4,3) CHECK(sensitivity > 0),
     overlap DECIMAL(4,3) CHECK(overlap >= 0 AND overlap <= 1),
-    week INT GENERATED ALWAYS AS (strftime('%W', timestamp)) STORED
+    week INT GENERATED ALWAYS AS (strftime('%W', timestamp)) STORED,
+    extra TEXT DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS idx_detections_timestamp ON detections(timestamp DESC);
@@ -112,11 +113,11 @@ def create_test_database():
     cursor.executemany("""
         INSERT INTO detections (
             timestamp, group_timestamp, scientific_name, common_name,
-            confidence, latitude, longitude, cutoff, sensitivity, overlap
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, [(d['timestamp'], d['group_timestamp'], d['scientific_name'], 
+            confidence, latitude, longitude, cutoff, sensitivity, overlap, extra
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, [(d['timestamp'], d['group_timestamp'], d['scientific_name'],
            d['common_name'], d['confidence'], d['latitude'], d['longitude'],
-           d['cutoff'], d['sensitivity'], d['overlap']) for d in detections])
+           d['cutoff'], d['sensitivity'], d['overlap'], '{}') for d in detections])
     
     conn.commit()
     

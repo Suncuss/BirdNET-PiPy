@@ -152,7 +152,8 @@ CREATE TABLE IF NOT EXISTS detections (
     cutoff DECIMAL(4,3) CHECK(cutoff > 0 AND cutoff <= 1),
     sensitivity DECIMAL(4,3) CHECK(sensitivity > 0),
     overlap DECIMAL(4,3) CHECK(overlap >= 0 AND overlap <= 1),
-    week INT GENERATED ALWAYS AS (strftime('%W', timestamp)) STORED
+    week INT GENERATED ALWAYS AS (strftime('%W', timestamp)) STORED,
+    extra TEXT DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS idx_detections_timestamp ON detections(timestamp DESC);
