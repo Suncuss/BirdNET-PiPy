@@ -44,7 +44,7 @@ Licensed under **CC BY-NC-SA 4.0**.
 
 This project is built upon:
 
-- **[BirdNET-Lite](https://birdnet.cornell.edu/)** - BirdNET model from K. Lisa Yang Center for Conservation Bioacoustics, Cornell Lab of Ornithology, Cornell University
+- **[BirdNET](https://birdnet.cornell.edu/)** - Developed by the K. Lisa Yang Center for Conservation Bioacoustics at the Cornell Lab of Ornithology and Chemnitz University of Technology
 - **[BirdNET-Pi](https://github.com/mcguirepr89/BirdNET-Pi)** - Original Raspberry Pi implementation by Patrick McGuire
 
 BirdNET-PiPy extends these projects with a modern Vue.js frontend, containerized architecture, and enhanced user interface.
