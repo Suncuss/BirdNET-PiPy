@@ -841,7 +841,9 @@ show_completion_message() {
 # Reboot system after installation
 prompt_reboot() {
     echo ""
-    print_warning "A reboot is required to ensure all changes take effect:"
+    print_status "Installation successful!"
+    echo ""
+    print_info "The system will now reboot to apply:"
     print_info "  - Docker group membership"
     print_info "  - PulseAudio configuration"
     print_info "  - Swap file activation"
