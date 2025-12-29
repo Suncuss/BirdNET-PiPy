@@ -31,6 +31,7 @@ Once installed, access the dashboard from any device on the same network:
 
 - **[Installation Guide](docs/INSTALLATION.md):** Detailed hardware requirements and setup instructions.
 - **[Deployment & Administration](deployment/README.md):** Service management, audio architecture, and system internals.
+- **[Privacy and Data Handling](docs/PRIVACY.md):** How your audio and data are processed locally on your device.
 
 ## Architecture
 
