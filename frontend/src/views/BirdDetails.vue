@@ -131,7 +131,7 @@
           <button v-for="page in totalPages" :key="page"
             @click="currentPage = page"
             :class="[
-              'px-3 py-1 rounded-md font-medium transition-colors',
+              'w-10 py-1 rounded-md font-medium transition-colors text-center',
               page === currentPage
                 ? 'bg-green-600 text-white'
                 : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
