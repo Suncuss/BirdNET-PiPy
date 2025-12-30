@@ -24,9 +24,6 @@ Once installed, access the dashboard from any device on the same network:
 - **Using hostname:** `http://<hostname>.local` (e.g., `http://raspberrypi.local`)
 - **Using IP address:** `http://<ip-address>` (e.g., `http://192.168.1.100`)
 
-> **Tip:** Find your Pi's IP with `hostname -I` or check your router's device list.
-
-
 ## Documentation
 
 - **[Installation Guide](docs/INSTALLATION.md):** Detailed hardware requirements and setup instructions.
