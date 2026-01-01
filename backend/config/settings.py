@@ -97,6 +97,7 @@ PULSEAUDIO_SOURCE = user_settings['audio'].get('pulseaudio_source', 'default')
 MODEL_PATH = f'{BASE_DIR}/birdnet_service/models/BirdNET_GLOBAL_6K_V2.4_Model_FP32.tflite'
 META_MODEL_PATH = f'{BASE_DIR}/birdnet_service/models/BirdNET_GLOBAL_6K_V2.4_MData_Model_FP16.tflite'
 LABELS_PATH = f'{BASE_DIR}/birdnet_service/models/labels.txt'
+EBIRD_CODES_PATH = f'{BASE_DIR}/birdnet_service/models/ebird_codes.json'
 
 # Geolocation configuration - from user settings
 LAT = user_settings['location']['latitude']

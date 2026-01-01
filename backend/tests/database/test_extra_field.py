@@ -231,3 +231,58 @@ class TestParseExtra:
         input_dict = {'already': 'parsed'}
         result = test_db_manager._parse_extra(input_dict)
         assert result == input_dict
+
+
+class TestEbirdCodeInExtra:
+    """Test eBird code storage in the extra field."""
+
+    def test_ebird_code_saved_to_database(self, test_db_manager, sample_detection):
+        """Test that ebird_code is persisted in database extra field."""
+        sample_detection['extra'] = {'ebird_code': 'amerob'}
+        detection_id = test_db_manager.insert_detection(sample_detection)
+
+        result = test_db_manager.get_detection_by_id(detection_id)
+        assert result['extra']['ebird_code'] == 'amerob'
+
+    def test_null_ebird_code_saved(self, test_db_manager, sample_detection):
+        """Test that null ebird_code is persisted correctly."""
+        sample_detection['extra'] = {'ebird_code': None}
+        detection_id = test_db_manager.insert_detection(sample_detection)
+
+        result = test_db_manager.get_detection_by_id(detection_id)
+        assert result['extra']['ebird_code'] is None
+
+    def test_ebird_code_with_other_extra_data(self, test_db_manager, sample_detection):
+        """Test ebird_code alongside other extra data."""
+        sample_detection['extra'] = {
+            'ebird_code': 'norcar',
+            'notes': 'Beautiful song',
+            'quality': 'excellent'
+        }
+        detection_id = test_db_manager.insert_detection(sample_detection)
+
+        result = test_db_manager.get_detection_by_id(detection_id)
+        assert result['extra']['ebird_code'] == 'norcar'
+        assert result['extra']['notes'] == 'Beautiful song'
+        assert result['extra']['quality'] == 'excellent'
+
+    def test_ebird_code_in_query_results(self, test_db_manager, sample_detection):
+        """Test that ebird_code is included in various query results."""
+        sample_detection['extra'] = {'ebird_code': 'blujay'}
+        test_db_manager.insert_detection(sample_detection)
+
+        # Test get_latest_detections
+        results = test_db_manager.get_latest_detections(limit=10)
+        assert len(results) == 1
+        assert results[0]['extra']['ebird_code'] == 'blujay'
+
+    def test_update_ebird_code(self, test_db_manager, sample_detection):
+        """Test updating ebird_code via update_extra_field."""
+        sample_detection['extra'] = {'ebird_code': 'amerob'}
+        detection_id = test_db_manager.insert_detection(sample_detection)
+
+        # Update the ebird_code
+        test_db_manager.update_extra_field(detection_id, 'ebird_code', 'amecro')
+
+        result = test_db_manager.get_detection_by_id(detection_id)
+        assert result['extra']['ebird_code'] == 'amecro'

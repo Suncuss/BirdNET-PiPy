@@ -26,7 +26,8 @@ logger = get_logger(__name__)
 model_config = {
     "model_path": settings.MODEL_PATH,
     "meta_model_path": settings.META_MODEL_PATH,
-    "labels_path": settings.LABELS_PATH
+    "labels_path": settings.LABELS_PATH,
+    "ebird_codes_path": settings.EBIRD_CODES_PATH
 }
 
 logger.info("Loading BirdNet models", extra={
@@ -39,8 +40,10 @@ try:
     model = model_loader.load_model()
     meta_model = model_loader.load_meta_model()
     labels = model_loader.load_labels()
+    ebird_codes = model_loader.load_ebird_codes()
     logger.info("Models loaded successfully", extra={
-        'num_species': len(labels)
+        'num_species': len(labels),
+        'num_ebird_codes': len(ebird_codes)
     })
 except Exception as e:
     logger.error("Failed to load models", exc_info=True)
@@ -291,6 +294,9 @@ def build_detection_result(species, chunk_index, total_chunks, step_seconds,
         "cutoff": float(cutoff),
         "sensitivity": float(sensitivity),
         "overlap": float(overlap),
+        "extra": {
+            "ebird_code": model_loader.get_ebird_code(scientific_name)
+        },
 
         # Additional fields not in the database schema
         "chunk_index": chunk_index,

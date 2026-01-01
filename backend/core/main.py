@@ -180,7 +180,8 @@ def save_detection_to_db(detection: Dict[str, Any]) -> None:
         'longitude': detection['longitude'],
         'cutoff': detection['cutoff'],
         'sensitivity': detection['sensitivity'],
-        'overlap': detection['overlap']
+        'overlap': detection['overlap'],
+        'extra': detection.get('extra', {})
     })
 
 

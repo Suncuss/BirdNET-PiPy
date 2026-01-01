@@ -21,7 +21,7 @@ def reset_imports():
     """Reset imports between tests to avoid state pollution."""
     yield
     # Clean up any cached imports
-    modules_to_remove = [m for m in sys.modules if m.startswith('core.') or m.startswith('config.')]
+    modules_to_remove = [m for m in sys.modules if m.startswith('core.') or m.startswith('config.') or m.startswith('birdnet_service.')]
     for module in modules_to_remove:
         sys.modules.pop(module, None)
 
