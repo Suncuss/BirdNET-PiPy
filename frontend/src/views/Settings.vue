@@ -373,13 +373,20 @@
                   {{ settings.updates?.channel === 'stable' ? 'Receive stable releases only' : 'Receive latest commits immediately' }}
                 </p>
               </div>
-              <select
-                v-model="settings.updates.channel"
-                class="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              >
-                <option value="stable">Stable</option>
-                <option value="latest">Latest</option>
-              </select>
+              <div class="flex bg-gray-200 rounded-lg p-0.5">
+                <button
+                  type="button"
+                  @click="settings.updates.channel = 'stable'"
+                  :class="settings.updates?.channel === 'stable' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-600 hover:text-gray-900'"
+                  class="px-3 py-1 text-sm font-medium rounded-md transition-all"
+                >Stable</button>
+                <button
+                  type="button"
+                  @click="settings.updates.channel = 'latest'"
+                  :class="settings.updates?.channel === 'latest' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-600 hover:text-gray-900'"
+                  class="px-3 py-1 text-sm font-medium rounded-md transition-all"
+                >Latest</button>
+              </div>
             </div>
           </div>
 
