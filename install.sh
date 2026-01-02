@@ -193,6 +193,7 @@ show_usage() {
     echo "Options:"
     echo "  --install-dir DIR    Installation directory (default: /home/\$USER/BirdNET-PiPy)"
     echo "  --update             Update existing installation (git sync + build + config)"
+    echo "  --tag TAG            Update to specific tag (e.g., v0.2.0) instead of latest"
     echo "  --help               Show this help message"
     echo ""
     echo "Examples:"
@@ -202,8 +203,11 @@ show_usage() {
     echo "  # Custom installation directory"
     echo "  sudo ./install.sh --install-dir /home/pi/BirdNET"
     echo ""
-    echo "  # Update existing installation"
+    echo "  # Update to latest commit on main"
     echo "  sudo ./install.sh --update"
+    echo ""
+    echo "  # Update to specific release tag"
+    echo "  sudo ./install.sh --update --tag v0.2.0"
 }
 
 # ============================================================================
@@ -719,6 +723,10 @@ restart_containers_on_failure() {
 
 # Perform system update (called when --update flag is used)
 # This handles: git sync, build, and system config updates
+#
+# Supports two modes:
+#   - Latest: sync to origin/main (default)
+#   - Tag: checkout specific tag (when UPDATE_TARGET_TAG is set)
 perform_update() {
     print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     print_status "BirdNET-PiPy System Update"
@@ -726,22 +734,47 @@ perform_update() {
 
     cd "$PROJECT_ROOT"
 
+    # Determine update mode
+    local update_target=""
+    if [ -n "$UPDATE_TARGET_TAG" ]; then
+        update_target="tag:$UPDATE_TARGET_TAG"
+        print_status "Update mode: Stable (tag $UPDATE_TARGET_TAG)"
+    else
+        update_target="branch:main"
+        print_status "Update mode: Latest (origin/main)"
+    fi
+
     # Step 1: Stop containers IMMEDIATELY so frontend can detect update in progress
     print_status "Stopping Docker containers..."
     docker compose down || true
 
-    # Step 2: Fetch latest and check if update needed
-    print_status "Fetching latest code from origin/main..."
-    if ! git fetch origin main 2>&1; then
+    # Step 2: Fetch from origin
+    print_status "Fetching from origin..."
+    if ! git fetch origin --tags 2>&1; then
         print_error "Git fetch failed - network issue or invalid remote"
         restart_containers_on_failure
         exit 1
     fi
 
     LOCAL=$(git rev-parse HEAD)
-    REMOTE=$(git rev-parse origin/main)
 
-    if [ "$LOCAL" = "$REMOTE" ]; then
+    # Step 3: Determine target commit based on update mode
+    if [ -n "$UPDATE_TARGET_TAG" ]; then
+        # Tag-based update (stable channel)
+        if ! git rev-parse "refs/tags/$UPDATE_TARGET_TAG" >/dev/null 2>&1; then
+            print_error "Tag $UPDATE_TARGET_TAG not found"
+            restart_containers_on_failure
+            exit 1
+        fi
+        TARGET=$(git rev-parse "refs/tags/$UPDATE_TARGET_TAG")
+        TARGET_DESC="$UPDATE_TARGET_TAG"
+    else
+        # Branch-based update (latest channel)
+        TARGET=$(git rev-parse origin/main)
+        TARGET_DESC="origin/main"
+    fi
+
+    if [ "$LOCAL" = "$TARGET" ]; then
         print_status "Already up to date, no code changes needed"
         print_status "Updating system configurations..."
         # Still update system configs even if code is current
@@ -756,29 +789,39 @@ perform_update() {
         exit 0
     fi
 
-    COMMITS_BEHIND=$(git rev-list --count HEAD..origin/main)
-    print_status "Update available: $COMMITS_BEHIND commits behind origin/main"
+    # Calculate commits difference
+    COMMITS_DIFF=$(git rev-list --count HEAD..$TARGET 2>/dev/null || echo "unknown")
+    print_status "Update available: $COMMITS_DIFF commits to $TARGET_DESC"
 
-    # Step 3: Check for local modifications and warn
+    # Step 4: Check for local modifications and warn
     if ! git diff --quiet HEAD 2>/dev/null || ! git diff --cached --quiet HEAD 2>/dev/null; then
         print_warning "Local modifications detected - these will be discarded:"
         git status --short 2>/dev/null | head -10
         print_warning "Note: The install directory is not intended for local customizations"
     fi
 
-    # Step 4: Sync to latest code (reset to origin/main)
-    print_status "Syncing to origin/main..."
-    if ! git reset --hard origin/main 2>&1; then
-        print_error "Git reset failed!"
-        restart_containers_on_failure
-        exit 1
+    # Step 5: Sync to target (checkout tag or reset to branch)
+    if [ -n "$UPDATE_TARGET_TAG" ]; then
+        print_status "Checking out tag $UPDATE_TARGET_TAG..."
+        if ! git checkout "$UPDATE_TARGET_TAG" 2>&1; then
+            print_error "Git checkout failed!"
+            restart_containers_on_failure
+            exit 1
+        fi
+    else
+        print_status "Syncing to origin/main..."
+        if ! git reset --hard origin/main 2>&1; then
+            print_error "Git reset failed!"
+            restart_containers_on_failure
+            exit 1
+        fi
     fi
 
     # Fix ownership after git operations
     get_actual_uid_gid
     chown -R $ACTUAL_USER:$ACTUAL_USER "$PROJECT_ROOT"
 
-    # Step 5: Build new images (as actual user)
+    # Step 6: Build new images (as actual user)
     print_status "Building application..."
     if ! build_application; then
         print_error "Build failed!"
@@ -786,16 +829,16 @@ perform_update() {
         exit 1
     fi
 
-    # Step 6: Update system configurations (root operations)
+    # Step 7: Update system configurations (root operations)
     print_status "Updating system configurations..."
     configure_pulseaudio
     create_service_file
     install_service
     setup_sudoers
 
-    # Step 7: Success - exit for systemd restart
+    # Step 8: Success - exit for systemd restart
     print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    print_status "Update complete! Applied $COMMITS_BEHIND commits from origin/main"
+    print_status "Update complete! Now at $TARGET_DESC"
     print_status "Exiting to restart service with updated code..."
     print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
@@ -975,6 +1018,10 @@ main() {
             --update)
                 UPDATE_MODE=true
                 shift
+                ;;
+            --tag)
+                UPDATE_TARGET_TAG="$2"
+                shift 2
                 ;;
             --help)
                 show_usage

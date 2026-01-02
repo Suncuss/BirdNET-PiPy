@@ -364,13 +364,42 @@
             </div>
           </div>
 
+          <!-- Update Channel Setting -->
+          <div class="mb-4 p-3 bg-gray-50 rounded-lg">
+            <div class="flex items-center justify-between">
+              <div>
+                <label class="text-sm font-medium text-gray-700">Update Channel</label>
+                <p class="text-xs text-gray-500 mt-0.5">
+                  {{ settings.updates?.channel === 'stable' ? 'Receive stable releases only' : 'Receive latest commits immediately' }}
+                </p>
+              </div>
+              <select
+                v-model="settings.updates.channel"
+                class="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              >
+                <option value="stable">Stable</option>
+                <option value="latest">Latest</option>
+              </select>
+            </div>
+          </div>
+
           <!-- Update Available -->
           <div v-if="systemUpdate.updateAvailable.value && systemUpdate.updateInfo.value" class="mb-3 p-3 bg-blue-50 rounded-lg">
             <div class="flex items-center justify-between">
               <div>
-                <p class="text-sm font-medium text-blue-800">Update available</p>
+                <p class="text-sm font-medium text-blue-800">
+                  Update available
+                  <span v-if="systemUpdate.updateInfo.value.latest_tag" class="ml-1 font-mono">
+                    {{ systemUpdate.updateInfo.value.latest_tag }}
+                  </span>
+                </p>
                 <p class="text-xs text-blue-600">
-                  {{ systemUpdate.updateInfo.value.fresh_sync ? 'Major version' : `${systemUpdate.updateInfo.value.commits_behind} new commits` }}
+                  <template v-if="systemUpdate.updateInfo.value.latest_tag">
+                    New release available
+                  </template>
+                  <template v-else>
+                    {{ systemUpdate.updateInfo.value.fresh_sync ? 'Major version' : `${systemUpdate.updateInfo.value.commits_behind} new commits` }}
+                  </template>
                 </p>
               </div>
               <button
@@ -680,6 +709,9 @@ export default {
         min_freq_khz: 0,
         max_dbfs: 0,
         min_dbfs: -120
+      },
+      updates: {
+        channel: 'stable'
       }
     })
 

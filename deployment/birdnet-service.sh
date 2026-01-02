@@ -247,13 +247,34 @@ restart_containers() {
 
 # Function to perform system update
 # Delegates to install.sh --update which handles:
-# - Git sync (fetch + reset)
+# - Git sync (fetch + reset for latest, checkout for tag)
 # - Docker image builds
 # - System config updates (PulseAudio, systemd, sudoers)
+#
+# Flag file formats:
+#   "update-requested" -> update to latest commit on main
+#   "update-requested:tag:v0.2.0" -> update to specific tag
 perform_system_update() {
     log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     log_info "System update requested, delegating to install.sh..."
     log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    # Read flag content to determine update type
+    local flag_content=""
+    local update_args="--update"
+
+    if [ -f "$UPDATE_FLAG_FILE" ]; then
+        flag_content=$(cat "$UPDATE_FLAG_FILE")
+
+        # Check if this is a tag-based update
+        if [[ "$flag_content" == update-requested:tag:* ]]; then
+            local target_tag="${flag_content#update-requested:tag:}"
+            log_info "Tag-based update requested: $target_tag"
+            update_args="--update --tag $target_tag"
+        else
+            log_info "Latest channel update requested (HEAD of main)"
+        fi
+    fi
 
     # Remove update flag before calling install.sh
     # (install.sh handles its own exit/restart flow)
@@ -262,7 +283,7 @@ perform_system_update() {
     # Delegate to install.sh --update (runs as root via sudo)
     # This handles: git sync, build, system configs, exit for restart
     local exit_code=0
-    sudo "$PROJECT_ROOT/install.sh" --update || exit_code=$?
+    sudo "$PROJECT_ROOT/install.sh" $update_args || exit_code=$?
 
     if [ $exit_code -eq 0 ]; then
         # install.sh exits with 0 after successful update

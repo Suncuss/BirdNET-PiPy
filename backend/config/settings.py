@@ -34,6 +34,9 @@ DEFAULT_SETTINGS = {
         "target_percent": 80,  # Free space until usage drops to this
         "keep_per_species": 60,  # Keep top N recordings per species by confidence
         "check_interval_minutes": 30  # How often to check disk usage
+    },
+    "updates": {
+        "channel": "stable"  # "stable" = latest tag, "latest" = HEAD of main
     }
 }
 
