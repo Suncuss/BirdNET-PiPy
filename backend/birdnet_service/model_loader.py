@@ -10,6 +10,10 @@ logger = logging.getLogger(__name__)
 
 
 class ModelLoader:
+    # Model identification
+    MODEL_NAME = "birdnet"
+    MODEL_VERSION = "2.4"
+
     def __init__(self, model_path, meta_model_path, labels_path, ebird_codes_path=None):
         self.model_path = model_path
         self.meta_model_path = meta_model_path

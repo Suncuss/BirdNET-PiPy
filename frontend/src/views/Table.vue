@@ -221,6 +221,7 @@
                   :is-playing="currentPlayingId === detection.id"
                   @toggle-play="togglePlayAudio"
                   @spectrogram="showSpectrogram"
+                  @show-info="showDetectionInfo"
                   @delete="confirmDelete"
                 />
               </div>
@@ -301,6 +302,7 @@
 	                    container-class="justify-end w-full"
 	                    @toggle-play="togglePlayAudio"
 	                    @spectrogram="showSpectrogram"
+	                    @show-info="showDetectionInfo"
 	                    @delete="confirmDelete"
 	                  />
 	                </td>
@@ -379,6 +381,13 @@
       @close="isSpectrogramModalVisible = false"
     />
 
+    <!-- Detection Info Modal -->
+    <DetectionInfoModal
+      :is-visible="isInfoModalVisible"
+      :detection="detectionForInfo"
+      @close="isInfoModalVisible = false"
+    />
+
     <!-- Delete Confirmation Modal -->
     <Teleport to="body">
       <div
@@ -424,16 +433,17 @@
 	<script setup>
 	import { ref, onMounted, onUnmounted, computed } from 'vue'
 	import { library } from '@fortawesome/fontawesome-svg-core'
-	import { faPlay, faPause, faCircleInfo, faTrashAlt } from '@fortawesome/free-solid-svg-icons'
+	import { faPlay, faPause, faCircleInfo, faTrashAlt, faDatabase } from '@fortawesome/free-solid-svg-icons'
 	
 	import api from '@/services/api'
 	import { getAudioUrl, getSpectrogramUrl } from '@/services/media'
 	import { useTableData } from '@/composables/useTableData'
 	import DetectionActions from '@/components/DetectionActions.vue'
 	import SpectrogramModal from '@/components/SpectrogramModal.vue'
+import DetectionInfoModal from '@/components/DetectionInfoModal.vue'
 
 // --- Icons Setup ---
-library.add(faPlay, faPause, faCircleInfo, faTrashAlt)
+library.add(faPlay, faPause, faCircleInfo, faTrashAlt, faDatabase)
 
 	// --- Constants ---
 	const SORT_OPTIONS = [
@@ -510,6 +520,8 @@ const currentAudioElement = ref(null)
 // Modals
 const isSpectrogramModalVisible = ref(false)
 const currentSpectrogramUrl = ref('')
+const isInfoModalVisible = ref(false)
+const detectionForInfo = ref(null)
 const showDeleteModal = ref(false)
 const detectionToDelete = ref(null)
 const isDeleting = ref(false)
@@ -657,6 +669,11 @@ const handleClearFilters = () => {
 	  currentSpectrogramUrl.value = getSpectrogramUrl(detection.spectrogram_filename)
 	  isSpectrogramModalVisible.value = true
 	}
+
+const showDetectionInfo = (detection) => {
+  detectionForInfo.value = detection
+  isInfoModalVisible.value = true
+}
 
 // --- Delete Logic ---
 

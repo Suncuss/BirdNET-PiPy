@@ -296,8 +296,8 @@ def build_detection_result(species, chunk_index, total_chunks, step_seconds,
         "overlap": float(overlap),
         "extra": {
             "ebird_code": model_loader.get_ebird_code(scientific_name),
-            "model": settings.MODEL_NAME,
-            "model_version": settings.MODEL_VERSION
+            "model": ModelLoader.MODEL_NAME,
+            "model_version": ModelLoader.MODEL_VERSION
         },
 
         # Additional fields not in the database schema

@@ -93,10 +93,6 @@ PULSEAUDIO_SOURCE = user_settings['audio'].get('pulseaudio_source', 'default')
 
 
 # Birdnet configuration
-# Model identification
-MODEL_NAME = "birdnet"
-MODEL_VERSION = "2.4"
-
 # Model configuration (always in Docker)
 MODEL_PATH = f'{BASE_DIR}/birdnet_service/models/BirdNET_GLOBAL_6K_V2.4_Model_FP32.tflite'
 META_MODEL_PATH = f'{BASE_DIR}/birdnet_service/models/BirdNET_GLOBAL_6K_V2.4_MData_Model_FP16.tflite'
