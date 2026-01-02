@@ -1377,15 +1377,18 @@ def trigger_system_update():
 
         current_branch = version_info.get('branch', 'main')
 
-        # Verify not on detached HEAD (branch would be "HEAD" in that case)
-        if current_branch == 'HEAD':
-            return jsonify({
-                'error': 'Cannot update: repository in detached HEAD state'
-            }), 400
-
         # Get update channel from settings
         settings = load_user_settings()
         channel = settings.get('updates', {}).get('channel', 'stable')
+
+        # Verify not on detached HEAD for "latest" channel only
+        # Stable channel uses git checkout <tag> which always results in detached HEAD
+        # Latest channel needs a branch to pull from
+        if current_branch == 'HEAD' and channel == 'latest':
+            return jsonify({
+                'error': 'Cannot update: repository in detached HEAD state. '
+                         'Switch to "Stable" channel or manually checkout main branch.'
+            }), 400
 
         # For stable channel, get the target tag
         target_tag = None

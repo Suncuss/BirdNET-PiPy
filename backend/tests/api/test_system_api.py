@@ -141,16 +141,48 @@ class TestSystemAPI:
             assert data['estimated_downtime'] == '2-5 minutes'
             mock_flag.assert_called_once_with('update-requested')
 
-    def test_trigger_update_detached_head(self, api_client):
-        """Test POST /api/system/update rejects detached HEAD state"""
-        with patch('core.api.load_version_info') as mock_load:
+    def test_trigger_update_detached_head_latest_channel(self, api_client):
+        """Test POST /api/system/update rejects detached HEAD for latest channel.
+
+        Latest channel needs a branch to pull from, so detached HEAD is an error.
+        """
+        with patch('core.api.load_version_info') as mock_load, \
+             patch('core.api.load_user_settings') as mock_settings:
             mock_load.return_value = {**self.SAMPLE_VERSION_INFO, 'branch': 'HEAD'}
+            mock_settings.return_value = {'updates': {'channel': 'latest'}}
 
             response = api_client.post('/api/system/update')
             assert response.status_code == 400
             data = response.get_json()
             assert 'error' in data
             assert 'detached HEAD state' in data['error']
+
+    def test_trigger_update_detached_head_stable_channel(self, api_client):
+        """Test POST /api/system/update allows detached HEAD for stable channel.
+
+        Stable channel uses git checkout <tag> which always results in detached HEAD.
+        This is expected and should not block future tag-based updates.
+        """
+        with patch('core.api.load_version_info') as mock_load, \
+             patch('core.api.load_user_settings') as mock_settings, \
+             patch('core.api.get_latest_tag') as mock_tag, \
+             patch('core.api.write_flag') as mock_flag:
+            mock_load.return_value = {**self.SAMPLE_VERSION_INFO, 'branch': 'HEAD'}
+            mock_settings.return_value = {'updates': {'channel': 'stable'}}
+            mock_tag.return_value = ({
+                'name': 'v0.3.0',
+                'commit_sha': 'def5678',
+                'commit_date': '2025-12-15T10:00:00Z',
+                'message': 'Release 0.3.0'
+            }, None)
+
+            response = api_client.post('/api/system/update')
+            assert response.status_code == 200
+            data = response.get_json()
+            assert data['status'] == 'update_triggered'
+            assert data['channel'] == 'stable'
+            assert data['target_tag'] == 'v0.3.0'
+            mock_flag.assert_called_once_with('update-requested:tag:v0.3.0')
 
     def test_trigger_update_missing_version(self, api_client):
         """Test POST /api/system/update handles missing version.json"""
