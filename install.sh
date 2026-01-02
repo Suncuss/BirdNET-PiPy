@@ -806,9 +806,11 @@ perform_update() {
     # - Latest: reset main to origin/main
 
     # Ensure we're on main branch (handles detached HEAD from previous tag updates)
-    if ! git checkout main 2>&1; then
+    # Use -f to force checkout even if untracked files would be overwritten
+    # (we already warned about local modifications above)
+    if ! git checkout -f main 2>&1; then
         print_warning "Could not checkout main, trying to create it..."
-        if ! git checkout -b main 2>&1; then
+        if ! git checkout -B main origin/main 2>&1; then
             print_error "Git checkout failed!"
             restart_containers_on_failure
             exit 1
