@@ -638,6 +638,45 @@ class TestUpdateChannelStable:
             assert data['channel'] == 'stable'
             assert 'error_message' in data
 
+    def test_update_check_stable_ahead_of_tag(self, api_client):
+        """Test stable channel shows no update when user is ahead of latest tag.
+
+        Scenario: User was on 'latest' channel, updated to a newer commit,
+        then switched to 'stable'. They're now ahead of the tag.
+        """
+        with patch('core.api.load_version_info') as mock_load, \
+             patch('core.api.load_user_settings') as mock_settings, \
+             patch('core.api.get_latest_tag') as mock_tag, \
+             patch('core.api.get_commits_comparison') as mock_compare:
+
+            # User is on commit 'newer123' which is ahead of the tag
+            mock_load.return_value = {**self.SAMPLE_VERSION_INFO, 'commit': 'newer123'}
+            mock_settings.return_value = {'updates': {'channel': 'stable'}}
+            mock_tag.return_value = ({
+                'name': 'v0.2.0',
+                'commit_sha': 'abc1234',
+                'commit_date': '2025-12-01T10:00:00Z',
+                'message': 'Release 0.2.0'
+            }, None)
+            # Comparison shows user is 3 commits ahead of the tag
+            # behind_by = how many commits tag is ahead of us (0)
+            # ahead_by = how many commits we are ahead of tag (mapped to commits_ahead)
+            mock_compare.return_value = ({
+                'ahead_by': 0,  # Tag is not ahead of us
+                'behind_by': 3,  # Tag is 3 commits behind us (we're ahead)
+                'status': 'behind',
+                'commits': []
+            }, None)
+
+            response = api_client.get('/api/system/update-check')
+            assert response.status_code == 200
+            data = response.get_json()
+            assert data['update_available'] is False
+            assert data['channel'] == 'stable'
+            assert data['latest_tag'] == 'v0.2.0'
+            assert data['commits_ahead'] == 3
+            assert 'ahead of' in data.get('message', '')
+
     def test_update_check_latest_channel(self, api_client):
         """Test latest channel uses original branch-based comparison"""
         with patch('core.api.load_version_info') as mock_load, \

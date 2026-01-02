@@ -1200,8 +1200,30 @@ def _check_stable_updates(current_commit, current_branch):
     comparison, comp_error = get_commits_comparison(current_commit, tag_commit)
 
     commits_behind = None
+    commits_ahead = None
     if comparison and not comp_error:
-        commits_behind = comparison.get('ahead_by', 0)
+        commits_behind = comparison.get('ahead_by', 0)  # Tag is ahead of us
+        commits_ahead = comparison.get('behind_by', 0)  # We are ahead of tag
+
+    # If user is ahead of the tag (on a newer commit), no update needed
+    if commits_ahead and commits_ahead > 0:
+        logger.info("Already ahead of latest tag", extra={
+            'current_commit': current_commit,
+            'tag': tag_info['name'],
+            'tag_commit': tag_commit,
+            'commits_ahead': commits_ahead
+        })
+        return jsonify({
+            'update_available': False,
+            'current_commit': current_commit,
+            'current_branch': current_branch,
+            'channel': 'stable',
+            'latest_tag': tag_info['name'],
+            'tag_commit': tag_commit,
+            'tag_date': tag_info.get('commit_date'),
+            'commits_ahead': commits_ahead,
+            'message': f'You are {commits_ahead} commits ahead of {tag_info["name"]}'
+        }), 200
 
     logger.info("Stable update available", extra={
         'current_commit': current_commit,
