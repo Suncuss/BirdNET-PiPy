@@ -286,3 +286,17 @@ class TestEbirdCodeInExtra:
 
         result = test_db_manager.get_detection_by_id(detection_id)
         assert result['extra']['ebird_code'] == 'amecro'
+
+    def test_model_info_saved_to_database(self, test_db_manager, sample_detection):
+        """Test that model info is persisted in database extra field."""
+        sample_detection['extra'] = {
+            'ebird_code': 'amerob',
+            'model': 'birdnet',
+            'model_version': '2.4'
+        }
+        detection_id = test_db_manager.insert_detection(sample_detection)
+
+        result = test_db_manager.get_detection_by_id(detection_id)
+        assert result['extra']['model'] == 'birdnet'
+        assert result['extra']['model_version'] == '2.4'
+        assert result['extra']['ebird_code'] == 'amerob'
