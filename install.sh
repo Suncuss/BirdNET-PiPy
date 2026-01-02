@@ -800,11 +800,25 @@ perform_update() {
         print_warning "Note: The install directory is not intended for local customizations"
     fi
 
-    # Step 5: Sync to target (checkout tag or reset to branch)
-    if [ -n "$UPDATE_TARGET_TAG" ]; then
-        print_status "Checking out tag $UPDATE_TARGET_TAG..."
-        if ! git checkout "$UPDATE_TARGET_TAG" 2>&1; then
+    # Step 5: Sync to target
+    # For both channels, we stay on main branch to allow smooth channel switching
+    # - Stable: reset main to tag commit
+    # - Latest: reset main to origin/main
+
+    # Ensure we're on main branch (handles detached HEAD from previous tag updates)
+    if ! git checkout main 2>&1; then
+        print_warning "Could not checkout main, trying to create it..."
+        if ! git checkout -b main 2>&1; then
             print_error "Git checkout failed!"
+            restart_containers_on_failure
+            exit 1
+        fi
+    fi
+
+    if [ -n "$UPDATE_TARGET_TAG" ]; then
+        print_status "Resetting to tag $UPDATE_TARGET_TAG..."
+        if ! git reset --hard "$UPDATE_TARGET_TAG" 2>&1; then
+            print_error "Git reset to tag failed!"
             restart_containers_on_failure
             exit 1
         fi
