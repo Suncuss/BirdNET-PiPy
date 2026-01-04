@@ -62,6 +62,7 @@ NC='\033[0m' # No Color
 # Command-line options
 CUSTOM_INSTALL_DIR=""
 UPDATE_MODE=false
+UPDATE_BRANCH=""  # Target branch for update (passed via --branch)
 
 # ============================================================================
 # Logging Functions
@@ -193,7 +194,7 @@ show_usage() {
     echo "Options:"
     echo "  --install-dir DIR    Installation directory (default: /home/\$USER/BirdNET-PiPy)"
     echo "  --update             Update existing installation (git sync + build + config)"
-    echo "  --tag TAG            Update to specific tag (e.g., v0.2.0) instead of latest"
+    echo "  --branch BRANCH      Target branch for update (default: current branch or main)"
     echo "  --help               Show this help message"
     echo ""
     echo "Examples:"
@@ -203,11 +204,11 @@ show_usage() {
     echo "  # Custom installation directory"
     echo "  sudo ./install.sh --install-dir /home/pi/BirdNET"
     echo ""
-    echo "  # Update to latest commit on main"
+    echo "  # Update to current branch"
     echo "  sudo ./install.sh --update"
     echo ""
-    echo "  # Update to specific release tag"
-    echo "  sudo ./install.sh --update --tag v0.2.0"
+    echo "  # Update to specific branch (e.g., staging for latest features)"
+    echo "  sudo ./install.sh --update --branch staging"
 }
 
 # ============================================================================
@@ -692,8 +693,9 @@ $ACTUAL_USER ALL=(ALL) NOPASSWD: $RM_BIN -f /run/pulse/native
 # Enable swap (optional, only if /swapfile-birdnet-pipy exists)
 $ACTUAL_USER ALL=(ALL) NOPASSWD: $SWAPON_BIN /swapfile-birdnet-pipy
 
-# System update via install.sh --update
+# System update via install.sh --update (with optional --branch)
 $ACTUAL_USER ALL=(ALL) NOPASSWD: $PROJECT_ROOT/install.sh --update
+$ACTUAL_USER ALL=(ALL) NOPASSWD: $PROJECT_ROOT/install.sh --update --branch *
 EOF
 
     # Sudoers files must be 440 and owned by root
@@ -723,10 +725,7 @@ restart_containers_on_failure() {
 
 # Perform system update (called when --update flag is used)
 # This handles: git sync, build, and system config updates
-#
-# Supports two modes:
-#   - Latest: sync to origin/main (default)
-#   - Tag: checkout specific tag (when UPDATE_TARGET_TAG is set)
+# Uses UPDATE_BRANCH if specified, otherwise current branch or main
 perform_update() {
     print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     print_status "BirdNET-PiPy System Update"
@@ -734,47 +733,30 @@ perform_update() {
 
     cd "$PROJECT_ROOT"
 
-    # Determine update mode
-    local update_target=""
-    if [ -n "$UPDATE_TARGET_TAG" ]; then
-        update_target="tag:$UPDATE_TARGET_TAG"
-        print_status "Update mode: Stable (tag $UPDATE_TARGET_TAG)"
-    else
-        update_target="branch:main"
-        print_status "Update mode: Latest (origin/main)"
+    # Determine target branch: explicit > current > main
+    local target_branch="${UPDATE_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
+    if [ "$target_branch" = "HEAD" ]; then
+        target_branch="main"
     fi
+    print_status "Target branch: $target_branch"
 
     # Step 1: Stop containers IMMEDIATELY so frontend can detect update in progress
     print_status "Stopping Docker containers..."
     docker compose down || true
 
-    # Step 2: Fetch from origin
-    print_status "Fetching from origin..."
-    if ! git fetch origin --tags 2>&1; then
-        print_error "Git fetch failed - network issue or invalid remote"
+    # Step 2: Fetch target branch with explicit refspec
+    # This ensures origin/$target_branch is created even in shallow/single-branch clones
+    print_status "Fetching latest code from origin/$target_branch..."
+    if ! git fetch origin "+refs/heads/$target_branch:refs/remotes/origin/$target_branch" 2>&1; then
+        print_error "Git fetch failed - branch '$target_branch' may not exist on remote"
         restart_containers_on_failure
         exit 1
     fi
 
     LOCAL=$(git rev-parse HEAD)
+    REMOTE=$(git rev-parse "origin/$target_branch")
 
-    # Step 3: Determine target commit based on update mode
-    if [ -n "$UPDATE_TARGET_TAG" ]; then
-        # Tag-based update (stable channel)
-        if ! git rev-parse "refs/tags/$UPDATE_TARGET_TAG" >/dev/null 2>&1; then
-            print_error "Tag $UPDATE_TARGET_TAG not found"
-            restart_containers_on_failure
-            exit 1
-        fi
-        TARGET=$(git rev-parse "refs/tags/$UPDATE_TARGET_TAG")
-        TARGET_DESC="$UPDATE_TARGET_TAG"
-    else
-        # Branch-based update (latest channel)
-        TARGET=$(git rev-parse origin/main)
-        TARGET_DESC="origin/main"
-    fi
-
-    if [ "$LOCAL" = "$TARGET" ]; then
+    if [ "$LOCAL" = "$REMOTE" ]; then
         print_status "Already up to date, no code changes needed"
         print_status "Updating system configurations..."
         # Still update system configs even if code is current
@@ -789,55 +771,47 @@ perform_update() {
         exit 0
     fi
 
-    # Calculate commits difference
-    COMMITS_DIFF=$(git rev-list --count HEAD..$TARGET 2>/dev/null || echo "unknown")
-    print_status "Update available: $COMMITS_DIFF commits to $TARGET_DESC"
+    COMMITS_BEHIND=$(git rev-list --count HEAD.."origin/$target_branch")
+    print_status "Update available: $COMMITS_BEHIND commits behind origin/$target_branch"
 
-    # Step 4: Check for local modifications and warn
+    # Step 3: Check for local modifications and warn
     if ! git diff --quiet HEAD 2>/dev/null || ! git diff --cached --quiet HEAD 2>/dev/null; then
         print_warning "Local modifications detected - these will be discarded:"
         git status --short 2>/dev/null | head -10
         print_warning "Note: The install directory is not intended for local customizations"
     fi
 
-    # Step 5: Sync to target
-    # For both channels, we stay on main branch to allow smooth channel switching
-    # - Stable: reset main to tag commit
-    # - Latest: reset main to origin/main
+    # Step 4: Sync to target branch (checkout + reset)
+    print_status "Syncing to origin/$target_branch..."
 
-    # Ensure we're on main branch (handles detached HEAD from previous tag updates)
-    # Use -f to force checkout even if untracked files would be overwritten
-    # (we already warned about local modifications above)
-    if ! git checkout -f main 2>&1; then
-        print_warning "Could not checkout main, trying to create it..."
-        if ! git checkout -B main origin/main 2>&1; then
+    # Check if local branch exists
+    if git show-ref --verify --quiet "refs/heads/$target_branch"; then
+        # Local branch exists - checkout and reset
+        if ! git checkout -f "$target_branch" 2>&1; then
             print_error "Git checkout failed!"
+            restart_containers_on_failure
+            exit 1
+        fi
+    else
+        # Local branch doesn't exist - create from remote tracking branch
+        if ! git checkout -b "$target_branch" "origin/$target_branch" 2>&1; then
+            print_error "Git checkout failed - could not create local branch!"
             restart_containers_on_failure
             exit 1
         fi
     fi
 
-    if [ -n "$UPDATE_TARGET_TAG" ]; then
-        print_status "Resetting to tag $UPDATE_TARGET_TAG..."
-        if ! git reset --hard "$UPDATE_TARGET_TAG" 2>&1; then
-            print_error "Git reset to tag failed!"
-            restart_containers_on_failure
-            exit 1
-        fi
-    else
-        print_status "Syncing to origin/main..."
-        if ! git reset --hard origin/main 2>&1; then
-            print_error "Git reset failed!"
-            restart_containers_on_failure
-            exit 1
-        fi
+    if ! git reset --hard "origin/$target_branch" 2>&1; then
+        print_error "Git reset failed!"
+        restart_containers_on_failure
+        exit 1
     fi
 
     # Fix ownership after git operations
     get_actual_uid_gid
     chown -R $ACTUAL_USER:$ACTUAL_USER "$PROJECT_ROOT"
 
-    # Step 6: Build new images (as actual user)
+    # Step 5: Build new images (as actual user)
     print_status "Building application..."
     if ! build_application; then
         print_error "Build failed!"
@@ -845,16 +819,16 @@ perform_update() {
         exit 1
     fi
 
-    # Step 7: Update system configurations (root operations)
+    # Step 6: Update system configurations (root operations)
     print_status "Updating system configurations..."
     configure_pulseaudio
     create_service_file
     install_service
     setup_sudoers
 
-    # Step 8: Success - exit for systemd restart
+    # Step 7: Success - exit for systemd restart
     print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    print_status "Update complete! Now at $TARGET_DESC"
+    print_status "Update complete! Applied $COMMITS_BEHIND commits from origin/$target_branch"
     print_status "Exiting to restart service with updated code..."
     print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
@@ -1035,8 +1009,8 @@ main() {
                 UPDATE_MODE=true
                 shift
                 ;;
-            --tag)
-                UPDATE_TARGET_TAG="$2"
+            --branch)
+                UPDATE_BRANCH="$2"
                 shift 2
                 ;;
             --help)

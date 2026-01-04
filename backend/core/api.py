@@ -749,15 +749,22 @@ def broadcast_detection_endpoint():
         }, exc_info=True)
         return jsonify({'error': str(e)}), 500
 
-def write_flag(flag_name):
-    """Write flag file to trigger host action"""
+def write_flag(flag_name, content=None):
+    """Write flag file to trigger host action.
+
+    Args:
+        flag_name: Name of the flag file (e.g., 'restart-backend', 'update-requested')
+        content: Optional content to write. If None, writes timestamp.
+                 For update-requested, content should be the target branch name.
+    """
     flag_dir = os.path.join(BASE_DIR, 'data', 'flags')
     os.makedirs(flag_dir, exist_ok=True)
     flag_file = os.path.join(flag_dir, flag_name)
     with open(flag_file, 'w') as f:
-        f.write(f"{datetime.now().isoformat()}\n")
+        f.write(content if content else datetime.now().isoformat())
     logger.debug("Flag file written", extra={
         'flag': flag_name,
+        'content': content,
         'path': flag_file
     })
 
@@ -834,44 +841,6 @@ def get_latest_remote_commit(branch='main'):
         'sha': data.get('sha', '')[:7],
         'message': data['commit']['message'].split('\n')[0],
         'date': data['commit']['committer']['date']
-    }, None
-
-def get_latest_tag():
-    """Get the latest tag from the repository.
-
-    Returns:
-        tuple: (tag_info dict, error string)
-        tag_info contains: name, commit_sha, commit_date, message
-    """
-    endpoint = "tags"
-    data, error = call_github_api(endpoint)
-
-    if error:
-        return None, error
-
-    if not data or len(data) == 0:
-        return None, "No tags found in repository"
-
-    # GitHub returns tags sorted by creation date (newest first)
-    latest_tag = data[0]
-    tag_name = latest_tag.get('name', '')
-    tag_commit_sha = latest_tag.get('commit', {}).get('sha', '')[:7]
-
-    # Get commit details for the tag
-    commit_endpoint = f"commits/{latest_tag.get('commit', {}).get('sha', '')}"
-    commit_data, commit_error = call_github_api(commit_endpoint)
-
-    commit_date = None
-    commit_message = None
-    if commit_data and not commit_error:
-        commit_date = commit_data.get('commit', {}).get('committer', {}).get('date')
-        commit_message = commit_data.get('commit', {}).get('message', '').split('\n')[0]
-
-    return {
-        'name': tag_name,
-        'commit_sha': tag_commit_sha,
-        'commit_date': commit_date,
-        'message': commit_message
     }, None
 
 def fetch_update_notes(branch='main'):
@@ -1003,6 +972,45 @@ def get_default_settings_endpoint():
         return jsonify({'error': str(e)}), 500
 
 
+@api.route('/api/settings/channel', methods=['PUT'])
+@log_api_request
+@require_auth
+def update_channel_setting():
+    """Update the update channel setting without triggering a restart.
+
+    The channel setting only affects update checks, not the running service,
+    so no restart is needed.
+    """
+    try:
+        data = request.json
+        if not data or 'channel' not in data:
+            return jsonify({'error': 'channel field required'}), 400
+
+        channel = data['channel']
+        if channel not in ['release', 'latest']:
+            return jsonify({'error': 'Invalid channel. Must be "release" or "latest"'}), 400
+
+        # Load current settings, update channel, save
+        current_settings = load_user_settings()
+        if 'updates' not in current_settings:
+            current_settings['updates'] = {}
+        current_settings['updates']['channel'] = channel
+        save_user_settings(current_settings)
+
+        logger.info("Update channel changed", extra={'channel': channel})
+
+        return jsonify({
+            'success': True,
+            'channel': channel
+        }), 200
+
+    except Exception as e:
+        logger.error("Failed to update channel setting", extra={
+            'error': str(e)
+        }, exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
 @api.route('/api/settings', methods=['PUT'])
 @log_api_request
 @require_auth
@@ -1113,15 +1121,34 @@ def get_system_version():
     except Exception as e:
         return jsonify({'error': f'Failed to get version info: {str(e)}'}), 500
 
+def get_channel_branch():
+    """Get the target branch based on update channel setting.
+
+    Returns:
+        tuple: (channel, branch) where channel is 'release' or 'latest'
+               and branch is 'main' or 'staging'
+    """
+    settings = load_user_settings()
+    channel = settings.get('updates', {}).get('channel', 'release')
+
+    # Normalize old "stable" setting and unknown values to "release" (safe default)
+    if channel not in ('release', 'latest'):
+        channel = 'release'
+
+    # Map channel to branch
+    branch = 'main' if channel == 'release' else 'staging'
+    return channel, branch
+
+
 @api.route('/api/system/update-check', methods=['GET'])
 @log_api_request
 @handle_api_errors
 def check_for_updates():
     """Check if updates are available using GitHub API.
 
-    Supports two update channels via user settings:
-    - "stable": Compare against latest tagged release
-    - "latest": Compare against HEAD of main branch
+    Compares current commit against the HEAD of the configured channel's branch:
+    - release channel: compares against main branch
+    - latest channel: compares against staging branch
     """
     try:
         # Load current version info
@@ -1135,223 +1162,125 @@ def check_for_updates():
         current_commit = version_info.get('commit', '')
         current_branch = version_info.get('branch', 'main')
 
+        # Get target branch based on channel setting
+        channel, target_branch = get_channel_branch()
+
+        logger.info("Update check initiated", extra={
+            'current_commit': current_commit,
+            'current_branch': current_branch,
+            'channel': channel,
+            'target_branch': target_branch
+        })
+
         if not current_commit or current_commit == 'unknown':
             return jsonify({
                 'error': 'Current commit hash not available in version.json'
             }), 500
 
-        # Get update channel from settings
-        settings = load_user_settings()
-        channel = settings.get('updates', {}).get('channel', 'stable')
+        # Get comparison from GitHub API
+        comparison, error = get_commits_comparison(current_commit, target_branch)
+        fresh_sync = False
 
-        logger.info("Update check initiated", extra={
-            'current_commit': current_commit,
-            'current_branch': current_branch,
-            'channel': channel
+        if error:
+            # Check if error indicates commit not found (repo history changed)
+            if 'No commit found' in error or '404' in error or '422' in error:
+                logger.info("Commit not found in remote - repo history may have changed", extra={
+                    'current_commit': current_commit,
+                    'error': error
+                })
+                # Fall back to comparing with latest remote commit
+                remote_info, remote_error = get_latest_remote_commit(target_branch)
+                if remote_error:
+                    logger.error("Failed to get remote commit", extra={'error': remote_error})
+                    return jsonify({'error': f'Failed to check for updates: {remote_error}'}), 500
+
+                remote_commit = remote_info['sha']
+                # If commits differ, update is available (fresh sync required)
+                update_available = current_commit[:7] != remote_commit[:7]
+                fresh_sync = update_available
+
+                logger.info("Fresh sync check result", extra={
+                    'current_commit': current_commit,
+                    'remote_commit': remote_commit,
+                    'update_available': update_available,
+                    'fresh_sync': fresh_sync
+                })
+
+                # Fetch update notes if update is available
+                update_note = None
+                if update_available:
+                    note_data = fetch_update_notes(target_branch)
+                    if should_show_update_note(current_commit, note_data):
+                        update_note = note_data.get('message')
+
+                return jsonify({
+                    'update_available': update_available,
+                    'current_commit': current_commit,
+                    'remote_commit': remote_commit,
+                    'commits_behind': None,  # Unknown for fresh sync
+                    'current_branch': current_branch,
+                    'target_branch': target_branch,
+                    'channel': channel,
+                    'preview_commits': [],  # No commit history available
+                    'fresh_sync': fresh_sync,
+                    'update_note': update_note
+                }), 200
+            else:
+                logger.error("GitHub API comparison failed", extra={'error': error})
+                return jsonify({'error': f'Failed to check for updates: {error}'}), 500
+
+        # Determine if update is available
+        # ahead_by: how many commits the target branch is ahead of current
+        # behind_by: how many commits the target branch is behind current (channel switch case)
+        commits_behind = comparison.get('ahead_by', 0)
+        status = comparison.get('status', 'unknown')
+
+        # Update is available if:
+        # 1. Target is ahead of us (normal update), OR
+        # 2. Commits are different (channel switch - target may be behind but we want to switch)
+        # Only 'identical' status means no update needed
+        update_available = status != 'identical'
+
+        logger.info("GitHub API comparison result", extra={
+            'comparison_status': status,
+            'ahead_by': comparison.get('ahead_by'),
+            'behind_by': comparison.get('behind_by'),
+            'commits_behind': commits_behind,
+            'update_available': update_available
         })
 
-        # Handle "stable" channel - compare against latest tag
-        if channel == 'stable':
-            return _check_stable_updates(current_commit, current_branch)
+        # Get latest remote commit info
+        remote_info, _ = get_latest_remote_commit(target_branch)
+        remote_commit = remote_info['sha'] if remote_info else comparison.get('target_commit', 'unknown')
 
-        # Handle "latest" channel - compare against HEAD of main
-        return _check_latest_updates(current_commit, current_branch)
+        if remote_info:
+            logger.info("Latest remote commit", extra={
+                'remote_commit': remote_commit,
+                'remote_message': remote_info.get('message', 'N/A')
+            })
+
+        # Fetch update notes if update is available
+        update_note = None
+        if update_available:
+            note_data = fetch_update_notes(target_branch)
+            if should_show_update_note(current_commit, note_data):
+                update_note = note_data.get('message')
+
+        return jsonify({
+            'update_available': update_available,
+            'current_commit': current_commit,
+            'remote_commit': remote_commit,
+            'commits_behind': commits_behind,
+            'current_branch': current_branch,
+            'target_branch': target_branch,
+            'channel': channel,
+            'preview_commits': comparison['commits'],
+            'fresh_sync': fresh_sync,
+            'update_note': update_note
+        }), 200
 
     except Exception as e:
         return jsonify({'error': f'Failed to check for updates: {str(e)}'}), 500
-
-
-def _check_stable_updates(current_commit, current_branch):
-    """Check for updates against the latest tagged release."""
-    tag_info, error = get_latest_tag()
-
-    if error:
-        logger.warning("Failed to get latest tag", extra={'error': error})
-        # Fall back to latest channel behavior if no tags
-        if "No tags found" in error:
-            return jsonify({
-                'update_available': False,
-                'current_commit': current_commit,
-                'current_branch': current_branch,
-                'channel': 'stable',
-                'error_message': 'No releases available yet'
-            }), 200
-        return jsonify({'error': f'Failed to check for updates: {error}'}), 500
-
-    tag_commit = tag_info['commit_sha']
-
-    # Check if current commit matches the tag commit
-    if current_commit[:7] == tag_commit[:7]:
-        logger.info("Already on latest tag", extra={
-            'current_commit': current_commit,
-            'tag': tag_info['name']
-        })
-        return jsonify({
-            'update_available': False,
-            'current_commit': current_commit,
-            'current_branch': current_branch,
-            'channel': 'stable',
-            'latest_tag': tag_info['name'],
-            'tag_commit': tag_commit,
-            'tag_date': tag_info.get('commit_date')
-        }), 200
-
-    # Compare current commit to tag commit
-    comparison, comp_error = get_commits_comparison(current_commit, tag_commit)
-
-    commits_behind = None
-    commits_ahead = None
-    if comparison and not comp_error:
-        commits_behind = comparison.get('ahead_by', 0)  # Tag is ahead of us
-        commits_ahead = comparison.get('behind_by', 0)  # We are ahead of tag
-
-    # If user is ahead of the tag (on a newer commit), no update needed
-    if commits_ahead and commits_ahead > 0:
-        logger.info("Already ahead of latest tag", extra={
-            'current_commit': current_commit,
-            'tag': tag_info['name'],
-            'tag_commit': tag_commit,
-            'commits_ahead': commits_ahead
-        })
-        return jsonify({
-            'update_available': False,
-            'current_commit': current_commit,
-            'current_branch': current_branch,
-            'channel': 'stable',
-            'latest_tag': tag_info['name'],
-            'tag_commit': tag_commit,
-            'tag_date': tag_info.get('commit_date'),
-            'commits_ahead': commits_ahead,
-            'message': f'You are {commits_ahead} commits ahead of {tag_info["name"]}'
-        }), 200
-
-    logger.info("Stable update available", extra={
-        'current_commit': current_commit,
-        'tag': tag_info['name'],
-        'tag_commit': tag_commit,
-        'commits_behind': commits_behind
-    })
-
-    # Fetch update notes
-    update_note = None
-    note_data = fetch_update_notes('main')
-    if should_show_update_note(current_commit, note_data):
-        update_note = note_data.get('message')
-
-    return jsonify({
-        'update_available': True,
-        'current_commit': current_commit,
-        'remote_commit': tag_commit,
-        'current_branch': current_branch,
-        'channel': 'stable',
-        'latest_tag': tag_info['name'],
-        'tag_commit': tag_commit,
-        'tag_date': tag_info.get('commit_date'),
-        'tag_message': tag_info.get('message'),
-        'commits_behind': commits_behind,
-        'preview_commits': comparison.get('commits', []) if comparison else [],
-        'fresh_sync': False,
-        'update_note': update_note
-    }), 200
-
-
-def _check_latest_updates(current_commit, current_branch):
-    """Check for updates against HEAD of main branch (original behavior)."""
-    target_branch = 'main'
-
-    # Get comparison from GitHub API
-    comparison, error = get_commits_comparison(current_commit, target_branch)
-    fresh_sync = False
-
-    if error:
-        # Check if error indicates commit not found (repo history changed)
-        if 'No commit found' in error or '404' in error or '422' in error:
-            logger.info("Commit not found in remote - repo history may have changed", extra={
-                'current_commit': current_commit,
-                'error': error
-            })
-            # Fall back to comparing with latest remote commit
-            remote_info, remote_error = get_latest_remote_commit(target_branch)
-            if remote_error:
-                logger.error("Failed to get remote commit", extra={'error': remote_error})
-                return jsonify({'error': f'Failed to check for updates: {remote_error}'}), 500
-
-            remote_commit = remote_info['sha']
-            # If commits differ, update is available (fresh sync required)
-            update_available = current_commit[:7] != remote_commit[:7]
-            fresh_sync = update_available
-
-            logger.info("Fresh sync check result", extra={
-                'current_commit': current_commit,
-                'remote_commit': remote_commit,
-                'update_available': update_available,
-                'fresh_sync': fresh_sync
-            })
-
-            # Fetch update notes if update is available
-            update_note = None
-            if update_available:
-                note_data = fetch_update_notes(target_branch)
-                if should_show_update_note(current_commit, note_data):
-                    update_note = note_data.get('message')
-
-            return jsonify({
-                'update_available': update_available,
-                'current_commit': current_commit,
-                'remote_commit': remote_commit,
-                'commits_behind': None,  # Unknown for fresh sync
-                'current_branch': current_branch,
-                'target_branch': target_branch,
-                'channel': 'latest',
-                'preview_commits': [],  # No commit history available
-                'fresh_sync': fresh_sync,
-                'update_note': update_note
-            }), 200
-        else:
-            logger.error("GitHub API comparison failed", extra={'error': error})
-            return jsonify({'error': f'Failed to check for updates: {error}'}), 500
-
-    # Use ahead_by: how many commits the remote is ahead of our local commit
-    commits_behind = comparison.get('ahead_by', 0)
-    update_available = commits_behind > 0
-
-    logger.info("GitHub API comparison result", extra={
-        'comparison_status': comparison.get('status'),
-        'ahead_by': comparison.get('ahead_by'),
-        'behind_by': comparison.get('behind_by'),  # Log for comparison
-        'commits_behind': commits_behind,
-        'update_available': update_available
-    })
-
-    # Get latest remote commit info
-    remote_info, _ = get_latest_remote_commit(target_branch)
-    remote_commit = remote_info['sha'] if remote_info else comparison.get('target_commit', 'unknown')
-
-    if remote_info:
-        logger.info("Latest remote commit", extra={
-            'remote_commit': remote_commit,
-            'remote_message': remote_info.get('message', 'N/A')
-        })
-
-    # Fetch update notes if update is available
-    update_note = None
-    if update_available:
-        note_data = fetch_update_notes(target_branch)
-        if should_show_update_note(current_commit, note_data):
-            update_note = note_data.get('message')
-
-    return jsonify({
-        'update_available': update_available,
-        'current_commit': current_commit,
-        'remote_commit': remote_commit,
-        'commits_behind': commits_behind,
-        'current_branch': current_branch,
-        'target_branch': target_branch,
-        'channel': 'latest',
-        'preview_commits': comparison['commits'],
-        'fresh_sync': fresh_sync,
-        'update_note': update_note
-    }), 200
 
 @api.route('/api/system/update', methods=['POST'])
 @require_auth
@@ -1360,14 +1289,16 @@ def _check_latest_updates(current_commit, current_branch):
 def trigger_system_update():
     """Trigger system update by writing flag file.
 
+    Writes the target branch name to the flag file so the service script
+    knows which branch to update to:
+    - release channel: writes 'main'
+    - latest channel: writes 'staging'
+
     Note: Update availability is already verified by frontend via /api/system/update-check
     before this endpoint is called. No need to re-check here.
-
-    For stable channel: writes "update-requested:tag:<tag_name>" to flag file
-    For latest channel: writes "update-requested" to flag file (original behavior)
     """
     try:
-        # Load current version info for validation and logging
+        # Load current version info for logging
         version_info = load_version_info()
 
         if version_info is None:
@@ -1375,44 +1306,16 @@ def trigger_system_update():
                 'error': 'Version information not available'
             }), 500
 
-        current_branch = version_info.get('branch', 'main')
+        # Get target branch based on channel setting
+        channel, target_branch = get_channel_branch()
 
-        # Get update channel from settings
-        settings = load_user_settings()
-        channel = settings.get('updates', {}).get('channel', 'stable')
-
-        # Verify not on detached HEAD for "latest" channel only
-        # Stable channel uses git checkout <tag> which always results in detached HEAD
-        # Latest channel needs a branch to pull from
-        if current_branch == 'HEAD' and channel == 'latest':
-            return jsonify({
-                'error': 'Cannot update: repository in detached HEAD state. '
-                         'Switch to "Stable" channel or manually checkout main branch.'
-            }), 400
-
-        # For stable channel, get the target tag
-        target_tag = None
-        if channel == 'stable':
-            tag_info, error = get_latest_tag()
-            if error:
-                return jsonify({
-                    'error': f'Failed to get latest release: {error}'
-                }), 500
-            target_tag = tag_info['name']
-
-        # Write update flag with appropriate content
-        if target_tag:
-            # Stable channel: include tag name for checkout
-            write_flag(f'update-requested:tag:{target_tag}')
-        else:
-            # Latest channel: service script will git pull main
-            write_flag('update-requested')
+        # Write update flag with target branch as content
+        write_flag('update-requested', target_branch)
 
         logger.info("System update triggered", extra={
             'current_commit': version_info.get('commit', 'unknown'),
-            'current_branch': current_branch,
             'channel': channel,
-            'target_tag': target_tag
+            'target_branch': target_branch
         })
 
         return jsonify({
@@ -1420,7 +1323,7 @@ def trigger_system_update():
             'message': 'System update initiated. Services will restart shortly.',
             'estimated_downtime': '2-5 minutes',
             'channel': channel,
-            'target_tag': target_tag
+            'target_branch': target_branch
         }), 200
 
     except Exception as e:

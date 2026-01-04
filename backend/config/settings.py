@@ -36,7 +36,7 @@ DEFAULT_SETTINGS = {
         "check_interval_minutes": 30  # How often to check disk usage
     },
     "updates": {
-        "channel": "stable"  # "stable" = latest tag, "latest" = HEAD of main
+        "channel": "release"  # "release" = main branch, "latest" = staging branch
     }
 }
 

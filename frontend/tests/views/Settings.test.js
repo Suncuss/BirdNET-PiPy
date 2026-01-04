@@ -88,9 +88,6 @@ const mockSettings = {
   general: {
     timezone: 'UTC',
     language: 'en'
-  },
-  updates: {
-    channel: 'stable'
   }
 }
 

@@ -364,49 +364,31 @@
             </div>
           </div>
 
-          <!-- Update Channel Setting -->
-          <div class="mb-4 p-3 bg-gray-50 rounded-lg">
-            <div class="flex items-center justify-between">
-              <div>
-                <label class="text-sm font-medium text-gray-700">Update Channel</label>
-                <p class="text-xs text-gray-500 mt-0.5">
-                  {{ settings.updates?.channel === 'stable' ? 'Receive stable releases only' : 'Receive latest commits immediately' }}
-                </p>
-              </div>
-              <div class="flex bg-gray-200 rounded-lg p-0.5">
-                <button
-                  type="button"
-                  @click="settings.updates.channel = 'stable'"
-                  :class="settings.updates?.channel === 'stable' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-600 hover:text-gray-900'"
-                  class="px-3 py-1 text-sm font-medium rounded-md transition-all"
-                >Stable</button>
-                <button
-                  type="button"
-                  @click="settings.updates.channel = 'latest'"
-                  :class="settings.updates?.channel === 'latest' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-600 hover:text-gray-900'"
-                  class="px-3 py-1 text-sm font-medium rounded-md transition-all"
-                >Latest</button>
-              </div>
+          <!-- Update Channel Toggle -->
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <label class="text-sm text-gray-600">Try Latest Features</label>
+              <p class="text-xs text-gray-400">Get newest features before stable release</p>
             </div>
+            <button
+              @click="toggleUpdateChannel"
+              :class="settings.updates?.channel === 'latest' ? 'bg-green-600' : 'bg-gray-200'"
+              class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+            >
+              <span
+                :class="settings.updates?.channel === 'latest' ? 'translate-x-6' : 'translate-x-1'"
+                class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"
+              />
+            </button>
           </div>
 
           <!-- Update Available -->
           <div v-if="systemUpdate.updateAvailable.value && systemUpdate.updateInfo.value" class="mb-3 p-3 bg-blue-50 rounded-lg">
             <div class="flex items-center justify-between">
               <div>
-                <p class="text-sm font-medium text-blue-800">
-                  Update available
-                  <span v-if="systemUpdate.updateInfo.value.latest_tag" class="ml-1 font-mono">
-                    {{ systemUpdate.updateInfo.value.latest_tag }}
-                  </span>
-                </p>
+                <p class="text-sm font-medium text-blue-800">Update available</p>
                 <p class="text-xs text-blue-600">
-                  <template v-if="systemUpdate.updateInfo.value.latest_tag">
-                    New release available
-                  </template>
-                  <template v-else>
-                    {{ systemUpdate.updateInfo.value.fresh_sync ? 'Major version' : `${systemUpdate.updateInfo.value.commits_behind} new commits` }}
-                  </template>
+                  {{ systemUpdate.updateInfo.value.fresh_sync ? 'Major version' : `${systemUpdate.updateInfo.value.commits_behind} new commits` }}
                 </p>
               </div>
               <button
@@ -718,7 +700,7 @@ export default {
         min_dbfs: -120
       },
       updates: {
-        channel: 'stable'
+        channel: 'release'
       }
     })
 
@@ -763,6 +745,14 @@ export default {
         const { data } = await api.get('/settings')
         settings.value = data
         recordingMode.value = settings.value.audio.recording_mode || 'pulseaudio'
+        // Normalize old "stable" channel to "release" for backward compatibility
+        if (settings.value.updates?.channel === 'stable') {
+          settings.value.updates.channel = 'release'
+        }
+        // Ensure updates object exists
+        if (!settings.value.updates) {
+          settings.value.updates = { channel: 'release' }
+        }
         if (saveStatus.value?.type === 'error') {
           saveStatus.value = null
         }
@@ -819,6 +809,25 @@ export default {
     const showStatus = (type, message) => {
       saveStatus.value = { type, message }
       setTimeout(() => { saveStatus.value = null }, 5000)
+    }
+
+    // Toggle update channel between release and latest (saves immediately, no restart needed)
+    const toggleUpdateChannel = async () => {
+      try {
+        // Toggle the channel
+        if (!settings.value.updates) {
+          settings.value.updates = { channel: 'release' }
+        }
+        const newChannel = settings.value.updates.channel === 'latest' ? 'release' : 'latest'
+
+        // Save immediately via dedicated endpoint (no restart needed)
+        await api.put('/settings/channel', { channel: newChannel })
+        settings.value.updates.channel = newChannel
+        showStatus('success', `Switched to ${newChannel === 'latest' ? 'latest' : 'release'} channel`)
+      } catch (error) {
+        console.error('Error saving channel setting:', error)
+        showStatus('error', 'Failed to save channel setting')
+      }
     }
 
     // Handle recording mode change - just update the mode, preserve all URLs
@@ -1042,6 +1051,7 @@ export default {
       exportCSV,
       saveSettings,
       resetToDefaults,
+      toggleUpdateChannel,
       onRecordingModeChange,
       confirmUpdate,
       systemUpdate,

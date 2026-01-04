@@ -39,12 +39,12 @@ class TestSystemAPI:
     def test_check_for_updates_available(self, api_client):
         """Test update check when updates are available"""
         with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.load_user_settings') as mock_settings, \
              patch('core.api.get_commits_comparison') as mock_compare, \
-             patch('core.api.get_latest_remote_commit') as mock_latest:
+             patch('core.api.get_latest_remote_commit') as mock_latest, \
+             patch('core.api.get_channel_branch') as mock_channel:
 
             mock_load.return_value = self.SAMPLE_VERSION_INFO
-            mock_settings.return_value = {'updates': {'channel': 'latest'}}
+            mock_channel.return_value = ('release', 'main')
             # Note: ahead_by indicates how many commits the remote is ahead of our local commit
             mock_compare.return_value = ({
                 'ahead_by': 5,
@@ -66,6 +66,7 @@ class TestSystemAPI:
             assert data['current_commit'] == '1a081f5'
             assert data['remote_commit'] == '2b192g6'
             assert data['target_branch'] == 'main'
+            assert data['channel'] == 'release'
             assert len(data['preview_commits']) == 2
             assert data['preview_commits'][0]['hash'] == '2b192g6'
             assert data['preview_commits'][0]['message'] == 'feat: add new feature'
@@ -73,12 +74,12 @@ class TestSystemAPI:
     def test_check_for_updates_up_to_date(self, api_client):
         """Test update check when already up to date"""
         with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.load_user_settings') as mock_settings, \
              patch('core.api.get_commits_comparison') as mock_compare, \
-             patch('core.api.get_latest_remote_commit') as mock_latest:
+             patch('core.api.get_latest_remote_commit') as mock_latest, \
+             patch('core.api.get_channel_branch') as mock_channel:
 
             mock_load.return_value = {**self.SAMPLE_VERSION_INFO, 'branch': 'main'}
-            mock_settings.return_value = {'updates': {'channel': 'latest'}}
+            mock_channel.return_value = ('release', 'main')
             mock_compare.return_value = ({
                 'ahead_by': 0,
                 'behind_by': 0,
@@ -94,15 +95,76 @@ class TestSystemAPI:
             assert data['update_available'] is False
             assert data['commits_behind'] == 0
             assert data['preview_commits'] == []
+            assert data['channel'] == 'release'
+
+    def test_check_for_updates_channel_switch_behind(self, api_client):
+        """Test update check when switching channels and target is behind current.
+
+        This happens when switching from latest (staging) back to release (main)
+        where main is behind staging. Should still show update available.
+        """
+        with patch('core.api.load_version_info') as mock_load, \
+             patch('core.api.get_commits_comparison') as mock_compare, \
+             patch('core.api.get_latest_remote_commit') as mock_latest, \
+             patch('core.api.get_channel_branch') as mock_channel:
+
+            mock_load.return_value = {**self.SAMPLE_VERSION_INFO, 'branch': 'staging'}
+            mock_channel.return_value = ('release', 'main')  # Switching to release
+            # status='behind' means target (main) is behind current (staging)
+            mock_compare.return_value = ({
+                'ahead_by': 0,
+                'behind_by': 5,
+                'status': 'behind',
+                'commits': [],
+                'target_commit': 'older123'
+            }, None)
+            mock_latest.return_value = ({'sha': 'older123', 'message': 'older commit', 'date': '2025-11-25T10:00:00Z'}, None)
+
+            response = api_client.get('/api/system/update-check')
+            assert response.status_code == 200
+            data = response.get_json()
+            # Should show update available even though target is "behind"
+            # because we're switching channels
+            assert data['update_available'] is True
+            assert data['channel'] == 'release'
+
+    def test_check_for_updates_channel_switch_diverged(self, api_client):
+        """Test update check when branches have diverged.
+
+        This can happen if both branches have independent commits.
+        Should show update available.
+        """
+        with patch('core.api.load_version_info') as mock_load, \
+             patch('core.api.get_commits_comparison') as mock_compare, \
+             patch('core.api.get_latest_remote_commit') as mock_latest, \
+             patch('core.api.get_channel_branch') as mock_channel:
+
+            mock_load.return_value = self.SAMPLE_VERSION_INFO
+            mock_channel.return_value = ('latest', 'staging')
+            # status='diverged' means branches have independent commits
+            mock_compare.return_value = ({
+                'ahead_by': 3,
+                'behind_by': 2,
+                'status': 'diverged',
+                'commits': [{'hash': 'abc1234', 'message': 'staging commit', 'date': '2025-11-29T10:00:00Z'}],
+                'target_commit': 'abc1234'
+            }, None)
+            mock_latest.return_value = ({'sha': 'abc1234', 'message': 'staging commit', 'date': '2025-11-29T10:00:00Z'}, None)
+
+            response = api_client.get('/api/system/update-check')
+            assert response.status_code == 200
+            data = response.get_json()
+            assert data['update_available'] is True
+            assert data['channel'] == 'latest'
 
     def test_check_for_updates_github_api_failure(self, api_client):
         """Test update check handles GitHub API failure"""
         with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.load_user_settings') as mock_settings, \
-             patch('core.api.get_commits_comparison') as mock_compare:
+             patch('core.api.get_commits_comparison') as mock_compare, \
+             patch('core.api.get_channel_branch') as mock_channel:
 
             mock_load.return_value = self.SAMPLE_VERSION_INFO
-            mock_settings.return_value = {'updates': {'channel': 'latest'}}
+            mock_channel.return_value = ('release', 'main')
             mock_compare.return_value = (None, "Network error")
 
             response = api_client.get('/api/system/update-check')
@@ -122,67 +184,43 @@ class TestSystemAPI:
             assert 'Version information not available' in data['error']
 
     def test_trigger_update_success(self, api_client):
-        """Test POST /api/system/update writes flag.
+        """Test POST /api/system/update writes flag with target branch.
 
-        Note: The trigger endpoint no longer checks GitHub API - frontend already
-        verified update availability via /api/system/update-check before calling this.
+        Note: The trigger endpoint writes the target branch name to the flag file
+        so the service script knows which branch to update to.
         """
         with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.load_user_settings') as mock_settings, \
-             patch('core.api.write_flag') as mock_flag:
+             patch('core.api.write_flag') as mock_flag, \
+             patch('core.api.get_channel_branch') as mock_channel:
 
             mock_load.return_value = self.SAMPLE_VERSION_INFO
-            mock_settings.return_value = {'updates': {'channel': 'latest'}}
+            mock_channel.return_value = ('release', 'main')
 
             response = api_client.post('/api/system/update')
             assert response.status_code == 200
             data = response.get_json()
             assert data['status'] == 'update_triggered'
             assert data['estimated_downtime'] == '2-5 minutes'
-            mock_flag.assert_called_once_with('update-requested')
+            assert data['channel'] == 'release'
+            assert data['target_branch'] == 'main'
+            mock_flag.assert_called_once_with('update-requested', 'main')
 
-    def test_trigger_update_detached_head_latest_channel(self, api_client):
-        """Test POST /api/system/update rejects detached HEAD for latest channel.
-
-        Latest channel needs a branch to pull from, so detached HEAD is an error.
-        """
+    def test_trigger_update_latest_channel(self, api_client):
+        """Test POST /api/system/update writes staging branch for latest channel"""
         with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.load_user_settings') as mock_settings:
-            mock_load.return_value = {**self.SAMPLE_VERSION_INFO, 'branch': 'HEAD'}
-            mock_settings.return_value = {'updates': {'channel': 'latest'}}
+             patch('core.api.write_flag') as mock_flag, \
+             patch('core.api.get_channel_branch') as mock_channel:
 
-            response = api_client.post('/api/system/update')
-            assert response.status_code == 400
-            data = response.get_json()
-            assert 'error' in data
-            assert 'detached HEAD state' in data['error']
-
-    def test_trigger_update_detached_head_stable_channel(self, api_client):
-        """Test POST /api/system/update allows detached HEAD for stable channel.
-
-        Stable channel uses git checkout <tag> which always results in detached HEAD.
-        This is expected and should not block future tag-based updates.
-        """
-        with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.load_user_settings') as mock_settings, \
-             patch('core.api.get_latest_tag') as mock_tag, \
-             patch('core.api.write_flag') as mock_flag:
-            mock_load.return_value = {**self.SAMPLE_VERSION_INFO, 'branch': 'HEAD'}
-            mock_settings.return_value = {'updates': {'channel': 'stable'}}
-            mock_tag.return_value = ({
-                'name': 'v0.3.0',
-                'commit_sha': 'def5678',
-                'commit_date': '2025-12-15T10:00:00Z',
-                'message': 'Release 0.3.0'
-            }, None)
+            mock_load.return_value = self.SAMPLE_VERSION_INFO
+            mock_channel.return_value = ('latest', 'staging')
 
             response = api_client.post('/api/system/update')
             assert response.status_code == 200
             data = response.get_json()
             assert data['status'] == 'update_triggered'
-            assert data['channel'] == 'stable'
-            assert data['target_tag'] == 'v0.3.0'
-            mock_flag.assert_called_once_with('update-requested:tag:v0.3.0')
+            assert data['channel'] == 'latest'
+            assert data['target_branch'] == 'staging'
+            mock_flag.assert_called_once_with('update-requested', 'staging')
 
     def test_trigger_update_missing_version(self, api_client):
         """Test POST /api/system/update handles missing version.json"""
@@ -201,8 +239,8 @@ class TestSystemAPI:
         assert hasattr(version, '__version_info__')
         assert hasattr(version, 'DISPLAY_NAME')
         assert hasattr(version, 'TECHNICAL_NAME')
-        # Version may be 0.1.0 on dev or 0.2.0+ on main
-        assert version.__version__ in ['0.1.0', '0.2.0']
+        assert version.__version__ == '0.2.0'
+        assert version.__version_info__ == (0, 2, 0)
         assert version.DISPLAY_NAME == 'BirdNET-PiPy'
         assert version.TECHNICAL_NAME == 'birdnet-pipy'
 
@@ -525,286 +563,6 @@ class TestUpdateNotes:
             assert result is True
 
 
-class TestGetLatestTag:
-    """Test get_latest_tag helper function"""
-
-    def test_get_latest_tag_success(self):
-        """Test successful tag fetch"""
-        mock_tags_response = [
-            {
-                'name': 'v0.2.0',
-                'commit': {'sha': 'abc1234567890'}
-            },
-            {
-                'name': 'v0.1.0',
-                'commit': {'sha': 'def5678901234'}
-            }
-        ]
-        mock_commit_response = {
-            'commit': {
-                'committer': {'date': '2025-12-01T10:00:00Z'},
-                'message': 'Release 0.2.0\n\nFeatures and fixes'
-            }
-        }
-
-        with patch('core.api.call_github_api') as mock_api:
-            mock_api.side_effect = [
-                (mock_tags_response, None),
-                (mock_commit_response, None)
-            ]
-
-            from core.api import get_latest_tag
-            result, error = get_latest_tag()
-
-            assert error is None
-            assert result['name'] == 'v0.2.0'
-            assert result['commit_sha'] == 'abc1234'
-            assert result['commit_date'] == '2025-12-01T10:00:00Z'
-            assert result['message'] == 'Release 0.2.0'
-
-    def test_get_latest_tag_no_tags(self):
-        """Test when repository has no tags"""
-        with patch('core.api.call_github_api') as mock_api:
-            mock_api.return_value = ([], None)
-
-            from core.api import get_latest_tag
-            result, error = get_latest_tag()
-
-            assert result is None
-            assert 'No tags found' in error
-
-    def test_get_latest_tag_api_error(self):
-        """Test handling of GitHub API error"""
-        with patch('core.api.call_github_api') as mock_api:
-            mock_api.return_value = (None, 'Network error')
-
-            from core.api import get_latest_tag
-            result, error = get_latest_tag()
-
-            assert result is None
-            assert error == 'Network error'
-
-
-class TestUpdateChannelStable:
-    """Test update-check with stable channel (tag-based)"""
-
-    SAMPLE_VERSION_INFO = {
-        'commit': '1a081f5',
-        'commit_date': '2025-11-28T08:49:00Z',
-        'branch': 'main',
-        'remote_url': 'https://github.com/Suncuss/BirdNET-PiPy',
-        'build_time': '2025-11-28T10:00:00Z'
-    }
-
-    def test_update_check_stable_update_available(self, api_client):
-        """Test stable channel shows update when behind latest tag"""
-        with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.load_user_settings') as mock_settings, \
-             patch('core.api.get_latest_tag') as mock_tag, \
-             patch('core.api.get_commits_comparison') as mock_compare, \
-             patch('core.api.fetch_update_notes') as mock_notes, \
-             patch('core.api.should_show_update_note') as mock_should_show:
-
-            mock_load.return_value = self.SAMPLE_VERSION_INFO
-            mock_settings.return_value = {'updates': {'channel': 'stable'}}
-            mock_tag.return_value = ({
-                'name': 'v0.2.0',
-                'commit_sha': 'abc1234',
-                'commit_date': '2025-12-01T10:00:00Z',
-                'message': 'Release 0.2.0'
-            }, None)
-            mock_compare.return_value = ({
-                'ahead_by': 5,
-                'behind_by': 0,
-                'status': 'ahead',
-                'commits': [{'hash': 'abc1234', 'message': 'feat: new', 'date': '2025-12-01T10:00:00Z'}]
-            }, None)
-            mock_notes.return_value = None
-            mock_should_show.return_value = False
-
-            response = api_client.get('/api/system/update-check')
-            assert response.status_code == 200
-            data = response.get_json()
-            assert data['update_available'] is True
-            assert data['channel'] == 'stable'
-            assert data['latest_tag'] == 'v0.2.0'
-            assert data['tag_commit'] == 'abc1234'
-
-    def test_update_check_stable_already_on_tag(self, api_client):
-        """Test stable channel shows no update when on latest tag"""
-        with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.load_user_settings') as mock_settings, \
-             patch('core.api.get_latest_tag') as mock_tag:
-
-            # Current commit matches the tag commit
-            mock_load.return_value = {**self.SAMPLE_VERSION_INFO, 'commit': 'abc1234'}
-            mock_settings.return_value = {'updates': {'channel': 'stable'}}
-            mock_tag.return_value = ({
-                'name': 'v0.2.0',
-                'commit_sha': 'abc1234',
-                'commit_date': '2025-12-01T10:00:00Z',
-                'message': 'Release 0.2.0'
-            }, None)
-
-            response = api_client.get('/api/system/update-check')
-            assert response.status_code == 200
-            data = response.get_json()
-            assert data['update_available'] is False
-            assert data['channel'] == 'stable'
-            assert data['latest_tag'] == 'v0.2.0'
-
-    def test_update_check_stable_no_tags(self, api_client):
-        """Test stable channel handles repository with no tags"""
-        with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.load_user_settings') as mock_settings, \
-             patch('core.api.get_latest_tag') as mock_tag:
-
-            mock_load.return_value = self.SAMPLE_VERSION_INFO
-            mock_settings.return_value = {'updates': {'channel': 'stable'}}
-            mock_tag.return_value = (None, 'No tags found in repository')
-
-            response = api_client.get('/api/system/update-check')
-            assert response.status_code == 200
-            data = response.get_json()
-            assert data['update_available'] is False
-            assert data['channel'] == 'stable'
-            assert 'error_message' in data
-
-    def test_update_check_stable_ahead_of_tag(self, api_client):
-        """Test stable channel shows no update when user is ahead of latest tag.
-
-        Scenario: User was on 'latest' channel, updated to a newer commit,
-        then switched to 'stable'. They're now ahead of the tag.
-        """
-        with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.load_user_settings') as mock_settings, \
-             patch('core.api.get_latest_tag') as mock_tag, \
-             patch('core.api.get_commits_comparison') as mock_compare:
-
-            # User is on commit 'newer123' which is ahead of the tag
-            mock_load.return_value = {**self.SAMPLE_VERSION_INFO, 'commit': 'newer123'}
-            mock_settings.return_value = {'updates': {'channel': 'stable'}}
-            mock_tag.return_value = ({
-                'name': 'v0.2.0',
-                'commit_sha': 'abc1234',
-                'commit_date': '2025-12-01T10:00:00Z',
-                'message': 'Release 0.2.0'
-            }, None)
-            # Comparison shows user is 3 commits ahead of the tag
-            # behind_by = how many commits tag is ahead of us (0)
-            # ahead_by = how many commits we are ahead of tag (mapped to commits_ahead)
-            mock_compare.return_value = ({
-                'ahead_by': 0,  # Tag is not ahead of us
-                'behind_by': 3,  # Tag is 3 commits behind us (we're ahead)
-                'status': 'behind',
-                'commits': []
-            }, None)
-
-            response = api_client.get('/api/system/update-check')
-            assert response.status_code == 200
-            data = response.get_json()
-            assert data['update_available'] is False
-            assert data['channel'] == 'stable'
-            assert data['latest_tag'] == 'v0.2.0'
-            assert data['commits_ahead'] == 3
-            assert 'ahead of' in data.get('message', '')
-
-    def test_update_check_latest_channel(self, api_client):
-        """Test latest channel uses original branch-based comparison"""
-        with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.load_user_settings') as mock_settings, \
-             patch('core.api.get_commits_comparison') as mock_compare, \
-             patch('core.api.get_latest_remote_commit') as mock_latest:
-
-            mock_load.return_value = self.SAMPLE_VERSION_INFO
-            mock_settings.return_value = {'updates': {'channel': 'latest'}}
-            mock_compare.return_value = ({
-                'ahead_by': 3,
-                'behind_by': 0,
-                'status': 'ahead',
-                'commits': [{'hash': 'def5678', 'message': 'latest commit', 'date': '2025-12-01T10:00:00Z'}],
-                'target_commit': 'def5678'
-            }, None)
-            mock_latest.return_value = ({'sha': 'def5678', 'message': 'latest', 'date': '2025-12-01T10:00:00Z'}, None)
-
-            response = api_client.get('/api/system/update-check')
-            assert response.status_code == 200
-            data = response.get_json()
-            assert data['update_available'] is True
-            assert data['channel'] == 'latest'
-            assert data['target_branch'] == 'main'
-            assert 'latest_tag' not in data
-
-
-class TestTriggerUpdateChannel:
-    """Test update trigger with channel support"""
-
-    SAMPLE_VERSION_INFO = {
-        'commit': '1a081f5',
-        'commit_date': '2025-11-28T08:49:00Z',
-        'branch': 'main',
-        'remote_url': 'https://github.com/Suncuss/BirdNET-PiPy',
-        'build_time': '2025-11-28T10:00:00Z'
-    }
-
-    def test_trigger_update_stable_channel(self, api_client):
-        """Test update trigger writes tag to flag file for stable channel"""
-        with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.load_user_settings') as mock_settings, \
-             patch('core.api.get_latest_tag') as mock_tag, \
-             patch('core.api.write_flag') as mock_flag:
-
-            mock_load.return_value = self.SAMPLE_VERSION_INFO
-            mock_settings.return_value = {'updates': {'channel': 'stable'}}
-            mock_tag.return_value = ({
-                'name': 'v0.2.0',
-                'commit_sha': 'abc1234',
-                'commit_date': '2025-12-01T10:00:00Z',
-                'message': 'Release 0.2.0'
-            }, None)
-
-            response = api_client.post('/api/system/update')
-            assert response.status_code == 200
-            data = response.get_json()
-            assert data['status'] == 'update_triggered'
-            assert data['channel'] == 'stable'
-            assert data['target_tag'] == 'v0.2.0'
-            mock_flag.assert_called_once_with('update-requested:tag:v0.2.0')
-
-    def test_trigger_update_latest_channel(self, api_client):
-        """Test update trigger uses original flag for latest channel"""
-        with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.load_user_settings') as mock_settings, \
-             patch('core.api.write_flag') as mock_flag:
-
-            mock_load.return_value = self.SAMPLE_VERSION_INFO
-            mock_settings.return_value = {'updates': {'channel': 'latest'}}
-
-            response = api_client.post('/api/system/update')
-            assert response.status_code == 200
-            data = response.get_json()
-            assert data['status'] == 'update_triggered'
-            assert data['channel'] == 'latest'
-            assert data['target_tag'] is None
-            mock_flag.assert_called_once_with('update-requested')
-
-    def test_trigger_update_stable_no_tags(self, api_client):
-        """Test update trigger fails gracefully when no tags for stable channel"""
-        with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.load_user_settings') as mock_settings, \
-             patch('core.api.get_latest_tag') as mock_tag:
-
-            mock_load.return_value = self.SAMPLE_VERSION_INFO
-            mock_settings.return_value = {'updates': {'channel': 'stable'}}
-            mock_tag.return_value = (None, 'No tags found in repository')
-
-            response = api_client.post('/api/system/update')
-            assert response.status_code == 500
-            data = response.get_json()
-            assert 'error' in data
-            assert 'No tags found' in data['error']
-
-
 class TestUpdateCheckWithNotes:
     """Test update-check endpoint includes update notes"""
 
@@ -819,14 +577,14 @@ class TestUpdateCheckWithNotes:
     def test_update_check_includes_update_note(self, api_client):
         """Test update-check includes update_note when available"""
         with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.load_user_settings') as mock_settings, \
              patch('core.api.get_commits_comparison') as mock_compare, \
              patch('core.api.get_latest_remote_commit') as mock_latest, \
              patch('core.api.fetch_update_notes') as mock_notes, \
-             patch('core.api.should_show_update_note') as mock_should_show:
+             patch('core.api.should_show_update_note') as mock_should_show, \
+             patch('core.api.get_channel_branch') as mock_channel:
 
             mock_load.return_value = self.SAMPLE_VERSION_INFO
-            mock_settings.return_value = {'updates': {'channel': 'latest'}}
+            mock_channel.return_value = ('release', 'main')
             # Note: status 'ahead' means remote is ahead of local (update available)
             mock_compare.return_value = ({
                 'ahead_by': 5,
@@ -848,14 +606,14 @@ class TestUpdateCheckWithNotes:
     def test_update_check_no_update_note_when_not_applicable(self, api_client):
         """Test update-check has null update_note when note doesn't apply"""
         with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.load_user_settings') as mock_settings, \
              patch('core.api.get_commits_comparison') as mock_compare, \
              patch('core.api.get_latest_remote_commit') as mock_latest, \
              patch('core.api.fetch_update_notes') as mock_notes, \
-             patch('core.api.should_show_update_note') as mock_should_show:
+             patch('core.api.should_show_update_note') as mock_should_show, \
+             patch('core.api.get_channel_branch') as mock_channel:
 
             mock_load.return_value = self.SAMPLE_VERSION_INFO
-            mock_settings.return_value = {'updates': {'channel': 'latest'}}
+            mock_channel.return_value = ('release', 'main')
             # Note: status 'ahead' means remote is ahead of local (update available)
             mock_compare.return_value = ({
                 'ahead_by': 5,
@@ -877,12 +635,12 @@ class TestUpdateCheckWithNotes:
     def test_update_check_no_update_note_when_up_to_date(self, api_client):
         """Test update-check has null update_note when no update available"""
         with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.load_user_settings') as mock_settings, \
              patch('core.api.get_commits_comparison') as mock_compare, \
-             patch('core.api.get_latest_remote_commit') as mock_latest:
+             patch('core.api.get_latest_remote_commit') as mock_latest, \
+             patch('core.api.get_channel_branch') as mock_channel:
 
             mock_load.return_value = {**self.SAMPLE_VERSION_INFO, 'branch': 'main'}
-            mock_settings.return_value = {'updates': {'channel': 'latest'}}
+            mock_channel.return_value = ('release', 'main')
             mock_compare.return_value = ({
                 'ahead_by': 0,
                 'behind_by': 0,

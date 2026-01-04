@@ -60,22 +60,38 @@ You can trigger maintenance tasks by touching flag files, avoiding full reboots.
 
 **Example:**
 ```bash
-# Trigger an update
-touch ~/BirdNET-PiPy/data/flags/update-requested
+# Trigger an update (content is the target branch)
+echo "main" > ~/BirdNET-PiPy/data/flags/update-requested
 ```
+
+### Update Channels
+
+BirdNET-PiPy supports two update channels, configurable in Settings:
+
+| Channel | Branch | Description |
+|---------|--------|-------------|
+| **Release** | `main` | Stable releases (default) |
+| **Latest** | `staging` | Newest features, may be less stable |
+
+When you trigger an update, the system checks for updates from the configured channel's branch.
 
 ### Update Flow Details
 
 When an update is triggered, `install.sh --update` performs:
 1. Stops Docker containers
-2. Fetches and syncs to `origin/main` (git fetch + reset)
+2. Fetches and syncs to the target branch (git fetch + checkout + reset)
 3. Rebuilds Docker images
 4. Updates system configs (PulseAudio, systemd service, sudoers)
 5. Exits for systemd to restart the service
 
-**Manual update:**
+**Manual update (current branch):**
 ```bash
 cd ~/BirdNET-PiPy && sudo ./install.sh --update
+```
+
+**Manual update (specific branch):**
+```bash
+cd ~/BirdNET-PiPy && sudo ./install.sh --update --branch staging
 ```
 
 **Note:** For existing installations before this feature was added, run `sudo ./install.sh` once to update the sudoers configuration for automatic updates.
