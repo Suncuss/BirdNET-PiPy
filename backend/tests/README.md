@@ -87,7 +87,7 @@ python -m pytest tests/audio/ -v
 python -m pytest tests/test_utils.py -v
 
 # Run with coverage
-python -m pytest tests/ --cov=core --cov=birdnet_service --cov-report=term-missing
+python -m pytest tests/ --cov=core --cov=model_service --cov-report=term-missing
 
 # Run specific test by name
 python -m pytest -k "test_auth" -v
@@ -299,4 +299,4 @@ When running with coverage, reports are generated in multiple formats:
 - **Terminal**: Summary displayed in console
 - **HTML**: Detailed report in `htmlcov/index.html`
 
-Coverage targets the `core/` and `birdnet_service/` modules.
+Coverage targets the `core/` and `model_service/` modules.

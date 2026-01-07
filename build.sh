@@ -110,10 +110,10 @@ build_sequential() {
 
     # Build order: smallest/fastest first, largest last
     # icecast is tiny, frontend is medium, backend is largest (pip install)
-    local services=("icecast" "frontend" "birdnet-server")
+    local services=("icecast" "frontend" "model-server")
 
-    # Note: birdnet-server, api, and main share the same image (backend/Dockerfile)
-    # Docker will use cached image for api and main after birdnet-server is built
+    # Note: model-server, api, and main share the same image (backend/Dockerfile)
+    # Docker will use cached image for api and main after model-server is built
 
     for service in "${services[@]}"; do
         print_status "Building $service..."

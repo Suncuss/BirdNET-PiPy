@@ -40,7 +40,7 @@ elif [[ "$1" == "coverage" ]]; then
     echo -e "${YELLOW}Running all tests with coverage report...${NC}"
     python -m pytest tests/ \
         --cov=core \
-        --cov=birdnet_service \
+        --cov=model_service \
         --cov-report=term-missing:skip-covered \
         --cov-report=html \
         --cov-report=term \
@@ -62,7 +62,7 @@ if command -v pytest &> /dev/null; then
         fi
         python -m pytest $TEST_PATH \
             --cov=core \
-            --cov=birdnet_service \
+            --cov=model_service \
             --cov-report=term-missing:skip-covered \
             --cov-report=html \
             --cov-report=term \
@@ -92,7 +92,7 @@ else
         fi
         python -m pytest $TEST_PATH \
             --cov=core \
-            --cov=birdnet_service \
+            --cov=model_service \
             --cov-report=term-missing:skip-covered \
             --cov-report=html \
             --cov-report=term \

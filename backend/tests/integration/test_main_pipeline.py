@@ -1062,7 +1062,7 @@ class TestFullPipelineIntegration:
             assert mock_birdnet_api.call_count == 2
             # First call is to BirdNet API
             first_call = mock_birdnet_api.call_args_list[0]
-            assert 'birdnet-server' in first_call[0][0]
+            assert 'model-server' in first_call[0][0]
             # Second call is broadcast
             second_call = mock_birdnet_api.call_args_list[1]
             assert 'broadcast' in second_call[0][0]

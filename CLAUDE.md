@@ -21,7 +21,7 @@ BirdNET-PiPy is a Python-based bird detection system based on the BirdNET model.
 ## Architecture
 
 **Microservices Backend:**
-- **BirdNet Server** (`backend/birdnet_service/birdnet_server.py`) - Port 5001: TensorFlow Lite model inference
+- **Model Inference Server** (`backend/model_service/inference_server.py`) - Port 5001: TensorFlow Lite model inference
 - **API Server** (`backend/core/api.py`) - Port 5002: REST API and static file serving
 - **Main Processing** (`backend/core/main.py`) - Continuous audio recording and analysis pipeline
 - **Icecast Streaming** (`backend/deployment/audio/`) - Port 8888: Live audio streaming to browsers
@@ -97,7 +97,7 @@ npm run test:coverage       # Run tests with coverage report
   - `audio_manager.py` - Audio recording (PulseAudio, HTTP stream, RTSP)
   - `storage_manager.py` - Disk cleanup and file management
   - `utils.py` - Utility functions
-- `birdnet_service/` - AI model service and TensorFlow Lite models
+- `model_service/` - AI model service and TensorFlow Lite models (supports multiple models via factory pattern)
 - `config/settings.py` - Environment-aware configuration
 - `scripts/` - Database and development scripts
 - `tests/` - Backend test suite (see `tests/README.md`)

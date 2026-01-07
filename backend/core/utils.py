@@ -8,7 +8,6 @@ import subprocess
 import os
 import requests
 from io import BytesIO
-from pydub import AudioSegment
 from matplotlib import font_manager
 import glob
 import threading

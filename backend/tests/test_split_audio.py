@@ -39,7 +39,7 @@ class TestSplitAudioOverlap:
 
     def test_no_overlap_9s(self, create_test_wav, sample_rate, chunk_length):
         """9-second recording with no overlap should produce 3 chunks."""
-        from birdnet_service.birdnet_server import split_audio
+        from model_service.inference_server import split_audio
 
         wav_path = create_test_wav(9)
         try:
@@ -53,7 +53,7 @@ class TestSplitAudioOverlap:
 
     def test_overlap_1_0_9s(self, create_test_wav, sample_rate, chunk_length):
         """9-second recording with 1.0s overlap should produce 4 chunks."""
-        from birdnet_service.birdnet_server import split_audio
+        from model_service.inference_server import split_audio
 
         wav_path = create_test_wav(9)
         try:
@@ -67,7 +67,7 @@ class TestSplitAudioOverlap:
 
     def test_overlap_1_5_9s(self, create_test_wav, sample_rate, chunk_length):
         """9-second recording with 1.5s overlap should produce 6 chunks."""
-        from birdnet_service.birdnet_server import split_audio
+        from model_service.inference_server import split_audio
 
         wav_path = create_test_wav(9)
         try:
@@ -81,7 +81,7 @@ class TestSplitAudioOverlap:
 
     def test_overlap_2_0_9s(self, create_test_wav, sample_rate, chunk_length):
         """9-second recording with 2.0s overlap should produce 8 chunks."""
-        from birdnet_service.birdnet_server import split_audio
+        from model_service.inference_server import split_audio
 
         wav_path = create_test_wav(9)
         try:
@@ -95,7 +95,7 @@ class TestSplitAudioOverlap:
 
     def test_overlap_0_5_9s_with_padding(self, create_test_wav, sample_rate, chunk_length):
         """9-second recording with 0.5s overlap - last chunk should be padded."""
-        from birdnet_service.birdnet_server import split_audio
+        from model_service.inference_server import split_audio
 
         wav_path = create_test_wav(9)
         try:
@@ -109,7 +109,7 @@ class TestSplitAudioOverlap:
 
     def test_no_overlap_12s(self, create_test_wav, sample_rate, chunk_length):
         """12-second recording with no overlap should produce 4 chunks."""
-        from birdnet_service.birdnet_server import split_audio
+        from model_service.inference_server import split_audio
 
         wav_path = create_test_wav(12)
         try:
@@ -120,7 +120,7 @@ class TestSplitAudioOverlap:
 
     def test_no_overlap_15s(self, create_test_wav, sample_rate, chunk_length):
         """15-second recording with no overlap should produce 5 chunks."""
-        from birdnet_service.birdnet_server import split_audio
+        from model_service.inference_server import split_audio
 
         wav_path = create_test_wav(15)
         try:
@@ -131,7 +131,7 @@ class TestSplitAudioOverlap:
 
     def test_overlap_1_5_15s(self, create_test_wav, sample_rate, chunk_length):
         """15-second recording with 1.5s overlap should produce 10 chunks."""
-        from birdnet_service.birdnet_server import split_audio
+        from model_service.inference_server import split_audio
 
         wav_path = create_test_wav(15)
         try:
@@ -144,7 +144,7 @@ class TestSplitAudioOverlap:
 
     def test_short_chunk_discarded(self, create_test_wav, sample_rate, chunk_length):
         """Chunks shorter than minlen (1.5s) should be discarded."""
-        from birdnet_service.birdnet_server import split_audio
+        from model_service.inference_server import split_audio
 
         # Create a 5-second file
         wav_path = create_test_wav(5)
@@ -158,7 +158,7 @@ class TestSplitAudioOverlap:
 
     def test_chunk_too_short_discarded(self, create_test_wav, sample_rate, chunk_length):
         """Chunks shorter than minlen (1.5s) should be discarded."""
-        from birdnet_service.birdnet_server import split_audio
+        from model_service.inference_server import split_audio
 
         # Create 4-second file with overlap that leaves <1.5s at end
         wav_path = create_test_wav(4)
@@ -171,7 +171,7 @@ class TestSplitAudioOverlap:
 
     def test_backward_compatibility_default_overlap(self, create_test_wav, sample_rate, chunk_length):
         """Default overlap of 0.0 should maintain backward compatibility."""
-        from birdnet_service.birdnet_server import split_audio
+        from model_service.inference_server import split_audio
 
         wav_path = create_test_wav(9)
         try:
@@ -183,7 +183,7 @@ class TestSplitAudioOverlap:
 
     def test_all_chunks_correct_size(self, create_test_wav, sample_rate, chunk_length):
         """All chunks should be exactly chunk_length * sample_rate samples."""
-        from birdnet_service.birdnet_server import split_audio
+        from model_service.inference_server import split_audio
 
         wav_path = create_test_wav(9)
         try:

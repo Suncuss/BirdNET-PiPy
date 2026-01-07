@@ -44,7 +44,7 @@ journalctl -u birdnet-pipy -f
 ```bash
 cd ~/BirdNET-PiPy
 docker compose logs -f [container_name]
-# containers: main, api, birdnet-server, frontend, icecast
+# containers: main, api, model-server, frontend, icecast
 ```
 
 ---

@@ -12,7 +12,6 @@ numpy==1.26.4  # Keep 1.26.x for compatibility with TensorFlow Lite
 scipy==1.15.3
 
 # Audio processing
-pydub==0.25.1
 
 # Machine Learning
 tflite-runtime==2.14.0  # Keep stable version for model compatibility

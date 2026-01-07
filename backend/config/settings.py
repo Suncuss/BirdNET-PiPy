@@ -37,6 +37,9 @@ DEFAULT_SETTINGS = {
     },
     "updates": {
         "channel": "release"  # "release" = main branch, "latest" = staging branch
+    },
+    "model": {
+        "type": "birdnet"  # Options: "birdnet" (future: "perch")
     }
 }
 
@@ -80,7 +83,7 @@ API_PORT = 5002
 
 # Service hostnames (Docker container names)
 API_HOST = 'api'
-BIRDNET_HOST = 'birdnet-server'
+BIRDNET_HOST = 'model-server'
 
 # Recording mode configuration
 RECORDING_MODE = user_settings['audio'].get('recording_mode', 'pulseaudio')
@@ -95,12 +98,12 @@ RTSP_URL = user_settings['audio'].get('rtsp_url', None)
 PULSEAUDIO_SOURCE = user_settings['audio'].get('pulseaudio_source', 'default')
 
 
-# Birdnet configuration
 # Model configuration (always in Docker)
-MODEL_PATH = f'{BASE_DIR}/birdnet_service/models/BirdNET_GLOBAL_6K_V2.4_Model_FP32.tflite'
-META_MODEL_PATH = f'{BASE_DIR}/birdnet_service/models/BirdNET_GLOBAL_6K_V2.4_MData_Model_FP16.tflite'
-LABELS_PATH = f'{BASE_DIR}/birdnet_service/models/labels.txt'
-EBIRD_CODES_PATH = f'{BASE_DIR}/birdnet_service/models/ebird_codes.json'
+MODEL_TYPE = user_settings.get('model', {}).get('type', 'birdnet')
+MODEL_PATH = f'{BASE_DIR}/model_service/models/BirdNET_GLOBAL_6K_V2.4_Model_FP32.tflite'
+META_MODEL_PATH = f'{BASE_DIR}/model_service/models/BirdNET_GLOBAL_6K_V2.4_MData_Model_FP16.tflite'
+LABELS_PATH = f'{BASE_DIR}/model_service/models/labels.txt'
+EBIRD_CODES_PATH = f'{BASE_DIR}/model_service/models/ebird_codes.json'
 
 # Geolocation configuration - from user settings
 LAT = user_settings['location']['latitude']

@@ -36,7 +36,7 @@ EBIRD_TAXONOMY_URL = (
 )
 
 # Default output path relative to this script
-DEFAULT_OUTPUT_PATH = Path(__file__).parent.parent / "birdnet_service" / "models" / "ebird_codes.json"
+DEFAULT_OUTPUT_PATH = Path(__file__).parent.parent / "model_service" / "models" / "ebird_codes.json"
 
 
 def download_csv(url: str) -> str:

@@ -1,12 +1,12 @@
 services:
-  birdnet-server:
+  model-server:
     build:
       context: ./backend
       dockerfile: Dockerfile
       args:
         UID: ${UID:-1000}
         GID: ${GID:-1000}
-    command: python -m birdnet_service.birdnet_server
+    command: python -m model_service.inference_server
     restart: unless-stopped
     volumes:
       - ./backend:/app
@@ -70,7 +70,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      - birdnet-server
+      - model-server
       - api
 
   icecast:
