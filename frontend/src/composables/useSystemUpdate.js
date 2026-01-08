@@ -46,13 +46,8 @@ export function useSystemUpdate() {
       updateAvailable.value = data.update_available
 
       if (data.update_available) {
-        if (data.fresh_sync) {
-          setStatus('info', 'Major update available')
-          logger.info('Fresh sync update available', data)
-        } else {
-          setStatus('info', `Update available: ${data.commits_behind} new commits`)
-          logger.info('Update available', data)
-        }
+        // No status message needed - the update box in the UI is sufficient
+        logger.info('Update available', data)
       } else {
         setStatus('success', 'System is up to date')
         logger.info('System is up to date', {

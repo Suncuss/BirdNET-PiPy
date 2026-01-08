@@ -86,7 +86,8 @@ describe('useSystemUpdate', () => {
 
     expect(updateAvailable.value).toBe(true)
     expect(updateInfo.value.commits_behind).toBe(5)
-    expect(statusMessage.value).toContain('Update available')
+    // No status message when update is available - the UI box is sufficient
+    expect(statusMessage.value).toBeNull()
   })
 
   it('checks for updates and shows up to date when no updates', async () => {
