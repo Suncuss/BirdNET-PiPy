@@ -388,7 +388,9 @@
               <div>
                 <p class="text-sm font-medium text-blue-800">Update available</p>
                 <p class="text-xs text-blue-600">
-                  {{ systemUpdate.updateInfo.value.fresh_sync ? 'Major version' : `${systemUpdate.updateInfo.value.commits_behind} new commits` }}
+                  {{ systemUpdate.updateInfo.value.fresh_sync ? 'Major version' :
+                     systemUpdate.updateInfo.value.commits_behind === 0 ? `Switch to ${systemUpdate.updateInfo.value.channel} channel` :
+                     `${systemUpdate.updateInfo.value.commits_behind} new commits` }}
                 </p>
               </div>
               <button
