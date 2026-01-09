@@ -367,7 +367,7 @@
           <!-- Update Channel Toggle -->
           <div class="flex items-center justify-between mb-4">
             <div>
-              <label class="text-sm text-gray-600">Try Latest Features</label>
+              <label class="text-sm text-gray-600">Try Experimental Features</label>
               <p class="text-xs text-gray-400">Get newest features before stable release</p>
             </div>
             <button
@@ -840,6 +840,7 @@ export default {
     // Confirm and trigger system update
     const confirmUpdate = async () => {
       showUpdateConfirm.value = false
+      window.scrollTo({ top: 0, behavior: 'smooth' })
       await systemUpdate.triggerUpdate(true)
     }
 

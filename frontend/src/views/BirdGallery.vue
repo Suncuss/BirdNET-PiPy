@@ -29,7 +29,7 @@
           <router-link :to="{ name: 'BirdDetails', params: { name: bird.name } }" class="group">
             <div class="relative aspect-square overflow-hidden bg-gray-200">
               <img :src="bird.imageUrl" :alt="bird.name"
-                class="absolute inset-0 w-full h-full object-cover transition-[opacity,transform] duration-500 group-hover:scale-110"
+                class="absolute inset-0 w-full h-full object-cover transition-[opacity,transform] duration-200 group-hover:scale-110"
                 :class="{ 'opacity-0': !bird.focalPointReady, 'opacity-100': bird.focalPointReady }"
                 :style="{ objectPosition: bird.focalPoint || '50% 50%' }"
                 loading="lazy">
@@ -165,22 +165,28 @@ export default {
 
     const updateBirdImages = async (birds) => {
       for (const bird of birds) {
-        // Hide image while loading real one
-        bird.focalPointReady = false
-
+        // Keep showing placeholder while loading real image
         const imageData = await fetchWikimediaImage(bird.name)
         if (imageData) {
+          // Calculate focal point first (this preloads image into browser cache)
+          const newFocalPoint = await calculateFocalPoint(imageData.imageUrl)
+
+          // Brief hide to trigger fade transition
+          bird.focalPointReady = false
+
+          // Update all image data
           bird.imageUrl = imageData.imageUrl
           bird.authorName = imageData.authorName
           bird.authorUrl = imageData.authorUrl
           bird.licenseType = imageData.licenseType
+          bird.focalPoint = newFocalPoint
 
-          // Calculate focal point immediately for this bird
-          bird.focalPoint = await calculateFocalPoint(imageData.imageUrl)
+          // Small delay to ensure opacity-0 is applied before fading in
+          await new Promise(r => requestAnimationFrame(r))
+
+          // Fade in the new image
+          bird.focalPointReady = true
         }
-
-        // Show image with correct crop
-        bird.focalPointReady = true
       }
     }
 

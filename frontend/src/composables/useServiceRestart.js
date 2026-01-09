@@ -29,11 +29,12 @@ export function useServiceRestart() {
       pollInterval = 5000,
       initialDelay = 10000,
       postConnectDelay = 15000, // Wait for all services (BirdNet, etc.) to fully initialize
-      autoReload = true
+      autoReload = true,
+      message = 'Services restarting'
     } = options
 
     isRestarting.value = true
-    restartMessage.value = 'Services restarting...'
+    restartMessage.value = `${message}...`
     restartError.value = ''
 
     const maxAttempts = Math.floor(maxWaitSeconds / (pollInterval / 1000))
@@ -78,7 +79,7 @@ export function useServiceRestart() {
             // Update message periodically
             const elapsed = Math.floor((attempts * pollInterval) / 1000)
             if (attempts % 4 === 0) {
-              restartMessage.value = `Services restarting... (${elapsed}s)`
+              restartMessage.value = `${message}... (${elapsed}s)`
             }
             setTimeout(checkConnection, pollInterval)
           }

@@ -11,7 +11,7 @@
             class="block w-full h-full cursor-pointer"
             :title="`View ${birdDetails.common_name} on Wikimedia Commons`">
             <img :src="birdImageData.imageUrl" :alt="birdDetails.common_name"
-              class="absolute inset-0 w-full h-full object-cover transition-[opacity,transform] duration-500 hover:scale-110"
+              class="absolute inset-0 w-full h-full object-cover transition-[opacity,transform] duration-200 hover:scale-110"
               :class="{ 'opacity-0': !imageReady, 'opacity-100': imageReady }"
               :style="{ objectPosition: imageFocalPoint }">
           </a>

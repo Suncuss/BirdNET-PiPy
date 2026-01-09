@@ -79,16 +79,28 @@ export function useSmartCrop() {
    */
   const useFocalPoint = (initialUrl = null) => {
     const focalPoint = ref('50% 50%')
-    const isReady = ref(false)
+    const isReady = ref(true) // Start visible to show placeholder
 
     const updateFocalPoint = async (url) => {
-      isReady.value = false
       if (!url || url === '/default_bird.png') {
         focalPoint.value = '50% 50%'
         isReady.value = true
         return
       }
-      focalPoint.value = await calculateFocalPoint(url)
+
+      // Calculate focal point first (preloads image into browser cache)
+      const newFocalPoint = await calculateFocalPoint(url)
+
+      // Brief hide to trigger fade transition
+      isReady.value = false
+
+      // Update focal point
+      focalPoint.value = newFocalPoint
+
+      // Small delay to ensure opacity-0 is applied before fading in
+      await new Promise(r => requestAnimationFrame(r))
+
+      // Fade in
       isReady.value = true
     }
 

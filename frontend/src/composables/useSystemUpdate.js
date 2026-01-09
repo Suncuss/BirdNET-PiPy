@@ -108,7 +108,8 @@ export function useSystemUpdate() {
       // Use shared service restart monitoring
       await serviceRestart.waitForRestart({
         maxWaitSeconds: 300, // 5 minutes for updates (longer than settings save)
-        autoReload: true
+        autoReload: true,
+        message: 'System updating'
       })
     } catch (error) {
       logger.error('Failed to trigger update', error)
