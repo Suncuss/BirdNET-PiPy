@@ -11,6 +11,25 @@ vi.mock('@/services/api', () => ({
   default: mockApi
 }))
 
+// Mock useSmartCrop composable
+vi.mock('@/composables/useSmartCrop', () => ({
+  useSmartCrop: () => ({
+    calculateFocalPoint: vi.fn().mockResolvedValue('50% 50%'),
+    processBirdImages: vi.fn().mockImplementation(async (birds) => {
+      birds.forEach(bird => {
+        bird.focalPoint = '50% 50%'
+        bird.focalPointReady = true
+      })
+    }),
+    useFocalPoint: () => ({
+      focalPoint: { value: '50% 50%' },
+      isReady: { value: true },
+      updateFocalPoint: vi.fn()
+    }),
+    clearCache: vi.fn()
+  })
+}))
+
 const mountGallery = () => mount(BirdGallery, {
   global: {
     stubs: {

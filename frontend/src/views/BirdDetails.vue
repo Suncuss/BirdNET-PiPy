@@ -6,12 +6,14 @@
 
       <!-- Bird Image, Quick Stats, and Attribution -->
       <div class="bg-white rounded-lg shadow overflow-hidden lg:col-span-1">
-        <div class="relative overflow-hidden w-full aspect-square max-h-[300px]">
-          <a :href="birdImageData.pageUrl" target="_blank" rel="noopener noreferrer" 
-            class="block w-full h-full cursor-pointer" 
+        <div class="relative overflow-hidden w-full aspect-square max-h-[300px] bg-gray-200">
+          <a :href="birdImageData.pageUrl" target="_blank" rel="noopener noreferrer"
+            class="block w-full h-full cursor-pointer"
             :title="`View ${birdDetails.common_name} on Wikimedia Commons`">
             <img :src="birdImageData.imageUrl" :alt="birdDetails.common_name"
-              class="absolute inset-0 w-full h-full object-cover object-center transition-transform duration-300 hover:scale-110">
+              class="absolute inset-0 w-full h-full object-cover transition-[opacity,transform] duration-500 hover:scale-110"
+              :class="{ 'opacity-0': !imageReady, 'opacity-100': imageReady }"
+              :style="{ objectPosition: imageFocalPoint }">
           </a>
         </div>
         <div class="p-4 bg-gray-100 text-sm text-gray-600">
@@ -159,11 +161,12 @@ import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import Chart from 'chart.js/auto'
 import SpectrogramModal from '@/components/SpectrogramModal.vue'
-	import { useDateNavigation } from '@/composables/useDateNavigation'
-	import { useChartHelpers } from '@/composables/useChartHelpers'
-	import { useChartColors } from '@/composables/useChartColors'
-	import api from '@/services/api'
-	import { getAudioUrl, getSpectrogramUrl } from '@/services/media'
+import { useDateNavigation } from '@/composables/useDateNavigation'
+import { useChartHelpers } from '@/composables/useChartHelpers'
+import { useChartColors } from '@/composables/useChartColors'
+import { useSmartCrop } from '@/composables/useSmartCrop'
+import api from '@/services/api'
+import { getAudioUrl, getSpectrogramUrl } from '@/services/media'
 
 export default {
   name: 'BirdDetails',
@@ -221,6 +224,8 @@ export default {
 
     const { destroyChart } = useChartHelpers()
     const { colorPalette } = useChartColors()
+    const { useFocalPoint } = useSmartCrop()
+    const { focalPoint: imageFocalPoint, isReady: imageReady, updateFocalPoint } = useFocalPoint()
 
     // Detect mobile portrait mode and return appropriate tick limits
     const getMaxTicksLimit = (view) => {
@@ -288,6 +293,9 @@ export default {
         })
 
         birdImageData.value = imageData
+
+        // Calculate focal point for smart cropping
+        await updateFocalPoint(imageData.imageUrl)
 
         // Fetch recordings
         await fetchRecordings()
@@ -510,12 +518,14 @@ export default {
       destroyChart(detectionChart)
     })
 
-	    return {
+    return {
       birdDetails,
       totalVisits,
       firstDetected,
       lastDetected,
       birdImageData,
+      imageFocalPoint,
+      imageReady,
       averageConfidence,
       peakActivityTime,
       seasonality,

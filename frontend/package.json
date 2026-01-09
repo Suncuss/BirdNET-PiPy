@@ -19,6 +19,7 @@
     "axios": "^1.7.4",
     "chart.js": "^4.4.3",
     "chartjs-chart-matrix": "^2.0.1",
+    "smartcrop": "^2.0.5",
     "socket.io-client": "^4.7.5",
     "vue": "^3.4.29",
     "vue-router": "^4.4.0"

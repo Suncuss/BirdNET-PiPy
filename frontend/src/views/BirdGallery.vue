@@ -27,9 +27,11 @@
 
           <!-- Wrap the image and related content inside the router-link -->
           <router-link :to="{ name: 'BirdDetails', params: { name: bird.name } }" class="group">
-            <div class="relative aspect-square overflow-hidden">
+            <div class="relative aspect-square overflow-hidden bg-gray-200">
               <img :src="bird.imageUrl" :alt="bird.name"
-                class="absolute inset-0 w-full h-full object-cover object-center transition-transform duration-300 group-hover:scale-110"
+                class="absolute inset-0 w-full h-full object-cover transition-[opacity,transform] duration-500 group-hover:scale-110"
+                :class="{ 'opacity-0': !bird.focalPointReady, 'opacity-100': bird.focalPointReady }"
+                :style="{ objectPosition: bird.focalPoint || '50% 50%' }"
                 loading="lazy">
               <div
                 class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
@@ -67,12 +69,14 @@
 <script>
 import { ref, computed, onMounted } from 'vue'
 import api from '@/services/api'
+import { useSmartCrop } from '@/composables/useSmartCrop'
 
 export default {
   name: 'BirdGallery',
   setup() {
     const selectedTab = ref('recent')
     const birds = ref([])
+    const { calculateFocalPoint } = useSmartCrop()
     const tabs = [
       { value: 'recent', label: 'Today\'s Detections', icon: '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z" clip-rule="evenodd" /></svg>' },
       { value: 'frequent', label: 'Most Frequent', icon: '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M12 7a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0V8.414l-4.293 4.293a1 1 0 01-1.414 0L8 10.414l-4.293 4.293a1 1 0 01-1.414-1.414l5-5a1 1 0 011.414 0L11 10.586 14.586 7H12z" clip-rule="evenodd" /></svg>' },
@@ -94,7 +98,8 @@ export default {
           name: bird.common_name,
           scientificName: bird.scientific_name,
           lastDetected: new Date(bird.timestamp),
-          imageUrl: '/default_bird.png',  // Placeholder, will be updated later
+          imageUrl: '/default_bird.png',
+          focalPointReady: true,  // Show placeholder immediately
         }))
       } catch (error) {
         console.error('Error fetching unique birds:', error)
@@ -112,7 +117,8 @@ export default {
           name: bird.common_name,
           scientificName: bird.scientific_name,
           lastDetected: new Date(bird.timestamp),
-          imageUrl: '/default_bird.png',  // Placeholder, will be updated later
+          imageUrl: '/default_bird.png',
+          focalPointReady: true,  // Show placeholder immediately
         }))
       } catch (error) {
         console.error(`Error fetching ${type} birds:`, error)
@@ -134,7 +140,8 @@ export default {
                 name: species.common_name,
                 scientificName: species.scientific_name,
                 lastDetected: details.last_detected ? new Date(details.last_detected) : null,
-                imageUrl: '/default_bird.png',  // Placeholder, will be updated later
+                imageUrl: '/default_bird.png',
+                focalPointReady: true,  // Show placeholder immediately
               }
             } catch (error) {
               // If details fetch fails, still show the bird
@@ -144,6 +151,7 @@ export default {
                 scientificName: species.scientific_name,
                 lastDetected: null,
                 imageUrl: '/default_bird.png',
+                focalPointReady: true,  // Show placeholder immediately
               }
             }
           })
@@ -157,13 +165,22 @@ export default {
 
     const updateBirdImages = async (birds) => {
       for (const bird of birds) {
+        // Hide image while loading real one
+        bird.focalPointReady = false
+
         const imageData = await fetchWikimediaImage(bird.name)
         if (imageData) {
           bird.imageUrl = imageData.imageUrl
           bird.authorName = imageData.authorName
           bird.authorUrl = imageData.authorUrl
           bird.licenseType = imageData.licenseType
+
+          // Calculate focal point immediately for this bird
+          bird.focalPoint = await calculateFocalPoint(imageData.imageUrl)
         }
+
+        // Show image with correct crop
+        bird.focalPointReady = true
       }
     }
 
