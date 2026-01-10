@@ -3,11 +3,11 @@
         <div class="bg-white rounded-lg shadow p-4">
             <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between mb-4">
                 <h2 class="text-lg font-semibold mb-2">Bird Activity Overview</h2>
-                <div class="flex flex-wrap items-center gap-2 justify-center lg:justify-end">
+                <div class="flex flex-wrap items-stretch gap-2 justify-center lg:justify-end">
                     <button 
                         @click="previousDay"
                         :class="[
-                            'p-2 rounded-lg transition-all duration-200',
+                            'p-2 rounded-lg transition-all duration-200 flex items-center justify-center',
                             isUpdating 
                                 ? 'text-gray-300 cursor-not-allowed' 
                                 : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
@@ -35,7 +35,7 @@
                     <button 
                         @click="nextDay"
                         :class="[
-                            'p-2 rounded-lg transition-all duration-200',
+                            'p-2 rounded-lg transition-all duration-200 flex items-center justify-center',
                             canGoForward 
                                 ? 'text-gray-600 hover:text-gray-900 hover:bg-gray-100' 
                                 : 'text-gray-300 cursor-not-allowed'
@@ -49,7 +49,7 @@
                     <button
                         @click="goToToday"
                         :class="[
-                            'font-semibold py-1 px-3 rounded-lg shadow text-sm transition-all duration-300',
+                            'font-semibold py-1 px-3 rounded-lg shadow text-sm transition-all duration-300 flex items-center justify-center',
                             isUpdating
                                 ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
                                 : 'bg-blue-600 hover:bg-blue-700 text-white focus:outline-none focus:ring-2 focus:ring-blue-300'
@@ -81,13 +81,13 @@
         <div class="bg-white rounded-lg shadow p-4 mt-4">
             <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between mb-4">
                 <h2 class="text-lg font-semibold mb-2">Detection Trends</h2>
-                <div class="flex flex-wrap items-center gap-2 justify-center lg:justify-end">
+                <div class="flex flex-wrap items-stretch gap-2 justify-center lg:justify-end">
                     <!-- Time Range Dropdown -->
                     <select
                         v-model="trendsTimeRange"
                         @change="onTrendsTimeRangeChange"
                         :disabled="isUpdatingTrends"
-                        class="px-3 py-1 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm"
+                        class="hidden sm:block px-3 py-1 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm"
                     >
                         <option value="7">Week</option>
                         <option value="14">Two Week</option>
@@ -101,7 +101,7 @@
                     <button
                         @click="previousTrendsPeriod"
                         :class="[
-                            'p-2 rounded-lg transition-all duration-200',
+                            'p-2 rounded-lg transition-all duration-200 flex items-center justify-center',
                             isUpdatingTrends
                                 ? 'text-gray-300 cursor-not-allowed'
                                 : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
@@ -130,7 +130,7 @@
                     <button
                         @click="nextTrendsPeriod"
                         :class="[
-                            'p-2 rounded-lg transition-all duration-200',
+                            'p-2 rounded-lg transition-all duration-200 flex items-center justify-center',
                             canGoForwardTrends
                                 ? 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
                                 : 'text-gray-300 cursor-not-allowed'
@@ -145,7 +145,7 @@
                     <button
                         @click="goToTodayTrends"
                         :class="[
-                            'font-semibold py-1 px-3 rounded-lg shadow text-sm transition-all duration-300',
+                            'font-semibold py-1 px-3 rounded-lg shadow text-sm transition-all duration-300 flex items-center justify-center',
                             isUpdatingTrends
                                 ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
                                 : 'bg-blue-600 hover:bg-blue-700 text-white focus:outline-none focus:ring-2 focus:ring-blue-300'
@@ -185,7 +185,7 @@
                                     @blur="handleBlur"
                                     @input="filterSpecies"
                                     placeholder="Search or select species..."
-                                    class="px-3 py-1 pr-8 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm w-48 lg:w-64"
+                                    class="h-9 px-3 pr-8 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm w-56 sm:w-64 lg:w-72"
                                     :disabled="isLoadingSpecies"
                                 />
                                 <button
@@ -225,7 +225,7 @@
                             @change="onSpeciesViewChange($event.target.value)"
                             :disabled="isUpdatingSpecies"
                             aria-label="View period"
-                            class="px-3 py-1 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm"
+                            class="hidden sm:block h-9 px-3 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm"
                         >
                             <option value="day">Day</option>
                             <option value="week">Week</option>
@@ -278,7 +278,10 @@
                 <p class="text-lg text-gray-500">{{ speciesChartError }}</p>
             </div>
             <div v-else class="flex items-center justify-center h-[300px] lg:h-[375px]">
-                <p class="text-lg text-gray-500">Please select a bird species from the dropdown to view its detection distribution.</p>
+                <p class="text-lg text-gray-500 text-center">
+                    <span class="sm:hidden">Select a species to view detections.</span>
+                    <span class="hidden sm:inline">Please select a bird species from the dropdown to view its detection distribution.</span>
+                </p>
             </div>
         </div>
     </div>

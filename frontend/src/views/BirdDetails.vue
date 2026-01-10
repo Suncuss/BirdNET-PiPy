@@ -41,7 +41,7 @@
             @click="changeView(view.value)"
             :disabled="isUpdating"
             :class="[
-              'px-4 py-2 rounded-md font-medium transition-colors duration-200',
+              'h-9 px-4 rounded-md font-medium transition-colors duration-200 inline-flex items-center justify-center',
               view.value === '6month' || view.value === 'year' ? 'hidden sm:block' : '',
               selectedView === view.value 
                 ? 'bg-green-600 text-white' 
@@ -58,7 +58,7 @@
           <button @click="navigatePrevious"
             :disabled="isUpdating"
             :class="[
-              'flex items-center px-2 sm:px-3 py-2 text-xs sm:text-sm font-medium rounded-md border transition-colors',
+              'h-9 flex items-center px-2 sm:px-3 text-xs sm:text-sm font-medium rounded-md border transition-colors',
               isUpdating
                 ? 'text-gray-400 bg-gray-100 border-gray-200 cursor-not-allowed'
                 : 'text-gray-700 bg-white border-gray-300 hover:bg-gray-50'
@@ -75,7 +75,7 @@
           <button @click="navigateNext"
             :disabled="isNextDisabled || isUpdating"
             :class="[
-              'flex items-center px-2 sm:px-3 py-2 text-xs sm:text-sm font-medium rounded-md border transition-colors',
+              'h-9 flex items-center px-2 sm:px-3 text-xs sm:text-sm font-medium rounded-md border transition-colors',
               (isNextDisabled || isUpdating)
                 ? 'text-gray-400 bg-gray-100 border-gray-200 cursor-not-allowed' 
                 : 'text-gray-700 bg-white border-gray-300 hover:bg-gray-50'
@@ -100,7 +100,7 @@
         <div class="flex items-center justify-between mb-4">
           <h2 class="text-lg font-semibold">Recordings</h2>
           <select v-model="recordingSort" @change="onSortChange"
-            class="px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-green-500">
+            class="h-9 px-3 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-green-500">
             <option value="recent">Most Recent</option>
             <option value="best">Best Recordings</option>
           </select>
