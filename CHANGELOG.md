@@ -1,4 +1,4 @@
-## [Unreleased]
+# Changelog
 
 ## [0.3.0] - 2026-01-10
 
