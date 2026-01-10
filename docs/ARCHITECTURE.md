@@ -28,7 +28,7 @@ BirdNET-PiPy uses a containerized microservices architecture with five Docker co
          │          │                             │
          │          ▼                             ▼
          │   ┌─────────────────┐          ┌─────────────────┐
-         │   │      api        │          │  model-server │
+         │   │      api        │          │  model-server   │
          │   │     :5002       │          │     :5001       │
          │   ├─────────────────┤          ├─────────────────┤
          └──▶│ Flask + SocketIO│          │ TensorFlow Lite │

@@ -177,11 +177,11 @@ describe('useSmartCrop', () => {
   })
 
   describe('useFocalPoint', () => {
-    it('initializes with default center position', () => {
+    it('initializes with default center position and ready state', () => {
       const { focalPoint, isReady } = helpers.useFocalPoint()
 
       expect(focalPoint.value).toBe('50% 50%')
-      expect(isReady.value).toBe(false)
+      expect(isReady.value).toBe(true) // Starts visible to show placeholder
     })
 
     it('sets isReady to true for default bird image', async () => {
@@ -203,14 +203,17 @@ describe('useSmartCrop', () => {
       expect(isReady.value).toBe(true)
     })
 
-    it('sets isReady to false while calculating', async () => {
+    it('stays visible while calculating then triggers brief fade', async () => {
       const mockImage = {
         naturalWidth: 800,
         naturalHeight: 600
       }
 
       const originalImage = global.Image
+      const originalRAF = global.requestAnimationFrame
       let resolveLoad
+      let rafCallback
+
       global.Image = vi.fn().mockImplementation(() => {
         const img = {
           crossOrigin: '',
@@ -225,25 +228,43 @@ describe('useSmartCrop', () => {
         return img
       })
 
+      // Mock requestAnimationFrame to control timing
+      global.requestAnimationFrame = vi.fn((cb) => {
+        rafCallback = cb
+        return 1
+      })
+
       smartcrop.crop.mockResolvedValue({
         topCrop: { x: 400, y: 300, width: 100, height: 100 }
       })
 
       const { isReady, updateFocalPoint } = helpers.useFocalPoint()
 
+      // Should start visible (to show placeholder)
+      expect(isReady.value).toBe(true)
+
       const promise = updateFocalPoint('https://example.com/bird.jpg')
 
-      // Should be false while loading
-      expect(isReady.value).toBe(false)
+      // Should stay visible while loading/calculating
+      expect(isReady.value).toBe(true)
 
-      // Resolve the image load
+      // Resolve the image load and smartcrop calculation
       resolveLoad()
+
+      // Wait for the calculation to complete and isReady to be set to false
+      await vi.waitFor(() => {
+        expect(isReady.value).toBe(false)
+      })
+
+      // Now trigger the requestAnimationFrame callback
+      rafCallback()
       await promise
 
-      // Should be true after complete
+      // Should be true after fade-in
       expect(isReady.value).toBe(true)
 
       global.Image = originalImage
+      global.requestAnimationFrame = originalRAF
     })
   })
 

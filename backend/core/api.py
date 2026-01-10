@@ -83,7 +83,7 @@ def require_internal(f):
 
 # Simple in-memory cache
 image_cache = {}
-CACHE_EXPIRATION = 36000  # Cache expiration time in seconds (10 hours)
+CACHE_EXPIRATION = 172800  # Cache expiration time in seconds (48 hours)
 
 def get_cached_image(species_name):
     if species_name in image_cache:
