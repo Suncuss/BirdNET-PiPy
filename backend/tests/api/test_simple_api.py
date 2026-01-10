@@ -533,3 +533,61 @@ class TestSimpleAPI:
                 data = response.get_json()
                 assert 'stream_url' in data
                 assert 'stream_type' in data
+
+    def test_detection_trends_endpoint(self, api_client, real_db_manager):
+        """Test /api/detections/trends endpoint."""
+        # Insert test data across 7 days
+        for day in range(7):
+            for i in range(day + 1):  # 1, 2, 3... detections per day
+                real_db_manager.insert_detection({
+                    'timestamp': f'2024-01-{10+day:02d}T{10+i:02d}:00:00',
+                    'group_timestamp': f'2024-01-{10+day:02d}T{10+i:02d}:00:00',
+                    'common_name': 'American Robin',
+                    'scientific_name': 'Turdus migratorius',
+                    'confidence': 0.85,
+                    'latitude': 40.7128,
+                    'longitude': -74.0060,
+                    'cutoff': 0.5,
+                    'sensitivity': 0.75,
+                    'overlap': 0.25
+                })
+
+        response = api_client.get('/api/detections/trends?start_date=2024-01-10&end_date=2024-01-16')
+        assert response.status_code == 200
+
+        data = response.get_json()
+        assert 'labels' in data
+        assert 'data' in data
+        assert len(data['labels']) == 7
+        assert data['data'][0] == 1  # First day: 1 detection
+        assert data['data'][6] == 7  # Last day: 7 detections
+
+    def test_detection_trends_missing_params(self, api_client, real_db_manager):
+        """Test trends endpoint with missing parameters."""
+        response = api_client.get('/api/detections/trends')
+        assert response.status_code == 400
+        assert 'required' in response.get_json()['error'].lower()
+
+        response = api_client.get('/api/detections/trends?start_date=2024-01-01')
+        assert response.status_code == 400
+
+    def test_detection_trends_invalid_dates(self, api_client, real_db_manager):
+        """Test trends endpoint with invalid date formats."""
+        response = api_client.get('/api/detections/trends?start_date=invalid&end_date=2024-01-15')
+        assert response.status_code == 400
+        assert 'Invalid' in response.get_json()['error']
+
+    def test_detection_trends_reversed_dates(self, api_client, real_db_manager):
+        """Test trends endpoint with start_date after end_date."""
+        response = api_client.get('/api/detections/trends?start_date=2024-01-15&end_date=2024-01-01')
+        assert response.status_code == 400
+        assert 'before' in response.get_json()['error'].lower()
+
+    def test_detection_trends_empty_range(self, api_client, real_db_manager):
+        """Test trends endpoint returns zeros for empty date range."""
+        response = api_client.get('/api/detections/trends?start_date=2024-06-01&end_date=2024-06-07')
+        assert response.status_code == 200
+
+        data = response.get_json()
+        assert len(data['labels']) == 7
+        assert all(count == 0 for count in data['data'])

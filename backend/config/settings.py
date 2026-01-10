@@ -124,7 +124,7 @@ SPECTROGRAM_DIR = f'{BASE_DIR}/data/spectrograms'
 
 # Default placeholder files (always in Docker)
 DEFAULT_AUDIO_PATH = f'{BASE_DIR}/assets/default_audio.mp3'
-DEFAULT_IMAGE_PATH = f'{BASE_DIR}/assets/default_spectrogram.png'
+DEFAULT_IMAGE_PATH = f'{BASE_DIR}/assets/default_spectrogram.webp'
 
 # Audio configuration - from user settings
 RECORDING_LENGTH = user_settings['audio']['recording_length']

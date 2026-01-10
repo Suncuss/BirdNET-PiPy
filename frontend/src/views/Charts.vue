@@ -77,6 +77,98 @@
             </div>
         </div>
 
+        <!-- Detection Trends -->
+        <div class="bg-white rounded-lg shadow p-4 mt-4">
+            <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between mb-4">
+                <h2 class="text-lg font-semibold mb-2">Detection Trends</h2>
+                <div class="flex flex-wrap items-center gap-2 justify-center lg:justify-end">
+                    <!-- Time Range Dropdown -->
+                    <select
+                        v-model="trendsTimeRange"
+                        @change="onTrendsTimeRangeChange"
+                        :disabled="isUpdatingTrends"
+                        class="px-3 py-1 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm"
+                    >
+                        <option value="7">Week</option>
+                        <option value="14">Two Week</option>
+                        <option value="30">Month</option>
+                        <option value="90">3 Month</option>
+                        <option value="180">6 Month</option>
+                        <option value="365">Year</option>
+                    </select>
+
+                    <!-- Date Navigation -->
+                    <button
+                        @click="previousTrendsPeriod"
+                        :class="[
+                            'p-2 rounded-lg transition-all duration-200',
+                            isUpdatingTrends
+                                ? 'text-gray-300 cursor-not-allowed'
+                                : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+                        ]"
+                        :disabled="isUpdatingTrends"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd" />
+                        </svg>
+                    </button>
+
+                    <input
+                        type="date"
+                        v-model="trendsEndDate"
+                        @change="onTrendsEndDateChange"
+                        :max="trendsMaxDate"
+                        :disabled="isUpdatingTrends"
+                        :class="[
+                            'px-3 py-1 border rounded-md text-sm',
+                            isUpdatingTrends
+                                ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
+                                : 'border-gray-300 focus:ring-blue-500 focus:border-blue-500'
+                        ]"
+                    />
+
+                    <button
+                        @click="nextTrendsPeriod"
+                        :class="[
+                            'p-2 rounded-lg transition-all duration-200',
+                            canGoForwardTrends
+                                ? 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+                                : 'text-gray-300 cursor-not-allowed'
+                        ]"
+                        :disabled="!canGoForwardTrends || isUpdatingTrends"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
+                        </svg>
+                    </button>
+
+                    <button
+                        @click="goToTodayTrends"
+                        :class="[
+                            'font-semibold py-1 px-3 rounded-lg shadow text-sm transition-all duration-300',
+                            isUpdatingTrends
+                                ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
+                                : 'bg-blue-600 hover:bg-blue-700 text-white focus:outline-none focus:ring-2 focus:ring-blue-300'
+                        ]"
+                        :disabled="isUpdatingTrends"
+                    >
+                        Today
+                    </button>
+                </div>
+            </div>
+
+            <!-- Chart or Placeholder -->
+            <div v-if="trendsChartData.data.length > 0 && !trendsChartError" class="h-[300px] lg:h-[375px]">
+                <canvas ref="trendsChart" class="h-full"></canvas>
+            </div>
+            <div v-else-if="trendsChartError" class="flex items-center justify-center h-[300px] lg:h-[375px]">
+                <p class="text-lg text-gray-500">{{ trendsChartError }}</p>
+            </div>
+            <div v-else class="flex items-center justify-center h-[300px] lg:h-[375px]">
+                <p class="text-lg text-gray-500">No detection data available for the selected period.</p>
+            </div>
+        </div>
+
         <!-- Species Detection Distribution -->
         <div class="bg-white rounded-lg shadow p-4 mt-4">
             <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between mb-4">
@@ -210,7 +302,8 @@ export default {
         const {
             detailedBirdActivityData,
             detailedBirdActivityError,
-            fetchChartsData
+            fetchChartsData,
+            fetchTrendsData
         } = useFetchBirdData()
 
         // Use composables
@@ -258,6 +351,16 @@ export default {
         const speciesChartInstance = ref(null)
         const speciesChartError = ref(null)
 
+        // Detection Trends chart
+        const trendsChart = ref(null)
+        const trendsChartInstance = ref(null)
+        const trendsTimeRange = ref('30')  // Default 30 days
+        const trendsEndDate = ref(getLocalDateString())
+        const trendsMaxDate = ref(getLocalDateString())
+        const isUpdatingTrends = ref(false)
+        const trendsChartData = ref({ labels: [], data: [] })
+        const trendsChartError = ref(null)
+
         // Computed properties
         const isDataEmpty = computed(() =>
             detailedBirdActivityData.value.length === 0 ||
@@ -277,6 +380,27 @@ export default {
         const canGoForward = computed(() => {
             return selectedDate.value < maxDate.value
         })
+
+        const canGoForwardTrends = computed(() => {
+            return trendsEndDate.value < trendsMaxDate.value
+        })
+
+        const trendsRangeLabels = {
+            '7': 'Week',
+            '14': 'Two Week',
+            '30': 'Month',
+            '90': '3 Month',
+            '180': '6 Month',
+            '365': 'Year'
+        }
+
+        const speciesViewLabels = {
+            day: 'Day',
+            week: 'Week',
+            month: 'Month',
+            '6month': '6 Month',
+            year: 'Year'
+        }
 
         // Methods
         const onDateChange = async () => {
@@ -314,7 +438,9 @@ export default {
 
         const goToToday = () => {
             if (isUpdating.value) return
-            selectedDate.value = getLocalDateString()
+            const today = getLocalDateString()
+            if (selectedDate.value === today) return
+            selectedDate.value = today
             onDateChange()
         }
 
@@ -423,6 +549,7 @@ export default {
 
             destroyChart(speciesChart)
 
+            const viewLabel = speciesViewLabels[speciesView.value] || speciesView.value
             const ctx = speciesChart.value.getContext('2d')
             speciesChartInstance.value = new Chart(ctx, {
                 type: 'bar',
@@ -443,7 +570,7 @@ export default {
                         legend: { display: false },
                         title: {
                             display: true,
-                            text: `${selectedSpecies.value.common_name} - ${speciesView.value.charAt(0).toUpperCase() + speciesView.value.slice(1)} View`,
+                            text: `${selectedSpecies.value.common_name} - ${viewLabel} View`,
                             font: { size: 14 },
                             color: colorPalette.text
                         }
@@ -481,6 +608,178 @@ export default {
             })
         }
 
+        // Detection Trends chart methods
+        const getTrendsStartDate = () => {
+            const endDate = new Date(trendsEndDate.value + 'T00:00:00')
+            const daysBack = parseInt(trendsTimeRange.value) - 1
+            const startDate = new Date(endDate)
+            startDate.setDate(startDate.getDate() - daysBack)
+            return getLocalDateString(startDate)
+        }
+
+        const updateTrendsChart = async () => {
+            if (isUpdatingTrends.value) return
+
+            isUpdatingTrends.value = true
+            trendsChartError.value = null
+
+            try {
+                const startDate = getTrendsStartDate()
+                const endDate = trendsEndDate.value
+
+                const data = await fetchTrendsData(startDate, endDate)
+
+                if (data) {
+                    trendsChartData.value = data
+                    await nextTick()
+                    createTrendsChart(data)
+                }
+            } catch (error) {
+                console.error('Error updating trends chart:', error)
+                trendsChartError.value = 'Failed to load detection trends'
+            } finally {
+                isUpdatingTrends.value = false
+            }
+        }
+
+        const createTrendsChart = (data) => {
+            if (!trendsChart.value) return
+
+            destroyChart(trendsChart)
+
+            const ctx = trendsChart.value.getContext('2d')
+
+            // Format labels for display (shorter date format)
+            const displayLabels = data.labels.map(dateStr => {
+                const date = new Date(dateStr + 'T00:00:00')
+                return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+            })
+
+            const rangeLabel = trendsRangeLabels[trendsTimeRange.value] || `${trendsTimeRange.value} Days`
+
+            trendsChartInstance.value = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: displayLabels,
+                    datasets: [{
+                        label: 'Total Detections',
+                        data: data.data,
+                        borderColor: colorPalette.secondary,
+                        backgroundColor: colorPalette.secondary + '40',  // 25% opacity
+                        fill: false,
+                        tension: 0.4,  // Cubic interpolation for smooth curves
+                        pointRadius: data.data.length > 60 ? 0 : 3,  // Hide points for long ranges
+                        pointHoverRadius: 5,
+                        pointBackgroundColor: colorPalette.secondary
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        intersect: false,
+                        mode: 'index'
+                    },
+                    plugins: {
+                        legend: { display: false },
+                        title: {
+                            display: true,
+                            text: `Daily Detections - ${rangeLabel}`,
+                            font: { size: 14 },
+                            color: colorPalette.text
+                        },
+                        tooltip: {
+                            callbacks: {
+                                title: (context) => {
+                                    // Show full date in tooltip
+                                    const index = context[0].dataIndex
+                                    const fullDate = data.labels[index]
+                                    const date = new Date(fullDate + 'T00:00:00')
+                                    return date.toLocaleDateString('en-US', {
+                                        weekday: 'short',
+                                        month: 'short',
+                                        day: 'numeric',
+                                        year: 'numeric'
+                                    })
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Detections',
+                                color: colorPalette.text
+                            },
+                            ticks: {
+                                color: colorPalette.text,
+                                callback: (value) => {
+                                    return Number.isInteger(value) ? value : ''
+                                }
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Date',
+                                color: colorPalette.text
+                            },
+                            ticks: {
+                                color: colorPalette.text,
+                                maxRotation: 45,
+                                minRotation: 45,
+                                // Auto-skip labels for readability
+                                autoSkip: true,
+                                maxTicksLimit: 15
+                            }
+                        }
+                    }
+                }
+            })
+        }
+
+        const onTrendsTimeRangeChange = () => {
+            updateTrendsChart()
+        }
+
+        const onTrendsEndDateChange = () => {
+            updateTrendsChart()
+        }
+
+        const previousTrendsPeriod = () => {
+            if (isUpdatingTrends.value) return
+            const date = new Date(trendsEndDate.value + 'T00:00:00')
+            const daysBack = parseInt(trendsTimeRange.value)
+            date.setDate(date.getDate() - daysBack)
+            trendsEndDate.value = getLocalDateString(date)
+            updateTrendsChart()
+        }
+
+        const nextTrendsPeriod = () => {
+            if (!canGoForwardTrends.value || isUpdatingTrends.value) return
+            const date = new Date(trendsEndDate.value + 'T00:00:00')
+            const daysForward = parseInt(trendsTimeRange.value)
+            date.setDate(date.getDate() + daysForward)
+            // Cap at today
+            const today = new Date()
+            if (date > today) {
+                trendsEndDate.value = getLocalDateString(today)
+            } else {
+                trendsEndDate.value = getLocalDateString(date)
+            }
+            updateTrendsChart()
+        }
+
+        const goToTodayTrends = () => {
+            if (isUpdatingTrends.value) return
+            const today = getLocalDateString()
+            if (trendsEndDate.value === today) return
+            trendsEndDate.value = today
+            updateTrendsChart()
+        }
+
         // Lifecycle
         onMounted(async () => {
             await fetchChartsData(selectedDate.value)
@@ -488,12 +787,14 @@ export default {
                 createCharts()
             }
             await fetchAllSpecies()
+            await updateTrendsChart()
         })
 
         onUnmounted(() => {
             destroyChart(totalObservationsChart)
             destroyChart(hourlyActivityHeatmap)
             destroyChart(speciesChart)
+            destroyChart(trendsChart)
         })
 
         // Watch for data changes
@@ -539,7 +840,21 @@ export default {
             canGoForwardSpecies,
             onSpeciesViewChange,
             previousSpeciesPeriod,
-            nextSpeciesPeriod
+            nextSpeciesPeriod,
+            // Detection Trends chart
+            trendsChart,
+            trendsTimeRange,
+            trendsEndDate,
+            trendsMaxDate,
+            trendsChartData,
+            trendsChartError,
+            isUpdatingTrends,
+            canGoForwardTrends,
+            onTrendsTimeRangeChange,
+            onTrendsEndDateChange,
+            previousTrendsPeriod,
+            nextTrendsPeriod,
+            goToTodayTrends
         }
     }
 }

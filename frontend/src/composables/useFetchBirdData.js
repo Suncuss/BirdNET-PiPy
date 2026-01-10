@@ -18,7 +18,10 @@ export function useFetchBirdData() {
   const recentObservationsError = ref(null);
   const summaryError = ref(null);
 
-  const latestObservationimageUrl = ref("/default_bird.png");
+  const trendsData = ref({ labels: [], data: [] });
+  const trendsError = ref(null);
+
+  const latestObservationimageUrl = ref("/default_bird.webp");
 
   const fetchChartsData = async (date) => {
     logger.info('Fetching charts data', { date });
@@ -162,6 +165,32 @@ export function useFetchBirdData() {
     }
   };
 
+  const fetchTrendsData = async (startDate, endDate) => {
+    logger.info('Fetching trends data', { startDate, endDate });
+    trendsError.value = null;
+
+    try {
+      const response = await api.get('/detections/trends', {
+        params: { start_date: startDate, end_date: endDate }
+      });
+      logger.api('GET', '/detections/trends', { startDate, endDate }, response);
+
+      trendsData.value = response.data;
+
+      logger.debug('Trends data fetched successfully', {
+        days: trendsData.value.labels?.length || 0,
+        totalDetections: trendsData.value.data?.reduce((a, b) => a + b, 0) || 0
+      });
+
+      return response.data;
+    } catch (error) {
+      logger.error('Failed to fetch trends data', error);
+      trendsError.value = 'Failed to fetch detection trends data.';
+      trendsData.value = { labels: [], data: [] };
+      return null;
+    }
+  };
+
   return {
     hourlyBirdActivityData,
     detailedBirdActivityData,
@@ -173,8 +202,11 @@ export function useFetchBirdData() {
     latestObservationError,
     recentObservationsError,
     summaryError,
+    trendsData,
+    trendsError,
     latestObservationimageUrl,
     fetchDashboardData,
     fetchChartsData,
+    fetchTrendsData,
   };
 }

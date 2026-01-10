@@ -63,8 +63,10 @@ export function useDateNavigation(options = {}) {
       case 'week': {
         const thisWeekStart = new Date(now)
         thisWeekStart.setDate(now.getDate() - now.getDay())
+        thisWeekStart.setHours(0, 0, 0, 0)
         const anchorWeekStart = new Date(anchor)
         anchorWeekStart.setDate(anchor.getDate() - anchor.getDay())
+        anchorWeekStart.setHours(0, 0, 0, 0)
         return anchorWeekStart < thisWeekStart
       }
       case 'month':

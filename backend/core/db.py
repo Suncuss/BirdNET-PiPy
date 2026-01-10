@@ -684,7 +684,70 @@ class DatabaseManager:
             'total_detections': sum(data)
         })
         return {'labels': labels, 'data': data}
-    
+
+    def get_daily_detection_counts(self, start_date, end_date):
+        """Get total detection counts per day for a date range.
+
+        Args:
+            start_date: Start date string (YYYY-MM-DD)
+            end_date: End date string (YYYY-MM-DD)
+
+        Returns:
+            dict: {'labels': ['YYYY-MM-DD', ...], 'data': [count, ...]}
+                  Labels are all dates in range (including zeros for continuity)
+        """
+        logger.debug("Getting daily detection counts", extra={
+            'start_date': start_date,
+            'end_date': end_date
+        })
+
+        # Parse dates
+        start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+        end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+
+        # Generate all dates in range for labels (ensures continuous data)
+        all_dates = []
+        current = start_dt
+        while current <= end_dt:
+            all_dates.append(current.strftime('%Y-%m-%d'))
+            current += timedelta(days=1)
+
+        # Initialize data with zeros
+        data = {date: 0 for date in all_dates}
+
+        # Query counts per day
+        query = """
+        SELECT
+            date(timestamp) as day,
+            COUNT(*) as count
+        FROM detections
+        WHERE date(timestamp) >= date(?)
+        AND date(timestamp) <= date(?)
+        GROUP BY day
+        ORDER BY day
+        """
+
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(query, (start_date, end_date))
+            results = cur.fetchall()
+
+        # Fill in counts
+        for row in results:
+            if row['day'] in data:
+                data[row['day']] = row['count']
+
+        # Convert to ordered lists
+        labels = all_dates
+        counts = [data[date] for date in all_dates]
+
+        logger.debug("Daily detection counts calculated", extra={
+            'days': len(labels),
+            'total_detections': sum(counts)
+        })
+
+        return {'labels': labels, 'data': counts}
+
     def get_all_unique_species(self):
         """Get all unique bird species ever detected, sorted alphabetically"""
         query = """

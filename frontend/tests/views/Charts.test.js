@@ -28,7 +28,10 @@ const mockChartsState = () => ({
   detailedBirdActivityData: ref([]),
   detailedBirdActivityError: ref(null),
   hourlyBirdActivityError: ref('skip chart'),
-  fetchChartsData: vi.fn()
+  fetchChartsData: vi.fn(),
+  trendsData: ref({ labels: [], data: [] }),
+  trendsError: ref(null),
+  fetchTrendsData: vi.fn().mockResolvedValue({ labels: [], data: [] })
 })
 
 const mountCharts = () => mount(Charts, {
@@ -117,5 +120,88 @@ describe('Charts', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('Failed to load')
+  })
+
+  describe('Detection Trends', () => {
+    it('initializes trends with 30 day default', async () => {
+      const wrapper = mountCharts()
+      await flushPromises()
+
+      expect(wrapper.vm.trendsTimeRange).toBe('30')
+    })
+
+    it('initializes trends end date to today', async () => {
+      const wrapper = mountCharts()
+      await flushPromises()
+
+      expect(wrapper.vm.trendsEndDate).toBe(today)
+    })
+
+    it('disables forward navigation when end date is today', async () => {
+      const wrapper = mountCharts()
+      await flushPromises()
+
+      expect(wrapper.vm.canGoForwardTrends).toBe(false)
+    })
+
+    it('enables forward navigation after navigating back', async () => {
+      const state = mockChartsState()
+      useFetchBirdData.mockReturnValue(state)
+
+      const wrapper = mountCharts()
+      await flushPromises()
+
+      wrapper.vm.previousTrendsPeriod()
+      await flushPromises()
+
+      expect(wrapper.vm.canGoForwardTrends).toBe(true)
+    })
+
+    it('calls fetchTrendsData when time range changes', async () => {
+      const state = mockChartsState()
+      useFetchBirdData.mockReturnValue(state)
+
+      const wrapper = mountCharts()
+      await flushPromises()
+
+      // Reset the mock to check for new calls
+      state.fetchTrendsData.mockClear()
+
+      wrapper.vm.trendsTimeRange = '7'
+      await wrapper.vm.onTrendsTimeRangeChange()
+      await flushPromises()
+
+      expect(state.fetchTrendsData).toHaveBeenCalled()
+    })
+
+    it('shows error message when trendsChartError exists', async () => {
+      const wrapper = mountCharts()
+      await flushPromises()
+
+      wrapper.vm.trendsChartError = 'Failed to load trends'
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('Failed to load trends')
+    })
+
+    it('goToTodayTrends resets end date to today', async () => {
+      const state = mockChartsState()
+      useFetchBirdData.mockReturnValue(state)
+
+      const wrapper = mountCharts()
+      await flushPromises()
+
+      // Navigate back first
+      wrapper.vm.previousTrendsPeriod()
+      await flushPromises()
+
+      expect(wrapper.vm.trendsEndDate).not.toBe(today)
+
+      // Reset to today
+      wrapper.vm.goToTodayTrends()
+      await flushPromises()
+
+      expect(wrapper.vm.trendsEndDate).toBe(today)
+    })
   })
 })

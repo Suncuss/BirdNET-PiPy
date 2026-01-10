@@ -367,6 +367,48 @@ def get_all_species():
     return jsonify(species_list)
 
 
+@api.route('/api/detections/trends', methods=['GET'])
+@log_api_request
+@handle_api_errors
+def get_detection_trends():
+    """Get daily detection counts for trend visualization.
+
+    Query params:
+    - start_date: Start date (YYYY-MM-DD) - required
+    - end_date: End date (YYYY-MM-DD) - required
+
+    Returns:
+        JSON: {'labels': ['2024-01-01', ...], 'data': [count, ...]}
+    """
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+
+    # Validate required parameters
+    if not start_date or not end_date:
+        return jsonify({'error': 'Both start_date and end_date are required'}), 400
+
+    # Validate date formats
+    for date_param, date_value in [('start_date', start_date), ('end_date', end_date)]:
+        try:
+            datetime.strptime(date_value, '%Y-%m-%d')
+        except ValueError:
+            return jsonify({'error': f'Invalid {date_param} format. Use YYYY-MM-DD'}), 400
+
+    # Validate date order
+    if start_date > end_date:
+        return jsonify({'error': 'start_date must be before or equal to end_date'}), 400
+
+    trends = db_manager.get_daily_detection_counts(start_date, end_date)
+
+    log_data_metrics('get_detection_trends', trends, {
+        'start_date': start_date,
+        'end_date': end_date,
+        'days': len(trends.get('labels', []))
+    })
+
+    return jsonify(trends)
+
+
 @api.route('/api/detections', methods=['GET'])
 @log_api_request
 @handle_api_errors

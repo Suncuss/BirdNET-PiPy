@@ -293,3 +293,97 @@ class TestDatabaseQueryMethods:
         assert len(results) == 1, f"Expected 1 result, got {len(results)}"
         assert results[0]['common_name'] == 'Brown-headed Nuthatch'
         assert results[0]['confidence'] == 0.87
+
+
+class TestDailyDetectionCounts:
+    """Tests for get_daily_detection_counts() method."""
+
+    def test_basic_daily_counts(self, test_db_manager):
+        """Test basic daily detection counting."""
+        # Insert detections across multiple days
+        days_data = [
+            ('2024-01-10', 5),
+            ('2024-01-11', 3),
+            ('2024-01-12', 0),  # No detections (won't insert)
+            ('2024-01-13', 8),
+        ]
+
+        for date, count in days_data:
+            for i in range(count):
+                test_db_manager.insert_detection({
+                    'timestamp': f'{date}T{10+i:02d}:00:00',
+                    'group_timestamp': f'{date}T{10+i:02d}:00:00',
+                    'scientific_name': 'Turdus migratorius',
+                    'common_name': 'American Robin',
+                    'confidence': 0.8,
+                    'latitude': 40.7128,
+                    'longitude': -74.0060,
+                    'cutoff': 0.5,
+                    'sensitivity': 0.75,
+                    'overlap': 0.25
+                })
+
+        result = test_db_manager.get_daily_detection_counts('2024-01-10', '2024-01-13')
+
+        assert 'labels' in result
+        assert 'data' in result
+        assert len(result['labels']) == 4
+        assert result['labels'] == ['2024-01-10', '2024-01-11', '2024-01-12', '2024-01-13']
+        assert result['data'] == [5, 3, 0, 8]
+
+    def test_empty_range(self, test_db_manager):
+        """Test with no detections in range."""
+        result = test_db_manager.get_daily_detection_counts('2024-06-01', '2024-06-07')
+
+        assert len(result['labels']) == 7
+        assert all(count == 0 for count in result['data'])
+
+    def test_single_day(self, test_db_manager):
+        """Test single day range."""
+        test_db_manager.insert_detection({
+            'timestamp': '2024-01-15T12:00:00',
+            'group_timestamp': '2024-01-15T12:00:00',
+            'scientific_name': 'Turdus migratorius',
+            'common_name': 'American Robin',
+            'confidence': 0.8,
+            'latitude': 40.7128,
+            'longitude': -74.0060,
+            'cutoff': 0.5,
+            'sensitivity': 0.75,
+            'overlap': 0.25
+        })
+
+        result = test_db_manager.get_daily_detection_counts('2024-01-15', '2024-01-15')
+
+        assert len(result['labels']) == 1
+        assert result['labels'] == ['2024-01-15']
+        assert result['data'] == [1]
+
+    def test_long_range(self, test_db_manager):
+        """Test 365-day range returns correct number of days."""
+        result = test_db_manager.get_daily_detection_counts('2024-01-01', '2024-12-31')
+
+        # 2024 is a leap year: 366 days
+        assert len(result['labels']) == 366
+        assert len(result['data']) == 366
+
+    def test_multiple_species_combined(self, test_db_manager):
+        """Test that counts combine all species."""
+        # Insert different species on same day
+        for species in ['American Robin', 'Blue Jay', 'Cardinal']:
+            test_db_manager.insert_detection({
+                'timestamp': '2024-01-15T12:00:00',
+                'group_timestamp': '2024-01-15T12:00:00',
+                'scientific_name': f'{species}_scientific',
+                'common_name': species,
+                'confidence': 0.8,
+                'latitude': 40.7128,
+                'longitude': -74.0060,
+                'cutoff': 0.5,
+                'sensitivity': 0.75,
+                'overlap': 0.25
+            })
+
+        result = test_db_manager.get_daily_detection_counts('2024-01-15', '2024-01-15')
+
+        assert result['data'] == [3]  # All species combined

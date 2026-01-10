@@ -67,7 +67,7 @@ describe('useFetchBirdData', () => {
       expect(result.latestObservationData.value).toBeNull()
       expect(result.recentObservationsData.value).toEqual([])
       expect(result.summaryData.value).toEqual({})
-      expect(result.latestObservationimageUrl.value).toBe('/default_bird.png')
+      expect(result.latestObservationimageUrl.value).toBe('/default_bird.webp')
     })
 
     it('initializes errors as null', () => {
@@ -254,7 +254,7 @@ describe('useFetchBirdData', () => {
 
       await fetchDashboardData()
 
-      expect(latestObservationimageUrl.value).toBe('/default_bird.png')
+      expect(latestObservationimageUrl.value).toBe('/default_bird.webp')
     })
 
     it('sets error messages on API failures', async () => {

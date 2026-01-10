@@ -29,7 +29,7 @@ const baseState = () => ({
   latestObservationError: ref(null),
   recentObservationsError: ref(null),
   summaryError: ref(null),
-  latestObservationimageUrl: ref('/default_bird.png'),
+  latestObservationimageUrl: ref('/default_bird.webp'),
   fetchDashboardData: vi.fn(),
   fetchChartsData: vi.fn()
 })

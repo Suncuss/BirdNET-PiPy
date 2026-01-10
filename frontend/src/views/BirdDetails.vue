@@ -193,7 +193,7 @@ export default {
     const selectedSpectrogramUrl = ref(null)
 
     const birdImageData = ref({
-      imageUrl: '/default_bird.png',
+      imageUrl: '/default_bird.webp',
       pageUrl: '',
       authorName: 'N/A',
       authorUrl: '',

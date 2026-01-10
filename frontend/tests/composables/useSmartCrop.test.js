@@ -98,7 +98,7 @@ describe('useSmartCrop', () => {
       global.Image = originalImage
     })
 
-    it('clamps values to 10-90% range', async () => {
+    it('clamps values to 0-100% range for square images', async () => {
       const mockImage = {
         naturalWidth: 1000,
         naturalHeight: 1000
@@ -119,14 +119,88 @@ describe('useSmartCrop', () => {
       })
 
       // Crop at extreme corner (0, 0)
-      // Center would be at (50, 50) = 5%, 5% - should clamp to 10%, 10%
+      // Center would be at (50, 50) = 5%, 5% - clamps to 0% minimum
       smartcrop.crop.mockResolvedValue({
         topCrop: { x: 0, y: 0, width: 100, height: 100 }
       })
 
       const result = await helpers.calculateFocalPoint('https://example.com/corner.jpg')
 
-      expect(result).toBe('10.0% 10.0%')
+      expect(result).toBe('5.0% 5.0%')
+
+      global.Image = originalImage
+    })
+
+    it('maps focal point to correct object-position for portrait images', async () => {
+      // Portrait image: 750x1000 (aspect 0.75)
+      // In square container, visible height = 75% of image
+      // halfVisible = 37.5%
+      const mockImage = {
+        naturalWidth: 750,
+        naturalHeight: 1000
+      }
+
+      const originalImage = global.Image
+      global.Image = vi.fn().mockImplementation(() => {
+        const img = {
+          crossOrigin: '',
+          onload: null,
+          onerror: null,
+          src: '',
+          naturalWidth: mockImage.naturalWidth,
+          naturalHeight: mockImage.naturalHeight
+        }
+        setTimeout(() => img.onload?.(), 0)
+        return img
+      })
+
+      // Focal point at top (5%) - should map to 0% to show top of image
+      smartcrop.crop.mockResolvedValue({
+        topCrop: { x: 325, y: 0, width: 100, height: 100 }
+      })
+
+      const result = await helpers.calculateFocalPoint('https://example.com/portrait.jpg')
+
+      // Focal Y = 5%, which is < halfVisible (37.5%), so object-position Y = 0%
+      expect(result).toBe('50.0% 0.0%')
+
+      global.Image = originalImage
+    })
+
+    it('maps focal point to correct object-position for extreme portrait images', async () => {
+      // Extreme portrait image: 600x1000 (aspect 0.6)
+      // In square container, visible height = 60% of image
+      // halfVisible = 30%
+      const mockImage = {
+        naturalWidth: 600,
+        naturalHeight: 1000
+      }
+
+      const originalImage = global.Image
+      global.Image = vi.fn().mockImplementation(() => {
+        const img = {
+          crossOrigin: '',
+          onload: null,
+          onerror: null,
+          src: '',
+          naturalWidth: mockImage.naturalWidth,
+          naturalHeight: mockImage.naturalHeight
+        }
+        setTimeout(() => img.onload?.(), 0)
+        return img
+      })
+
+      // Focal point at 20% from top - should map to 0% (within upper visible region)
+      smartcrop.crop.mockResolvedValue({
+        topCrop: { x: 250, y: 150, width: 100, height: 100 }
+      })
+
+      const result = await helpers.calculateFocalPoint('https://example.com/extreme-portrait.jpg')
+
+      // Focal Y = 20%, which is < halfVisible (30%), so object-position Y = 0%
+      expect(result).toBe('50.0% 0.0%')
+      // smartcrop should still be called with new algorithm
+      expect(smartcrop.crop).toHaveBeenCalled()
 
       global.Image = originalImage
     })
@@ -146,7 +220,7 @@ describe('useSmartCrop', () => {
 
       const result = await helpers.calculateFocalPoint('https://example.com/broken.jpg')
 
-      expect(result).toBe('50% 50%')
+      expect(result).toBe('50% 35%')
 
       global.Image = originalImage
     })
@@ -170,26 +244,26 @@ describe('useSmartCrop', () => {
 
       const result = await helpers.calculateFocalPoint('https://example.com/fail.jpg')
 
-      expect(result).toBe('50% 50%')
+      expect(result).toBe('50% 35%')
 
       global.Image = originalImage
     })
   })
 
   describe('useFocalPoint', () => {
-    it('initializes with default center position and ready state', () => {
+    it('initializes with default upper-center position for bird photos', () => {
       const { focalPoint, isReady } = helpers.useFocalPoint()
 
-      expect(focalPoint.value).toBe('50% 50%')
+      expect(focalPoint.value).toBe('50% 35%')
       expect(isReady.value).toBe(true) // Starts visible to show placeholder
     })
 
     it('sets isReady to true for default bird image', async () => {
       const { focalPoint, isReady, updateFocalPoint } = helpers.useFocalPoint()
 
-      await updateFocalPoint('/default_bird.png')
+      await updateFocalPoint('/default_bird.webp')
 
-      expect(focalPoint.value).toBe('50% 50%')
+      expect(focalPoint.value).toBe('50% 35%')
       expect(isReady.value).toBe(true)
     })
 
@@ -271,8 +345,8 @@ describe('useSmartCrop', () => {
   describe('processBirdImages', () => {
     it('sets focalPointReady flag on each bird', async () => {
       const birds = [
-        { name: 'Sparrow', imageUrl: '/default_bird.png' },
-        { name: 'Robin', imageUrl: '/default_bird.png' }
+        { name: 'Sparrow', imageUrl: '/default_bird.webp' },
+        { name: 'Robin', imageUrl: '/default_bird.webp' }
       ]
 
       await helpers.processBirdImages(birds)
@@ -283,12 +357,12 @@ describe('useSmartCrop', () => {
 
     it('sets default focal point for placeholder images', async () => {
       const birds = [
-        { name: 'Sparrow', imageUrl: '/default_bird.png' }
+        { name: 'Sparrow', imageUrl: '/default_bird.webp' }
       ]
 
       await helpers.processBirdImages(birds)
 
-      expect(birds[0].focalPoint).toBe('50% 50%')
+      expect(birds[0].focalPoint).toBe('50% 35%')
     })
 
     it('calculates focal point for real images', async () => {

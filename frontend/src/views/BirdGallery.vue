@@ -98,7 +98,7 @@ export default {
           name: bird.common_name,
           scientificName: bird.scientific_name,
           lastDetected: new Date(bird.timestamp),
-          imageUrl: '/default_bird.png',
+          imageUrl: '/default_bird.webp',
           focalPointReady: true,  // Show placeholder immediately
         }))
       } catch (error) {
@@ -117,7 +117,7 @@ export default {
           name: bird.common_name,
           scientificName: bird.scientific_name,
           lastDetected: new Date(bird.timestamp),
-          imageUrl: '/default_bird.png',
+          imageUrl: '/default_bird.webp',
           focalPointReady: true,  // Show placeholder immediately
         }))
       } catch (error) {
@@ -140,7 +140,7 @@ export default {
                 name: species.common_name,
                 scientificName: species.scientific_name,
                 lastDetected: details.last_detected ? new Date(details.last_detected) : null,
-                imageUrl: '/default_bird.png',
+                imageUrl: '/default_bird.webp',
                 focalPointReady: true,  // Show placeholder immediately
               }
             } catch (error) {
@@ -150,7 +150,7 @@ export default {
                 name: species.common_name,
                 scientificName: species.scientific_name,
                 lastDetected: null,
-                imageUrl: '/default_bird.png',
+                imageUrl: '/default_bird.webp',
                 focalPointReady: true,  // Show placeholder immediately
               }
             }
