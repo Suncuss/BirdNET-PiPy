@@ -1,19 +1,18 @@
 ## [Unreleased]
 
-- Changed Wikimedia image cache expiration from 24 to 48 hours
-
 ## [0.3.0] - 2026-01-10
 
 - Added smart image cropping - bird photos now crop to center the bird in frame
 - Added smooth fade transition when switching between bird images
 - Added update channel setting - choose between stable releases or latest development builds
 - Added model factory pattern to backend to support different ML models in the future
+- Changed Wikimedia image cache expiration from 24 to 48 hours
 - Improved update UX - page auto-scrolls to top so you can see progress messages
 - Improved update messaging when switching between channels
-- Removed redundant "update available" status text
 - Fixed update flow for users ahead of stable tags
 - Fixed checkout conflicts with untracked files during updates
 - Fixed stable channel updates from detached HEAD state
+- Removed redundant "update available" status text
 - Removed old `birdnet_service` directory
 
 ## [0.2.0] - 2026-01-02
