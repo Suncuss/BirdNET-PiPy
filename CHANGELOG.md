@@ -45,38 +45,18 @@
 
 ## [0.1.0] - 2025-11-28
 
-First release.
+First public release.
 
-- Added bird detection using BirdNET TensorFlow Lite model
-- Added Dashboard with detection summary, recent observations, and activity charts
-- Added Bird Gallery with Wikimedia images
-- Added Bird Details page with detection history, charts, and recordings list
-- Added Charts view with day/week/month navigation
-- Added Live Feed showing detections in real-time via WebSocket
-- Added Settings page for recording source, location, confidence threshold
-- Added PulseAudio setup for sharing audio between containers
-- Added Icecast streaming for browser audio playback
-- Added support for USB microphone, HTTP streams, and RTSP cameras
-- Added configurable overlap between audio chunks for better detection at boundaries
-- Added WebP spectrograms (much smaller than PNG)
-- Added mobile-friendly layouts
-- Added Safari compatibility
-- Added audio playback for bird calls
 - Added one-line curl install for Raspberry Pi
-- Added Docker Compose deployment with nginx reverse proxy
-- Added auto-reboot after installation with countdown
-- Added installation logging for troubleshooting
 - Added in-app update checking and installation
-- Added systemd service with auto-restart
 - Added storage usage display and automatic cleanup (keeps top 60 per species)
 - Added optional password protection for settings and audio stream
 - Added rate limiting on login
-- Added test suite for backend (real SQLite databases) and frontend (Vitest)
-- Added single build.sh script to build and deploy everything
+- Added auto-reboot after installation with countdown
+- Added installation logging for troubleshooting
 - Changed audio loading from librosa to scipy for faster startup
 - Fixed memory leaks in dashboard audio playback
 - Fixed thread hangs with proper timeouts
-- Fixed chart timezone issues
 
 ---
 
@@ -84,23 +64,20 @@ First release.
 
 ### August-November 2025
 
-- Added direct ALSA microphone recording option
-- Added HTTP stream recording with atomic file writes
-- Added RTSP camera support
-- Changed audio architecture from ALSA to PulseAudio for multi-container sharing
-- Added Icecast stream to LiveFeed view
-- Added auto-detect for host timezone
-- Changed spectrogram format from PNG to WebP (87% smaller)
+- Added PulseAudio architecture for multi-container audio sharing
+- Added Icecast streaming for browser audio playback
 - Added nginx reverse proxy for unified port 80 access
+- Added support for USB microphone, HTTP streams, and RTSP cameras
+- Added configurable overlap between audio chunks for better detection at boundaries
+- Added Docker Compose deployment with systemd service
+- Added test suite for backend and frontend
+- Added single build.sh script to build and deploy everything
+- Changed spectrogram format from PNG to WebP (87% smaller)
 - Improved Docker builds with multi-stage pattern
 - Refactored main.py to filesystem-as-queue architecture
 - Added thread safety with TFLite interpreter locking
-- Added timeouts to prevent thread hangs
-- Fixed memory leaks in dashboard audio context
 - Added security hardening: input validation, CORS, secure headers
 - Expanded test coverage to 62% with real SQLite databases
-- Added one-line curl installation script
-- Added systemd service with auto-restart
 
 ### June-July 2025
 
@@ -111,30 +88,29 @@ First release.
 
 ### May-June 2025
 
-- Rebuilt detection distribution with day/week/month tabs
+- Added Charts view with day/week/month navigation
 - Added real-time live detection via Socket.IO
 - Added FFmpeg + Icecast deployment for browser audio streaming
 - Added dynamic settings management with flag-based restarts
-- Fixed Safari chart rendering issues
-- Fixed Safari dropdown styling
+- Added mobile-friendly layouts
+- Fixed Safari chart rendering and dropdown styling
 - Fixed SPA routing in Docker
 
 ### August 2024
 
-- Added BirdDetails view with per-species charts
-- Added audio playback with useAudioPlayback composable
+- Added BirdDetails view with per-species detection history and charts
+- Added paginated recordings section with sort options
+- Added audio playback for bird calls
 - Added Docker containers for frontend and backend
-- Added database queries with confidence tiebreaking
-- Added timestamp handling for detection records
+- Added Settings page for recording source, location, confidence threshold
 - Improved spectrogram styling
 
 ### July 2024
 
 - Added Vue.js 3 frontend with Composition API
-- Added Dashboard view with detection charts
-- Added BirdGallery view for browsing species
+- Added Dashboard with detection summary, recent observations, and activity charts
+- Added Bird Gallery with Wikimedia images
 - Added Chart.js integration for detection distribution
-- Added Wikimedia API integration for bird photos
 - Added WebSocket support for live updates
 
 ### November 2023
