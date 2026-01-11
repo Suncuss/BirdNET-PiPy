@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+- Added audio stream error handling in Live Feed - detects network errors, stream end, and buffering
+- Added visual error feedback with amber pulsing status message
+- Added stream connection/disconnection logging in Icecast container with timestamps
+- Improved Live Feed status messages - removed unrelated WebSocket status, focused on audio state
+- Hidden stream description on mobile for cleaner layout
+
 ## [0.3.1] - 2026-01-10
 
 - Added Detection Trends chart showing bird activity over configurable time ranges

@@ -1,5 +1,5 @@
 from core.db import DatabaseManager
-from config.settings import SPECTROGRAM_DIR, EXTRACTED_AUDIO_DIR, DEFAULT_AUDIO_PATH, DEFAULT_IMAGE_PATH, API_PORT, BASE_DIR, STREAM_URL, RECORDING_MODE, LABELS_PATH, load_user_settings, get_default_settings
+from config.settings import SPECTROGRAM_DIR, EXTRACTED_AUDIO_DIR, DEFAULT_AUDIO_PATH, DEFAULT_IMAGE_PATH, API_PORT, BASE_DIR, STREAM_URL, RTSP_URL, RECORDING_MODE, LABELS_PATH, load_user_settings, get_default_settings
 from core.logging_config import setup_logging, get_logger, log_api_request
 from core.api_utils import (
     handle_api_errors,
@@ -744,11 +744,19 @@ def get_stream_config():
         })
     elif RECORDING_MODE == 'rtsp':
         # RTSP mode - use Icecast to transcode RTSP to MP3 for browser
-        return jsonify({
-            'stream_url': '/stream/stream.mp3',
-            'stream_type': 'icecast',
-            'description': 'RTSP stream via Icecast'
-        })
+        if RTSP_URL:
+            return jsonify({
+                'stream_url': '/stream/stream.mp3',
+                'stream_type': 'icecast',
+                'description': 'RTSP stream via Icecast'
+            })
+        else:
+            # rtsp mode but no URL configured
+            return jsonify({
+                'stream_url': None,
+                'stream_type': 'none',
+                'description': 'RTSP mode selected but no URL configured'
+            })
     elif RECORDING_MODE == 'http_stream':
         # HTTP stream mode - use custom stream URL
         if STREAM_URL:
@@ -1071,8 +1079,17 @@ def update_settings():
 
             # Validate RTSP URL if provided
             rtsp_url = new_settings['audio'].get('rtsp_url')
+            if recording_mode == 'rtsp' and not rtsp_url:
+                return jsonify({'error': 'RTSP URL required when recording_mode is "rtsp"'}), 400
             if rtsp_url and not rtsp_url.startswith(('rtsp://', 'rtsps://')):
                 return jsonify({'error': 'Invalid RTSP URL. Must start with rtsp:// or rtsps://'}), 400
+            
+            # Validate HTTP stream URL if required
+            stream_url = new_settings['audio'].get('stream_url')
+            if recording_mode == 'http_stream' and not stream_url:
+                return jsonify({'error': 'Stream URL required when recording_mode is "http_stream"'}), 400
+            if stream_url and not stream_url.startswith(('http://', 'https://')):
+                return jsonify({'error': 'Invalid Stream URL. Must start with http:// or https://'}), 400
 
             # Validate recording_length
             recording_length = new_settings['audio'].get('recording_length')

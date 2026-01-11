@@ -25,15 +25,26 @@
         </div>
       </div>
 
-      <!-- Restart Status Banners -->
-      <RestartStatus
-        variant="banner"
-        :isRestarting="serviceRestart.isRestarting.value || systemUpdate.isRestarting.value"
-        :restartMessage="serviceRestart.restartMessage.value || systemUpdate.restartMessage.value"
-        :restartError="serviceRestart.restartError.value"
-        :saveError="settingsSaveError"
+      <!-- Error Banner (save errors or restart errors) -->
+      <AlertBanner
+        :message="settingsSaveError || serviceRestart.restartError.value"
+        variant="warning"
         @dismiss="dismissSettingsError"
       />
+
+      <!-- Restart Progress -->
+      <div
+        v-if="(serviceRestart.isRestarting.value || systemUpdate.isRestarting.value) && (serviceRestart.restartMessage.value || systemUpdate.restartMessage.value)"
+        class="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg"
+      >
+        <div class="flex items-center gap-2 text-blue-700 text-sm">
+          <svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          <span>{{ serviceRestart.restartMessage.value || systemUpdate.restartMessage.value }}</span>
+        </div>
+      </div>
 
       <div class="space-y-4">
         <!-- Location & Audio Source -->
@@ -619,14 +630,14 @@ import { useServiceRestart } from '@/composables/useServiceRestart'
 import { useAuth } from '@/composables/useAuth'
 import api, { createLongRequest } from '@/services/api'
 import SpeciesFilterModal from '@/components/SpeciesFilterModal.vue'
-import RestartStatus from '@/components/RestartStatus.vue'
+import AlertBanner from '@/components/AlertBanner.vue'
 import AppButton from '@/components/AppButton.vue'
 
 export default {
   name: 'Settings',
   components: {
     SpeciesFilterModal,
-    RestartStatus,
+    AlertBanner,
     AppButton
   },
   setup() {
@@ -776,6 +787,15 @@ export default {
     // Save settings to API
     const saveSettings = async () => {
       try {
+        if (recordingMode.value === 'http_stream' && !settings.value.audio.stream_url?.trim()) {
+          settingsSaveError.value = 'HTTP Stream requires a Stream URL'
+          return
+        }
+        if (recordingMode.value === 'rtsp' && !settings.value.audio.rtsp_url?.trim()) {
+          settingsSaveError.value = 'RTSP Stream requires an RTSP URL'
+          return
+        }
+
         loading.value = true
         settingsSaveError.value = ''
         settings.value.location.configured = true

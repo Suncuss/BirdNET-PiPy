@@ -12,7 +12,7 @@
       <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-4">
         <button @click="toggleAudio"
           class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg shadow focus:outline-none focus:ring-2 focus:ring-blue-300 flex items-center justify-center min-w-[120px] flex-shrink-0 disabled:bg-gray-400 disabled:cursor-not-allowed"
-          :disabled="isLoading || !streamUrl">
+          :disabled="isLoading || !streamUrl || hasError">
           <template v-if="isLoading">
             <div class="animate-spin w-4 h-4 rounded-full border-2 border-gray-100 border-t-blue-500 mr-2"></div>
             Loading...
@@ -23,16 +23,19 @@
         </button>
 
         <div class="text-right">
-          <span class="text-sm text-gray-500 break-words">Status: {{ statusMessage }}</span>
-          <div class="text-xs text-gray-400 mt-1">
-            <template v-if="streamType === 'icecast'">🎤 Local Icecast Stream</template>
-            <template v-else-if="streamType === 'custom'">📡 Custom Stream</template>
+          <span class="text-sm break-words" :class="hasError ? 'text-amber-600 animate-pulse-fast' : 'text-gray-500'">Status: {{ statusMessage }}</span>
+          <div class="hidden sm:block text-xs text-gray-400 mt-1">
+            <template v-if="streamDescription">
+              {{ streamDescription }}
+            </template>
             <template v-else-if="streamType === 'none'">⚠️ No stream available</template>
             <template v-else>❓ Unknown</template>
           </div>
         </div>
       </div>
-      <audio ref="audioElement" :src="streamUrl" preload="none" crossorigin="anonymous"></audio>
+      <audio ref="audioElement" :src="streamUrl" preload="none" crossorigin="anonymous"
+        @error="handleAudioError" @stalled="handleAudioBuffering" @waiting="handleAudioBuffering"
+        @playing="handleAudioPlaying" @ended="handleAudioEnded"></audio>
       <BirdDetectionList :detections="birdDetections" />
     </div>
   </div>
@@ -54,10 +57,12 @@ export default {
     const audioElement = ref(null)
     const isPlaying = ref(false)
     const isLoading = ref(false)
+    const hasError = ref(false)
     const statusMessage = ref('Click Start to begin')
     const birdDetections = ref([])
     const streamUrl = ref('')
-    const streamType = ref('local')
+    const streamType = ref('none')
+    const streamDescription = ref('')
 
     let audioContext, analyser, source, dataArray, animationId
     let canvasCtx, canvasWidth, canvasHeight
@@ -81,6 +86,22 @@ export default {
       }
     }
 
+    const showError = (message, duration = 4000) => {
+      statusMessage.value = message
+      hasError.value = true
+      setTimeout(() => {
+        hasError.value = false
+      }, duration)
+    }
+
+    const stopPlayback = () => {
+      isPlaying.value = false
+      if (animationId) {
+        cancelAnimationFrame(animationId)
+        animationId = null
+      }
+    }
+
     const startAudio = async () => {
       try {
         isLoading.value = true
@@ -96,15 +117,17 @@ export default {
         await audioElement.value.play()
         statusMessage.value = 'Icecast stream connected'
         console.log('Audio playback started successfully')
+        return true
       } catch (error) {
         console.error('Error starting audio playback:', error)
         // Check if it might be an auth error (nginx returns 401 for unauthenticated requests)
         if (error.name === 'NotAllowedError' || error.message?.includes('401')) {
-          statusMessage.value = 'Authentication required - please log in'
+          showError('Authentication required - please log in')
           window.location.href = '/?auth=required'
         } else {
-          statusMessage.value = 'Error starting audio playback'
+          showError('Error starting audio playback')
         }
+        return false
       } finally {
         isLoading.value = false
       }
@@ -119,6 +142,57 @@ export default {
         console.error('Error stopping audio playback:', error)
         statusMessage.value = 'Error stopping audio playback'
       }
+    }
+
+    const handleAudioError = (event) => {
+      // Ignore errors when not actively playing (e.g., empty src on page load)
+      if (!isPlaying.value && !isLoading.value) {
+        return
+      }
+
+      const error = event.target.error
+      console.error('Audio element error:', error)
+
+      let errorMessage = 'Stream error'
+      if (error) {
+        switch (error.code) {
+          case MediaError.MEDIA_ERR_ABORTED:
+            errorMessage = 'Stream aborted'
+            break
+          case MediaError.MEDIA_ERR_NETWORK:
+            errorMessage = 'Network error - stream unavailable'
+            break
+          case MediaError.MEDIA_ERR_DECODE:
+            errorMessage = 'Stream decode error'
+            break
+          case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+            errorMessage = 'Stream format not supported'
+            break
+        }
+      }
+
+      showError(errorMessage)
+      isLoading.value = false
+      stopPlayback()
+    }
+
+    const handleAudioBuffering = () => {
+      console.warn('Audio stream buffering')
+      if (isPlaying.value) {
+        statusMessage.value = 'Stream buffering...'
+      }
+    }
+
+    const handleAudioPlaying = () => {
+      if (isPlaying.value) {
+        statusMessage.value = 'Icecast stream connected'
+      }
+    }
+
+    const handleAudioEnded = () => {
+      console.warn('Audio stream ended')
+      statusMessage.value = 'Stream ended - click Start to reconnect'
+      stopPlayback()
     }
 
     const drawSpectrogram = () => {
@@ -145,12 +219,11 @@ export default {
 
     const toggleAudio = async () => {
       if (isPlaying.value) {
-        cancelAnimationFrame(animationId)
+        stopPlayback()
         await stopAudio()
-        isPlaying.value = false
       } else {
-        await startAudio()
-        if (!isLoading.value) {
+        const success = await startAudio()
+        if (success) {
           if (!isSafari) {
             drawSpectrogram()
           }
@@ -164,15 +237,16 @@ export default {
         const { data: config } = await api.get('/stream/config')
         streamUrl.value = config.stream_url || ''
         streamType.value = config.stream_type || 'none'
+        streamDescription.value = config.description || ''
         console.log(`Stream URL configured (${config.stream_type}):`, streamUrl.value)
 
         // Update status message based on stream availability
         if (!streamUrl.value || streamType.value === 'none') {
-          statusMessage.value = 'No audio stream available (using direct microphone)'
+          statusMessage.value = 'No audio stream configured'
         }
       } catch (error) {
         console.error('Error fetching stream config:', error)
-        statusMessage.value = 'Error loading stream configuration'
+        showError('Error loading stream configuration')
       }
     }
 
@@ -183,18 +257,10 @@ export default {
 
       socket.on('connect', () => {
         console.log('Connected to WebSocket')
-        // Only update status if audio isn't playing
-        if (!isPlaying.value) {
-          statusMessage.value = 'WebSocket connected'
-        }
       })
 
       socket.on('disconnect', () => {
         console.log('Disconnected from WebSocket')
-        // Only update status if audio isn't playing
-        if (!isPlaying.value) {
-          statusMessage.value = 'WebSocket disconnected'
-        }
       })
 
       socket.on('connect_error', (error) => {
@@ -307,13 +373,34 @@ export default {
       audioElement,
       isPlaying,
       isLoading,
+      hasError,
       statusMessage,
       toggleAudio,
       birdDetections,
       streamUrl,
       streamType,
-      isSafari
+      streamDescription,
+      isSafari,
+      handleAudioError,
+      handleAudioBuffering,
+      handleAudioPlaying,
+      handleAudioEnded
     }
   }
 }
 </script>
+
+<style scoped>
+.animate-pulse-fast {
+  animation: pulse-error 2s ease-in-out 2;
+}
+
+@keyframes pulse-error {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+</style>

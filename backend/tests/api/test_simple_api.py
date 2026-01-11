@@ -352,7 +352,77 @@ class TestSimpleAPI:
                 assert response.get_json()['message'] == 'Settings saved. Services will restart in 10-30 seconds.'
                 mock_save.assert_called_once()
                 assert mock_flag.call_count >= 1  # at least one restart flag
-    
+
+    def test_settings_url_validation(self):
+        """Test URL validation for stream settings."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+                 patch('core.db.DatabaseManager') as MockDB, \
+                 patch('core.api.load_user_settings') as mock_load, \
+                 patch('core.api.save_user_settings'), \
+                 patch('core.api.write_flag'):
+
+                mock_db_instance = Mock()
+                MockDB.return_value = mock_db_instance
+                mock_load.return_value = {}
+
+                from core.api import create_app
+                app, _ = create_app()
+                client = app.test_client()
+
+                # Test invalid HTTP stream URL (must start with http:// or https://)
+                invalid_stream = {
+                    'audio': {
+                        'recording_mode': 'http_stream',
+                        'stream_url': 'ftp://example.com/stream'
+                    }
+                }
+                response = client.put('/api/settings',
+                                    data=json.dumps(invalid_stream),
+                                    content_type='application/json')
+                assert response.status_code == 400
+                assert 'Invalid Stream URL' in response.get_json()['error']
+
+                # Test invalid RTSP URL (must start with rtsp:// or rtsps://)
+                invalid_rtsp = {
+                    'audio': {
+                        'recording_mode': 'rtsp',
+                        'rtsp_url': 'http://example.com/stream'
+                    }
+                }
+                response = client.put('/api/settings',
+                                    data=json.dumps(invalid_rtsp),
+                                    content_type='application/json')
+                assert response.status_code == 400
+                assert 'Invalid RTSP URL' in response.get_json()['error']
+
+                # Test missing URL when required
+                missing_stream_url = {
+                    'audio': {
+                        'recording_mode': 'http_stream',
+                        'stream_url': ''
+                    }
+                }
+                response = client.put('/api/settings',
+                                    data=json.dumps(missing_stream_url),
+                                    content_type='application/json')
+                assert response.status_code == 400
+                assert 'Stream URL required' in response.get_json()['error']
+
+                missing_rtsp_url = {
+                    'audio': {
+                        'recording_mode': 'rtsp',
+                        'rtsp_url': ''
+                    }
+                }
+                response = client.put('/api/settings',
+                                    data=json.dumps(missing_rtsp_url),
+                                    content_type='application/json')
+                assert response.status_code == 400
+                assert 'RTSP URL required' in response.get_json()['error']
+
     def test_update_channel_setting(self):
         """Test update channel setting endpoint (no restart)."""
         with tempfile.TemporaryDirectory() as tmpdir:

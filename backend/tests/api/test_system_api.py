@@ -239,8 +239,11 @@ class TestSystemAPI:
         assert hasattr(version, '__version_info__')
         assert hasattr(version, 'DISPLAY_NAME')
         assert hasattr(version, 'TECHNICAL_NAME')
-        assert version.__version__ == '0.2.0'
-        assert version.__version_info__ == (0, 2, 0)
+        # Check format, not specific values (those change on each release)
+        assert isinstance(version.__version__, str)
+        assert len(version.__version__.split('.')) >= 2  # at least major.minor
+        assert isinstance(version.__version_info__, tuple)
+        assert len(version.__version_info__) >= 2
         assert version.DISPLAY_NAME == 'BirdNET-PiPy'
         assert version.TECHNICAL_NAME == 'birdnet-pipy'
 

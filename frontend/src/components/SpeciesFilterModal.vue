@@ -57,17 +57,38 @@
 
         <!-- Selected Count & Actions -->
         <div class="p-4 border-t border-gray-200 bg-gray-50 rounded-b-xl">
-          <!-- Restart/Save Status -->
-          <RestartStatus
-            v-if="hasStatus"
-            variant="inline"
-            :isRestarting="isRestarting"
-            :restartMessage="restartMessage"
-            :restartError="restartError"
-            :saveError="saveError"
-            @dismiss="handleDismiss"
-            @retry="saveAndClose"
-          />
+          <!-- Restart Progress -->
+          <div v-if="isRestarting && restartMessage" class="flex items-center gap-2 text-blue-700 text-sm">
+            <svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <span>{{ restartMessage }}</span>
+          </div>
+
+          <!-- Error (save or restart) -->
+          <div v-else-if="saveError || restartError" class="flex items-center justify-between w-full">
+            <div class="flex items-center gap-2 text-amber-700 text-sm">
+              <svg class="h-4 w-4 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <span>{{ saveError || restartError }}</span>
+            </div>
+            <div class="flex gap-2">
+              <button
+                @click="handleDismiss"
+                class="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                @click="saveAndClose"
+                class="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+              >
+                Retry
+              </button>
+            </div>
+          </div>
 
           <!-- Normal Actions -->
           <div v-else class="flex items-center justify-between">
@@ -101,13 +122,9 @@
 <script>
 import { ref, computed, onMounted, watch } from 'vue'
 import api from '@/services/api'
-import RestartStatus from '@/components/RestartStatus.vue'
 
 export default {
   name: 'SpeciesFilterModal',
-  components: {
-    RestartStatus
-  },
   props: {
     title: {
       type: String,
@@ -151,11 +168,6 @@ export default {
     const allSpecies = ref([])
     const totalSpecies = ref(0)
     const selectedSpecies = ref([...props.modelValue])
-
-    // Check if any status should be shown (restart progress, restart error, or save error)
-    const hasStatus = computed(() => {
-      return (props.isRestarting && props.restartMessage) || props.restartError || saveError.value
-    })
 
     // Debounce search
     let searchTimeout = null
@@ -254,7 +266,6 @@ export default {
       loading,
       saving,
       saveError,
-      hasStatus,
       searchQuery,
       filteredSpecies,
       totalSpecies,

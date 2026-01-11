@@ -42,6 +42,14 @@ describe('LiveFeed', () => {
         stream_type: 'icecast'
       }
     })
+
+    // Mock MediaError constants (not available in jsdom)
+    vi.stubGlobal('MediaError', {
+      MEDIA_ERR_ABORTED: 1,
+      MEDIA_ERR_NETWORK: 2,
+      MEDIA_ERR_DECODE: 3,
+      MEDIA_ERR_SRC_NOT_SUPPORTED: 4
+    })
     vi.stubGlobal('Audio', vi.fn().mockImplementation(() => ({
       play: vi.fn().mockResolvedValue(),
       pause: vi.fn(),
@@ -105,7 +113,7 @@ describe('LiveFeed', () => {
     const wrapper = mountLiveFeed()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('No audio stream available')
+    expect(wrapper.text()).toContain('No audio stream configured')
   })
 
   it('toggles audio start/stop states', async () => {
@@ -127,5 +135,112 @@ describe('LiveFeed', () => {
     expect(onMock).toHaveBeenCalledWith('connect', expect.any(Function))
     expect(onMock).toHaveBeenCalledWith('disconnect', expect.any(Function))
     expect(onMock).toHaveBeenCalledWith('bird_detected', expect.any(Function))
+  })
+
+  describe('error handling', () => {
+    it('handleAudioError ignores errors when not playing or loading', async () => {
+      const wrapper = mountLiveFeed()
+      await flushPromises()
+
+      // Simulate error event when not playing
+      wrapper.vm.handleAudioError({ target: { error: { code: 2 } } })
+
+      // hasError should remain false
+      expect(wrapper.vm.hasError).toBe(false)
+    })
+
+    it('handleAudioError shows error and stops playback when playing', async () => {
+      const wrapper = mountLiveFeed()
+      await flushPromises()
+
+      // Start playing first
+      await wrapper.vm.toggleAudio()
+      expect(wrapper.vm.isPlaying).toBe(true)
+
+      // Simulate network error
+      wrapper.vm.handleAudioError({ target: { error: { code: 2 } } }) // MEDIA_ERR_NETWORK
+
+      expect(wrapper.vm.hasError).toBe(true)
+      expect(wrapper.vm.statusMessage).toBe('Network error - stream unavailable')
+      expect(wrapper.vm.isPlaying).toBe(false)
+    })
+
+    it('handleAudioEnded updates status and stops playback', async () => {
+      const wrapper = mountLiveFeed()
+      await flushPromises()
+
+      await wrapper.vm.toggleAudio()
+      expect(wrapper.vm.isPlaying).toBe(true)
+
+      wrapper.vm.handleAudioEnded()
+
+      expect(wrapper.vm.statusMessage).toBe('Stream ended - click Start to reconnect')
+      expect(wrapper.vm.isPlaying).toBe(false)
+    })
+
+    it('handleAudioBuffering updates status only when playing', async () => {
+      const wrapper = mountLiveFeed()
+      await flushPromises()
+
+      // Should not update when not playing
+      wrapper.vm.handleAudioBuffering()
+      expect(wrapper.vm.statusMessage).not.toBe('Stream buffering...')
+
+      // Start playing
+      await wrapper.vm.toggleAudio()
+      wrapper.vm.handleAudioBuffering()
+      expect(wrapper.vm.statusMessage).toBe('Stream buffering...')
+    })
+
+    it('handleAudioPlaying restores connected status when playing', async () => {
+      const wrapper = mountLiveFeed()
+      await flushPromises()
+
+      await wrapper.vm.toggleAudio()
+      wrapper.vm.statusMessage = 'Stream buffering...'
+
+      wrapper.vm.handleAudioPlaying()
+      expect(wrapper.vm.statusMessage).toBe('Icecast stream connected')
+    })
+
+    it('hasError clears after timeout', async () => {
+      const wrapper = mountLiveFeed()
+      await flushPromises()
+
+      await wrapper.vm.toggleAudio()
+      wrapper.vm.handleAudioError({ target: { error: { code: 2 } } })
+
+      expect(wrapper.vm.hasError).toBe(true)
+
+      // Advance timers past the 4000ms duration
+      vi.advanceTimersByTime(4000)
+
+      expect(wrapper.vm.hasError).toBe(false)
+    })
+
+    it('toggleAudio does not set isPlaying when audio fails to start', async () => {
+      // Mock AudioContext.resume to reject
+      vi.stubGlobal('AudioContext', vi.fn().mockImplementation(() => ({
+        createAnalyser: () => ({
+          fftSize: 0,
+          frequencyBinCount: 0,
+          getByteFrequencyData: vi.fn(),
+          connect: vi.fn()
+        }),
+        createMediaElementSource: () => ({
+          connect: vi.fn()
+        }),
+        destination: {},
+        resume: vi.fn().mockRejectedValue(new Error('audio failed'))
+      })))
+
+      const wrapper = mountLiveFeed()
+      await flushPromises()
+
+      await wrapper.vm.toggleAudio()
+
+      expect(wrapper.vm.isPlaying).toBe(false)
+      expect(wrapper.vm.hasError).toBe(true)
+    })
   })
 })

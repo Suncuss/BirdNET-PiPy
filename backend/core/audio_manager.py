@@ -18,6 +18,8 @@ from datetime import datetime
 from typing import Optional
 import logging
 
+from core.utils import sanitize_url
+
 logger = logging.getLogger(__name__)
 
 
@@ -293,11 +295,8 @@ class RtspRecorder(BaseRecorder):
             if current_time - self._last_error_logged > 30:
                 self._last_error_logged = current_time
                 stderr_snippet = result.stderr[:500] if result.stderr else "No error output"
-                # Sanitize URL to hide credentials in logs
-                safe_url = self.rtsp_url
-                if '@' in safe_url:
-                    safe_url = safe_url.split('@')[-1]
-                logger.error(f"RTSP recording failed (returncode={result.returncode}, url=...{safe_url}): {stderr_snippet}")
+                safe_url = sanitize_url(self.rtsp_url)
+                logger.error(f"RTSP recording failed (returncode={result.returncode}, url={safe_url}): {stderr_snippet}")
 
         return result.returncode == 0
 
@@ -398,6 +397,8 @@ def create_recorder(
     elif recording_mode == 'rtsp':
         if not rtsp_url:
             raise ValueError("rtsp_url required for rtsp recording mode")
+        if not rtsp_url.startswith(('rtsp://', 'rtsps://')):
+            raise ValueError("rtsp_url must start with rtsp:// or rtsps://")
         return RtspRecorder(
             rtsp_url=rtsp_url,
             chunk_duration=chunk_duration,

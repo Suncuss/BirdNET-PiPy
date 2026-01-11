@@ -131,10 +131,74 @@ fi
 
 echo "Icecast server started on port 8888"
 
-# Start FFmpeg streaming to Icecast
-echo "Starting audio stream capture..."
-exec ffmpeg -hide_banner -loglevel warning \
-    "${AUDIO_ARGS[@]}" \
-    -codec:a libmp3lame -b:a "$STREAM_BITRATE" \
-    -f mp3 -content_type audio/mpeg \
-    "icecast://source:${ICECAST_PASSWORD}@localhost:8888/stream.mp3"
+# Retry configuration (match main container patterns)
+if [ -n "$RTSP_STREAM_URL" ]; then
+    RETRY_DELAY=2  # RTSP needs longer reconnection time
+else
+    RETRY_DELAY=1  # PulseAudio recovers faster
+fi
+RETRY_COUNT=0
+LAST_ERROR_LOG=0
+ERROR_LOG_INTERVAL=30
+
+# Graceful shutdown handler
+RUNNING=true
+cleanup() {
+    RUNNING=false
+    echo "[$(date '+%H:%M:%S')] Received shutdown signal..."
+    if [ -n "$FFMPEG_PID" ]; then
+        kill "$FFMPEG_PID" 2>/dev/null
+    fi
+}
+trap cleanup SIGTERM SIGINT
+
+# Disable exit-on-error for the retry loop
+set +e
+
+echo "[$(date '+%H:%M:%S')] Starting audio stream capture..."
+
+while $RUNNING; do
+    STREAM_START=$(date +%s)
+
+    ffmpeg -hide_banner -loglevel warning \
+        "${AUDIO_ARGS[@]}" \
+        -codec:a libmp3lame -b:a "$STREAM_BITRATE" \
+        -f mp3 -content_type audio/mpeg \
+        "icecast://source:${ICECAST_PASSWORD}@localhost:8888/stream.mp3" &
+    FFMPEG_PID=$!
+
+    # Log successful start after brief delay (FFmpeg connects quickly if source is available)
+    sleep 1
+    if kill -0 "$FFMPEG_PID" 2>/dev/null; then
+        if [ $RETRY_COUNT -gt 0 ]; then
+            echo "[$(date '+%H:%M:%S')] Stream reconnected after $RETRY_COUNT retries"
+        else
+            echo "[$(date '+%H:%M:%S')] Stream connected successfully"
+        fi
+        RETRY_COUNT=0
+    fi
+
+    wait $FFMPEG_PID
+    EXIT_CODE=$?
+    STREAM_DURATION=$(($(date +%s) - STREAM_START))
+
+    if ! $RUNNING; then
+        echo "[$(date '+%H:%M:%S')] Shutdown complete"
+        break
+    fi
+
+    RETRY_COUNT=$((RETRY_COUNT + 1))
+
+    # Rate-limited error logging (avoid log flooding)
+    CURRENT_TIME=$(date +%s)
+    if [ $((CURRENT_TIME - LAST_ERROR_LOG)) -gt $ERROR_LOG_INTERVAL ]; then
+        LAST_ERROR_LOG=$CURRENT_TIME
+        if [ $STREAM_DURATION -gt 5 ]; then
+            echo "[$(date '+%H:%M:%S')] Stream disconnected after ${STREAM_DURATION}s (exit code: $EXIT_CODE), reconnecting..."
+        else
+            echo "[$(date '+%H:%M:%S')] Connection failed (attempt $RETRY_COUNT), retrying in ${RETRY_DELAY}s..."
+        fi
+    fi
+
+    sleep $RETRY_DELAY
+done
