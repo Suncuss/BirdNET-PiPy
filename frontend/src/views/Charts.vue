@@ -18,15 +18,15 @@
                             <path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd" />
                         </svg>
                     </button>
-                    <input 
+                    <input
                         id="date-picker"
-                        type="date" 
-                        v-model="selectedDate" 
+                        type="date"
+                        v-model="selectedDate"
                         @change="onDateChange"
                         :max="maxDate"
                         :disabled="isUpdating"
                         :class="[
-                            'px-3 py-1 border rounded-md text-sm',
+                            'h-9 px-3 border rounded-md text-sm',
                             isUpdating
                                 ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
                                 : 'border-gray-300 focus:ring-blue-500 focus:border-blue-500'
@@ -46,21 +46,12 @@
                             <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
                         </svg>
                     </button>
-                    <button
-                        @click="goToToday"
-                        :class="[
-                            'font-semibold py-1 px-3 rounded-lg shadow text-sm transition-all duration-300 flex items-center justify-center',
-                            isUpdating
-                                ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
-                                : 'bg-blue-600 hover:bg-blue-700 text-white focus:outline-none focus:ring-2 focus:ring-blue-300'
-                        ]"
-                        :disabled="isUpdating"
-                    >
+                    <AppButton size="row" :disabled="isUpdating" @click="goToToday">
                         Today
-                    </button>
+                    </AppButton>
                 </div>
             </div>
-            
+
             <div v-if="!isDataEmpty && !detailedBirdActivityError" class="flex h-[300px] lg:h-[375px]">
                 <div class="w-full lg:w-1/3 lg:pr-2">
                     <canvas ref="totalObservationsChart" class="h-full"></canvas>
@@ -87,7 +78,7 @@
                         v-model="trendsTimeRange"
                         @change="onTrendsTimeRangeChange"
                         :disabled="isUpdatingTrends"
-                        class="hidden sm:block px-3 py-1 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm"
+                        class="hidden sm:block h-9 px-3 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm"
                     >
                         <option value="7">Week</option>
                         <option value="14">Two Week</option>
@@ -120,7 +111,7 @@
                         :max="trendsMaxDate"
                         :disabled="isUpdatingTrends"
                         :class="[
-                            'px-3 py-1 border rounded-md text-sm',
+                            'h-9 px-3 border rounded-md text-sm',
                             isUpdatingTrends
                                 ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
                                 : 'border-gray-300 focus:ring-blue-500 focus:border-blue-500'
@@ -142,18 +133,9 @@
                         </svg>
                     </button>
 
-                    <button
-                        @click="goToTodayTrends"
-                        :class="[
-                            'font-semibold py-1 px-3 rounded-lg shadow text-sm transition-all duration-300 flex items-center justify-center',
-                            isUpdatingTrends
-                                ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
-                                : 'bg-blue-600 hover:bg-blue-700 text-white focus:outline-none focus:ring-2 focus:ring-blue-300'
-                        ]"
-                        :disabled="isUpdatingTrends"
-                    >
+                    <AppButton size="row" :disabled="isUpdatingTrends" @click="goToTodayTrends">
                         Today
-                    </button>
+                    </AppButton>
                 </div>
             </div>
 
@@ -296,11 +278,15 @@ import { useBirdCharts } from '@/composables/useBirdCharts'
 import { useDateNavigation } from '@/composables/useDateNavigation'
 import { useChartHelpers } from '@/composables/useChartHelpers'
 import api from '@/services/api'
+import AppButton from '@/components/AppButton.vue'
 
 Chart.register(MatrixController, MatrixElement)
 
 export default {
     name: 'Charts',
+    components: {
+        AppButton
+    },
     setup() {
         const {
             detailedBirdActivityData,

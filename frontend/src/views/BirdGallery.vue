@@ -53,10 +53,9 @@
             <h2 class="text-lg font-semibold mb-2">{{ bird.name }}</h2>
             <p class="text-sm text-gray-600 mb-1">{{ bird.scientificName }}</p>
             <p class="text-xs text-gray-500">{{ bird.lastDetected ? `Last detected: ${formatDate(bird.lastDetected)}` : 'Detection info available in details' }}</p>
-            <router-link :to="{ name: 'BirdDetails', params: { name: bird.name } }"
-              class="mt-2 inline-block bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg shadow focus:outline-none focus:ring-2 focus:ring-blue-300 text-sm transition-all duration-300">
+            <AppButton :to="{ name: 'BirdDetails', params: { name: bird.name } }" class="mt-2">
               Learn More
-            </router-link>
+            </AppButton>
           </div>
         </div>
       </div>
@@ -70,9 +69,13 @@
 import { ref, computed, onMounted } from 'vue'
 import api from '@/services/api'
 import { useSmartCrop } from '@/composables/useSmartCrop'
+import AppButton from '@/components/AppButton.vue'
 
 export default {
   name: 'BirdGallery',
+  components: {
+    AppButton
+  },
   setup() {
     const selectedTab = ref('recent')
     const birds = ref([])

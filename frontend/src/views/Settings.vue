@@ -7,20 +7,21 @@
           <span v-if="saveStatus" :class="saveStatus.type === 'success' ? 'text-green-600' : 'text-red-600'" class="text-sm mr-2">
             {{ saveStatus.message }}
           </span>
-          <button
+          <AppButton
+            variant="secondary"
             @click="resetToDefaults"
-            class="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
             :disabled="loading || serviceRestart.isRestarting.value || systemUpdate.isRestarting.value"
           >
             Reset
-          </button>
-          <button
+          </AppButton>
+          <AppButton
             @click="saveSettings"
-            class="px-4 py-1.5 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-sm transition-colors disabled:bg-gray-400"
-            :disabled="loading || serviceRestart.isRestarting.value || systemUpdate.isRestarting.value"
+            :loading="loading"
+            loading-text="Saving..."
+            :disabled="serviceRestart.isRestarting.value || systemUpdate.isRestarting.value"
           >
-            {{ loading ? 'Saving...' : 'Save' }}
-          </button>
+            Save
+          </AppButton>
         </div>
       </div>
 
@@ -619,12 +620,14 @@ import { useAuth } from '@/composables/useAuth'
 import api, { createLongRequest } from '@/services/api'
 import SpeciesFilterModal from '@/components/SpeciesFilterModal.vue'
 import RestartStatus from '@/components/RestartStatus.vue'
+import AppButton from '@/components/AppButton.vue'
 
 export default {
   name: 'Settings',
   components: {
     SpeciesFilterModal,
-    RestartStatus
+    RestartStatus,
+    AppButton
   },
   setup() {
     // Composables

@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.1] - 2026-01-10
+
+- Added Detection Trends chart showing bird activity over configurable time ranges
+- Added reusable AppButton component for consistent button styling
+- Changed default bird images to WebP format for smaller file sizes
+- Fixed chart control alignment on mobile devices
+- Fixed smart cropping for portrait-oriented bird images
+- Improved chart navigation and label spacing
+
 ## [0.3.0] - 2026-01-10
 
 - Added smart image cropping - bird photos now crop to center the bird in frame
