@@ -390,9 +390,10 @@ class TestDeleteDetectionAPI:
             assert os.path.exists(spectrogram_file)
 
             # Delete with auth bypass and patched directories
+            # Note: Patch storage_manager where delete_detection_files looks up the dirs
             with patch('core.auth.is_authenticated', return_value=True), \
-                 patch('core.api.EXTRACTED_AUDIO_DIR', audio_dir), \
-                 patch('core.api.SPECTROGRAM_DIR', spectrogram_dir):
+                 patch('core.storage_manager.EXTRACTED_AUDIO_DIR', audio_dir), \
+                 patch('core.storage_manager.SPECTROGRAM_DIR', spectrogram_dir):
                 response = api_client.delete(f'/api/detections/{detection_id}')
                 assert response.status_code == 200
                 data = response.get_json()

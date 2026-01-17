@@ -172,6 +172,7 @@ import { faPlay, faPause, faCircleInfo, faExternalLinkAlt } from '@fortawesome/f
 
 	import { useFetchBirdData } from '@/composables/useFetchBirdData';
 	import { useBirdCharts } from '@/composables/useBirdCharts';
+	import { useAudioPlayer } from '@/composables/useAudioPlayer';
 	import SpectrogramModal from '@/components/SpectrogramModal.vue';
 	import { getAudioUrl, getSpectrogramUrl } from '@/services/media'
 
@@ -210,7 +211,6 @@ export default {
 
         const isSpectrogramModalVisible = ref(false)
         const currentSpectrogramUrl = ref('')
-        const currentAudioElement = ref(null)
         const hourlyActivityChart = ref(null)
 
         const totalObservationsChart = ref(null)
@@ -218,8 +218,13 @@ export default {
 
         const latestObservationIsPlaying = ref(false)
         const initialLoad = ref(true)
-        const currentPlayingId = ref(null)
         const spectrogramCanvas = ref(null)
+
+        // Audio player composable for simple play/stop in Recent Observations list
+        const {
+            currentPlayingId,
+            togglePlay: audioTogglePlay
+        } = useAudioPlayer()
 
         // Chart References
         const hourlyActivityChartInstance = ref(null)
@@ -275,18 +280,14 @@ export default {
                 audioCtx = null
             }
 
-            // Pause and clean up audio elements
+            // Pause and clean up audio elements (for playLatestObservation with AudioContext)
             if (audioElement) {
                 audioElement.pause()
                 audioElement.src = ''
                 audioElement = null
             }
 
-            if (currentAudioElement.value) {
-                currentAudioElement.value.pause()
-                currentAudioElement.value.src = ''
-                currentAudioElement.value = null
-            }
+            // Note: currentAudioElement cleanup for togglePlayBirdCall is handled by useAudioPlayer composable
 
             // Clean up other audio resources
             source = null
@@ -420,25 +421,10 @@ export default {
 	        };
 
         const togglePlayBirdCall = (observation) => {
-            if (currentAudioElement.value) {
-                currentAudioElement.value.pause();
-                if (currentPlayingId.value === observation.id) {
-                    currentPlayingId.value = null;
-                    return;
-                }
-            }
-	            const audioUrl = getAudioUrl(observation?.bird_song_file_name)
-	            if (!audioUrl) return
-	            const audio = new Audio(audioUrl);
-	            audio.play().catch((err) => {
-	                console.warn('Failed to play audio:', err)
-	                currentPlayingId.value = null;
-	            });
-	            audio.addEventListener('ended', () => {
-	                currentPlayingId.value = null;
-	            });
-            currentAudioElement.value = audio;
-            currentPlayingId.value = observation.id;
+            if (!observation?.id) return
+            const audioUrl = getAudioUrl(observation?.bird_song_file_name)
+            if (!audioUrl) return
+            audioTogglePlay(observation.id, audioUrl)
         };
 
         const formatTimestamp = (dateString) => {

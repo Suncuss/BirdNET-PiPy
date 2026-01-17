@@ -133,25 +133,13 @@ class DatabaseManager:
             cur = conn.cursor()
             cur.execute(query, (limit,))
             rows = cur.fetchall()
-            
+
             detections = []
             for row in rows:
-                detection = dict(row)
-
-                # Parse extra JSON field
-                detection['extra'] = self._parse_extra(detection.get('extra'))
-
-                # Generate standardized filenames using utility function
-                filenames = build_detection_filenames(
-                    detection['common_name'],
-                    detection['confidence'],
-                    detection['timestamp'],
-                    audio_extension='mp3'
-                )
-
-                detection['bird_song_file_name'] = filenames['audio_filename']
-                detection['spectrogram_file_name'] = filenames['spectrogram_filename']
-
+                detection = self._normalize_detection(row, include_filenames=True)
+                # Use legacy field names for backward compatibility with frontend
+                detection['bird_song_file_name'] = detection.pop('audio_filename')
+                detection['spectrogram_file_name'] = detection.pop('spectrogram_filename')
                 detections.append(detection)
 
             return detections
@@ -495,25 +483,7 @@ class DatabaseManager:
             cur.execute(query, (species_name, limit_param))
             rows = cur.fetchall()
 
-        recordings = []
-        for row in rows:
-            record = dict(row)
-
-            # Parse extra JSON field
-            record['extra'] = self._parse_extra(record.get('extra'))
-
-            # Generate standardized filenames using utility function
-            filenames = build_detection_filenames(
-                record['common_name'],
-                record['confidence'],
-                record['timestamp'],
-                audio_extension='mp3'
-            )
-
-            record['audio_filename'] = filenames['audio_filename']
-            record['spectrogram_filename'] = filenames['spectrogram_filename']
-
-            recordings.append(record)
+        recordings = [self._normalize_detection(row, include_filenames=True) for row in rows]
 
         logger.debug("Bird recordings retrieved", extra={
             'species': species_name,
@@ -871,24 +841,7 @@ class DatabaseManager:
         order = 'ASC' if order.lower() == 'asc' else 'DESC'
 
         # Build WHERE conditions
-        conditions = []
-        params = []
-
-        if start_date:
-            start_date_iso = f"{start_date}T00:00:00"
-            conditions.append("timestamp >= ?")
-            params.append(start_date_iso)
-
-        if end_date:
-            end_date_iso = f"{end_date}T23:59:59"
-            conditions.append("timestamp <= ?")
-            params.append(end_date_iso)
-
-        if species:
-            conditions.append("common_name = ?")
-            params.append(species)
-
-        where_clause = " AND ".join(conditions) if conditions else "1=1"
+        where_clause, params = self._build_detection_filters(start_date, end_date, species)
 
         # Get total count
         count_query = f"""
@@ -932,25 +885,7 @@ class DatabaseManager:
             rows = cur.fetchall()
 
         # Build detection list with filenames
-        detections = []
-        for row in rows:
-            detection = dict(row)
-
-            # Parse extra JSON field
-            detection['extra'] = self._parse_extra(detection.get('extra'))
-
-            # Generate standardized filenames using utility function
-            filenames = build_detection_filenames(
-                detection['common_name'],
-                detection['confidence'],
-                detection['timestamp'],
-                audio_extension='mp3'
-            )
-
-            detection['audio_filename'] = filenames['audio_filename']
-            detection['spectrogram_filename'] = filenames['spectrogram_filename']
-
-            detections.append(detection)
+        detections = [self._normalize_detection(row, include_filenames=True) for row in rows]
 
         logger.debug("Paginated detections retrieved", extra={
             'page': page,
@@ -985,24 +920,7 @@ class DatabaseManager:
             list: All detection records matching the filters
         """
         # Build WHERE conditions
-        conditions = []
-        params = []
-
-        if start_date:
-            start_date_iso = f"{start_date}T00:00:00"
-            conditions.append("timestamp >= ?")
-            params.append(start_date_iso)
-
-        if end_date:
-            end_date_iso = f"{end_date}T23:59:59"
-            conditions.append("timestamp <= ?")
-            params.append(end_date_iso)
-
-        if species:
-            conditions.append("common_name = ?")
-            params.append(species)
-
-        where_clause = " AND ".join(conditions) if conditions else "1=1"
+        where_clause, params = self._build_detection_filters(start_date, end_date, species)
 
         query = f"""
         SELECT
@@ -1076,17 +994,7 @@ class DatabaseManager:
             row = cur.fetchone()
 
         if row:
-            detection = dict(row)
-            detection['extra'] = self._parse_extra(detection.get('extra'))
-            filenames = build_detection_filenames(
-                detection['common_name'],
-                detection['confidence'],
-                detection['timestamp'],
-                audio_extension='mp3'
-            )
-            detection['audio_filename'] = filenames['audio_filename']
-            detection['spectrogram_filename'] = filenames['spectrogram_filename']
-            return detection
+            return self._normalize_detection(row, include_filenames=True)
         return None
 
     def delete_detection(self, detection_id):
@@ -1121,6 +1029,76 @@ class DatabaseManager:
             return detection
 
         return None
+
+    # -------------------------------------------------------------------------
+    # Query building helpers
+    # -------------------------------------------------------------------------
+
+    def _build_detection_filters(self, start_date=None, end_date=None, species=None):
+        """Build WHERE clause components for detection queries.
+
+        Args:
+            start_date: Start date filter (YYYY-MM-DD)
+            end_date: End date filter (YYYY-MM-DD)
+            species: Filter by common_name
+
+        Returns:
+            tuple: (where_clause, params) where where_clause is SQL string
+                   and params is list of values for parameterized query
+        """
+        conditions = []
+        params = []
+
+        if start_date:
+            start_date_iso = f"{start_date}T00:00:00"
+            conditions.append("timestamp >= ?")
+            params.append(start_date_iso)
+
+        if end_date:
+            end_date_iso = f"{end_date}T23:59:59"
+            conditions.append("timestamp <= ?")
+            params.append(end_date_iso)
+
+        if species:
+            conditions.append("common_name = ?")
+            params.append(species)
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+        return where_clause, params
+
+    # -------------------------------------------------------------------------
+    # Detection normalization helpers
+    # -------------------------------------------------------------------------
+
+    def _normalize_detection(self, row, include_filenames=True):
+        """Convert a database row to a normalized detection dict.
+
+        This centralizes the common pattern of:
+        1. Converting sqlite3.Row to dict
+        2. Parsing the extra JSON field
+        3. Optionally generating standardized filenames
+
+        Args:
+            row: sqlite3.Row object from query
+            include_filenames: If True, generate and attach audio/spectrogram filenames
+
+        Returns:
+            dict: Normalized detection with parsed extra and optional filenames
+        """
+        detection = dict(row)
+        detection['extra'] = self._parse_extra(detection.get('extra'))
+
+        if include_filenames:
+            filenames = build_detection_filenames(
+                detection['common_name'],
+                detection['confidence'],
+                detection['timestamp'],
+                audio_extension='mp3'
+            )
+            detection['audio_filename'] = filenames['audio_filename']
+            detection['spectrogram_filename'] = filenames['spectrogram_filename']
+
+        return detection
 
     # -------------------------------------------------------------------------
     # Extra field helpers

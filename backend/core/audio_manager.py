@@ -31,6 +31,9 @@ class BaseRecorder(ABC):
     with timestamp-based filenames and atomic file operations.
     """
 
+    # Rate limit interval for error logging (seconds)
+    _ERROR_LOG_INTERVAL = 30
+
     def __init__(self, chunk_duration: float, output_dir: str, target_sample_rate: int):
         """
         Initialize base recorder.
@@ -45,6 +48,7 @@ class BaseRecorder(ABC):
         self.target_sample_rate = target_sample_rate
         self.is_running = False
         self.recording_thread = None
+        self._last_error_logged = 0  # Timestamp for rate-limited logging
 
     @abstractmethod
     def _get_thread_name(self) -> str:
@@ -63,6 +67,39 @@ class BaseRecorder(ABC):
             True if recording succeeded, False otherwise
         """
         pass
+
+    def _get_ffmpeg_output_args(self, temp_path: str) -> list:
+        """
+        Get common ffmpeg output arguments for WAV recording.
+
+        Args:
+            temp_path: Path to write output file
+
+        Returns:
+            List of ffmpeg arguments for output format
+        """
+        return [
+            '-t', str(self.chunk_duration),
+            '-ar', str(self.target_sample_rate),
+            '-ac', '1',
+            '-acodec', 'pcm_s16le',
+            '-y', temp_path
+        ]
+
+    def _log_recording_error(self, message: str) -> None:
+        """
+        Log a recording error with rate limiting to avoid log flooding.
+
+        Only logs if at least _ERROR_LOG_INTERVAL seconds have passed
+        since the last error was logged.
+
+        Args:
+            message: Error message to log
+        """
+        current_time = time.time()
+        if current_time - self._last_error_logged > self._ERROR_LOG_INTERVAL:
+            self._last_error_logged = current_time
+            logger.error(message)
 
     def _record_chunk(self) -> Optional[str]:
         """
@@ -172,7 +209,6 @@ class HttpStreamRecorder(BaseRecorder):
         """
         super().__init__(chunk_duration, output_dir, target_sample_rate)
         self.stream_url = stream_url
-        self._last_error_logged = 0  # Timestamp of last error log (rate limiting)
 
     def _get_thread_name(self) -> str:
         return "HTTPRecordingThread"
@@ -191,15 +227,7 @@ class HttpStreamRecorder(BaseRecorder):
         )
 
         # Start ffmpeg process to convert and save
-        ffmpeg_cmd = [
-            'ffmpeg',
-            '-i', 'pipe:0',
-            '-t', str(self.chunk_duration),
-            '-ar', str(self.target_sample_rate),
-            '-ac', '1',
-            '-acodec', 'pcm_s16le',
-            '-y', temp_path
-        ]
+        ffmpeg_cmd = ['ffmpeg', '-i', 'pipe:0'] + self._get_ffmpeg_output_args(temp_path)
 
         try:
             ffmpeg_proc = subprocess.Popen(
@@ -220,13 +248,12 @@ class HttpStreamRecorder(BaseRecorder):
             curl_proc.wait(timeout=2)
 
             if ffmpeg_proc.returncode != 0:
-                # Rate-limit error logging to avoid flooding logs (log once per 30 seconds)
-                current_time = time.time()
-                if current_time - self._last_error_logged > 30:
-                    self._last_error_logged = current_time
-                    ffmpeg_stderr = ffmpeg_proc.stderr.read().decode('utf-8', errors='replace')[:500] if ffmpeg_proc.stderr else ""
-                    curl_stderr = curl_proc.stderr.read().decode('utf-8', errors='replace')[:200] if curl_proc.stderr else ""
-                    logger.error(f"HTTP stream recording failed (returncode={ffmpeg_proc.returncode}, url={self.stream_url}): ffmpeg: {ffmpeg_stderr}, curl: {curl_stderr}")
+                ffmpeg_stderr = ffmpeg_proc.stderr.read().decode('utf-8', errors='replace')[:500] if ffmpeg_proc.stderr else ""
+                curl_stderr = curl_proc.stderr.read().decode('utf-8', errors='replace')[:200] if curl_proc.stderr else ""
+                self._log_recording_error(
+                    f"HTTP stream recording failed (returncode={ffmpeg_proc.returncode}, "
+                    f"url={self.stream_url}): ffmpeg: {ffmpeg_stderr}, curl: {curl_stderr}"
+                )
 
             return ffmpeg_proc.returncode == 0
 
@@ -256,7 +283,6 @@ class RtspRecorder(BaseRecorder):
         """
         super().__init__(chunk_duration, output_dir, target_sample_rate)
         self.rtsp_url = rtsp_url
-        self._last_error_logged = 0  # Timestamp of last error log (rate limiting)
 
     def _get_thread_name(self) -> str:
         return "RTSPRecordingThread"
@@ -275,12 +301,7 @@ class RtspRecorder(BaseRecorder):
             '-rtsp_transport', 'tcp',
             '-timeout', '10000000',  # 10 second connection timeout (microseconds)
             '-i', self.rtsp_url,
-            '-t', str(self.chunk_duration),
-            '-ar', str(self.target_sample_rate),
-            '-ac', '1',
-            '-acodec', 'pcm_s16le',
-            '-y', temp_path
-        ]
+        ] + self._get_ffmpeg_output_args(temp_path)
 
         result = subprocess.run(
             cmd,
@@ -290,13 +311,11 @@ class RtspRecorder(BaseRecorder):
         )
 
         if result.returncode != 0:
-            # Rate-limit error logging to avoid flooding logs (log once per 30 seconds)
-            current_time = time.time()
-            if current_time - self._last_error_logged > 30:
-                self._last_error_logged = current_time
-                stderr_snippet = result.stderr[:500] if result.stderr else "No error output"
-                safe_url = sanitize_url(self.rtsp_url)
-                logger.error(f"RTSP recording failed (returncode={result.returncode}, url={safe_url}): {stderr_snippet}")
+            stderr_snippet = result.stderr[:500] if result.stderr else "No error output"
+            safe_url = sanitize_url(self.rtsp_url)
+            self._log_recording_error(
+                f"RTSP recording failed (returncode={result.returncode}, url={safe_url}): {stderr_snippet}"
+            )
 
         return result.returncode == 0
 
@@ -321,7 +340,6 @@ class PulseAudioRecorder(BaseRecorder):
         """
         super().__init__(chunk_duration, output_dir, target_sample_rate)
         self.source_name = source_name if source_name else "default"
-        self._last_error_logged = 0  # Timestamp of last error log (rate limiting)
 
     def _get_thread_name(self) -> str:
         return "PulseAudioRecordingThread"
@@ -335,12 +353,7 @@ class PulseAudioRecorder(BaseRecorder):
             'ffmpeg',
             '-f', 'pulse',
             '-i', self.source_name,
-            '-t', str(self.chunk_duration),
-            '-ar', str(self.target_sample_rate),
-            '-ac', '1',
-            '-acodec', 'pcm_s16le',
-            '-y', temp_path
-        ]
+        ] + self._get_ffmpeg_output_args(temp_path)
 
         result = subprocess.run(
             cmd,
@@ -350,12 +363,10 @@ class PulseAudioRecorder(BaseRecorder):
         )
 
         if result.returncode != 0:
-            # Rate-limit error logging to avoid flooding logs (log once per 30 seconds)
-            current_time = time.time()
-            if current_time - self._last_error_logged > 30:
-                self._last_error_logged = current_time
-                stderr_snippet = result.stderr[:500] if result.stderr else "No error output"
-                logger.error(f"PulseAudio recording failed (returncode={result.returncode}): {stderr_snippet}")
+            stderr_snippet = result.stderr[:500] if result.stderr else "No error output"
+            self._log_recording_error(
+                f"PulseAudio recording failed (returncode={result.returncode}): {stderr_snippet}"
+            )
 
         return result.returncode == 0
 

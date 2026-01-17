@@ -1,4 +1,5 @@
 from core.db import DatabaseManager
+from core.storage_manager import delete_detection_files
 from config.settings import SPECTROGRAM_DIR, EXTRACTED_AUDIO_DIR, DEFAULT_AUDIO_PATH, DEFAULT_IMAGE_PATH, API_PORT, BASE_DIR, STREAM_URL, RTSP_URL, RECORDING_MODE, LABELS_PATH, load_user_settings, get_default_settings
 from core.logging_config import setup_logging, get_logger, log_api_request
 from core.api_utils import (
@@ -560,21 +561,15 @@ def delete_detection(detection_id):
     if not detection:
         return jsonify({'error': 'Detection not found'}), 404
 
-    # Clean up associated files
-    files_deleted = []
-    audio_path = os.path.join(EXTRACTED_AUDIO_DIR, detection['audio_filename'])
-    spectrogram_path = os.path.join(SPECTROGRAM_DIR, detection['spectrogram_filename'])
+    # Clean up associated files using shared utility
+    delete_result = delete_detection_files(detection)
 
-    for file_path in [audio_path, spectrogram_path]:
-        if os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-                files_deleted.append(os.path.basename(file_path))
-            except OSError as e:
-                logger.warning("Failed to delete file", extra={
-                    'file': file_path,
-                    'error': str(e)
-                })
+    # Build files_deleted list for response
+    files_deleted = []
+    if delete_result['deleted_audio']:
+        files_deleted.append(detection['audio_filename'])
+    if delete_result['deleted_spectrogram']:
+        files_deleted.append(detection['spectrogram_filename'])
 
     logger.info("Detection deleted with files", extra={
         'detection_id': detection_id,
@@ -628,19 +623,8 @@ def delete_detections_batch():
             failed.append({'id': detection_id, 'error': 'Not found'})
             continue
 
-        # Clean up associated files
-        audio_path = os.path.join(EXTRACTED_AUDIO_DIR, detection['audio_filename'])
-        spectrogram_path = os.path.join(SPECTROGRAM_DIR, detection['spectrogram_filename'])
-
-        for file_path in [audio_path, spectrogram_path]:
-            if os.path.exists(file_path):
-                try:
-                    os.remove(file_path)
-                except OSError as e:
-                    logger.warning("Failed to delete file", extra={
-                        'file': file_path,
-                        'error': str(e)
-                    })
+        # Clean up associated files using shared utility
+        delete_detection_files(detection)
 
         deleted.append(detection_id)
 

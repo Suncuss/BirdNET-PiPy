@@ -438,6 +438,7 @@
 	import api from '@/services/api'
 	import { getAudioUrl, getSpectrogramUrl } from '@/services/media'
 	import { useTableData } from '@/composables/useTableData'
+	import { useAudioPlayer } from '@/composables/useAudioPlayer'
 	import DetectionActions from '@/components/DetectionActions.vue'
 	import SpectrogramModal from '@/components/SpectrogramModal.vue'
 import DetectionInfoModal from '@/components/DetectionInfoModal.vue'
@@ -487,6 +488,12 @@ const {
   setPerPage
 } = useTableData()
 
+// Audio playback composable
+const {
+  currentPlayingId,
+  togglePlay
+} = useAudioPlayer()
+
 // --- State ---
 
 // Filters
@@ -496,7 +503,7 @@ const {
 	  get: () => perPage.value,
 	  set: (value) => setPerPage(value)
 	})
-	
+
 	// Species Filter
 	const speciesSearchQuery = ref('')
 	const showSpeciesDropdown = ref(false)
@@ -505,17 +512,13 @@ const {
 	const filteredSpeciesList = computed(() => {
 	  const query = speciesSearchQuery.value.trim().toLowerCase()
 	  if (!query) return speciesList.value
-	
+
 	  return speciesList.value.filter((species) => {
 	    const commonName = (species?.common_name || '').toLowerCase()
 	    const scientificName = (species?.scientific_name || '').toLowerCase()
 	    return commonName.includes(query) || scientificName.includes(query)
 	  })
 	})
-
-// Audio Playback
-const currentPlayingId = ref(null)
-const currentAudioElement = ref(null)
 
 // Modals
 const isSpectrogramModalVisible = ref(false)
@@ -614,58 +617,14 @@ const handleClearFilters = () => {
   clearFilters()
 }
 
-	const stopAudio = () => {
-	  if (!currentAudioElement.value) return
-	  currentAudioElement.value.pause()
-	  currentAudioElement.value.onended = null
-	  currentAudioElement.value.onerror = null
-	  currentAudioElement.value = null
-	}
-	
-	const togglePlayAudio = async (detection) => {
-	  if (!detection?.id) return
-	
-	  if (currentPlayingId.value === detection.id) {
-	    stopAudio()
-	    currentPlayingId.value = null
-	    return
-	  }
-	
-	  stopAudio()
-	
-	  const audioUrl = getAudioUrl(detection.audio_filename)
-	  if (!audioUrl) return
-	
-	  const audio = new Audio(audioUrl)
-	  currentAudioElement.value = audio
-	  currentPlayingId.value = detection.id
-	
-	  audio.onended = () => {
-	    if (currentPlayingId.value === detection.id) {
-	      currentPlayingId.value = null
-	    }
-	    stopAudio()
-	  }
-	
-	  audio.onerror = () => {
-	    if (currentPlayingId.value === detection.id) {
-	      currentPlayingId.value = null
-	    }
-	    stopAudio()
-	  }
-	
-	  try {
-	    await audio.play()
-	  } catch (err) {
-	    console.warn('Failed to play audio:', err)
-	    if (currentPlayingId.value === detection.id) {
-	      currentPlayingId.value = null
-	    }
-	    stopAudio()
-	  }
-	}
-	
-	const showSpectrogram = (detection) => {
+const togglePlayAudio = (detection) => {
+  if (!detection?.id) return
+  const audioUrl = getAudioUrl(detection.audio_filename)
+  if (!audioUrl) return
+  togglePlay(detection.id, audioUrl)
+}
+
+const showSpectrogram = (detection) => {
 	  currentSpectrogramUrl.value = getSpectrogramUrl(detection.spectrogram_filename)
 	  isSpectrogramModalVisible.value = true
 	}
@@ -736,6 +695,6 @@ const executeDelete = async () => {
 
 	onUnmounted(() => {
 	  document.removeEventListener('click', handleClickOutside)
-	  stopAudio()
+	  // Audio cleanup is handled automatically by useAudioPlayer composable
 	})
 	</script>

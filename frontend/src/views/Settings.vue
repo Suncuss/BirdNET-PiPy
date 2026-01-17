@@ -112,7 +112,6 @@
                   class="block w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
                   placeholder="rtsp://user:pass@192.168.1.100:554/stream"
                 >
-                <p class="text-xs text-gray-400 mt-1">Supports rtsp:// and rtsps://</p>
               </div>
             </div>
           </div>
@@ -144,7 +143,7 @@
           <h2 class="text-base font-medium text-gray-800 mb-3">Security</h2>
 
           <!-- Auth Toggle -->
-          <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center justify-between mb-4">
             <div>
               <label class="text-sm text-gray-600">Require Authentication</label>
               <p class="text-xs text-gray-400">Protect settings and audio stream with password</p>
@@ -153,7 +152,7 @@
               @click="handleAuthToggle"
               :disabled="authLoading"
               :class="auth.authStatus.value.authEnabled ? 'bg-green-600' : 'bg-gray-200'"
-              class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+              class="relative inline-flex flex-shrink-0 h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
             >
               <span
                 :class="auth.authStatus.value.authEnabled ? 'translate-x-6' : 'translate-x-1'"
@@ -385,7 +384,7 @@
             <button
               @click="toggleUpdateChannel"
               :class="settings.updates?.channel === 'latest' ? 'bg-green-600' : 'bg-gray-200'"
-              class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+              class="relative inline-flex flex-shrink-0 h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
             >
               <span
                 :class="settings.updates?.channel === 'latest' ? 'translate-x-6' : 'translate-x-1'"

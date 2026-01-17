@@ -2,11 +2,17 @@
 
 ## [Unreleased]
 
-- Added audio stream error handling in Live Feed - detects network errors, stream end, and buffering
+## [0.3.2] - 2026-01-17
+
+- Fixed toggle buttons getting cut off on mobile in Settings page
+- Improved Live Feed error handling - detects network errors, stream end, and buffering issues
 - Added visual error feedback with amber pulsing status message
-- Added stream connection/disconnection logging in Icecast container with timestamps
-- Improved Live Feed status messages - removed unrelated WebSocket status, focused on audio state
+- Added stream connection/disconnection logging in Icecast container
+- Improved Live Feed status messages - focused on audio state
 - Hidden stream description on mobile for cleaner layout
+- Refactored: DRY improvements for detection filtering, normalization, and file deletion
+- Refactored: Shared audio player composable for Table and Dashboard views
+- Refactored: Shared ffmpeg helpers in audio recorders
 
 ## [0.3.1] - 2026-01-10
 
