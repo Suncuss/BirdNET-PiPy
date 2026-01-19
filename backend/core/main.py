@@ -1,15 +1,17 @@
 from config.settings import (
     RECORDING_DIR, RECORDING_LENGTH, EXTRACTED_AUDIO_DIR, SPECTROGRAM_DIR,
     BIRDNET_SERVER_ENDPOINT, ANALYSIS_CHUNK_LENGTH, API_PORT, API_HOST, SAMPLE_RATE,
-    RECORDING_MODE, PULSEAUDIO_SOURCE, STREAM_URL, RTSP_URL
+    RECORDING_MODE, PULSEAUDIO_SOURCE, STREAM_URL, RTSP_URL, LAT, LON, LOCATION_CONFIGURED
 )
 from core.db import DatabaseManager
 from core.utils import generate_spectrogram, trim_audio, select_audio_chunks, convert_wav_to_mp3, sanitize_url
 from core.audio_manager import BaseRecorder, create_recorder
 from core.logging_config import setup_logging, get_logger
 from core.storage_manager import storage_monitor_loop
+from core.weather_service import get_weather_service
 from version import __version__, DISPLAY_NAME
 
+import json
 import os
 import time
 import glob
@@ -232,6 +234,28 @@ def handle_detection(detection: Dict[str, Any], input_file_path: str, thread_log
 
     extract_detection_audio(detection, input_file_path)
     create_detection_spectrogram(detection, input_file_path)
+
+    # Attach weather data if location is configured (explicit None check for 0-coordinate support)
+    if LOCATION_CONFIGURED and LAT is not None and LON is not None:
+        weather_service = get_weather_service()
+        weather_data, weather_error = weather_service.get_current_weather(LAT, LON)
+        if weather_data:
+            extra = detection.get('extra', {})
+            if isinstance(extra, str):
+                try:
+                    extra = json.loads(extra)
+                except json.JSONDecodeError:
+                    extra = {}
+            extra['weather'] = weather_data
+            detection['extra'] = extra
+            thread_logger.debug("Weather attached to detection", extra={
+                'species': detection['common_name'],
+                'temp': weather_data.get('temp')
+            })
+        elif weather_error:
+            thread_logger.debug("Weather fetch skipped", extra={
+                'reason': weather_error
+            })
 
     thread_logger.debug("Saving detection to database", extra={
         'species': detection['common_name'],

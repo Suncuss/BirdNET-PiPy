@@ -108,6 +108,7 @@ EBIRD_CODES_PATH = f'{BASE_DIR}/model_service/models/ebird_codes.json'
 # Geolocation configuration - from user settings
 LAT = user_settings['location']['latitude']
 LON = user_settings['location']['longitude']
+LOCATION_CONFIGURED = user_settings['location'].get('configured', False)
 
 # Prediction configuration - from user settings
 SENSITIVITY = user_settings['detection']['sensitivity']
