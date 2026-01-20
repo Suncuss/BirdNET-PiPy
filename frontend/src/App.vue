@@ -53,6 +53,7 @@ import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useLogger } from '@/composables/useLogger'
 import { useAuth } from '@/composables/useAuth'
+import { useUnitSettings } from '@/composables/useUnitSettings'
 import { DISPLAY_NAME } from './version'
 import LocationSetupModal from '@/components/LocationSetupModal.vue'
 import LoginModal from '@/components/LoginModal.vue'
@@ -69,6 +70,7 @@ export default {
     const route = useRoute()
     const router = useRouter()
     const auth = useAuth()
+    const unitSettings = useUnitSettings()
 
     const showLocationSetup = ref(false)
     const showLoginModal = ref(false)
@@ -76,6 +78,8 @@ export default {
     const checkLocationSetup = async () => {
       try {
         const { data: settings } = await api.get('/settings')
+        // Sync unit preference from settings
+        unitSettings.setUseMetricUnits(settings.display?.use_metric_units ?? true)
         // Show setup modal if location has not been configured
         if (!settings.location?.configured) {
           logger.info('Location not configured, showing setup modal')
@@ -99,9 +103,12 @@ export default {
       logger.info('Location saved', location)
     }
 
-    const onLoginSuccess = () => {
+    const onLoginSuccess = async () => {
       showLoginModal.value = false
       logger.info('Login successful')
+
+      // Load settings (including unit preference) after login
+      await checkLocationSetup()
 
       // Redirect to stored destination if any
       const redirect = sessionStorage.getItem('authRedirect')

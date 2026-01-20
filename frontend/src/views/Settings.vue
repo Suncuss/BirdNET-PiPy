@@ -278,6 +278,27 @@
               </div>
             </div>
 
+            <!-- Display Settings -->
+            <div class="pt-4 border-t border-gray-100">
+              <h3 class="text-sm font-medium text-gray-700 mb-3">Display</h3>
+              <div class="flex items-center justify-between">
+                <div>
+                  <label class="text-sm text-gray-600">Use Metric Units</label>
+                  <p class="text-xs text-gray-400">Show weather in °C, km/h, mm (off for °F, mph, in)</p>
+                </div>
+                <button
+                  @click="toggleMetricUnits"
+                  :class="settings.display?.use_metric_units !== false ? 'bg-green-600' : 'bg-gray-200'"
+                  class="relative inline-flex flex-shrink-0 h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+                >
+                  <span
+                    :class="settings.display?.use_metric_units !== false ? 'translate-x-6' : 'translate-x-1'"
+                    class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"
+                  />
+                </button>
+              </div>
+            </div>
+
             <!-- Species Filter Settings -->
             <div class="pt-4 border-t border-gray-100">
               <h3 class="text-sm font-medium text-gray-700 mb-3">Species Filter</h3>
@@ -627,6 +648,7 @@ import { ref, onMounted } from 'vue'
 import { useSystemUpdate } from '@/composables/useSystemUpdate'
 import { useServiceRestart } from '@/composables/useServiceRestart'
 import { useAuth } from '@/composables/useAuth'
+import { useUnitSettings } from '@/composables/useUnitSettings'
 import api, { createLongRequest } from '@/services/api'
 import SpeciesFilterModal from '@/components/SpeciesFilterModal.vue'
 import AlertBanner from '@/components/AlertBanner.vue'
@@ -643,6 +665,7 @@ export default {
     // Composables
     const serviceRestart = useServiceRestart()
     const auth = useAuth()
+    const unitSettings = useUnitSettings()
 
     // State
     const loading = ref(false)
@@ -716,6 +739,9 @@ export default {
       },
       updates: {
         channel: 'release'
+      },
+      display: {
+        use_metric_units: true  // As nature intended
       }
     })
 
@@ -768,6 +794,11 @@ export default {
         if (!settings.value.updates) {
           settings.value.updates = { channel: 'release' }
         }
+        // Ensure display object exists and sync with composable
+        if (!settings.value.display) {
+          settings.value.display = { use_metric_units: true }
+        }
+        unitSettings.setUseMetricUnits(settings.value.display.use_metric_units ?? true)
         if (saveStatus.value?.type === 'error') {
           saveStatus.value = null
         }
@@ -851,6 +882,29 @@ export default {
       } catch (error) {
         console.error('Error saving channel setting:', error)
         showStatus('error', 'Failed to save channel setting')
+      }
+    }
+
+    // Toggle metric/imperial units (saves immediately, no restart needed)
+    const toggleMetricUnits = async () => {
+      try {
+        // Ensure display object exists
+        if (!settings.value.display) {
+          settings.value.display = { use_metric_units: true }
+        }
+        const newValue = settings.value.display.use_metric_units === false
+
+        // Save immediately via dedicated endpoint (no restart needed)
+        await api.put('/settings/units', { use_metric_units: newValue })
+        settings.value.display.use_metric_units = newValue
+
+        // Update the shared composable state so other components see the change
+        unitSettings.setUseMetricUnits(newValue)
+
+        showStatus('success', `Switched to ${newValue ? 'metric' : 'imperial'} units`)
+      } catch (error) {
+        console.error('Error saving units setting:', error)
+        showStatus('error', 'Failed to save units setting')
       }
     }
 
@@ -1077,6 +1131,7 @@ export default {
       saveSettings,
       resetToDefaults,
       toggleUpdateChannel,
+      toggleMetricUnits,
       onRecordingModeChange,
       confirmUpdate,
       systemUpdate,

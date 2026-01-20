@@ -40,6 +40,10 @@ DEFAULT_SETTINGS = {
     },
     "model": {
         "type": "birdnet"  # Options: "birdnet" (future: "perch")
+    },
+    "display": {
+        # Default to metric because 0°C = freezing and 100°C = boiling just makes sense
+        "use_metric_units": True
     }
 }
 

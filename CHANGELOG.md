@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+- Added weather data integration - attaches current weather from Open-Meteo API to bird detections
+- Added weather display in Detection Info modal (temperature, humidity, wind, precipitation, cloud cover, pressure)
+- Added metric/imperial unit toggle in Settings (Advanced → Display)
+- Added hourly weather caching to minimize API calls
+- Added negative caching for weather API failures (5-minute cooldown)
+- Fixed weather cache to invalidate on day change, not just hour change
+- Fixed weather display to handle case-insensitive keys and double-encoded JSON
+- Fixed location check to support coordinates at 0° latitude/longitude
+
 ## [0.3.2] - 2026-01-17
 
 - Fixed toggle buttons getting cut off on mobile in Settings page

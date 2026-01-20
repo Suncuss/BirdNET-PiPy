@@ -16,15 +16,16 @@ BirdNET-PiPy is designed with privacy in mind. All processing happens locally on
 - No tracking cookies
 - No data sent to cloud services
 
-## External Requests (Only When You Use These Features)
+## External Requests
 
-| Feature | Service | What's Sent |
-|---------|---------|-------------|
-| Bird images | Wikimedia Commons | Species name |
-| Location search | OpenStreetMap | Search text |
-| Update check | GitHub | Version info |
+| Feature | Service | What's Sent | When |
+|---------|---------|-------------|------|
+| Bird images | Wikimedia Commons | Species name | When viewing gallery/details |
+| Weather data | Open-Meteo | Coordinates | When a bird is detected* |
+| Location search | OpenStreetMap | Search text | When searching in setup |
+| Update check | GitHub | Version info | When checking for updates |
 
-These requests only happen when you explicitly use the feature - never automatically.
+*Weather requests are cached hourly to minimize API calls. Weather data is attached to detections to record conditions at the time of sighting.
 
 ## BirdNET Model
 
@@ -38,4 +39,4 @@ The AI model runs entirely on your device. No audio is ever sent to external ser
 
 ---
 
-*Last updated: December 2024*
+*Last updated: January 2026*

@@ -1045,6 +1045,45 @@ def update_channel_setting():
         return jsonify({'error': str(e)}), 500
 
 
+@api.route('/api/settings/units', methods=['PUT'])
+@log_api_request
+@require_auth
+def update_units_setting():
+    """Update the display units setting without triggering a restart.
+
+    The units setting only affects frontend display, not the running service,
+    so no restart is needed.
+    """
+    try:
+        data = request.json
+        if not data or 'use_metric_units' not in data:
+            return jsonify({'error': 'use_metric_units field required'}), 400
+
+        use_metric = data['use_metric_units']
+        if not isinstance(use_metric, bool):
+            return jsonify({'error': 'use_metric_units must be a boolean'}), 400
+
+        # Load current settings, update units, save
+        current_settings = load_user_settings()
+        if 'display' not in current_settings:
+            current_settings['display'] = {}
+        current_settings['display']['use_metric_units'] = use_metric
+        save_user_settings(current_settings)
+
+        logger.info("Display units changed", extra={'use_metric_units': use_metric})
+
+        return jsonify({
+            'success': True,
+            'use_metric_units': use_metric
+        }), 200
+
+    except Exception as e:
+        logger.error("Failed to update units setting", extra={
+            'error': str(e)
+        }, exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
 @api.route('/api/settings', methods=['PUT'])
 @log_api_request
 @require_auth
