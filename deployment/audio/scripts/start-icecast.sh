@@ -3,6 +3,21 @@
 
 set -e
 
+# Recording mode constants
+# Source of truth: backend/config/constants.py
+# Keep in sync when adding/removing modes
+VALID_RECORDING_MODES=("pulseaudio" "http_stream" "rtsp")
+DEFAULT_RECORDING_MODE="pulseaudio"
+
+# Validate recording mode
+is_valid_recording_mode() {
+    local mode="$1"
+    for valid_mode in "${VALID_RECORDING_MODES[@]}"; do
+        [[ "$mode" == "$valid_mode" ]] && return 0
+    done
+    return 1
+}
+
 # Configuration from environment
 STREAM_BITRATE="${STREAM_BITRATE:-320k}"
 
@@ -68,7 +83,11 @@ EOF
 SETTINGS_FILE="/app/data/config/user_settings.json"
 RTSP_STREAM_URL=""
 if [ -f "$SETTINGS_FILE" ]; then
-    RECORDING_MODE=$(jq -r '.audio.recording_mode // "pulseaudio"' "$SETTINGS_FILE")
+    RECORDING_MODE=$(jq -r '.audio.recording_mode // "'"$DEFAULT_RECORDING_MODE"'"' "$SETTINGS_FILE")
+    if ! is_valid_recording_mode "$RECORDING_MODE"; then
+        echo "Warning: Unknown recording mode '$RECORDING_MODE', using default"
+        RECORDING_MODE="$DEFAULT_RECORDING_MODE"
+    fi
     if [ "$RECORDING_MODE" = "rtsp" ]; then
         RTSP_STREAM_URL=$(jq -r '.audio.rtsp_url // empty' "$SETTINGS_FILE")
     fi

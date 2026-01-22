@@ -3,6 +3,7 @@ from config.settings import (
     BIRDNET_SERVER_ENDPOINT, ANALYSIS_CHUNK_LENGTH, API_PORT, API_HOST, SAMPLE_RATE,
     RECORDING_MODE, PULSEAUDIO_SOURCE, STREAM_URL, RTSP_URL, LAT, LON, LOCATION_CONFIGURED
 )
+from config.constants import RecordingMode
 from core.db import DatabaseManager
 from core.utils import generate_spectrogram, trim_audio, select_audio_chunks, convert_wav_to_mp3, sanitize_url
 from core.audio_manager import BaseRecorder, create_recorder
@@ -55,13 +56,13 @@ def setup_recorder(recording_mode: str, thread_logger) -> BaseRecorder:
         Configured recorder instance
     """
     # Log startup info based on mode
-    if recording_mode == 'pulseaudio':
+    if recording_mode == RecordingMode.PULSEAUDIO:
         thread_logger.info("Starting PulseAudio recording", extra={
             'pulseaudio_source': PULSEAUDIO_SOURCE,
             'chunk_duration': RECORDING_LENGTH,
             'output_dir': RECORDING_DIR
         })
-    elif recording_mode == 'rtsp':
+    elif recording_mode == RecordingMode.RTSP:
         thread_logger.info("Starting RTSP stream recording", extra={
             'rtsp_url': sanitize_url(RTSP_URL),
             'chunk_duration': RECORDING_LENGTH,

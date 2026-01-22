@@ -10,6 +10,7 @@
 - Fixed weather cache to invalidate on day change, not just hour change
 - Fixed weather display to handle case-insensitive keys and double-encoded JSON
 - Fixed location check to support coordinates at 0° latitude/longitude
+- Refactored: DRY configuration constants in `backend/config/constants.py` for validation
 
 ## [0.3.2] - 2026-01-17
 

@@ -90,9 +90,11 @@
                   @change="onRecordingModeChange"
                   class="block w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
                 >
-                  <option value="pulseaudio">Local Microphone</option>
-                  <option value="http_stream">HTTP Stream</option>
-                  <option value="rtsp">RTSP Stream</option>
+                  <option
+                    v-for="mode in recordingModeOptions"
+                    :key="mode.value"
+                    :value="mode.value"
+                  >{{ mode.label }}</option>
                 </select>
               </div>
               <div v-if="recordingMode === 'http_stream'">
@@ -255,9 +257,11 @@
                     v-model.number="settings.audio.recording_length"
                     class="block w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
                   >
-                    <option :value="9">9 seconds</option>
-                    <option :value="12">12 seconds</option>
-                    <option :value="15">15 seconds</option>
+                    <option
+                      v-for="len in recordingLengthOptions"
+                      :key="len.value"
+                      :value="len.value"
+                    >{{ len.label }}</option>
                   </select>
                 </div>
                 <div>
@@ -267,12 +271,11 @@
                     v-model.number="settings.audio.overlap"
                     class="block w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
                   >
-                    <option :value="0.0">None</option>
-                    <option :value="0.5">0.5s</option>
-                    <option :value="1.0">1.0s</option>
-                    <option :value="1.5">1.5s</option>
-                    <option :value="2.0">2.0s</option>
-                    <option :value="2.5">2.5s</option>
+                    <option
+                      v-for="ov in overlapOptions"
+                      :key="ov.value"
+                      :value="ov.value"
+                    >{{ ov.label }}</option>
                   </select>
                 </div>
               </div>
@@ -667,6 +670,26 @@ export default {
     const auth = useAuth()
     const unitSettings = useUnitSettings()
 
+    // Dropdown options (static configuration)
+    const recordingModeOptions = [
+      { value: 'pulseaudio', label: 'Local Microphone' },
+      { value: 'http_stream', label: 'HTTP Stream' },
+      { value: 'rtsp', label: 'RTSP Stream' }
+    ]
+    const recordingLengthOptions = [
+      { value: 9, label: '9 seconds' },
+      { value: 12, label: '12 seconds' },
+      { value: 15, label: '15 seconds' }
+    ]
+    const overlapOptions = [
+      { value: 0.0, label: 'None' },
+      { value: 0.5, label: '0.5s' },
+      { value: 1.0, label: '1.0s' },
+      { value: 1.5, label: '1.5s' },
+      { value: 2.0, label: '2.0s' },
+      { value: 2.5, label: '2.5s' }
+    ]
+
     // State
     const loading = ref(false)
     const saveStatus = ref(null)
@@ -707,42 +730,15 @@ export default {
     const confirmSetupPassword = ref('')
     const changePasswordError = ref('')
     const setupPasswordError = ref('')
+    // Minimal settings skeleton - actual values loaded from API
     const settings = ref({
-      location: {
-        latitude: 42.47,
-        longitude: -76.45,
-        configured: false
-      },
-      detection: {
-        sensitivity: 0.75,
-        cutoff: 0.60
-      },
-      species_filter: {
-        allowed_species: [],
-        blocked_species: []
-      },
-      audio: {
-        recording_mode: 'pulseaudio',
-        stream_url: null,
-        rtsp_url: null,
-        pulseaudio_source: null,
-        recording_length: 9,
-        overlap: 0.0,
-        sample_rate: 48000,
-        recording_chunk_length: 3
-      },
-      spectrogram: {
-        max_freq_khz: 12,
-        min_freq_khz: 0,
-        max_dbfs: 0,
-        min_dbfs: -120
-      },
-      updates: {
-        channel: 'release'
-      },
-      display: {
-        use_metric_units: true  // As nature intended
-      }
+      location: {},
+      detection: {},
+      species_filter: { allowed_species: [], blocked_species: [] },
+      audio: {},
+      spectrogram: {},
+      updates: {},
+      display: {}
     })
 
     // System update composable
@@ -779,13 +775,13 @@ export default {
       return speciesNameMap.value[scientificName] || scientificName
     }
 
-    // Load settings from API with retry
+    // Load settings from API with retry and fallback to defaults
     const loadSettings = async (retryCount = 0) => {
       try {
         loading.value = true
         const { data } = await api.get('/settings')
         settings.value = data
-        recordingMode.value = settings.value.audio.recording_mode || 'pulseaudio'
+        recordingMode.value = settings.value.audio?.recording_mode || 'pulseaudio'
         // Normalize old "stable" channel to "release" for backward compatibility
         if (settings.value.updates?.channel === 'stable') {
           settings.value.updates.channel = 'release'
@@ -807,7 +803,15 @@ export default {
         if (retryCount < 2) {
           setTimeout(() => loadSettings(retryCount + 1), 2000)
         } else {
-          showStatus('error', `Failed to load settings`)
+          // Fallback to defaults on failure
+          try {
+            const { data } = await api.get('/settings/defaults')
+            settings.value = data
+            recordingMode.value = data.audio?.recording_mode || 'pulseaudio'
+          } catch (defaultsErr) {
+            console.error('Failed to load defaults:', defaultsErr)
+            showStatus('error', 'Failed to load settings')
+          }
         }
       } finally {
         loading.value = false
@@ -1163,7 +1167,11 @@ export default {
       closeFilterModal,
       updateFilterList,
       saveSpeciesFilter,
-      getCommonName
+      getCommonName,
+      // Dropdown options
+      recordingModeOptions,
+      recordingLengthOptions,
+      overlapOptions
     }
   }
 }

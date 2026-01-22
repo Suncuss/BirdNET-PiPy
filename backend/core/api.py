@@ -1,6 +1,13 @@
 from core.db import DatabaseManager
 from core.storage_manager import delete_detection_files
 from config.settings import SPECTROGRAM_DIR, EXTRACTED_AUDIO_DIR, DEFAULT_AUDIO_PATH, DEFAULT_IMAGE_PATH, API_PORT, BASE_DIR, STREAM_URL, RTSP_URL, RECORDING_MODE, LABELS_PATH, load_user_settings, get_default_settings
+from config.constants import (
+    RecordingMode,
+    VALID_RECORDING_MODES,
+    RECORDING_LENGTH_OPTIONS,
+    OVERLAP_OPTIONS,
+    UPDATE_CHANNELS,
+)
 from core.logging_config import setup_logging, get_logger, log_api_request
 from core.api_utils import (
     handle_api_errors,
@@ -719,14 +726,14 @@ def get_available_species():
 def get_stream_config():
     """Provide stream configuration for frontend based on recording mode"""
 
-    if RECORDING_MODE == 'pulseaudio':
+    if RECORDING_MODE == RecordingMode.PULSEAUDIO:
         # PulseAudio mode - provide Icecast stream URL
         return jsonify({
             'stream_url': '/stream/stream.mp3',
             'stream_type': 'icecast',
             'description': 'Local Icecast audio stream'
         })
-    elif RECORDING_MODE == 'rtsp':
+    elif RECORDING_MODE == RecordingMode.RTSP:
         # RTSP mode - use Icecast to transcode RTSP to MP3 for browser
         if RTSP_URL:
             return jsonify({
@@ -741,7 +748,7 @@ def get_stream_config():
                 'stream_type': 'none',
                 'description': 'RTSP mode selected but no URL configured'
             })
-    elif RECORDING_MODE == 'http_stream':
+    elif RECORDING_MODE == RecordingMode.HTTP_STREAM:
         # HTTP stream mode - use custom stream URL
         if STREAM_URL:
             return jsonify({
@@ -1021,7 +1028,7 @@ def update_channel_setting():
             return jsonify({'error': 'channel field required'}), 400
 
         channel = data['channel']
-        if channel not in ['release', 'latest']:
+        if channel not in UPDATE_CHANNELS:
             return jsonify({'error': 'Invalid channel. Must be "release" or "latest"'}), 400
 
         # Load current settings, update channel, save
@@ -1097,31 +1104,31 @@ def update_settings():
         # Validate recording mode settings
         if 'audio' in new_settings:
             recording_mode = new_settings['audio'].get('recording_mode')
-            if recording_mode and recording_mode not in ['pulseaudio', 'http_stream', 'rtsp']:
-                return jsonify({'error': 'Invalid recording_mode. Must be "pulseaudio", "http_stream", or "rtsp"'}), 400
+            if recording_mode and recording_mode not in VALID_RECORDING_MODES:
+                return jsonify({'error': f'Invalid recording_mode. Must be one of: {", ".join(VALID_RECORDING_MODES)}'}), 400
 
             # Validate RTSP URL if provided
             rtsp_url = new_settings['audio'].get('rtsp_url')
-            if recording_mode == 'rtsp' and not rtsp_url:
+            if recording_mode == RecordingMode.RTSP and not rtsp_url:
                 return jsonify({'error': 'RTSP URL required when recording_mode is "rtsp"'}), 400
             if rtsp_url and not rtsp_url.startswith(('rtsp://', 'rtsps://')):
                 return jsonify({'error': 'Invalid RTSP URL. Must start with rtsp:// or rtsps://'}), 400
-            
+
             # Validate HTTP stream URL if required
             stream_url = new_settings['audio'].get('stream_url')
-            if recording_mode == 'http_stream' and not stream_url:
+            if recording_mode == RecordingMode.HTTP_STREAM and not stream_url:
                 return jsonify({'error': 'Stream URL required when recording_mode is "http_stream"'}), 400
             if stream_url and not stream_url.startswith(('http://', 'https://')):
                 return jsonify({'error': 'Invalid Stream URL. Must start with http:// or https://'}), 400
 
             # Validate recording_length
             recording_length = new_settings['audio'].get('recording_length')
-            if recording_length is not None and recording_length not in [9, 12, 15]:
+            if recording_length is not None and recording_length not in RECORDING_LENGTH_OPTIONS:
                 return jsonify({'error': 'Invalid recording_length. Must be 9, 12, or 15 seconds'}), 400
 
             # Validate overlap
             overlap = new_settings['audio'].get('overlap')
-            if overlap is not None and overlap not in [0.0, 0.5, 1.0, 1.5, 2.0, 2.5]:
+            if overlap is not None and overlap not in OVERLAP_OPTIONS:
                 return jsonify({'error': 'Invalid overlap. Must be 0.0, 0.5, 1.0, 1.5, 2.0, or 2.5 seconds'}), 400
 
         # Save settings to JSON file

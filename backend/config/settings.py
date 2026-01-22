@@ -1,6 +1,8 @@
 import os
 import json
 
+from config.constants import DEFAULT_RECORDING_MODE
+
 # Base directory (always in Docker)
 BASE_DIR = '/app'
 
@@ -13,7 +15,7 @@ DEFAULT_SETTINGS = {
         "blocked_species": []    # Never detect these species
     },
     "audio": {
-        "recording_mode": "pulseaudio",  # "pulseaudio", "http_stream", or "rtsp"
+        "recording_mode": DEFAULT_RECORDING_MODE,  # "pulseaudio", "http_stream", or "rtsp"
         "stream_url": None,  # Custom stream URL for http_stream mode
         "rtsp_url": None,  # RTSP stream URL for rtsp mode
         "pulseaudio_source": None,  # PulseAudio source name (e.g., "default")
@@ -90,7 +92,7 @@ API_HOST = 'api'
 BIRDNET_HOST = 'model-server'
 
 # Recording mode configuration
-RECORDING_MODE = user_settings['audio'].get('recording_mode', 'pulseaudio')
+RECORDING_MODE = user_settings['audio'].get('recording_mode', DEFAULT_RECORDING_MODE)
 
 # Stream URL configuration (for http_stream mode) - directly from JSON
 STREAM_URL = user_settings['audio'].get('stream_url', None)

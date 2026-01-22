@@ -19,6 +19,7 @@ from typing import Optional
 import logging
 
 from core.utils import sanitize_url
+from config.constants import RecordingMode, VALID_RECORDING_MODES
 
 logger = logging.getLogger(__name__)
 
@@ -398,14 +399,14 @@ def create_recorder(
     Raises:
         ValueError: If recording_mode is invalid or required URL/source is missing
     """
-    if recording_mode == 'pulseaudio':
+    if recording_mode == RecordingMode.PULSEAUDIO:
         return PulseAudioRecorder(
             source_name=source_name or 'default',
             chunk_duration=chunk_duration,
             output_dir=output_dir,
             target_sample_rate=target_sample_rate
         )
-    elif recording_mode == 'rtsp':
+    elif recording_mode == RecordingMode.RTSP:
         if not rtsp_url:
             raise ValueError("rtsp_url required for rtsp recording mode")
         if not rtsp_url.startswith(('rtsp://', 'rtsps://')):
@@ -416,7 +417,7 @@ def create_recorder(
             output_dir=output_dir,
             target_sample_rate=target_sample_rate
         )
-    elif recording_mode == 'http_stream':
+    elif recording_mode == RecordingMode.HTTP_STREAM:
         if not stream_url:
             raise ValueError("stream_url required for http_stream recording mode")
         return HttpStreamRecorder(
@@ -426,4 +427,7 @@ def create_recorder(
             target_sample_rate=target_sample_rate
         )
     else:
-        raise ValueError(f"Unknown recording mode: {recording_mode}")
+        raise ValueError(
+            f"Unknown recording mode: {recording_mode}. "
+            f"Valid modes: {', '.join(VALID_RECORDING_MODES)}"
+        )
