@@ -43,14 +43,27 @@ fi
 
 # Logging setup - use /var/log for persistence across reboots
 LOG_FILE="/var/log/birdnet-pipy-install.log"
-# Append to existing log (useful if installation is retried)
-touch "$LOG_FILE" 2>/dev/null || LOG_FILE="/tmp/birdnet-pipy-install.log"
-echo "" >> "$LOG_FILE"
-echo "========== Installation started: $(date) ==========" >> "$LOG_FILE"
 
-# Capture ALL output (stdout and stderr) to both console and log file
-# This ensures command output from apt-get, docker, git, etc. is logged for debugging
-exec > >(tee -a "$LOG_FILE") 2>&1
+# Initialize logging (only once, even across re-exec from curl install)
+setup_logging() {
+    # Skip if already set up (prevents duplicate output when script re-executes itself)
+    [ -n "$_BIRDNET_LOGGING" ] && return 0
+    export _BIRDNET_LOGGING=1
+
+    # Try /var/log, fall back to /tmp if not writable
+    touch "$LOG_FILE" 2>/dev/null || LOG_FILE="/tmp/birdnet-pipy-install.log"
+
+    # Write header (append to preserve history across retries)
+    echo "" >> "$LOG_FILE"
+    echo "========== Installation started: $(date) ==========" >> "$LOG_FILE"
+
+    # Capture all output: terminal gets colors, log file gets plain text
+    # The sed strips ANSI color codes (e.g., \033[0;32m) from the log file
+    exec > >(tee >(sed 's/\x1b\[[0-9;]*m//g' >> "$LOG_FILE")) 2>&1
+}
+
+# Initialize logging immediately
+setup_logging
 
 # Colors for output
 GREEN='\033[0;32m'
