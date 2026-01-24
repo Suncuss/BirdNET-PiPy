@@ -6,7 +6,7 @@ BirdNET-PiPy is designed with privacy in mind. All processing happens locally on
 
 - **Audio recordings** - Raw audio is processed locally and deleted immediately. Only detected bird clips are saved.
 - **Detection data** - Bird species, timestamps, and confidence scores stored in a local database.
-- **Location** - Your coordinates are stored locally to help filter species predictions.
+- **Location** - Your coordinates are stored locally to filter species predictions and retrieve local weather conditions.
 - **Settings & passwords** - All configuration stays on your device. Passwords are securely hashed.
 
 ## What We Don't Collect
@@ -24,8 +24,11 @@ BirdNET-PiPy is designed with privacy in mind. All processing happens locally on
 | Weather data | Open-Meteo | Coordinates | When a bird is detected* |
 | Location search | OpenStreetMap | Search text | When searching in setup |
 | Update check | GitHub | Version info | When checking for updates |
+| BirdWeather | BirdWeather.com | Audio clip, species, confidence, coordinates, timestamp | Each detection (if Station ID configured)** |
 
 *Weather requests are cached hourly to minimize API calls. Weather data is attached to detections to record conditions at the time of sighting.
+
+**BirdWeather uploads are optional. Configure a Station ID in Settings to contribute detections to the global bird monitoring network at birdweather.com.
 
 ## BirdNET Model
 

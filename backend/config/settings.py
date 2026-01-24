@@ -46,6 +46,9 @@ DEFAULT_SETTINGS = {
     "display": {
         # Default to metric because 0°C = freezing and 100°C = boiling just makes sense
         "use_metric_units": True
+    },
+    "birdweather": {
+        "id": None  # Station token from birdweather.com
     }
 }
 
@@ -123,6 +126,9 @@ CUTOFF = user_settings['detection']['cutoff']
 # Species filter configuration - from user settings
 ALLOWED_SPECIES = user_settings.get('species_filter', {}).get('allowed_species', [])
 BLOCKED_SPECIES = user_settings.get('species_filter', {}).get('blocked_species', [])
+
+# BirdWeather configuration - from user settings
+BIRDWEATHER_ID = user_settings.get('birdweather', {}).get('id')
 
 # Folders configuration
 RECORDING_DIR = f'{BASE_DIR}/data/audio/recordings'

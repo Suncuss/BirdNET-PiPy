@@ -16,7 +16,7 @@
           </div>
           <h2 class="text-xl font-semibold text-gray-900">Set Your Location</h2>
           <p class="mt-2 text-sm text-gray-600">
-            BirdNET uses your location to filter bird species that are likely in your area.
+            BirdNET uses your location to filter bird species that are likely in your area and to retrieve local weather conditions.
           </p>
         </div>
 

@@ -60,46 +60,29 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Command-line options
-CUSTOM_INSTALL_DIR=""
 UPDATE_MODE=false
-UPDATE_BRANCH=""  # Target branch for update (passed via --branch)
+TARGET_BRANCH=""  # Target branch for install/update (default: main for install, current for update)
+NO_REBOOT=false   # Skip reboot prompt (for testing)
+SKIP_BUILD=false  # Skip Docker image build (for testing)
 
 # ============================================================================
 # Logging Functions
 # ============================================================================
 
-# Log to file with timestamp
-log_to_file() {
-    local level=$1
-    shift
-    local message="$@"
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [$level] $message" >> "$LOG_FILE"
-}
-
-# Print to console and log
 print_status() {
     echo -e "${GREEN}[INSTALL]${NC} $1"
-    log_to_file "STATUS" "$1"
 }
 
 print_warning() {
     echo -e "${YELLOW}[WARNING]${NC} $1"
-    log_to_file "WARNING" "$1"
 }
 
 print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
-    log_to_file "ERROR" "$1"
 }
 
 print_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
-    log_to_file "INFO" "$1"
-}
-
-# Debug logging (only shown in log file)
-log_debug() {
-    log_to_file "DEBUG" "$1"
 }
 
 # ============================================================================
@@ -117,9 +100,7 @@ check_root() {
     # Check if running as direct root (not via sudo)
     if [ "$EUID" -eq 0 ] && [ -z "$SUDO_USER" ]; then
         print_error "Please run this script with sudo, not as direct root"
-        print_info "Correct usage:"
-        echo "  sudo ./install.sh"
-        echo "  sudo ./install.sh --install-dir /path/to/install"
+        print_info "Example: sudo ./install.sh"
         exit 1
     fi
 }
@@ -153,13 +134,11 @@ detect_platform() {
     if [ -f /etc/os-release ]; then
         . /etc/os-release
         OS_ID=$ID
-        OS_VERSION_ID=$VERSION_ID
         OS_NAME=$NAME
         print_status "Detected platform: $OS_NAME"
     else
         print_warning "Cannot detect OS distribution"
         OS_ID="linux"
-        OS_NAME="Unknown Linux"
     fi
 
     # Check if Debian-based (for apt-get)
@@ -192,23 +171,21 @@ show_usage() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  --install-dir DIR    Installation directory (default: /home/\$USER/BirdNET-PiPy)"
     echo "  --update             Update existing installation (git sync + build + config)"
-    echo "  --branch BRANCH      Target branch for update (default: current branch or main)"
+    echo "  --branch BRANCH      Target branch (default: main for install, current for update)"
+    echo "  --no-reboot          Skip automatic reboot after installation (for testing)"
+    echo "  --skip-build         Skip Docker image build (for testing)"
     echo "  --help               Show this help message"
     echo ""
     echo "Examples:"
-    echo "  # Quick install with defaults"
+    echo "  # Quick install with defaults (main branch)"
     echo "  curl -fsSL https://raw.githubusercontent.com/Suncuss/BirdNET-PiPy/main/install.sh | sudo bash"
     echo ""
-    echo "  # Custom installation directory"
-    echo "  sudo ./install.sh --install-dir /home/pi/BirdNET"
+    echo "  # Install from staging branch (latest features)"
+    echo "  curl -fsSL https://raw.githubusercontent.com/Suncuss/BirdNET-PiPy/main/install.sh | sudo bash -s -- --branch staging"
     echo ""
-    echo "  # Update to current branch"
+    echo "  # Update existing installation"
     echo "  sudo ./install.sh --update"
-    echo ""
-    echo "  # Update to specific branch (e.g., staging for latest features)"
-    echo "  sudo ./install.sh --update --branch staging"
 }
 
 # ============================================================================
@@ -253,29 +230,19 @@ install_prerequisites() {
 # Stage 1: Clone Repository Logic
 # ============================================================================
 
-# Check if git is available (should be installed by install_prerequisites)
-check_git() {
-    if ! command -v git &> /dev/null; then
-        print_error "Git not installed. This should not happen."
-        exit 1
-    fi
-}
-
 # Clone repository
 clone_repository() {
     print_status "Cloning BirdNET-PiPy repository..."
 
-    check_git
+    # Determine target branch (default: main)
+    local branch="${TARGET_BRANCH:-$REPO_BRANCH}"
 
     # Determine installation directory
-    if [ -n "$CUSTOM_INSTALL_DIR" ]; then
-        INSTALL_DIR="$CUSTOM_INSTALL_DIR"
-    else
-        ACTUAL_USER=$(get_actual_user)
-        INSTALL_DIR="/home/$ACTUAL_USER/BirdNET-PiPy"
-    fi
+    ACTUAL_USER=$(get_actual_user)
+    INSTALL_DIR="/home/$ACTUAL_USER/BirdNET-PiPy"
 
     print_info "Installation directory: $INSTALL_DIR"
+    [ "$branch" != "main" ] && print_info "Target branch: $branch"
 
     # Check if directory already exists
     if [ -d "$INSTALL_DIR" ]; then
@@ -289,8 +256,8 @@ clone_repository() {
             if [ "$CURRENT_REPO" = "$REPO_URL" ]; then
                 print_status "Existing BirdNET-PiPy repository found, pulling latest changes..."
                 cd "$INSTALL_DIR"
-                git checkout $REPO_BRANCH
-                git pull origin $REPO_BRANCH || {
+                git checkout $branch
+                git pull origin $branch || {
                     print_error "Failed to update repository"
                     exit 1
                 }
@@ -301,7 +268,7 @@ clone_repository() {
                 print_error "Directory exists but contains a different git repository"
                 print_error "Expected: $REPO_URL"
                 print_error "Found: $CURRENT_REPO"
-                print_info "Use --install-dir to specify a different installation location"
+                print_info "Please remove or rename: $INSTALL_DIR"
                 exit 1
             fi
         else
@@ -311,11 +278,11 @@ clone_repository() {
         fi
     else
         # Clone fresh (shallow clone for speed - full history not needed)
-        git clone --depth 1 -b $REPO_BRANCH "$REPO_URL" "$INSTALL_DIR" || {
+        git clone --depth 1 -b $branch "$REPO_URL" "$INSTALL_DIR" || {
             print_error "Failed to clone repository"
             exit 1
         }
-        print_status "Repository cloned to $INSTALL_DIR (shallow clone)"
+        print_status "Repository cloned to $INSTALL_DIR (branch: $branch)"
 
         # Fix ownership after clone
         get_actual_uid_gid
@@ -429,23 +396,6 @@ setup_docker_user() {
     fi
 }
 
-# Verify Docker installation
-verify_docker() {
-    print_status "Verifying Docker installation..."
-
-    if ! docker --version &> /dev/null; then
-        print_error "Docker verification failed"
-        exit 1
-    fi
-
-    if ! docker compose version &> /dev/null; then
-        print_error "Docker Compose plugin verification failed"
-        exit 1
-    fi
-
-    print_status "Docker verification passed"
-}
-
 # ============================================================================
 # Application Setup (Ported from deployment/install-service.sh)
 # ============================================================================
@@ -526,6 +476,11 @@ configure_pulseaudio() {
 
 # Build Docker images
 build_application() {
+    if [ "$SKIP_BUILD" = true ]; then
+        print_status "Skipping Docker image build (--skip-build flag)"
+        return 0
+    fi
+
     print_status "Building BirdNET-PiPy application..."
 
     get_actual_uid_gid
@@ -566,32 +521,6 @@ fix_data_permissions() {
     # Fix ownership
     chown -R $ACTUAL_USER:$ACTUAL_USER "$PROJECT_ROOT/data"
     print_status "Data permissions fixed for user $ACTUAL_USER"
-}
-
-# Copy installation log to project directory for easy access
-copy_log_to_project() {
-    if [ -n "$PROJECT_ROOT" ] && [ -d "$PROJECT_ROOT/data" ]; then
-        local project_log="$PROJECT_ROOT/data/install.log"
-        cp "$LOG_FILE" "$project_log"
-        get_actual_uid_gid
-        chown $ACTUAL_USER:$ACTUAL_USER "$project_log"
-        print_status "Installation log copied to: $project_log"
-    fi
-}
-
-# Make runtime script executable
-setup_runtime_script() {
-    print_status "Setting up runtime script..."
-
-    RUNTIME_SCRIPT="$PROJECT_ROOT/deployment/birdnet-service.sh"
-
-    if [ ! -f "$RUNTIME_SCRIPT" ]; then
-        print_error "Runtime script not found: $RUNTIME_SCRIPT"
-        exit 1
-    fi
-
-    chmod +x "$RUNTIME_SCRIPT"
-    print_status "Runtime script is executable"
 }
 
 # Create systemd service file
@@ -725,7 +654,7 @@ restart_containers_on_failure() {
 
 # Perform system update (called when --update flag is used)
 # This handles: git sync, build, and system config updates
-# Uses UPDATE_BRANCH if specified, otherwise current branch or main
+# Uses TARGET_BRANCH if specified, otherwise current branch or main
 perform_update() {
     print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     print_status "BirdNET-PiPy System Update"
@@ -734,7 +663,7 @@ perform_update() {
     cd "$PROJECT_ROOT"
 
     # Determine target branch: explicit > current > main
-    local target_branch="${UPDATE_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
+    local target_branch="${TARGET_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
     if [ "$target_branch" = "HEAD" ]; then
         target_branch="main"
     fi
@@ -875,23 +804,13 @@ validate_installation() {
         checks_passed=false
     fi
 
-    # Check Docker images
-    local image_count=$(docker images 2>/dev/null | grep -c "birdnet-pipy" || true)
-    log_debug "Docker images check: found $image_count BirdNET-PiPy images"
-
-    if [ "$image_count" -eq 0 ]; then
-        print_error "Docker images not built"
-        # Log all available images for debugging
-        log_debug "Available Docker images:"
-        docker images 2>/dev/null | while read line; do
-            log_debug "  $line"
-        done
-        checks_passed=false
-    else
-        log_debug "Docker images found: $image_count"
-        docker images 2>/dev/null | grep "birdnet-pipy" | while read line; do
-            log_debug "  $line"
-        done
+    # Check Docker images (skip if --skip-build was used)
+    if [ "$SKIP_BUILD" != true ]; then
+        local image_count=$(docker images 2>/dev/null | grep -c "birdnet-pipy" || true)
+        if [ "$image_count" -eq 0 ]; then
+            print_error "Docker images not built"
+            checks_passed=false
+        fi
     fi
 
     if [ "$checks_passed" = true ]; then
@@ -938,9 +857,7 @@ show_completion_message() {
     print_info "Installation directory: $PROJECT_ROOT"
     print_info "Images are built and the systemd service is installed."
     echo ""
-    print_info "Installation logs (persistent across reboots):"
-    echo "  - System log: $LOG_FILE"
-    echo "  - Project log: $PROJECT_ROOT/data/install.log"
+    print_info "Installation log: $LOG_FILE"
     echo ""
     print_info "Start the service with:"
     echo "  sudo systemctl start $SERVICE_NAME"
@@ -964,26 +881,22 @@ show_completion_message() {
     print_info "To trigger a container restart:"
     echo "  touch $PROJECT_ROOT/data/flags/restart-backend"
     echo ""
-    # Show swap info if it was created
-    if [ -f "/swapfile-birdnet-pipy" ]; then
-        print_info "Swap File:"
-        echo "  Created at: /swapfile-birdnet-pipy (auto-enabled during builds)"
-        local swap_size=$(ls -lh /swapfile-birdnet-pipy | awk '{print $5}')
-        echo "  Size: $swap_size"
-    fi
-    echo ""
     print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 }
 
 # Reboot system after installation
 prompt_reboot() {
+    if [ "$NO_REBOOT" = true ]; then
+        print_status "Reboot skipped (--no-reboot flag)"
+        return 0
+    fi
+
     echo ""
     print_status "Installation successful!"
     echo ""
     print_info "The system will now reboot to apply:"
     print_info "  - Docker group membership"
     print_info "  - PulseAudio configuration"
-    print_info "  - Swap file activation"
     echo ""
     print_status "Rebooting now..."
     sleep 2  # Brief pause to ensure output is flushed
@@ -1001,21 +914,25 @@ main() {
     # Parse command-line arguments
     while [[ $# -gt 0 ]]; do
         case $1 in
-            --install-dir)
-                CUSTOM_INSTALL_DIR="$2"
-                shift 2
-                ;;
             --update)
                 UPDATE_MODE=true
                 shift
                 ;;
             --branch)
-                UPDATE_BRANCH="$2"
+                TARGET_BRANCH="$2"
                 shift 2
                 ;;
             --help)
                 show_usage
                 exit 0
+                ;;
+            --no-reboot)
+                NO_REBOOT=true
+                shift
+                ;;
+            --skip-build)
+                SKIP_BUILD=true
+                shift
                 ;;
             *)
                 print_error "Unknown option: $1"
@@ -1055,7 +972,9 @@ main() {
         clone_repository
         # Save arguments to pass through
         ARGS=""
-        [ -n "$CUSTOM_INSTALL_DIR" ] && ARGS="$ARGS --install-dir $CUSTOM_INSTALL_DIR"
+        [ -n "$TARGET_BRANCH" ] && ARGS="$ARGS --branch $TARGET_BRANCH"
+        [ "$NO_REBOOT" = true ] && ARGS="$ARGS --no-reboot"
+        [ "$SKIP_BUILD" = true ] && ARGS="$ARGS --skip-build"
         reexec_from_clone $ARGS
         # Script exits here (exec replaces process)
     fi
@@ -1071,7 +990,6 @@ main() {
     if ! check_docker || ! check_docker_compose; then
         install_docker
         setup_docker_user
-        verify_docker
     else
         print_status "Docker and Docker Compose are already installed, skipping..."
     fi
@@ -1082,7 +1000,7 @@ main() {
     # Application setup
     fix_data_permissions
     build_application
-    setup_runtime_script
+    chmod +x "$PROJECT_ROOT/deployment/birdnet-service.sh"
 
     # Service setup
     create_service_file
@@ -1092,11 +1010,10 @@ main() {
     # Validate installation
     validate_installation
 
-    # Copy log to project directory for easy access
-    copy_log_to_project
-
-    # Show completion message
-    show_completion_message
+    # Show completion message (skip if --no-reboot since this is likely a test)
+    if [ "$NO_REBOOT" != true ]; then
+        show_completion_message
+    fi
 
     # Prompt for reboot (user can Ctrl+C to cancel)
     prompt_reboot

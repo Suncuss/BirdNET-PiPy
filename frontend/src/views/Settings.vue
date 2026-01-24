@@ -365,6 +365,25 @@
                 </div>
               </div>
             </div>
+
+            <!-- BirdWeather Integration -->
+            <div class="pt-4 border-t border-gray-100">
+              <h3 class="text-sm font-medium text-gray-700 mb-3">BirdWeather</h3>
+              <div>
+                <label for="birdweatherId" class="block text-sm text-gray-600 mb-1">Station ID</label>
+                <input
+                  id="birdweatherId"
+                  type="text"
+                  :value="settings.birdweather?.id || ''"
+                  @input="updateBirdweatherId($event.target.value)"
+                  class="block w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                  placeholder="your-station-token"
+                >
+                <p class="text-xs text-gray-400 mt-1">
+                  Share detections with <a href="https://app.birdweather.com/account/stations" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:underline">BirdWeather.com</a>
+                </p>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -738,7 +757,8 @@ export default {
       audio: {},
       spectrogram: {},
       updates: {},
-      display: {}
+      display: {},
+      birdweather: { id: null }
     })
 
     // System update composable
@@ -915,6 +935,11 @@ export default {
     // Handle recording mode change - just update the mode, preserve all URLs
     const onRecordingModeChange = () => {
       settings.value.audio.recording_mode = recordingMode.value
+    }
+
+    // Handle BirdWeather ID update
+    const updateBirdweatherId = (value) => {
+      settings.value.birdweather.id = value || null
     }
 
     // Confirm and trigger system update
@@ -1137,6 +1162,7 @@ export default {
       toggleUpdateChannel,
       toggleMetricUnits,
       onRecordingModeChange,
+      updateBirdweatherId,
       confirmUpdate,
       systemUpdate,
       serviceRestart,

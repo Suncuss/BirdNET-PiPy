@@ -1,0 +1,97 @@
+# Dockerfile for testing install.sh in a clean Debian environment with systemd
+# Uses Docker-in-Docker (DinD) to test full installation flow including Docker setup
+#
+# Build: docker build -f Dockerfile.test -t birdnet-install-test .
+# Run:   docker run --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw birdnet-install-test
+
+FROM debian:bookworm
+
+# Prevent interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install systemd and essential packages
+RUN apt-get update && apt-get install -y \
+    systemd \
+    systemd-sysv \
+    dbus \
+    sudo \
+    curl \
+    git \
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    procps \
+    iproute2 \
+    iptables \
+    kmod \
+    # PulseAudio for audio tests
+    pulseaudio \
+    pulseaudio-utils \
+    alsa-utils \
+    # BATS testing framework
+    bats \
+    bats-assert \
+    bats-support \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Docker (for DinD testing)
+RUN install -m 0755 -d /etc/apt/keyrings && \
+    curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg && \
+    chmod a+r /etc/apt/keyrings/docker.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+    https://download.docker.com/linux/debian bookworm stable" > /etc/apt/sources.list.d/docker.list && \
+    apt-get update && \
+    apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create test user with passwordless sudo and add to docker group
+RUN useradd -m -s /bin/bash testuser && \
+    echo "testuser ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/testuser && \
+    chmod 440 /etc/sudoers.d/testuser && \
+    usermod -aG docker testuser
+
+# Configure git to trust the project directory (avoids dubious ownership errors)
+RUN git config --global --add safe.directory /home/testuser/BirdNET-PiPy
+
+# Remove unnecessary systemd services that can cause issues in containers
+# But preserve Docker services
+RUN rm -f /lib/systemd/system/multi-user.target.wants/* \
+    /etc/systemd/system/*.wants/* \
+    /lib/systemd/system/local-fs.target.wants/* \
+    /lib/systemd/system/sockets.target.wants/*udev* \
+    /lib/systemd/system/sockets.target.wants/*initctl* \
+    /lib/systemd/system/sysinit.target.wants/systemd-tmpfiles-setup* \
+    /lib/systemd/system/systemd-update-utmp* && \
+    # Re-enable Docker and containerd services
+    systemctl enable docker.service containerd.service
+
+# Configure Docker to use vfs storage driver (required for DinD - overlay doesn't work)
+RUN mkdir -p /etc/docker && \
+    echo '{"storage-driver": "vfs"}' > /etc/docker/daemon.json
+
+# Create directories needed for container operation
+RUN mkdir -p /run/systemd/system
+
+# Configure systemd for container mode
+ENV container=docker
+
+# Create directory for test project
+RUN mkdir -p /home/testuser/BirdNET-PiPy && \
+    chown testuser:testuser /home/testuser/BirdNET-PiPy
+
+# Create directory for test scripts
+RUN mkdir -p /tests
+WORKDIR /tests
+
+# Copy test files (done by docker-test-install.sh via bind mount or copy)
+# The test runner will mount the project directory at runtime
+
+# Set up environment
+ENV SUDO_USER=testuser
+ENV HOME=/home/testuser
+
+# Use systemd as init (PID 1)
+STOPSIGNAL SIGRTMIN+3
+CMD ["/lib/systemd/systemd"]

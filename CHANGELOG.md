@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Simplified install.sh - removed 75 lines of redundant code and unused options
+- Added `--branch` option to install.sh for installing from non-main branches
+- Added BirdWeather integration - upload detections and audio to birdweather.com
+- Added BirdWeather Station ID setting in Settings (Advanced → BirdWeather)
 - Added weather data integration - attaches current weather from Open-Meteo API to bird detections
 - Added weather display in Detection Info modal (temperature, humidity, wind, precipitation, cloud cover, pressure)
 - Added metric/imperial unit toggle in Settings (Advanced → Display)
