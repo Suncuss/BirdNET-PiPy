@@ -58,8 +58,8 @@ setup_logging() {
     echo "========== Installation started: $(date) ==========" >> "$LOG_FILE"
 
     # Capture all output: terminal gets colors, log file gets plain text
-    # The sed strips ANSI color codes (e.g., \033[0;32m) from the log file
-    exec > >(tee >(sed 's/\x1b\[[0-9;]*m//g' >> "$LOG_FILE")) 2>&1
+    # The sed strips ANSI color codes (e.g., \033[0;32m) and carriage returns from the log file
+    exec > >(tee >(sed 's/\x1b\[[0-9;]*m//g; s/\r//g' >> "$LOG_FILE")) 2>&1
 }
 
 # Initialize logging immediately
@@ -867,34 +867,12 @@ show_completion_message() {
     print_status "BirdNET-PiPy Installation Complete!"
     print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
-    print_info "Installation directory: $PROJECT_ROOT"
-    print_info "Images are built and the systemd service is installed."
-    echo ""
-    print_info "Installation log: $LOG_FILE"
-    echo ""
-    print_info "Start the service with:"
-    echo "  sudo systemctl start $SERVICE_NAME"
-    echo ""
-    print_info "Service Management Commands:"
-    echo "  sudo systemctl status $SERVICE_NAME    # Check status"
-    echo "  sudo systemctl stop $SERVICE_NAME      # Stop service"
-    echo "  sudo systemctl restart $SERVICE_NAME   # Restart service"
-    echo "  sudo journalctl -u $SERVICE_NAME -f    # View logs"
-    echo ""
-    print_info "Access the Dashboard:"
+    print_info "Access the Dashboard after reboot:"
     local hostname=$(hostname)
     local ip_addr=$(hostname -I | awk '{print $1}')
     echo "  http://${hostname}.local"
     [ -n "$ip_addr" ] && echo "  http://${ip_addr}"
     echo ""
-    print_info "Audio Services:"
-    echo "  pulseaudio --check && echo Running       # Check PulseAudio"
-    echo "  pactl list sources short                 # List audio sources"
-    echo ""
-    print_info "To trigger a container restart:"
-    echo "  touch $PROJECT_ROOT/data/flags/restart-backend"
-    echo ""
-    print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 }
 
 # Reboot system after installation
@@ -904,14 +882,7 @@ prompt_reboot() {
         return 0
     fi
 
-    echo ""
-    print_status "Installation successful!"
-    echo ""
-    print_info "The system will now reboot to apply:"
-    print_info "  - Docker group membership"
-    print_info "  - PulseAudio configuration"
-    echo ""
-    print_status "Rebooting now..."
+    print_status "Rebooting to apply changes..."
     sleep 2  # Brief pause to ensure output is flushed
     reboot
 }
