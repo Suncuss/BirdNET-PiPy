@@ -2,6 +2,7 @@
 
 BirdNET-PiPy is a self-hosted system that uses the [BirdNET](https://birdnet.cornell.edu/) deep-learning model to identify birds from their sounds, with an easy-to-use web dashboard for monitoring and exploration. Connect a microphone and run it 24/7 in your backyard on a Raspberry Pi to discover which birds are around you.
 
+
 <p align="center">
   <img src="docs/interface_demo.webp" alt="BirdNET-PiPy Dashboard" width="90%">
 </p>
@@ -52,5 +53,7 @@ This project is built upon:
 BirdNET-PiPy extends these projects with a modern Vue.js frontend, containerized architecture, and enhanced user interface.
 
 ---
+
+[The story behind](https://suncuss.github.io/BirdNET-PiPy/#story)
 
 Build by Claude Code and Yudong with ❤️
