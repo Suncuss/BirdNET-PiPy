@@ -18,19 +18,11 @@
                             <path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd" />
                         </svg>
                     </button>
-                    <input
-                        id="date-picker"
-                        type="date"
+                    <AppDatePicker
                         v-model="selectedDate"
                         @change="onDateChange"
                         :max="maxDate"
                         :disabled="isUpdating"
-                        :class="[
-                            'h-9 px-3 border rounded-md text-sm',
-                            isUpdating
-                                ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
-                                : 'border-gray-300 focus:ring-blue-500 focus:border-blue-500'
-                        ]"
                     />
                     <button 
                         @click="nextDay"
@@ -104,18 +96,11 @@
                         </svg>
                     </button>
 
-                    <input
-                        type="date"
+                    <AppDatePicker
                         v-model="trendsEndDate"
                         @change="onTrendsEndDateChange"
                         :max="trendsMaxDate"
                         :disabled="isUpdatingTrends"
-                        :class="[
-                            'h-9 px-3 border rounded-md text-sm',
-                            isUpdatingTrends
-                                ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
-                                : 'border-gray-300 focus:ring-blue-500 focus:border-blue-500'
-                        ]"
                     />
 
                     <button
@@ -279,13 +264,15 @@ import { useDateNavigation } from '@/composables/useDateNavigation'
 import { useChartHelpers } from '@/composables/useChartHelpers'
 import api from '@/services/api'
 import AppButton from '@/components/AppButton.vue'
+import AppDatePicker from '@/components/AppDatePicker.vue'
 
 Chart.register(MatrixController, MatrixElement)
 
 export default {
     name: 'Charts',
     components: {
-        AppButton
+        AppButton,
+        AppDatePicker
     },
     setup() {
         const {

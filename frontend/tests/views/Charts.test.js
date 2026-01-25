@@ -23,6 +23,16 @@ vi.mock('chart.js/auto', () => {
   return { default: ChartMock }
 })
 
+// Mock AppDatePicker component to avoid PrimeVue dependency in tests
+vi.mock('@/components/AppDatePicker.vue', () => ({
+  default: {
+    name: 'AppDatePicker',
+    template: '<input type="date" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" @change="$emit(\'change\', $event.target.value)" />',
+    props: ['modelValue', 'disabled', 'max'],
+    emits: ['update:modelValue', 'change']
+  }
+}))
+
 const mockChartsState = () => ({
   hourlyBirdActivityData: ref([]),
   detailedBirdActivityData: ref([]),

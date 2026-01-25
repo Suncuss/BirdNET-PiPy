@@ -120,7 +120,7 @@
 </template>
 
 <script>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import api from '@/services/api'
 
 export default {
@@ -260,6 +260,10 @@ export default {
 
     onMounted(() => {
       loadSpecies()
+    })
+
+    onUnmounted(() => {
+      clearTimeout(searchTimeout)
     })
 
     return {

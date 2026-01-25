@@ -84,7 +84,7 @@ def save_auth_config(config):
     with open(temp_file, 'w') as f:
         json.dump(config, f, indent=2)
 
-    os.rename(temp_file, AUTH_CONFIG_FILE)
+    os.replace(temp_file, AUTH_CONFIG_FILE)
 
     # Set restrictive permissions (owner read/write only)
     try:

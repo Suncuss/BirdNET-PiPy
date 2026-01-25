@@ -11,26 +11,27 @@
     <!-- Filters -->
     <div class="bg-white rounded-lg shadow p-4 mb-4">
       <div class="flex flex-col sm:flex-row sm:flex-wrap sm:items-end gap-3">
-        <!-- From Date -->
-        <div class="w-full sm:w-auto">
-          <label class="block text-xs font-medium text-gray-600 mb-1">From</label>
-          <input
-            type="date"
-            v-model="localStartDate"
-            @change="applyFilters"
-            class="h-10 px-3 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
-          />
-        </div>
+        <!-- Date Range -->
+        <div class="flex gap-3 w-full sm:w-auto">
+          <!-- From Date -->
+          <div class="flex-1 sm:flex-none">
+            <label class="block text-xs font-medium text-gray-600 mb-1">From</label>
+            <AppDatePicker
+              v-model="localStartDate"
+              @change="applyFilters"
+              size="large"
+            />
+          </div>
 
-        <!-- To Date -->
-        <div class="w-full sm:w-auto">
-          <label class="block text-xs font-medium text-gray-600 mb-1">To</label>
-          <input
-            type="date"
-            v-model="localEndDate"
-            @change="applyFilters"
-            class="h-10 px-3 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
-          />
+          <!-- To Date -->
+          <div class="flex-1 sm:flex-none">
+            <label class="block text-xs font-medium text-gray-600 mb-1">To</label>
+            <AppDatePicker
+              v-model="localEndDate"
+              @change="applyFilters"
+              size="large"
+            />
+          </div>
         </div>
 
         <!-- Species Filter -->
@@ -442,6 +443,7 @@
 	import DetectionActions from '@/components/DetectionActions.vue'
 	import SpectrogramModal from '@/components/SpectrogramModal.vue'
 import DetectionInfoModal from '@/components/DetectionInfoModal.vue'
+import AppDatePicker from '@/components/AppDatePicker.vue'
 
 // --- Icons Setup ---
 library.add(faPlay, faPause, faCircleInfo, faTrashAlt, faDatabase)

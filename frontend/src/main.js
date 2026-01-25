@@ -5,6 +5,10 @@ import './style.css'
 import { setupGlobalErrorHandler, useLogger } from './composables/useLogger'
 import { VERSION, DISPLAY_NAME } from './version'
 
+// PrimeVue
+import PrimeVue from 'primevue/config'
+import Aura from '@primeuix/themes/aura'
+
 // Setup global error handling
 setupGlobalErrorHandler()
 
@@ -35,6 +39,14 @@ if (import.meta.env.DEV) {
 }
 
 app.use(router)
+app.use(PrimeVue, {
+    theme: {
+        preset: Aura,
+        options: {
+            darkModeSelector: false // Disable dark mode
+        }
+    }
+})
 
 app.mount('#app')
 

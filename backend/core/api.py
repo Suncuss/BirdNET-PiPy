@@ -92,6 +92,23 @@ def require_internal(f):
 # Simple in-memory cache
 image_cache = {}
 CACHE_EXPIRATION = 172800  # Cache expiration time in seconds (48 hours)
+MAX_CACHE_SIZE = 1000  # Maximum number of cached entries
+
+
+def _cleanup_expired_cache():
+    """Remove expired entries from image cache."""
+    current_time = time.time()
+    expired_keys = [
+        key for key, value in image_cache.items()
+        if current_time - value['timestamp'] >= CACHE_EXPIRATION
+    ]
+    for key in expired_keys:
+        del image_cache[key]
+    if expired_keys:
+        logger.debug("Cleaned up expired cache entries", extra={
+            'removed_count': len(expired_keys)
+        })
+
 
 def get_cached_image(species_name):
     if species_name in image_cache:
@@ -104,7 +121,16 @@ def get_cached_image(species_name):
             return cached_data['data']
     return None
 
+
 def set_cached_image(species_name, data):
+    # Periodically clean up expired entries when adding new ones
+    if len(image_cache) >= MAX_CACHE_SIZE:
+        _cleanup_expired_cache()
+        # If still at max after cleanup, remove oldest entry
+        if len(image_cache) >= MAX_CACHE_SIZE:
+            oldest_key = min(image_cache, key=lambda k: image_cache[k]['timestamp'])
+            del image_cache[oldest_key]
+
     image_cache[species_name] = {
         'data': data,
         'timestamp': time.time()

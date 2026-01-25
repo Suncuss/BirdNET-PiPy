@@ -116,6 +116,19 @@ def serve_file_with_fallback(directory, filename, default_file_path, file_type="
 
     file_path = os.path.join(directory, filename)
 
+    # Security: Verify resolved path is within the directory (prevents symlink attacks)
+    real_dir = os.path.realpath(directory)
+    real_file = os.path.realpath(file_path)
+    if not real_file.startswith(real_dir + os.sep) and real_file != real_dir:
+        logger.warning(f"Symlink attack attempt blocked for {file_type}", extra={
+            'filename': filename,
+            'resolved_path': real_file,
+            'expected_dir': real_dir
+        })
+        default_dir = os.path.dirname(default_file_path)
+        default_name = os.path.basename(default_file_path)
+        return make_response(send_from_directory(default_dir, default_name))
+
     if os.path.exists(file_path):
         logger.debug(f"Serving {file_type} file", extra={
             'file': filename,
