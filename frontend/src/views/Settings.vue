@@ -21,6 +21,7 @@
             :disabled="serviceRestart.isRestarting.value || systemUpdate.isRestarting.value"
           >
             Save
+            <span v-if="hasUnsavedChanges" class="ml-1.5 w-2 h-2 bg-orange-500 rounded-full inline-block"></span>
           </AppButton>
         </div>
       </div>
@@ -58,9 +59,10 @@
                   <label for="latitude" class="block text-sm text-gray-600 mb-1">Latitude</label>
                   <input
                     id="latitude"
-                    type="number"
-                    step="0.000001"
+                    type="text"
+                    inputmode="decimal"
                     v-model.number="settings.location.latitude"
+                    @input="limitDecimals"
                     class="block w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
                     placeholder="42.47"
                   >
@@ -69,15 +71,16 @@
                   <label for="longitude" class="block text-sm text-gray-600 mb-1">Longitude</label>
                   <input
                     id="longitude"
-                    type="number"
-                    step="0.000001"
+                    type="text"
+                    inputmode="decimal"
                     v-model.number="settings.location.longitude"
+                    @input="limitDecimals"
                     class="block w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
                     placeholder="-76.45"
                   >
                 </div>
               </div>
-              <p class="text-xs text-gray-400">Used for filtering species by region</p>
+              <p class="text-xs text-gray-400">Used for species filtering and weather data</p>
             </div>
 
             <!-- Audio Source -->
@@ -662,26 +665,40 @@
         @close="closeFilterModal"
         @update:modelValue="updateFilterList"
       />
+
+      <!-- Unsaved Changes Modal -->
+      <UnsavedChangesModal
+        v-if="showUnsavedModal"
+        :saving="loading"
+        :error="settingsSaveError"
+        @save="handleUnsavedSave"
+        @discard="handleUnsavedDiscard"
+        @cancel="handleUnsavedCancel"
+      />
     </div>
   </template>
 
   <script>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { onBeforeRouteLeave } from 'vue-router'
 import { useSystemUpdate } from '@/composables/useSystemUpdate'
 import { useServiceRestart } from '@/composables/useServiceRestart'
 import { useAuth } from '@/composables/useAuth'
 import { useUnitSettings } from '@/composables/useUnitSettings'
+import { limitDecimals } from '@/utils/inputHelpers'
 import api, { createLongRequest } from '@/services/api'
 import SpeciesFilterModal from '@/components/SpeciesFilterModal.vue'
 import AlertBanner from '@/components/AlertBanner.vue'
 import AppButton from '@/components/AppButton.vue'
+import UnsavedChangesModal from '@/components/UnsavedChangesModal.vue'
 
 export default {
   name: 'Settings',
   components: {
     SpeciesFilterModal,
     AlertBanner,
-    AppButton
+    AppButton,
+    UnsavedChangesModal
   },
   setup() {
     // Composables
@@ -761,6 +778,40 @@ export default {
       birdweather: { id: null }
     })
 
+    // Unsaved changes tracking
+    const originalSettings = ref(null)
+    const showUnsavedModal = ref(false)
+    const navigationResolver = ref(null)
+
+    // Extract only fields that require manual save (excludes auto-save toggles)
+    const getComparableSettings = (s) => ({
+      location: { latitude: s.location?.latitude, longitude: s.location?.longitude },
+      audio: {
+        recording_mode: s.audio?.recording_mode,
+        stream_url: s.audio?.stream_url,
+        rtsp_url: s.audio?.rtsp_url,
+        recording_length: s.audio?.recording_length,
+        overlap: s.audio?.overlap
+      },
+      detection: { sensitivity: s.detection?.sensitivity, cutoff: s.detection?.cutoff },
+      species_filter: {
+        allowed_species: s.species_filter?.allowed_species || [],
+        blocked_species: s.species_filter?.blocked_species || []
+      },
+      birdweather: { id: s.birdweather?.id }
+    })
+
+    // Take snapshot of current settings for change detection
+    const takeSnapshot = () => {
+      originalSettings.value = JSON.parse(JSON.stringify(getComparableSettings(settings.value)))
+    }
+
+    // Check for unsaved changes
+    const hasUnsavedChanges = computed(() => {
+      if (!originalSettings.value) return false
+      return JSON.stringify(getComparableSettings(settings.value)) !== JSON.stringify(originalSettings.value)
+    })
+
     // System update composable
     const systemUpdate = useSystemUpdate()
 
@@ -818,6 +869,8 @@ export default {
         if (saveStatus.value?.type === 'error') {
           saveStatus.value = null
         }
+        // Take snapshot for unsaved changes tracking
+        takeSnapshot()
       } catch (error) {
         console.error('Error loading settings:', error)
         if (retryCount < 2) {
@@ -828,6 +881,8 @@ export default {
             const { data } = await api.get('/settings/defaults')
             settings.value = data
             recordingMode.value = data.audio?.recording_mode || 'pulseaudio'
+            // Take snapshot for unsaved changes tracking
+            takeSnapshot()
           } catch (defaultsErr) {
             console.error('Failed to load defaults:', defaultsErr)
             showStatus('error', 'Failed to load settings')
@@ -838,28 +893,40 @@ export default {
       }
     }
 
-    // Save settings to API
-    const saveSettings = async () => {
-      try {
-        if (recordingMode.value === 'http_stream' && !settings.value.audio.stream_url?.trim()) {
-          settingsSaveError.value = 'HTTP Stream requires a Stream URL'
-          return
-        }
-        if (recordingMode.value === 'rtsp' && !settings.value.audio.rtsp_url?.trim()) {
-          settingsSaveError.value = 'RTSP Stream requires an RTSP URL'
-          return
-        }
+    // Save settings to API (returns true on success, false on failure)
+    const saveSettingsOnly = async () => {
+      // Validate stream URLs if using stream modes
+      if (recordingMode.value === 'http_stream' && !settings.value.audio.stream_url?.trim()) {
+        settingsSaveError.value = 'HTTP Stream requires a Stream URL'
+        return false
+      }
+      if (recordingMode.value === 'rtsp' && !settings.value.audio.rtsp_url?.trim()) {
+        settingsSaveError.value = 'RTSP Stream requires an RTSP URL'
+        return false
+      }
 
+      try {
         loading.value = true
         settingsSaveError.value = ''
         settings.value.location.configured = true
         await api.put('/settings', settings.value)
-        loading.value = false
-        await serviceRestart.waitForRestart({ autoReload: true })
+        // Update snapshot after successful save
+        takeSnapshot()
+        return true
       } catch (error) {
         console.error('Error saving settings:', error)
         settingsSaveError.value = 'Failed to save settings. Please try again.'
+        return false
+      } finally {
         loading.value = false
+      }
+    }
+
+    // Save settings and wait for restart (used by main Save button)
+    const saveSettings = async () => {
+      const success = await saveSettingsOnly()
+      if (success) {
+        await serviceRestart.waitForRestart({ autoReload: true, message: 'Updating settings' })
       }
     }
 
@@ -1018,7 +1085,9 @@ export default {
       try {
         settings.value.location.configured = true
         await api.put('/settings', settings.value)
-        await serviceRestart.waitForRestart({ autoReload: true })
+        // Update snapshot after successful save
+        takeSnapshot()
+        await serviceRestart.waitForRestart({ autoReload: true, message: 'Updating settings' })
       } catch (error) {
         console.error('Error saving species filter:', error)
         throw error
@@ -1139,6 +1208,60 @@ export default {
       }
     }
 
+    // Browser beforeunload handler
+    const handleBeforeUnload = (e) => {
+      if (hasUnsavedChanges.value) {
+        e.preventDefault()
+        e.returnValue = '' // Required for Chrome
+      }
+    }
+
+    // Unsaved changes modal handlers
+    const handleUnsavedSave = async () => {
+      const success = await saveSettingsOnly()
+      if (success) {
+        // Close modal, cancel navigation, show restart banner like regular save
+        showUnsavedModal.value = false
+        if (navigationResolver.value) {
+          navigationResolver.value(false) // Cancel navigation - page will reload after restart
+          navigationResolver.value = null
+        }
+        // Scroll to top to show restart progress banner
+        window.scrollTo({ top: 0, behavior: 'smooth' })
+        // Wait for restart with auto-reload (uses existing banner UI)
+        await serviceRestart.waitForRestart({ autoReload: true, message: 'Updating settings' })
+      }
+      // On failure: modal stays open, error shown via settingsSaveError
+    }
+
+    const handleUnsavedDiscard = () => {
+      showUnsavedModal.value = false
+      if (navigationResolver.value) {
+        navigationResolver.value(true)
+        navigationResolver.value = null
+      }
+    }
+
+    const handleUnsavedCancel = () => {
+      showUnsavedModal.value = false
+      if (navigationResolver.value) {
+        navigationResolver.value(false)
+        navigationResolver.value = null
+      }
+    }
+
+    // Navigation guard - intercept route changes when there are unsaved changes
+    onBeforeRouteLeave(() => {
+      if (hasUnsavedChanges.value) {
+        showUnsavedModal.value = true
+        // Return a Promise - navigation blocked until resolved
+        return new Promise((resolve) => {
+          navigationResolver.value = resolve
+        })
+      }
+      return true
+    })
+
     // Load settings on component mount
     onMounted(() => {
       loadSettings()
@@ -1146,6 +1269,12 @@ export default {
       loadSpeciesList()
       systemUpdate.loadVersionInfo()
       auth.checkAuthStatus()
+      window.addEventListener('beforeunload', handleBeforeUnload)
+    })
+
+    // Cleanup on unmount
+    onUnmounted(() => {
+      window.removeEventListener('beforeunload', handleBeforeUnload)
     })
 
     return {
@@ -1162,6 +1291,7 @@ export default {
       toggleUpdateChannel,
       toggleMetricUnits,
       onRecordingModeChange,
+      limitDecimals,
       updateBirdweatherId,
       confirmUpdate,
       systemUpdate,
@@ -1197,7 +1327,13 @@ export default {
       // Dropdown options
       recordingModeOptions,
       recordingLengthOptions,
-      overlapOptions
+      overlapOptions,
+      // Unsaved changes
+      hasUnsavedChanges,
+      showUnsavedModal,
+      handleUnsavedSave,
+      handleUnsavedDiscard,
+      handleUnsavedCancel
     }
   }
 }

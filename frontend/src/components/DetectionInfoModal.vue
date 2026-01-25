@@ -67,6 +67,14 @@
                   </div>
                 </div>
               </div>
+              <div class="mt-2">
+                <a
+                  href="https://open-meteo.com/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-xs text-gray-400 hover:text-gray-600 transition-colors"
+                >Weather data from Open-Meteo</a>
+              </div>
             </div>
 
             <!-- Other Metadata Section -->

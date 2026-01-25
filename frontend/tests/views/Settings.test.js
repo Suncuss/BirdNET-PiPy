@@ -437,4 +437,196 @@ describe('Settings', () => {
     })
   })
 
+  describe('Unsaved Changes Detection', () => {
+    it('hasUnsavedChanges is false after initial load', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      expect(wrapper.vm.hasUnsavedChanges).toBe(false)
+    })
+
+    it('hasUnsavedChanges becomes true when settings are modified', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      expect(wrapper.vm.hasUnsavedChanges).toBe(false)
+
+      // Modify a setting
+      wrapper.vm.settings.location.latitude = 50.0
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.vm.hasUnsavedChanges).toBe(true)
+    })
+
+    it('hasUnsavedChanges returns to false when reverted to original', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      const originalLat = wrapper.vm.settings.location.latitude
+
+      // Modify a setting
+      wrapper.vm.settings.location.latitude = 50.0
+      await wrapper.vm.$nextTick()
+      expect(wrapper.vm.hasUnsavedChanges).toBe(true)
+
+      // Revert to original
+      wrapper.vm.settings.location.latitude = originalLat
+      await wrapper.vm.$nextTick()
+      expect(wrapper.vm.hasUnsavedChanges).toBe(false)
+    })
+
+    it('hasUnsavedChanges becomes false after successful save', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      // Modify a setting
+      wrapper.vm.settings.location.latitude = 50.0
+      await wrapper.vm.$nextTick()
+      expect(wrapper.vm.hasUnsavedChanges).toBe(true)
+
+      // Mock successful save
+      mockApi.put.mockResolvedValueOnce({ data: { status: 'updated' } })
+
+      // Save settings
+      await wrapper.vm.saveSettings()
+      await flushPromises()
+
+      expect(wrapper.vm.hasUnsavedChanges).toBe(false)
+    })
+
+    it('shows orange indicator on Save button when there are unsaved changes', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      // Find the Save button (contains "Save" text and is not the Reset button)
+      const saveButton = wrapper.findAll('button').find(btn =>
+        btn.text().includes('Save') && !btn.text().includes('Reset')
+      )
+
+      // Initially no indicator within Save button
+      expect(saveButton.find('.bg-orange-500').exists()).toBe(false)
+
+      // Modify a setting
+      wrapper.vm.settings.location.latitude = 50.0
+      await wrapper.vm.$nextTick()
+
+      // Now indicator should appear within Save button
+      expect(saveButton.find('.bg-orange-500').exists()).toBe(true)
+    })
+
+    it('shows unsaved changes modal when showUnsavedModal is true', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      // Modal should not be visible initially
+      expect(wrapper.findComponent({ name: 'UnsavedChangesModal' }).exists()).toBe(false)
+
+      // Trigger modal
+      wrapper.vm.showUnsavedModal = true
+      await wrapper.vm.$nextTick()
+
+      // Modal should now be visible
+      expect(wrapper.findComponent({ name: 'UnsavedChangesModal' }).exists()).toBe(true)
+    })
+
+    it('handleUnsavedDiscard closes modal', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      // Open modal
+      wrapper.vm.showUnsavedModal = true
+      await wrapper.vm.$nextTick()
+      expect(wrapper.vm.showUnsavedModal).toBe(true)
+
+      // Trigger discard
+      wrapper.vm.handleUnsavedDiscard()
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.vm.showUnsavedModal).toBe(false)
+    })
+
+    it('handleUnsavedCancel closes modal', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      // Open modal
+      wrapper.vm.showUnsavedModal = true
+      await wrapper.vm.$nextTick()
+      expect(wrapper.vm.showUnsavedModal).toBe(true)
+
+      // Trigger cancel
+      wrapper.vm.handleUnsavedCancel()
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.vm.showUnsavedModal).toBe(false)
+    })
+
+    it('handleUnsavedSave saves and closes modal on success', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      // Mock successful save
+      mockApi.put.mockResolvedValueOnce({ data: { status: 'updated' } })
+
+      // Set up modal state with a pending change
+      wrapper.vm.settings.location.latitude = 50.0
+      wrapper.vm.showUnsavedModal = true
+      await wrapper.vm.$nextTick()
+
+      // Trigger save
+      await wrapper.vm.handleUnsavedSave()
+      await flushPromises()
+
+      expect(mockApi.put).toHaveBeenCalledWith('/settings', expect.any(Object))
+      expect(wrapper.vm.showUnsavedModal).toBe(false)
+    })
+
+    it('handleUnsavedSave keeps modal open on validation failure', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      // Set up state that will fail validation (HTTP stream mode without URL)
+      wrapper.vm.recordingMode = 'http_stream'
+      wrapper.vm.settings.audio.recording_mode = 'http_stream'
+      wrapper.vm.settings.audio.stream_url = ''
+      wrapper.vm.showUnsavedModal = true
+      let navigationResolved = null
+      wrapper.vm.navigationResolver = (value) => { navigationResolved = value }
+      await wrapper.vm.$nextTick()
+
+      // Trigger save (should fail validation)
+      await wrapper.vm.handleUnsavedSave()
+      await flushPromises()
+
+      // Modal should stay open, navigation should NOT be resolved
+      expect(wrapper.vm.showUnsavedModal).toBe(true)
+      expect(navigationResolved).toBe(null)
+      expect(wrapper.vm.settingsSaveError).toContain('Stream URL')
+    })
+
+    it('handleUnsavedSave keeps modal open on API failure', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      // Mock API failure
+      mockApi.put.mockRejectedValueOnce(new Error('API error'))
+
+      // Set up modal state with a pending change
+      wrapper.vm.settings.location.latitude = 50.0
+      wrapper.vm.showUnsavedModal = true
+      let navigationResolved = null
+      wrapper.vm.navigationResolver = (value) => { navigationResolved = value }
+      await wrapper.vm.$nextTick()
+
+      // Trigger save
+      await wrapper.vm.handleUnsavedSave()
+      await flushPromises()
+
+      // Modal should stay open, navigation should NOT be resolved
+      expect(wrapper.vm.showUnsavedModal).toBe(true)
+      expect(navigationResolved).toBe(null)
+      expect(wrapper.vm.settingsSaveError).toContain('Failed to save')
+    })
+  })
+
 })

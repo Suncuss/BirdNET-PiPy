@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Added lat/long input limiting to 2 decimal places (sufficient precision for species filtering)
+- Added Open-Meteo attribution link in Detection Info modal
+- Added unsaved changes detection on Settings page with confirmation modal when navigating away
 - Simplified install.sh - removed 75 lines of redundant code and unused options
 - Added `--branch` option to install.sh for installing from non-main branches
 - Added BirdWeather integration - upload detections and audio to birdweather.com
@@ -15,6 +18,7 @@
 - Fixed weather display to handle case-insensitive keys and double-encoded JSON
 - Fixed location check to support coordinates at 0° latitude/longitude
 - Refactored: DRY configuration constants in `backend/config/constants.py` for validation
+- Refactored: Extracted shared `limitDecimals` utility for coordinate inputs
 
 ## [0.3.2] - 2026-01-17
 

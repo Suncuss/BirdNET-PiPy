@@ -16,7 +16,7 @@
           </div>
           <h2 class="text-xl font-semibold text-gray-900">Set Your Location</h2>
           <p class="mt-2 text-sm text-gray-600">
-            BirdNET uses your location to filter bird species that are likely in your area and to retrieve local weather conditions.
+            BirdNET-PiPy uses your location to filter bird species likely in your area and to retrieve local weather information.
           </p>
         </div>
 
@@ -33,7 +33,7 @@
               @keyup.enter="searchAddress"
               type="text"
               placeholder="City, address, or place name..."
-              class="flex-1 rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring focus:ring-green-200 focus:ring-opacity-50"
+              class="flex-1 rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring focus:ring-green-200 focus:ring-opacity-50 pl-3"
             >
             <button
               @click="searchAddress"
@@ -80,10 +80,11 @@
             <input
               id="latitude"
               v-model.number="latitude"
-              type="number"
-              step="0.01"
+              type="text"
+              inputmode="decimal"
+              @input="limitDecimals"
               placeholder="e.g., 42.47"
-              class="w-full rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring focus:ring-green-200 focus:ring-opacity-50"
+              class="w-full rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring focus:ring-green-200 focus:ring-opacity-50 pl-3"
             >
           </div>
           <div>
@@ -91,10 +92,11 @@
             <input
               id="longitude"
               v-model.number="longitude"
-              type="number"
-              step="0.01"
+              type="text"
+              inputmode="decimal"
+              @input="limitDecimals"
               placeholder="e.g., -76.45"
-              class="w-full rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring focus:ring-green-200 focus:ring-opacity-50"
+              class="w-full rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring focus:ring-green-200 focus:ring-opacity-50 pl-3"
             >
           </div>
         </div>
@@ -141,6 +143,7 @@
 <script>
 import { ref, computed } from 'vue'
 import { useServiceRestart } from '@/composables/useServiceRestart'
+import { limitDecimals } from '@/utils/inputHelpers'
 import api from '@/services/api'
 
 export default {
@@ -288,6 +291,7 @@ export default {
       isValidLocation,
       searchAddress,
       selectSearchResult,
+      limitDecimals,
       saveLocation,
       skipSetup,
       serviceRestart
