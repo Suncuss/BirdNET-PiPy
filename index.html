@@ -5,6 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>BirdNET-PiPy - Bird Detection for Raspberry Pi</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256' fill='%23000000'%3E%3Cg transform='scale(-1,1) translate(-256,0)'%3E%3Cpath d='M176,68a12,12,0,1,1-12-12A12,12,0,0,1,176,68Zm-50.87891,61.85449a7.99847,7.99847,0,0,0-11.2666,1.02393l-40,48a7.99987,7.99987,0,1,0,12.291,10.24316l40-48A7.999,7.999,0,0,0,125.12109,129.85449ZM240,80a7.99943,7.99943,0,0,1-3.5625,6.65625L216,100.28125V120A104.11791,104.11791,0,0,1,112,224H8a7.99963,7.99963,0,0,1-6.24707-12.99756L96,93.19385V76A60.00943,60.00943,0,0,1,213.207,57.85547L236.4375,73.34375A7.99943,7.99943,0,0,1,240,80Zm-22.42188,0L201.89551,69.544a8.00117,8.00117,0,0,1-3.30567-4.64454A44.0074,44.0074,0,0,0,112,76V96a8.00033,8.00033,0,0,1-1.75293,4.99756L24.64453,208H112a88.09957,88.09957,0,0,0,88-88V96a7.99943,7.99943,0,0,1,3.5625-6.65625Z'/%3E%3C/g%3E%3C/svg%3E">
     <meta name="description"
         content="Transform your Raspberry Pi into a bird detection station. Real-time identification using BirdNET model.">
     <script src="https://cdn.tailwindcss.com"></script>
@@ -106,21 +107,21 @@
                 <span class="font-bold text-lg sm:text-xl text-green-700">BirdNET-PiPy</span>
             </div>
             <div class="flex items-center gap-1 sm:gap-2">
-                <a href="https://birdnet.suncuss.me" target="_blank"
-                    class="flex items-center gap-1 sm:gap-2 bg-green-500 text-white px-2 sm:px-3 py-2 rounded-lg text-sm hover:bg-green-400 transition">
-                    <svg class="w-4 h-4 sm:w-5 sm:h-5" fill="currentColor" viewBox="0 0 256 256">
+                <a href="https://birdnet-pipy.suncuss.me" target="_blank"
+                    class="flex items-center gap-1 sm:gap-2 bg-green-500 text-white px-1.5 py-1 sm:px-3 sm:py-2 rounded-lg text-xs sm:text-sm hover:bg-green-400 transition">
+                    <svg class="w-4 h-4 sm:w-5 sm:h-5 -scale-x-100" fill="currentColor" viewBox="0 0 256 256">
                         <path
                             d="M176,68a12,12,0,1,1-12-12A12,12,0,0,1,176,68Zm-50.87891,61.85449a7.99847,7.99847,0,0,0-11.2666,1.02393l-40,48a7.99987,7.99987,0,1,0,12.291,10.24316l40-48A7.999,7.999,0,0,0,125.12109,129.85449ZM240,80a7.99943,7.99943,0,0,1-3.5625,6.65625L216,100.28125V120A104.11791,104.11791,0,0,1,112,224H8a7.99963,7.99963,0,0,1-6.24707-12.99756L96,93.19385V76A60.00943,60.00943,0,0,1,213.207,57.85547L236.4375,73.34375A7.99943,7.99943,0,0,1,240,80Zm-22.42188,0L201.89551,69.544a8.00117,8.00117,0,0,1-3.30567-4.64454A44.0074,44.0074,0,0,0,112,76V96a8.00033,8.00033,0,0,1-1.75293,4.99756L24.64453,208H112a88.09957,88.09957,0,0,0,88-88V96a7.99943,7.99943,0,0,1,3.5625-6.65625Z" />
                     </svg>
-                    <span class="hidden sm:inline">Demo</span>
+                    <span>Demo</span>
                 </a>
                 <a href="https://github.com/Suncuss/BirdNET-PiPy" target="_blank"
-                    class="flex items-center gap-1 sm:gap-2 bg-gray-900 text-white px-2 sm:px-3 py-2 rounded-lg text-sm hover:bg-gray-700 transition">
+                    class="flex items-center gap-1 sm:gap-2 bg-gray-900 text-white px-1.5 py-1 sm:px-3 sm:py-2 rounded-lg text-xs sm:text-sm hover:bg-gray-700 transition">
                     <svg class="w-4 h-4 sm:w-5 sm:h-5" fill="currentColor" viewBox="0 0 24 24">
                         <path
                             d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" />
                     </svg>
-                    <span class="hidden sm:inline">GitHub</span>
+                    <span>GitHub</span>
                 </a>
             </div>
         </div>
@@ -133,10 +134,9 @@
                 Bird Detection for<br>
                 <span class="text-green-200">Your Raspberry Pi</span>
             </h1>
-            <p class="text-lg sm:text-xl md:text-2xl text-green-100 mb-6 sm:mb-8 max-w-3xl mx-auto px-2 sm:px-0">
-                Run BirdNET on a Raspberry Pi to identify birds from their sounds.<span class="hidden sm:inline">
-                    Records detections 24/7 with a simple
-                    web interface.</span>
+            <p class="text-lg sm:text-xl md:text-2xl text-green-100 mb-6 sm:mb-8 max-w-4xl mx-auto px-2 sm:px-0">
+                Find out who's singing in your backyard.<br><span class="hidden sm:inline">
+                    Plug in a mic and explore your discoveries right from your browser.</span>
             </p>
 
             <!-- Screenshot Carousel -->
@@ -208,7 +208,7 @@
         <div class="max-w-6xl mx-auto">
             <h2 class="text-2xl sm:text-3xl md:text-4xl font-bold text-center mb-3 sm:mb-4">Features</h2>
             <p class="text-gray-600 text-center mb-8 sm:mb-12 max-w-2xl mx-auto text-sm sm:text-base">
-                A complete bird monitoring solution that runs 24/7 on your Raspberry Pi
+                An easy-to-use bird monitoring system that runs 24/7 on a Raspberry Pi.
             </p>
             <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-8">
                 <!-- Feature 1 -->
