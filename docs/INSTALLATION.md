@@ -77,7 +77,7 @@ journalctl -u birdnet-pipy -f
 
 ### Troubleshooting & Advanced Config
 
-For detailed logs, advanced configuration, and architecture details, see the **[System Administration Guide](deployment/README.md)**.
+For detailed logs, advanced configuration, and architecture details, see the **[System Administration Guide](../deployment/README.md)**.
 
 ### Web Interface
 
