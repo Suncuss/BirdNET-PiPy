@@ -2,23 +2,20 @@
 
 ## [Unreleased]
 
-- Added lat/long input limiting to 2 decimal places (sufficient precision for species filtering)
-- Added Open-Meteo attribution link in Detection Info modal
-- Added unsaved changes detection on Settings page with confirmation modal when navigating away
-- Simplified install.sh - removed 75 lines of redundant code and unused options
-- Added `--branch` option to install.sh for installing from non-main branches
 - Added BirdWeather integration - upload detections and audio to birdweather.com
-- Added BirdWeather Station ID setting in Settings (Advanced → BirdWeather)
 - Added weather data integration - attaches current weather from Open-Meteo API to bird detections
 - Added weather display in Detection Info modal (temperature, humidity, wind, precipitation, cloud cover, pressure)
 - Added metric/imperial unit toggle in Settings (Advanced → Display)
-- Added hourly weather caching to minimize API calls
-- Added negative caching for weather API failures (5-minute cooldown)
-- Fixed weather cache to invalidate on day change, not just hour change
-- Fixed weather display to handle case-insensitive keys and double-encoded JSON
+- Added Open-Meteo attribution link in Detection Info modal
+- Added PrimeVue DatePicker for consistent cross-browser date styling
+- Added unsaved changes detection on Settings page with confirmation modal when navigating away
+- Added `--branch` option to install.sh for installing from non-main branches
+- Fixed date pickers displaying incorrectly on mobile in Table view
+- Fixed iOS zoom on date picker inputs
 - Fixed location check to support coordinates at 0° latitude/longitude
-- Refactored: DRY configuration constants in `backend/config/constants.py` for validation
-- Refactored: Extracted shared `limitDecimals` utility for coordinate inputs
+- Fixed audio queue cleanup error when buffer is full
+- Changed lat/long inputs to limit to 2 decimal places (sufficient precision for species filtering)
+- Simplified install.sh - removed 75 lines of redundant code and unused options
 
 ## [0.3.2] - 2026-01-17
 

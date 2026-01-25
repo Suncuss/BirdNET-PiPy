@@ -1,10 +1,14 @@
 # BirdNET-PiPy
 
-BirdNET-PiPy is a robust acoustic monitoring system for the Raspberry Pi. It uses the [BirdNET](https://birdnet.cornell.edu/) deep learning model to detect and identify bird calls in real-time, providing a modern web interface for data viewing.
+BirdNET-PiPy is a self-hosted system that uses the [BirdNET](https://birdnet.cornell.edu/) deep-learning model to identify birds from their sounds, with an easy-to-use web dashboard for monitoring and exploration. Connect a microphone and run it 24/7 in your backyard on a Raspberry Pi to discover which birds are around you.
+
+<p align="center">
+  <img src="docs/interface_demo.webp" alt="BirdNET-PiPy Dashboard" width="90%">
+</p>
 
 ## Features
 
-- 🐦 **Real-time Identification:** Detects bird calls locally using the BirdNET-Lite model.
+- 🐦 **Real-time Identification:** Detects bird calls locally using the BirdNET model.
 - 📊 **Modern Dashboard:** Vue.js-based interface for visualizing detections and spectrograms.
 - 🐳 **Containerized:** Docker-based architecture for reliability and isolation.
 - 📱 **Mobile Friendly:** Responsive design works on desktop and mobile.
@@ -46,5 +50,7 @@ This project is built upon:
 - **[BirdNET-Pi](https://github.com/mcguirepr89/BirdNET-Pi)** - Original Raspberry Pi implementation by Patrick McGuire
 
 BirdNET-PiPy extends these projects with a modern Vue.js frontend, containerized architecture, and enhanced user interface.
+
+---
 
 Build by Claude Code and Yudong with ❤️
