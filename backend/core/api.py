@@ -1,5 +1,13 @@
 from core.db import DatabaseManager
 from core.storage_manager import delete_detection_files
+from core.migration import (
+    BirdNETPiMigrator,
+    get_migration_progress,
+    set_migration_progress,
+    clear_migration_progress,
+    start_migration_if_not_running
+)
+import threading
 from config.settings import SPECTROGRAM_DIR, EXTRACTED_AUDIO_DIR, DEFAULT_AUDIO_PATH, DEFAULT_IMAGE_PATH, API_PORT, BASE_DIR, STREAM_URL, RTSP_URL, RECORDING_MODE, LABELS_PATH, load_user_settings, get_default_settings
 from config.constants import (
     RecordingMode,
@@ -31,7 +39,7 @@ from core.auth import (
 )
 from version import __version__, DISPLAY_NAME
 
-from flask import Flask, Blueprint, jsonify, request, Response
+from flask import Flask, Blueprint, jsonify, request, Response, session
 from flask_socketio import SocketIO, emit
 from datetime import datetime, timedelta
 import os
@@ -41,6 +49,8 @@ import time
 import re
 import csv
 import io
+import tempfile
+import uuid
 
 # Setup logging
 setup_logging('api')
@@ -1579,6 +1589,285 @@ def auth_change_password():
     except Exception as e:
         logger.error("Change password error", extra={'error': str(e)})
         return jsonify({'error': 'Failed to change password'}), 500
+
+
+# =============================================================================
+# Migration Endpoints (BirdNET-Pi import)
+# =============================================================================
+
+# Directory for storing temporary migration files
+MIGRATION_TEMP_DIR = os.path.join(BASE_DIR, 'data', 'temp', 'migration')
+
+
+def get_migration_temp_path():
+    """Get temp file path from session, if it exists and is valid."""
+    temp_path = session.get('migration_temp_path')
+    if temp_path and os.path.exists(temp_path):
+        return temp_path
+    return None
+
+
+def cleanup_migration_temp():
+    """Remove temp file and clear session."""
+    temp_path = session.pop('migration_temp_path', None)
+    if temp_path and os.path.exists(temp_path):
+        try:
+            os.remove(temp_path)
+            logger.debug("Migration temp file cleaned up", extra={'path': temp_path})
+        except Exception as e:
+            logger.warning("Failed to cleanup migration temp file", extra={
+                'path': temp_path,
+                'error': str(e)
+            })
+
+
+@api.route('/api/migration/validate', methods=['POST'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def migration_validate():
+    """Upload and validate a BirdNET-Pi database file.
+
+    Accepts multipart/form-data with a 'file' field containing the birds.db file.
+
+    Returns:
+        JSON with validation result, record count, duplicate count, and preview records
+    """
+    # Check if file was uploaded
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+
+    # Validate file extension
+    if not file.filename.endswith('.db'):
+        return jsonify({'error': 'File must be a .db SQLite database file'}), 400
+
+    # Clean up any previous temp file
+    cleanup_migration_temp()
+
+    # Create temp directory if needed
+    os.makedirs(MIGRATION_TEMP_DIR, exist_ok=True)
+
+    # Save to temp file with unique name
+    temp_filename = f"migration_{uuid.uuid4().hex}.db"
+    temp_path = os.path.join(MIGRATION_TEMP_DIR, temp_filename)
+
+    try:
+        file.save(temp_path)
+        logger.info("Migration file uploaded", extra={
+            'original_filename': file.filename,
+            'temp_path': temp_path
+        })
+
+        # Validate the database
+        migrator = BirdNETPiMigrator(db_manager)
+        validation = migrator.validate_source_database(temp_path)
+
+        if not validation['valid']:
+            # Clean up invalid file
+            os.remove(temp_path)
+            return jsonify({
+                'valid': False,
+                'error': validation['error']
+            }), 400
+
+        # Get preview (skip duplicate counting - too slow for large databases)
+        preview = migrator.get_preview(temp_path, limit=10)
+
+        # Store temp path and record count in session for import step
+        session['migration_temp_path'] = temp_path
+        session['migration_total_records'] = validation['record_count']
+
+        return jsonify({
+            'valid': True,
+            'record_count': validation['record_count'],
+            'preview': preview
+        }), 200
+
+    except Exception as e:
+        # Clean up on error
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        logger.error("Migration validation error", extra={'error': str(e)}, exc_info=True)
+        return jsonify({'error': f'Failed to validate database: {str(e)}'}), 500
+
+
+def _run_migration_background(temp_path, total_records, skip_duplicates):
+    """Run migration in background thread.
+
+    Args:
+        temp_path: Path to the validated source database (used as migration ID)
+        total_records: Total number of records to import
+        skip_duplicates: Whether to skip duplicate records
+    """
+    try:
+        migrator = BirdNETPiMigrator(db_manager)
+        result = migrator.migrate(
+            temp_path,
+            skip_duplicates=skip_duplicates,
+            temp_path=temp_path,
+            total_records=total_records
+        )
+
+        logger.info("Migration import completed", extra={
+            'migration_id': temp_path,
+            'imported': result['imported'],
+            'skipped': result['skipped'],
+            'errors': result['errors']
+        })
+
+    except Exception as e:
+        logger.error("Migration import error", extra={
+            'migration_id': temp_path,
+            'error': str(e)
+        }, exc_info=True)
+        set_migration_progress(temp_path, {
+            'status': 'failed',
+            'error': str(e)
+        })
+
+    finally:
+        # Clean up temp file after migration completes
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+                logger.debug("Migration temp file cleaned up", extra={'path': temp_path})
+            except Exception as e:
+                logger.warning("Failed to cleanup migration temp file", extra={
+                    'path': temp_path,
+                    'error': str(e)
+                })
+
+        # Clear progress tracking after a delay to allow final status poll
+        def cleanup_progress():
+            import time
+            time.sleep(300)  # Keep progress available for 5 minutes
+            clear_migration_progress(temp_path)
+            logger.debug("Migration progress cleared", extra={'migration_id': temp_path})
+
+        cleanup_thread = threading.Thread(target=cleanup_progress, daemon=True)
+        cleanup_thread.start()
+
+
+@api.route('/api/migration/import', methods=['POST'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def migration_import():
+    """Start importing records from a previously validated BirdNET-Pi database.
+
+    The import runs in the background. Use /api/migration/status to check progress.
+
+    Request body (optional):
+        {
+            "skip_duplicates": true  // default: true
+        }
+
+    Returns:
+        JSON with status: started and migration_id for tracking
+    """
+    # Get temp file from session
+    temp_path = get_migration_temp_path()
+    if not temp_path:
+        return jsonify({'error': 'No validated file found. Please upload and validate first.'}), 400
+
+    total_records = session.get('migration_total_records', 0)
+
+    # Get options from request (handle missing or non-JSON body)
+    data = {}
+    if request.is_json:
+        data = request.json or {}
+    skip_duplicates = data.get('skip_duplicates', True)
+
+    # Clear session early - we either start the migration or it's already running
+    # This prevents cancel from interfering with a running migration
+    session.pop('migration_temp_path', None)
+    session.pop('migration_total_records', None)
+
+    # Atomically check if we can start and initialize progress
+    # This prevents race conditions with duplicate requests
+    # temp_path is used as the migration_id (unique per upload via uuid)
+    can_start = start_migration_if_not_running(temp_path, total_records)
+
+    if not can_start:
+        # Already running - return temp_path as migration_id so client can poll
+        return jsonify({
+            'status': 'already_running',
+            'migration_id': temp_path,
+            'message': 'Migration is already in progress'
+        }), 200
+
+    # Start background thread
+    thread = threading.Thread(
+        target=_run_migration_background,
+        args=(temp_path, total_records, skip_duplicates),
+        daemon=True
+    )
+    thread.start()
+
+    logger.info("Migration import started in background", extra={
+        'migration_id': temp_path,
+        'total_records': total_records
+    })
+
+    return jsonify({
+        'status': 'started',
+        'migration_id': temp_path,
+        'total_records': total_records
+    }), 200
+
+
+@api.route('/api/migration/status', methods=['GET'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def migration_status():
+    """Get the current status of a running migration.
+
+    Query params:
+        migration_id: The migration ID returned from /api/migration/import
+
+    Returns:
+        JSON with current progress (status, processed, total, imported, skipped, errors)
+    """
+    migration_id = request.args.get('migration_id')
+    if not migration_id:
+        return jsonify({'error': 'migration_id parameter required'}), 400
+
+    progress = get_migration_progress(migration_id)
+    if not progress:
+        return jsonify({
+            'status': 'not_found',
+            'message': 'No migration found with this ID'
+        }), 404
+
+    return jsonify(progress), 200
+
+
+@api.route('/api/migration/cancel', methods=['POST'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def migration_cancel():
+    """Cancel migration and clean up.
+
+    Call this if user cancels after validation but before import.
+    Note: Cannot stop a running import (it will complete in background),
+    but this will clean up the temp file if called.
+    """
+    temp_path = get_migration_temp_path()
+
+    if temp_path:
+        # Clear any progress tracking (keyed by temp_path)
+        clear_migration_progress(temp_path)
+        cleanup_migration_temp()
+        logger.info("Migration cancelled and temp file cleaned up")
+        return jsonify({'status': 'cancelled', 'message': 'Migration cancelled'}), 200
+    else:
+        return jsonify({'status': 'ok', 'message': 'No migration in progress'}), 200
 
 
 # Global SocketIO instance to be used by other modules
