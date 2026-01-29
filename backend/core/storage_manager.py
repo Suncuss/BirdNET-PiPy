@@ -16,7 +16,7 @@ import os
 import shutil
 import time
 from core.logging_config import get_logger
-from core.utils import build_detection_filenames
+from core.utils import build_detection_filenames, get_legacy_filename
 from config.settings import (
     EXTRACTED_AUDIO_DIR,
     SPECTROGRAM_DIR,
@@ -57,8 +57,34 @@ def get_disk_usage(path=None):
     }
 
 
+def _resolve_path_with_legacy_fallback(filename, directory):
+    """Resolve file path, falling back to legacy colon-pattern if needed.
+
+    Args:
+        filename: Filename (dash-pattern)
+        directory: Directory containing the file
+
+    Returns:
+        Full path to the file (dash or legacy pattern, whichever exists)
+    """
+    path = os.path.join(directory, filename)
+    if os.path.exists(path):
+        return path
+
+    legacy_filename = get_legacy_filename(filename)
+    if legacy_filename:
+        legacy_path = os.path.join(directory, legacy_filename)
+        if os.path.exists(legacy_path):
+            return legacy_path
+
+    return path  # Return original path even if it doesn't exist
+
+
 def get_detection_files(detection):
     """Get full file paths for a detection record.
+
+    Supports lazy migration: if new dash-pattern files don't exist,
+    falls back to checking for old colon-pattern files.
 
     Args:
         detection: dict with common_name, confidence, timestamp
@@ -73,8 +99,8 @@ def get_detection_files(detection):
     )
 
     return {
-        'audio_path': os.path.join(EXTRACTED_AUDIO_DIR, filenames['audio_filename']),
-        'spectrogram_path': os.path.join(SPECTROGRAM_DIR, filenames['spectrogram_filename'])
+        'audio_path': _resolve_path_with_legacy_fallback(filenames['audio_filename'], EXTRACTED_AUDIO_DIR),
+        'spectrogram_path': _resolve_path_with_legacy_fallback(filenames['spectrogram_filename'], SPECTROGRAM_DIR)
     }
 
 

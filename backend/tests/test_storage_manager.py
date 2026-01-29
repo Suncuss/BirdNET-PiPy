@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 from fixtures.test_config import TEST_DATABASE_SCHEMA
 
 
+
 @pytest.fixture
 def test_db_manager():
     """Create a DatabaseManager with temporary test database."""
@@ -191,6 +192,73 @@ class TestGetDetectionFiles:
                 assert 'American_Robin' in paths['audio_path']
                 assert 'American_Robin' in paths['spectrogram_path']
                 assert '85' in paths['audio_path']  # Confidence as percentage
+
+    def test_fallback_to_legacy_colon_pattern(self):
+        """Should fall back to legacy colon-pattern files if dash-pattern not found."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            audio_dir = os.path.join(tmpdir, 'audio')
+            spectrogram_dir = os.path.join(tmpdir, 'spectrograms')
+            os.makedirs(audio_dir)
+            os.makedirs(spectrogram_dir)
+
+            # Create legacy files with colon pattern
+            legacy_audio = os.path.join(audio_dir, 'Test_Bird_85_2024-01-15-birdnet-10:30:00.mp3')
+            legacy_spectrogram = os.path.join(spectrogram_dir, 'Test_Bird_85_2024-01-15-birdnet-10:30:00.webp')
+            with open(legacy_audio, 'w') as f:
+                f.write('audio')
+            with open(legacy_spectrogram, 'w') as f:
+                f.write('spectrogram')
+
+            with patch('config.settings.EXTRACTED_AUDIO_DIR', audio_dir):
+                with patch('config.settings.SPECTROGRAM_DIR', spectrogram_dir):
+                    with patch('config.settings.BASE_DIR', tmpdir):
+                        with patch('config.settings.user_settings', {'storage': {}}):
+                            from core.storage_manager import get_detection_files
+
+                            detection = {
+                                'common_name': 'Test Bird',
+                                'confidence': 0.85,
+                                'timestamp': '2024-01-15T10:30:00'
+                            }
+
+                            paths = get_detection_files(detection)
+
+                            # Should return the legacy paths since dash-pattern doesn't exist
+                            assert paths['audio_path'] == legacy_audio
+                            assert paths['spectrogram_path'] == legacy_spectrogram
+
+    def test_prefers_dash_pattern_when_exists(self):
+        """Should prefer dash-pattern files when they exist."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            audio_dir = os.path.join(tmpdir, 'audio')
+            spectrogram_dir = os.path.join(tmpdir, 'spectrograms')
+            os.makedirs(audio_dir)
+            os.makedirs(spectrogram_dir)
+
+            # Create both dash and colon pattern files
+            dash_audio = os.path.join(audio_dir, 'Test_Bird_85_2024-01-15-birdnet-10-30-00.mp3')
+            colon_audio = os.path.join(audio_dir, 'Test_Bird_85_2024-01-15-birdnet-10:30:00.mp3')
+            with open(dash_audio, 'w') as f:
+                f.write('dash audio')
+            with open(colon_audio, 'w') as f:
+                f.write('colon audio')
+
+            with patch('config.settings.EXTRACTED_AUDIO_DIR', audio_dir):
+                with patch('config.settings.SPECTROGRAM_DIR', spectrogram_dir):
+                    with patch('config.settings.BASE_DIR', tmpdir):
+                        with patch('config.settings.user_settings', {'storage': {}}):
+                            from core.storage_manager import get_detection_files
+
+                            detection = {
+                                'common_name': 'Test Bird',
+                                'confidence': 0.85,
+                                'timestamp': '2024-01-15T10:30:00'
+                            }
+
+                            paths = get_detection_files(detection)
+
+                            # Should return the dash-pattern path (new format)
+                            assert paths['audio_path'] == dash_audio
 
 
 class TestEstimateDeletableSize:

@@ -46,10 +46,11 @@ class TestNormalizeDetection:
         assert result['extra'].get('model') == 'birdnet_v2'
 
         # Check filenames are generated
+        # Time uses dashes for filesystem compatibility (Windows doesn't allow colons)
         assert 'audio_filename' in result
         assert 'spectrogram_filename' in result
-        assert result['audio_filename'] == 'Blue_Jay_88_2024-01-15-birdnet-10:30:45.mp3'
-        assert result['spectrogram_filename'] == 'Blue_Jay_88_2024-01-15-birdnet-10:30:45.webp'
+        assert result['audio_filename'] == 'Blue_Jay_88_2024-01-15-birdnet-10-30-45.mp3'
+        assert result['spectrogram_filename'] == 'Blue_Jay_88_2024-01-15-birdnet-10-30-45.webp'
 
     def test_normalize_detection_without_filenames(self, test_db_manager):
         """Test normalization without filename generation."""

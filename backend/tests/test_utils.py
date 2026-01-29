@@ -3,7 +3,7 @@ Unit tests for core/utils.py
 """
 import pytest
 from datetime import datetime
-from core.utils import build_detection_filenames
+from core.utils import build_detection_filenames, get_legacy_filename
 
 
 class TestBuildDetectionFilenames:
@@ -14,32 +14,36 @@ class TestBuildDetectionFilenames:
         dt = datetime(2025, 11, 25, 11, 38, 39, 123456)
         result = build_detection_filenames('Golden-crowned Kinglet', 0.5690, dt)
 
-        assert result['audio_filename'] == 'Golden-crowned_Kinglet_57_2025-11-25-birdnet-11:38:39.mp3'
-        assert result['spectrogram_filename'] == 'Golden-crowned_Kinglet_57_2025-11-25-birdnet-11:38:39.webp'
+        # Time uses dashes for filesystem compatibility (Windows doesn't allow colons)
+        assert result['audio_filename'] == 'Golden-crowned_Kinglet_57_2025-11-25-birdnet-11-38-39.mp3'
+        assert result['spectrogram_filename'] == 'Golden-crowned_Kinglet_57_2025-11-25-birdnet-11-38-39.webp'
 
     def test_datetime_object_without_microseconds(self):
         """Test that datetime objects without microseconds work correctly"""
         dt = datetime(2025, 11, 25, 11, 38, 39)
         result = build_detection_filenames('Golden-crowned Kinglet', 0.5690, dt)
 
-        assert result['audio_filename'] == 'Golden-crowned_Kinglet_57_2025-11-25-birdnet-11:38:39.mp3'
-        assert result['spectrogram_filename'] == 'Golden-crowned_Kinglet_57_2025-11-25-birdnet-11:38:39.webp'
+        # Time uses dashes for filesystem compatibility (Windows doesn't allow colons)
+        assert result['audio_filename'] == 'Golden-crowned_Kinglet_57_2025-11-25-birdnet-11-38-39.mp3'
+        assert result['spectrogram_filename'] == 'Golden-crowned_Kinglet_57_2025-11-25-birdnet-11-38-39.webp'
 
     def test_string_timestamp_with_microseconds(self):
         """Test that string timestamps with microseconds are normalized"""
         timestamp = '2025-11-25T11:38:39.000000'
         result = build_detection_filenames('Golden-crowned Kinglet', 0.5690, timestamp)
 
-        assert result['audio_filename'] == 'Golden-crowned_Kinglet_57_2025-11-25-birdnet-11:38:39.mp3'
-        assert result['spectrogram_filename'] == 'Golden-crowned_Kinglet_57_2025-11-25-birdnet-11:38:39.webp'
+        # Time uses dashes for filesystem compatibility (Windows doesn't allow colons)
+        assert result['audio_filename'] == 'Golden-crowned_Kinglet_57_2025-11-25-birdnet-11-38-39.mp3'
+        assert result['spectrogram_filename'] == 'Golden-crowned_Kinglet_57_2025-11-25-birdnet-11-38-39.webp'
 
     def test_string_timestamp_without_microseconds(self):
         """Test that string timestamps without microseconds work correctly"""
         timestamp = '2025-11-25T11:38:39'
         result = build_detection_filenames('Golden-crowned Kinglet', 0.5690, timestamp)
 
-        assert result['audio_filename'] == 'Golden-crowned_Kinglet_57_2025-11-25-birdnet-11:38:39.mp3'
-        assert result['spectrogram_filename'] == 'Golden-crowned_Kinglet_57_2025-11-25-birdnet-11:38:39.webp'
+        # Time uses dashes for filesystem compatibility (Windows doesn't allow colons)
+        assert result['audio_filename'] == 'Golden-crowned_Kinglet_57_2025-11-25-birdnet-11-38-39.mp3'
+        assert result['spectrogram_filename'] == 'Golden-crowned_Kinglet_57_2025-11-25-birdnet-11-38-39.webp'
 
     def test_consistent_output_across_formats(self):
         """Test that all timestamp formats produce identical filenames"""
@@ -106,11 +110,49 @@ class TestBuildDetectionFilenames:
         """Test the overall filename format matches expected pattern"""
         result = build_detection_filenames('American Robin', 0.85, '2025-11-24T10:30:45')
 
-        expected_audio = 'American_Robin_85_2025-11-24-birdnet-10:30:45.mp3'
-        expected_spec = 'American_Robin_85_2025-11-24-birdnet-10:30:45.webp'
+        # Time uses dashes for filesystem compatibility (Windows doesn't allow colons)
+        expected_audio = 'American_Robin_85_2025-11-24-birdnet-10-30-45.mp3'
+        expected_spec = 'American_Robin_85_2025-11-24-birdnet-10-30-45.webp'
 
         assert result['audio_filename'] == expected_audio
         assert result['spectrogram_filename'] == expected_spec
+
+
+class TestGetLegacyFilename:
+    """Tests for get_legacy_filename() function"""
+
+    def test_converts_dash_pattern_to_colon_pattern(self):
+        """Test conversion of dash time pattern to colon pattern"""
+        result = get_legacy_filename('American_Robin_85_2025-01-28-birdnet-10-30-45.mp3')
+        assert result == 'American_Robin_85_2025-01-28-birdnet-10:30:45.mp3'
+
+    def test_converts_spectrogram_filename(self):
+        """Test conversion works for spectrogram filenames"""
+        result = get_legacy_filename('Test_Bird_50_2025-01-01-birdnet-12-00-00.webp')
+        assert result == 'Test_Bird_50_2025-01-01-birdnet-12:00:00.webp'
+
+    def test_handles_species_with_hyphen(self):
+        """Test species names with hyphens don't interfere"""
+        result = get_legacy_filename('Golden-crowned_Kinglet_57_2025-11-25-birdnet-11-38-39.mp3')
+        assert result == 'Golden-crowned_Kinglet_57_2025-11-25-birdnet-11:38:39.mp3'
+
+    def test_returns_none_without_birdnet_marker(self):
+        """Test returns None for filenames without -birdnet- marker"""
+        result = get_legacy_filename('random_file_name.mp3')
+        assert result is None
+
+    def test_returns_none_for_insufficient_time_parts(self):
+        """Test returns None when time portion doesn't have enough parts"""
+        result = get_legacy_filename('Test_Bird_85_2025-01-28-birdnet-10-30.mp3')
+        assert result is None
+
+    def test_preserves_date_dashes(self):
+        """Test that date portion dashes are preserved"""
+        result = get_legacy_filename('Test_Bird_85_2025-01-28-birdnet-10-30-45.mp3')
+        # The date part should still have dashes
+        assert '2025-01-28' in result
+        # Only the time part after -birdnet- should use colons
+        assert result.endswith('-birdnet-10:30:45.mp3')
 
 
 class TestSelectAudioChunks:

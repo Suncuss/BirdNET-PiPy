@@ -12,6 +12,10 @@ import logging
 # Add parent directory to path so we can import our modules
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+# Pre-import config.settings so patch('config.settings.X') works in individual tests
+# This must happen after sys.path is set up, before tests run
+import config.settings  # noqa: F401
+
 # Configure logging for tests
 logging.basicConfig(level=logging.INFO)
 

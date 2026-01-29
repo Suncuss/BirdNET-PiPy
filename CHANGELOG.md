@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Changed audio/spectrogram filenames to use dashes instead of colons in timestamps (better compatibility)
 - Added BirdNET-Pi migration - import historical detections, audio files, and generate spectrograms from BirdNET-Pi via Settings
 - Added BirdWeather integration - upload detections and audio to birdweather.com
 - Added weather data integration - attaches current weather from Open-Meteo API to bird detections

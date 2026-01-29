@@ -53,8 +53,9 @@ class TestDatabaseBasicOperations:
         assert len(results) == 1
         
         result = results[0]
-        assert result['bird_song_file_name'] == 'Blue_Jay_88_2024-01-15-birdnet-10:30:45.mp3'
-        assert result['spectrogram_file_name'] == 'Blue_Jay_88_2024-01-15-birdnet-10:30:45.webp'
+        # Time uses dashes for filesystem compatibility (Windows doesn't allow colons)
+        assert result['bird_song_file_name'] == 'Blue_Jay_88_2024-01-15-birdnet-10-30-45.mp3'
+        assert result['spectrogram_file_name'] == 'Blue_Jay_88_2024-01-15-birdnet-10-30-45.webp'
 
     def test_get_detections_by_date_range(self, test_db_manager):
         """Test date range filtering with proper date handling."""

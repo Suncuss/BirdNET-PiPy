@@ -8,6 +8,7 @@ from flask import jsonify, request, send_from_directory, make_response
 from datetime import datetime
 import os
 from core.logging_config import get_logger
+from core.utils import get_legacy_filename
 
 logger = get_logger(__name__)
 
@@ -103,16 +104,19 @@ def serve_file_with_fallback(directory, filename, default_file_path, file_type="
     Returns:
         Flask response object
     """
+    def serve_default():
+        default_dir = os.path.dirname(default_file_path)
+        default_name = os.path.basename(default_file_path)
+        return make_response(send_from_directory(default_dir, default_name))
+
     # Security: Validate filename to prevent path traversal attacks
     # Reject filenames with path separators or parent directory references
     if not filename or '/' in filename or '\\' in filename or '..' in filename:
         logger.warning(f"Invalid {file_type} filename rejected", extra={
-            'filename': filename,
-            'type': file_type
+            'requested_file': filename,
+            'file_type': file_type
         })
-        default_dir = os.path.dirname(default_file_path)
-        default_name = os.path.basename(default_file_path)
-        return make_response(send_from_directory(default_dir, default_name))
+        return serve_default()
 
     file_path = os.path.join(directory, filename)
 
@@ -121,28 +125,52 @@ def serve_file_with_fallback(directory, filename, default_file_path, file_type="
     real_file = os.path.realpath(file_path)
     if not real_file.startswith(real_dir + os.sep) and real_file != real_dir:
         logger.warning(f"Symlink attack attempt blocked for {file_type}", extra={
-            'filename': filename,
+            'requested_file': filename,
             'resolved_path': real_file,
             'expected_dir': real_dir
         })
-        default_dir = os.path.dirname(default_file_path)
-        default_name = os.path.basename(default_file_path)
-        return make_response(send_from_directory(default_dir, default_name))
+        return serve_default()
 
     if os.path.exists(file_path):
         logger.debug(f"Serving {file_type} file", extra={
             'file': filename,
-            'type': file_type
+            'file_type': file_type
         })
         return make_response(send_from_directory(directory, filename))
-    else:
-        logger.warning(f"{file_type.capitalize()} file not found, serving default", extra={
-            'requested_file': filename,
-            'type': file_type
-        })
-        default_dir = os.path.dirname(default_file_path)
-        default_name = os.path.basename(default_file_path)
-        return make_response(send_from_directory(default_dir, default_name))
+
+    # Fallback: try old colon pattern (lazy migration)
+    legacy_filename = get_legacy_filename(filename)
+    if legacy_filename:
+        legacy_path = os.path.join(directory, legacy_filename)
+
+        # Security: Verify legacy resolved path is within the directory
+        real_legacy = os.path.realpath(legacy_path)
+        if real_legacy.startswith(real_dir + os.sep) or real_legacy == real_dir:
+            if os.path.exists(legacy_path):
+                # Lazy migration: rename to new dash pattern
+                try:
+                    os.rename(legacy_path, file_path)
+                    logger.info(f"Migrated {file_type} file from colon to dash pattern", extra={
+                        'old_file': legacy_filename,
+                        'new_file': filename,
+                        'file_type': file_type
+                    })
+                    return make_response(send_from_directory(directory, filename))
+                except OSError as e:
+                    # Rename failed, serve from old location
+                    logger.warning(f"Failed to rename {file_type} file, serving from old location", extra={
+                        'old_file': legacy_filename,
+                        'new_file': filename,
+                        'error': str(e),
+                        'file_type': file_type
+                    })
+                    return make_response(send_from_directory(directory, legacy_filename))
+
+    logger.warning(f"{file_type.capitalize()} file not found, serving default", extra={
+        'requested_file': filename,
+        'file_type': file_type
+    })
+    return serve_default()
 
 
 def validate_limit_param(default=10, min_val=1, max_val=100):

@@ -33,8 +33,8 @@ def build_detection_filenames(common_name, confidence, timestamp, audio_extensio
 
     Example:
         >>> build_detection_filenames("American Robin", 0.85, "2025-11-24T10:30:45.123456")
-        {'audio_filename': 'American_Robin_85_2025-11-24-birdnet-10:30:45.123456.mp3',
-         'spectrogram_filename': 'American_Robin_85_2025-11-24-birdnet-10:30:45.123456.webp'}
+        {'audio_filename': 'American_Robin_85_2025-11-24-birdnet-10-30-45.mp3',
+         'spectrogram_filename': 'American_Robin_85_2025-11-24-birdnet-10-30-45.webp'}
     """
     from datetime import datetime
 
@@ -58,9 +58,13 @@ def build_detection_filenames(common_name, confidence, timestamp, audio_extensio
         # Strip microseconds to match database timestamp format
         time_part = timestamp.strftime('%H:%M:%S')
 
+    # Convert time colons to dashes for filesystem compatibility
+    # (colons are not allowed in Windows filenames and can cause issues elsewhere)
+    time_part_safe = time_part.replace(':', '-')
+
     # Build filenames using consistent format
-    audio_filename = f"{common_name_underscored}_{confidence_rounded}_{date_part}-birdnet-{time_part}.{audio_extension}"
-    spectrogram_filename = f"{common_name_underscored}_{confidence_rounded}_{date_part}-birdnet-{time_part}.webp"
+    audio_filename = f"{common_name_underscored}_{confidence_rounded}_{date_part}-birdnet-{time_part_safe}.{audio_extension}"
+    spectrogram_filename = f"{common_name_underscored}_{confidence_rounded}_{date_part}-birdnet-{time_part_safe}.webp"
 
     return {
         'audio_filename': audio_filename,
@@ -221,6 +225,42 @@ def convert_wav_to_mp3(input_file_name, output_file_name, bitrate="320k"):
         output_file_name
     ]
     subprocess.run(command, check=True, timeout=30)
+
+
+def get_legacy_filename(filename):
+    """Convert new dash-pattern filename to old colon-pattern.
+
+    Used for fallback lookup of old files that still use colons in the time portion.
+
+    Pattern: {species}_{conf}_{date}-birdnet-{HH-MM-SS}.ext
+    Returns: {species}_{conf}_{date}-birdnet-{HH:MM:SS}.ext
+
+    Args:
+        filename: Filename with dash-pattern time (e.g., "Bird_85_2025-01-28-birdnet-10-30-45.mp3")
+
+    Returns:
+        Legacy filename with colon-pattern time, or None if pattern doesn't match
+
+    Example:
+        >>> get_legacy_filename("American_Robin_85_2025-01-28-birdnet-10-30-45.mp3")
+        'American_Robin_85_2025-01-28-birdnet-10:30:45.mp3'
+    """
+    marker = '-birdnet-'
+    if marker not in filename:
+        return None
+
+    idx = filename.index(marker) + len(marker)
+    prefix = filename[:idx]
+    suffix = filename[idx:]
+
+    # Convert first two dashes in time portion to colons
+    # HH-MM-SS.ext -> HH:MM:SS.ext
+    parts = suffix.split('-', 2)
+    if len(parts) >= 3:
+        legacy_suffix = f"{parts[0]}:{parts[1]}:{parts[2]}"
+        return prefix + legacy_suffix
+
+    return None
 
 
 def sanitize_url(url: str) -> str:

@@ -586,20 +586,24 @@ def _build_spectrogram_title_from_audio_filename(audio_filename: str) -> str:
     """Build spectrogram title matching live detection format.
 
     Expected filename format (without extension):
-        Species_Name_85_2024-01-15-birdnet-10:30:45
-    Output title format:
+        Species_Name_85_2024-01-15-birdnet-10:30:45  (old colon pattern)
+        Species_Name_85_2024-01-15-birdnet-10-30-45  (new dash pattern)
+    Output title format (always uses colons for readability):
         Species Name (0.85) - 2024-01-15T10:30:45
     """
     base_name = os.path.splitext(audio_filename)[0]
 
+    # Accept both colon (HH:MM:SS) and dash (HH-MM-SS) time patterns
     match = re.match(
-        r"^(?P<species>.+)_(?P<confidence>\d{1,3})_(?P<date>\d{4}-\d{2}-\d{2})-birdnet-(?P<time>\d{2}:\d{2}:\d{2})$",
+        r"^(?P<species>.+)_(?P<confidence>\d{1,3})_(?P<date>\d{4}-\d{2}-\d{2})-birdnet-(?P<time>\d{2}[:\-]\d{2}[:\-]\d{2})$",
         base_name
     )
     if match:
         species = match.group('species').replace('_', ' ')
         confidence = int(match.group('confidence')) / 100.0
-        timestamp = f"{match.group('date')}T{match.group('time')}"
+        # Normalize time to colons for human-readable title
+        time_str = match.group('time').replace('-', ':')
+        timestamp = f"{match.group('date')}T{time_str}"
         return f"{species} ({confidence:.2f}) - {timestamp}"
 
     # Fallback: readable title if filename doesn't match expected format
