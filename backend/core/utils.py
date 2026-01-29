@@ -126,9 +126,11 @@ def generate_spectrogram(input_file_path, output_file_path, graph_title, start_t
     # Generate spectrogram
     frequencies, times, Sxx = spectrogram(data, rate, window=np.hamming(256), noverlap=128, nperseg=256)
 
-    # Convert to dBFS, adding a small epsilon to avoid log(0)
-   
-    Sxx_dbfs = 10 * np.log10(Sxx / np.max(Sxx) + epsilon)
+    # Convert to dBFS, guarding against zero-energy (silent) inputs
+    max_power = np.max(Sxx)
+    if max_power <= 0:
+        max_power = epsilon
+    Sxx_dbfs = 10 * np.log10((Sxx / max_power) + epsilon)
 
     # Convert frequencies to kHz
     frequencies = frequencies / 1000

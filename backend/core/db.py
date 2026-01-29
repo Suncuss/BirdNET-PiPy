@@ -1195,3 +1195,36 @@ class DatabaseManager:
             )
             conn.commit()
             return cur.rowcount > 0
+
+    def get_detections_with_original_filename(self):
+        """Get detections that have original_file_name in extra JSON field.
+
+        Used for BirdNET-Pi migration to match audio files.
+
+        Returns:
+            list: Detections with id, timestamp, common_name, confidence,
+                  and original_file_name extracted from extra JSON
+        """
+        query = """
+        SELECT
+            id,
+            timestamp,
+            common_name,
+            confidence,
+            json_extract(extra, '$.original_file_name') as original_file_name
+        FROM detections
+        WHERE json_extract(extra, '$.original_file_name') IS NOT NULL
+        """
+
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(query)
+            results = cur.fetchall()
+
+        detections = [dict(row) for row in results]
+
+        logger.debug("Retrieved detections with original_file_name", extra={
+            'count': len(detections)
+        })
+
+        return detections

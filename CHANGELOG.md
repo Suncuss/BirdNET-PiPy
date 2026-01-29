@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Added BirdNET-Pi migration - import historical detections from BirdNET-Pi's birds.db file via Settings
+- Added BirdNET-Pi migration - import historical detections, audio files, and generate spectrograms from BirdNET-Pi via Settings
 - Added BirdWeather integration - upload detections and audio to birdweather.com
 - Added weather data integration - attaches current weather from Open-Meteo API to bird detections
 - Added weather display in Detection Info modal (temperature, humidity, wind, precipitation, cloud cover, pressure)

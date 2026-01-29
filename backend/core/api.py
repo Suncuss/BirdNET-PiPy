@@ -7,6 +7,20 @@ from core.migration import (
     clear_migration_progress,
     start_migration_if_not_running
 )
+from core.migration_audio import (
+    list_available_folders,
+    scan_audio_files,
+    check_disk_space,
+    import_audio_files,
+    get_audio_import_progress,
+    clear_audio_import_progress,
+    start_audio_import_if_not_running,
+    scan_files_needing_spectrograms,
+    generate_spectrograms_batch,
+    get_spectrogram_progress,
+    clear_spectrogram_progress,
+    start_spectrogram_generation_if_not_running
+)
 import threading
 from config.settings import SPECTROGRAM_DIR, EXTRACTED_AUDIO_DIR, DEFAULT_AUDIO_PATH, DEFAULT_IMAGE_PATH, API_PORT, BASE_DIR, STREAM_URL, RTSP_URL, RECORDING_MODE, LABELS_PATH, load_user_settings, get_default_settings
 from config.constants import (
@@ -1598,6 +1612,33 @@ def auth_change_password():
 # Directory for storing temporary migration files
 MIGRATION_TEMP_DIR = os.path.join(BASE_DIR, 'data', 'temp', 'migration')
 
+def cleanup_migration_temp_dir():
+    """Remove orphaned migration temp files from previous sessions."""
+    if not os.path.isdir(MIGRATION_TEMP_DIR):
+        return 0
+
+    removed = 0
+    for filename in os.listdir(MIGRATION_TEMP_DIR):
+        if not (filename.startswith('migration_') and filename.endswith('.db')):
+            continue
+        file_path = os.path.join(MIGRATION_TEMP_DIR, filename)
+        if not os.path.isfile(file_path):
+            continue
+        try:
+            os.remove(file_path)
+            removed += 1
+        except Exception as e:
+            logger.warning("Failed to remove migration temp file", extra={
+                'path': file_path,
+                'error': str(e)
+            })
+
+    if removed:
+        logger.info("Cleaned orphaned migration temp files", extra={
+            'removed': removed
+        })
+    return removed
+
 
 def get_migration_temp_path():
     """Get temp file path from session, if it exists and is valid."""
@@ -1870,6 +1911,331 @@ def migration_cancel():
         return jsonify({'status': 'ok', 'message': 'No migration in progress'}), 200
 
 
+# =============================================================================
+# Migration Stage 2: Audio Import Endpoints
+# =============================================================================
+
+@api.route('/api/migration/audio/folders', methods=['GET'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def migration_audio_folders():
+    """List available folders that contain audio files.
+
+    Returns folders in the data directory that contain audio files
+    and are not system folders.
+
+    Returns:
+        JSON with list of available folders
+    """
+    folders = list_available_folders()
+    return jsonify({'folders': folders}), 200
+
+
+@api.route('/api/migration/audio/scan', methods=['POST'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def migration_audio_scan():
+    """Scan source folder for matching audio files.
+
+    Request body:
+        source_folder: Relative path to folder within data directory (required)
+
+    Returns:
+        JSON with matched files count, unmatched count, total size, and disk space info
+    """
+    data = request.get_json() or {}
+    source_folder = data.get('source_folder')
+
+    if not source_folder:
+        return jsonify({
+            'error': 'Missing source_folder parameter',
+            'hint': 'Please select a folder containing your BirdNET-Pi audio files.'
+        }), 400
+
+    scan_result = scan_audio_files(db_manager, source_folder)
+
+    # Check disk space if we have matched files
+    disk_check = check_disk_space(scan_result['total_size_bytes'])
+
+    return jsonify({
+        'source_folder': scan_result.get('source_folder', ''),
+        'source_exists': scan_result['source_exists'],
+        'total_records': scan_result['total_records'],
+        'matched_count': scan_result['matched_count'],
+        'unmatched_count': scan_result['unmatched_count'],
+        'total_size_bytes': scan_result['total_size_bytes'],
+        'disk_usage': disk_check
+    }), 200
+
+
+@api.route('/api/migration/audio/import', methods=['POST'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def migration_audio_import():
+    """Start importing matched audio files.
+
+    Request body:
+        source_folder: Relative path to folder within data directory (required)
+
+    The import runs in the background. Use /api/migration/audio/status to check progress.
+
+    Returns:
+        JSON with status: started and import_id for tracking
+    """
+    data = request.get_json() or {}
+    source_folder = data.get('source_folder')
+
+    if not source_folder:
+        return jsonify({
+            'error': 'Missing source_folder parameter',
+            'hint': 'Please select a folder containing your BirdNET-Pi audio files.'
+        }), 400
+
+    # Re-scan to get matched files (ensures fresh data)
+    scan_result = scan_audio_files(db_manager, source_folder)
+
+    if not scan_result['matched_files']:
+        return jsonify({
+            'error': 'No matching audio files found in the selected folder.',
+            'hint': 'Make sure the folder contains audio files that match your imported database records.'
+        }), 400
+
+    # Check disk space
+    disk_check = check_disk_space(scan_result['total_size_bytes'])
+    if not disk_check['has_enough_space']:
+        return jsonify({
+            'error': 'Not enough disk space to import these files.',
+            'hint': 'Free up some space or import fewer files.',
+            'required_bytes': scan_result['total_size_bytes'],
+            'available_bytes': disk_check['available_bytes']
+        }), 400
+
+    # Generate unique import ID
+    import_id = f"audio_import_{uuid.uuid4().hex}"
+    total_files = len(scan_result['matched_files'])
+
+    # Atomically check if we can start
+    can_start, running_id = start_audio_import_if_not_running(import_id, total_files)
+    if not can_start:
+        return jsonify({
+            'status': 'already_running',
+            'import_id': running_id,  # Return the ID of the running job
+            'message': 'Audio import is already in progress'
+        }), 200
+
+    # Start background thread
+    def run_import():
+        try:
+            import_audio_files(db_manager, scan_result['matched_files'], import_id)
+        finally:
+            # Clear progress tracking after a delay
+            def cleanup_progress():
+                import time
+                time.sleep(300)  # Keep progress available for 5 minutes
+                clear_audio_import_progress(import_id)
+                logger.debug("Audio import progress cleared", extra={'import_id': import_id})
+
+            cleanup_thread = threading.Thread(target=cleanup_progress, daemon=True)
+            cleanup_thread.start()
+
+    thread = threading.Thread(target=run_import, daemon=True)
+    thread.start()
+
+    logger.info("Audio import started in background", extra={
+        'import_id': import_id,
+        'total_files': total_files
+    })
+
+    return jsonify({
+        'status': 'started',
+        'import_id': import_id,
+        'total_files': total_files
+    }), 200
+
+
+@api.route('/api/migration/audio/status', methods=['GET'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def migration_audio_status():
+    """Get the current status of an audio import.
+
+    Query params:
+        import_id: The import ID returned from /api/migration/audio/import
+
+    Returns:
+        JSON with current progress (status, processed, total, imported, skipped, errors)
+    """
+    import_id = request.args.get('import_id')
+    if not import_id:
+        return jsonify({'error': 'import_id parameter required'}), 400
+
+    progress = get_audio_import_progress(import_id)
+    if not progress:
+        return jsonify({
+            'status': 'not_found',
+            'message': 'No audio import found with this ID'
+        }), 404
+
+    return jsonify(progress), 200
+
+
+@api.route('/api/migration/audio/skip', methods=['POST'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def migration_audio_skip():
+    """Skip the audio import stage.
+
+    Returns:
+        JSON with status: skipped
+    """
+    logger.info("Audio import stage skipped")
+    return jsonify({'status': 'skipped', 'message': 'Audio import skipped'}), 200
+
+
+# =============================================================================
+# Migration Stage 3: Spectrogram Generation Endpoints
+# =============================================================================
+
+@api.route('/api/migration/spectrogram/scan', methods=['POST'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def migration_spectrogram_scan():
+    """Scan for audio files needing spectrograms.
+
+    Checks EXTRACTED_AUDIO_DIR for audio files without matching spectrograms.
+
+    Returns:
+        JSON with count of files needing spectrograms and estimated size
+    """
+    scan_result = scan_files_needing_spectrograms()
+
+    return jsonify({
+        'count': scan_result['count'],
+        'estimated_size_bytes': scan_result['estimated_size_bytes'],
+        'disk_usage': scan_result['disk_usage']
+    }), 200
+
+
+@api.route('/api/migration/spectrogram/generate', methods=['POST'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def migration_spectrogram_generate():
+    """Start generating spectrograms for audio files.
+
+    Must call /api/migration/spectrogram/scan first.
+    The generation runs in the background. Use /api/migration/spectrogram/status to check progress.
+
+    Returns:
+        JSON with status: started and generation_id for tracking
+    """
+    # Scan for files needing spectrograms
+    scan_result = scan_files_needing_spectrograms()
+
+    if not scan_result['files_needing']:
+        return jsonify({
+            'status': 'no_files',
+            'message': 'No files need spectrograms'
+        }), 200
+
+    # Check disk space
+    if not scan_result['disk_usage']['has_enough_space']:
+        return jsonify({
+            'error': 'Insufficient disk space',
+            'required_bytes': scan_result['estimated_size_bytes'],
+            'available_bytes': scan_result['disk_usage']['available_bytes']
+        }), 400
+
+    # Generate unique generation ID
+    generation_id = f"spectrogram_gen_{uuid.uuid4().hex}"
+    total_files = scan_result['count']
+
+    # Atomically check if we can start
+    can_start, running_id = start_spectrogram_generation_if_not_running(generation_id, total_files)
+    if not can_start:
+        return jsonify({
+            'status': 'already_running',
+            'generation_id': running_id,  # Return the ID of the running job
+            'message': 'Spectrogram generation is already in progress'
+        }), 200
+
+    # Start background thread
+    def run_generation():
+        try:
+            generate_spectrograms_batch(scan_result['files_needing'], generation_id)
+        finally:
+            # Clear progress tracking after a delay
+            def cleanup_progress():
+                import time
+                time.sleep(300)  # Keep progress available for 5 minutes
+                clear_spectrogram_progress(generation_id)
+                logger.debug("Spectrogram progress cleared", extra={'generation_id': generation_id})
+
+            cleanup_thread = threading.Thread(target=cleanup_progress, daemon=True)
+            cleanup_thread.start()
+
+    thread = threading.Thread(target=run_generation, daemon=True)
+    thread.start()
+
+    logger.info("Spectrogram generation started in background", extra={
+        'generation_id': generation_id,
+        'total_files': total_files
+    })
+
+    return jsonify({
+        'status': 'started',
+        'generation_id': generation_id,
+        'total_files': total_files
+    }), 200
+
+
+@api.route('/api/migration/spectrogram/status', methods=['GET'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def migration_spectrogram_status():
+    """Get the current status of spectrogram generation.
+
+    Query params:
+        generation_id: The generation ID returned from /api/migration/spectrogram/generate
+
+    Returns:
+        JSON with current progress (status, processed, total, generated, errors)
+    """
+    generation_id = request.args.get('generation_id')
+    if not generation_id:
+        return jsonify({'error': 'generation_id parameter required'}), 400
+
+    progress = get_spectrogram_progress(generation_id)
+    if not progress:
+        return jsonify({
+            'status': 'not_found',
+            'message': 'No spectrogram generation found with this ID'
+        }), 404
+
+    return jsonify(progress), 200
+
+
+@api.route('/api/migration/spectrogram/skip', methods=['POST'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def migration_spectrogram_skip():
+    """Skip the spectrogram generation stage.
+
+    Returns:
+        JSON with status: skipped
+    """
+    logger.info("Spectrogram generation stage skipped")
+    return jsonify({'status': 'skipped', 'message': 'Spectrogram generation skipped'}), 200
+
+
 # Global SocketIO instance to be used by other modules
 socketio = None
 
@@ -1883,6 +2249,11 @@ def create_app():
 
     # Configure session for authentication
     configure_session(app)
+
+    try:
+        cleanup_migration_temp_dir()
+    except Exception as e:
+        logger.warning("Startup migration temp cleanup failed", extra={'error': str(e)})
 
     app.register_blueprint(api)
 
