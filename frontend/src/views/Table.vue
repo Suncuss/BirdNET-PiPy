@@ -18,6 +18,7 @@
             <label class="block text-xs font-medium text-gray-600 mb-1">From</label>
             <AppDatePicker
               v-model="localStartDate"
+              :max="todayDate"
               @change="applyFilters"
               size="large"
             />
@@ -28,6 +29,8 @@
             <label class="block text-xs font-medium text-gray-600 mb-1">To</label>
             <AppDatePicker
               v-model="localEndDate"
+              :min="localStartDate || undefined"
+              :max="todayDate"
               @change="applyFilters"
               size="large"
             />
@@ -501,6 +504,13 @@ const {
 // Filters
 	const localStartDate = ref('')
 	const localEndDate = ref('')
+	const todayDate = computed(() => {
+	  const today = new Date()
+	  const year = today.getFullYear()
+	  const month = String(today.getMonth() + 1).padStart(2, '0')
+	  const day = String(today.getDate()).padStart(2, '0')
+	  return `${year}-${month}-${day}`
+	})
 	const perPageModel = computed({
 	  get: () => perPage.value,
 	  set: (value) => setPerPage(value)

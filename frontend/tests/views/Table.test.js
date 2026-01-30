@@ -440,7 +440,7 @@ describe('Table.vue', () => {
 
 	      // Table remains visible and an inline action error is shown
 	      expect(wrapper.text()).toContain('American Robin')
-	      expect(wrapper.text()).toContain('Authentication required to delete detections.')
+	      expect(wrapper.text()).toContain('Please log in to delete')
 	    })
 	  })
 

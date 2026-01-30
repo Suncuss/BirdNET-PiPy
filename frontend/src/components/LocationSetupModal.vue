@@ -129,12 +129,6 @@
           {{ saving ? 'Saving...' : 'Save Location' }}
         </button>
 
-        <!-- Skip for now link -->
-        <p v-if="!serviceRestart.isRestarting.value" class="mt-4 text-center text-sm text-gray-500">
-          <button @click="skipSetup" class="text-gray-600 hover:text-gray-800 underline">
-            Skip for now (use default location)
-          </button>
-        </p>
       </div>
     </div>
   </div>
@@ -143,6 +137,7 @@
 <script>
 import { ref, computed } from 'vue'
 import { useServiceRestart } from '@/composables/useServiceRestart'
+import { useAppStatus } from '@/composables/useAppStatus'
 import { limitDecimals } from '@/utils/inputHelpers'
 import api from '@/services/api'
 
@@ -158,6 +153,7 @@ export default {
   setup(props, { emit }) {
     // Composables
     const serviceRestart = useServiceRestart()
+    const appStatus = useAppStatus()
 
     // State
     const latitude = ref(null)
@@ -249,32 +245,14 @@ export default {
 
         saving.value = false
 
+        // Signal that we're restarting
+        appStatus.setRestarting(true)
+
         // Wait for service restart, then auto-reload
-        await serviceRestart.waitForRestart({ autoReload: true })
+        await serviceRestart.waitForRestart({ autoReload: true, message: 'Updating settings' })
       } catch (error) {
         console.error('Save error:', error)
         errorMessage.value = 'Failed to save location. Please try again.'
-        saving.value = false
-      }
-    }
-
-    const skipSetup = async () => {
-      // Mark as configured with default values
-      saving.value = true
-
-      try {
-        const { data: settings } = await api.get('/settings')
-        settings.location.configured = true
-
-        await api.put('/settings', settings)
-
-        saving.value = false
-
-        // Wait for service restart, then auto-reload
-        await serviceRestart.waitForRestart({ autoReload: true })
-      } catch (error) {
-        console.error('Skip setup error:', error)
-        emit('close') // Close anyway on skip
         saving.value = false
       }
     }
@@ -293,7 +271,6 @@ export default {
       selectSearchResult,
       limitDecimals,
       saveLocation,
-      skipSetup,
       serviceRestart
     }
   }

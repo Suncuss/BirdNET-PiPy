@@ -13,9 +13,9 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 
 import requests
-from tzlocal import get_localzone
 
 from config.settings import LAT, LON, BIRDWEATHER_ID
+from core.timezone_service import get_timezone
 from core.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -29,7 +29,7 @@ def _to_iso8601_with_tz(timestamp_str: str) -> str:
     try:
         dt = datetime.fromisoformat(timestamp_str)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=get_localzone())
+            dt = dt.replace(tzinfo=get_timezone())
         return dt.isoformat()
     except Exception:
         return timestamp_str

@@ -120,7 +120,7 @@ describe('useFetchBirdData', () => {
       await fetchChartsData('2025-11-26')
 
       expect(hourlyBirdActivityData.value).toEqual([])
-      expect(hourlyBirdActivityError.value).toBe('Failed to fetch hourly activity data.')
+      expect(hourlyBirdActivityError.value).toBe('Hmm, cannot reach the server')
     })
 
     it('handles API errors gracefully for detailed data', async () => {
@@ -139,7 +139,7 @@ describe('useFetchBirdData', () => {
       await fetchChartsData('2025-11-26')
 
       expect(detailedBirdActivityData.value).toEqual([])
-      expect(detailedBirdActivityError.value).toBe('Failed to fetch detailed activity data.')
+      expect(detailedBirdActivityError.value).toBe('Hmm, cannot reach the server')
     })
 
     it('passes date parameter to API calls', async () => {
@@ -283,9 +283,9 @@ describe('useFetchBirdData', () => {
 
       await fetchDashboardData()
 
-      expect(latestObservationError.value).toBe('Failed to fetch latest observation data.')
-      expect(recentObservationsError.value).toBe('Failed to fetch recent observations data.')
-      expect(summaryError.value).toBe('Failed to fetch summary data.')
+      expect(latestObservationError.value).toBe('Hmm, cannot reach the server')
+      expect(recentObservationsError.value).toBe('Hmm, cannot reach the server')
+      expect(summaryError.value).toBe('Hmm, cannot reach the server')
     })
   })
 
@@ -331,7 +331,7 @@ describe('useFetchBirdData', () => {
 
       // First call fails
       await fetchChartsData('2025-11-26')
-      expect(hourlyBirdActivityError.value).toBe('Failed to fetch hourly activity data.')
+      expect(hourlyBirdActivityError.value).toBe('Hmm, cannot reach the server')
 
       // Retry succeeds
       shouldFail = false

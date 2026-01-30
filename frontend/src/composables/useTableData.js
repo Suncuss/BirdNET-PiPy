@@ -101,7 +101,7 @@ export function useTableData() {
       }
     } catch (err) {
       logger.error('Failed to fetch detections', err)
-      error.value = 'Failed to load detections. Please try again.'
+      error.value = 'Hmm, cannot reach the server'
       detections.value = []
       totalItems.value = 0
     } finally {
@@ -137,11 +137,11 @@ export function useTableData() {
       logger.error('Failed to delete detection', err)
 
       if (err.response?.status === 401) {
-        actionError.value = 'Authentication required to delete detections.'
+        actionError.value = 'Please log in to delete'
       } else if (err.response?.status === 404) {
-        actionError.value = 'Detection not found.'
+        actionError.value = 'Detection not found'
       } else {
-        actionError.value = 'Failed to delete detection. Please try again.'
+        actionError.value = 'Hmm, cannot reach the server'
       }
       return false
     }
@@ -220,7 +220,7 @@ export function useTableData() {
       }
 
       if (failed > 0) {
-        actionError.value = `Deleted ${deleted} detection(s), but ${failed} failed.`
+        actionError.value = `Deleted ${deleted}, but ${failed} failed`
       }
 
       return { success: deleted > 0, deleted, failed }
@@ -228,9 +228,9 @@ export function useTableData() {
       logger.error('Failed to batch delete detections', err)
 
       if (err.response?.status === 401) {
-        actionError.value = 'Authentication required to delete detections.'
+        actionError.value = 'Please log in to delete'
       } else {
-        actionError.value = 'Failed to delete detections. Please try again.'
+        actionError.value = 'Hmm, cannot reach the server'
       }
       return { success: false, deleted: 0, failed: selectedIds.value.size }
     }

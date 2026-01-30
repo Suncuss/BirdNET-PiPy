@@ -458,3 +458,45 @@ class TestBirdWeatherServiceWorker:
 
             # Verify cleanup was called for dropped upload
             assert mock_remove.call_count >= 1
+
+
+class TestBirdWeatherTimezone:
+    """Test timezone handling in BirdWeather service."""
+
+    def test_iso8601_uses_timezone_service(self):
+        """Test that _to_iso8601_with_tz uses timezone service."""
+        from zoneinfo import ZoneInfo
+        with patch('core.birdweather_service.get_timezone') as mock_get_tz:
+            mock_get_tz.return_value = ZoneInfo('America/Los_Angeles')
+
+            from core.birdweather_service import _to_iso8601_with_tz
+
+            # Timestamp without timezone info
+            result = _to_iso8601_with_tz('2024-01-15T10:30:00')
+
+            # Should have called get_timezone
+            mock_get_tz.assert_called_once()
+
+            # Result should have timezone info
+            assert '-08:00' in result or '-07:00' in result  # PST or PDT
+
+    def test_iso8601_preserves_existing_timezone(self):
+        """Test that existing timezone info is preserved."""
+        with patch('core.birdweather_service.get_timezone') as mock_get_tz:
+            from core.birdweather_service import _to_iso8601_with_tz
+
+            # Timestamp with timezone info already
+            result = _to_iso8601_with_tz('2024-01-15T10:30:00+05:30')
+
+            # Should NOT have called get_timezone
+            mock_get_tz.assert_not_called()
+
+            # Result should preserve original timezone
+            assert '+05:30' in result
+
+    def test_iso8601_handles_invalid_input(self):
+        """Test that invalid input returns original string."""
+        from core.birdweather_service import _to_iso8601_with_tz
+
+        result = _to_iso8601_with_tz('not a timestamp')
+        assert result == 'not a timestamp'

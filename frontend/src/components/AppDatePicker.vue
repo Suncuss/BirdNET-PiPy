@@ -2,6 +2,7 @@
   <DatePicker
     v-model="dateValue"
     :disabled="disabled"
+    :minDate="minDateObj"
     :maxDate="maxDateObj"
     dateFormat="mm/dd/yy"
     showIcon
@@ -24,6 +25,10 @@ const props = defineProps({
     type: Boolean,
     default: false
   },
+  min: {
+    type: String,
+    default: null
+  },
   max: {
     type: String,
     default: null
@@ -39,6 +44,12 @@ const emit = defineEmits(['update:modelValue', 'change'])
 
 // Convert string date (YYYY-MM-DD) to Date object for PrimeVue
 const dateValue = ref(props.modelValue ? new Date(props.modelValue + 'T00:00:00') : null)
+
+// Convert min string to Date object
+const minDateObj = computed(() => {
+  if (!props.min) return null
+  return new Date(props.min + 'T00:00:00')
+})
 
 // Convert max string to Date object
 const maxDateObj = computed(() => {

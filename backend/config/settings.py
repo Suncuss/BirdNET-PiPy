@@ -6,9 +6,12 @@ from config.constants import DEFAULT_RECORDING_MODE
 # Base directory (always in Docker)
 BASE_DIR = '/app'
 
+# User settings file path
+USER_SETTINGS_PATH = f'{BASE_DIR}/data/config/user_settings.json'
+
 # Default settings structure - single source of truth
 DEFAULT_SETTINGS = {
-    "location": {"latitude": 42.47, "longitude": -76.45, "configured": False},
+    "location": {"latitude": 42.47, "longitude": -76.45, "configured": False, "timezone": None},
     "detection": {"sensitivity": 0.75, "cutoff": 0.60},
     "species_filter": {
         "allowed_species": [],   # If non-empty, ONLY detect these (bypasses location filter)
@@ -61,7 +64,7 @@ def get_default_settings():
 
 def load_user_settings():
     """Load user settings from JSON file"""
-    json_path = os.path.join(BASE_DIR, 'data', 'config', 'user_settings.json')
+    json_path = USER_SETTINGS_PATH
 
     # Get a copy of defaults to merge with
     defaults = get_default_settings()
@@ -118,6 +121,7 @@ EBIRD_CODES_PATH = f'{BASE_DIR}/model_service/models/ebird_codes.json'
 LAT = user_settings['location']['latitude']
 LON = user_settings['location']['longitude']
 LOCATION_CONFIGURED = user_settings['location'].get('configured', False)
+TIMEZONE = user_settings['location'].get('timezone')
 
 # Prediction configuration - from user settings
 SENSITIVITY = user_settings['detection']['sensitivity']

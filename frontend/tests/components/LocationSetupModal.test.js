@@ -23,6 +23,17 @@ vi.mock('@/composables/useServiceRestart', () => ({
   })
 }))
 
+// Mock the useAppStatus composable
+vi.mock('@/composables/useAppStatus', () => ({
+  useAppStatus: () => ({
+    locationConfigured: { value: null },
+    isRestarting: { value: false },
+    setLocationConfigured: vi.fn(),
+    setRestarting: vi.fn(),
+    isReady: vi.fn(() => false)
+  })
+}))
+
 describe('LocationSetupModal', () => {
   let fetchMock
 
@@ -65,11 +76,6 @@ describe('LocationSetupModal', () => {
       const wrapper = mountModal()
       expect(wrapper.find('#latitude').exists()).toBe(true)
       expect(wrapper.find('#longitude').exists()).toBe(true)
-    })
-
-    it('shows skip option', () => {
-      const wrapper = mountModal()
-      expect(wrapper.text()).toContain('Skip for now')
     })
   })
 
@@ -146,28 +152,6 @@ describe('LocationSetupModal', () => {
       await flushPromises()
 
       expect(savedSettings.location.configured).toBe(true)
-    })
-  })
-
-  describe('Skip Setup', () => {
-    it('marks location as configured when skipping', async () => {
-      let savedSettings = null
-      mockApi.get.mockResolvedValueOnce({
-        data: { location: { latitude: 42.47, longitude: -76.45, configured: false } }
-      })
-      mockApi.put.mockImplementationOnce((url, settings) => {
-        savedSettings = settings
-        return Promise.resolve({ data: { message: 'Settings saved' } })
-      })
-
-      const wrapper = mountModal()
-
-      const skipButton = wrapper.findAll('button').find(b => b.text().includes('Skip for now'))
-      await skipButton.trigger('click')
-      await flushPromises()
-
-      expect(savedSettings.location.configured).toBe(true)
-      // Note: close is not emitted - page reloads after service restart
     })
   })
 

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Added date picker validation in Table view (start date cannot be in the future, end date cannot be before start date)
+- Added automatic timezone detection from location via Open-Meteo API at startup (ensures correct timestamps for BirdWeather uploads)
+- Changed location setup to be required before detection starts (removed "Skip for now" option)
 - Changed audio/spectrogram filenames to use dashes instead of colons in timestamps (better compatibility)
 - Added BirdNET-Pi migration - import historical detections, audio files, and generate spectrograms from BirdNET-Pi via Settings
 - Added BirdWeather integration - upload detections and audio to birdweather.com

@@ -1,6 +1,7 @@
 <template>
     <div class="dashboard">
-        <div class="p-4 grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <!-- Dashboard content (hidden during setup via locationConfigured check) -->
+        <div v-if="locationConfigured !== false" class="p-4 grid grid-cols-1 lg:grid-cols-3 gap-4">
             <!-- Bird Activity Overview -->
             <div class="bg-white rounded-lg shadow p-4 lg:col-span-3 h-[300px] lg:h-[375px]">
                 <h2 class="text-lg font-semibold mb-2">Bird Activity Overview</h2>
@@ -162,7 +163,7 @@
 </template>
 
 <script>
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import Chart from 'chart.js/auto'
 import { MatrixController, MatrixElement } from 'chartjs-chart-matrix'
 
@@ -173,6 +174,7 @@ import { faPlay, faPause, faCircleInfo, faExternalLinkAlt } from '@fortawesome/f
 	import { useFetchBirdData } from '@/composables/useFetchBirdData';
 	import { useBirdCharts } from '@/composables/useBirdCharts';
 	import { useAudioPlayer } from '@/composables/useAudioPlayer';
+	import { useAppStatus } from '@/composables/useAppStatus';
 	import SpectrogramModal from '@/components/SpectrogramModal.vue';
 	import { getAudioUrl, getSpectrogramUrl } from '@/services/media'
 
@@ -247,8 +249,11 @@ export default {
             createHourlyActivityChart: createHourlyChart
         } = useBirdCharts()
 
-        // Lifecycle hooks
-        onMounted(async () => {
+        // App status for coordinating with setup flow
+        const { locationConfigured } = useAppStatus()
+
+        // Start data fetching and charts
+        const startDashboard = async () => {
             await fetchDashboardData();
             dataFetchInterval = setInterval(fetchDashboardData, 4500)
 
@@ -260,7 +265,22 @@ export default {
                 createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: initialLoad.value, title: null });
             }
             chartUpdateInterval = setInterval(redrawCharts, 4500)
+        }
+
+        // Lifecycle hooks
+        onMounted(async () => {
             initializeCanvas();
+            // Only start fetching if location is already configured
+            if (locationConfigured.value === true) {
+                await startDashboard();
+            }
+        });
+
+        // Watch for location to become configured (after setup modal)
+        watch(locationConfigured, async (configured) => {
+            if (configured === true && !dataFetchInterval) {
+                await startDashboard();
+            }
         });
 
         onUnmounted(() => {
@@ -459,6 +479,7 @@ export default {
         };
 
         return {
+            locationConfigured,
             latestObservationData,
             recentObservationsData,
             currentSummaryPeriod,

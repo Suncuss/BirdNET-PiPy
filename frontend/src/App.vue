@@ -54,6 +54,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useLogger } from '@/composables/useLogger'
 import { useAuth } from '@/composables/useAuth'
 import { useUnitSettings } from '@/composables/useUnitSettings'
+import { useAppStatus } from '@/composables/useAppStatus'
 import { DISPLAY_NAME } from './version'
 import LocationSetupModal from '@/components/LocationSetupModal.vue'
 import LoginModal from '@/components/LoginModal.vue'
@@ -71,6 +72,7 @@ export default {
     const router = useRouter()
     const auth = useAuth()
     const unitSettings = useUnitSettings()
+    const appStatus = useAppStatus()
 
     const showLocationSetup = ref(false)
     const showLoginModal = ref(false)
@@ -83,10 +85,14 @@ export default {
         // Show setup modal if location has not been configured
         if (!settings.location?.configured) {
           logger.info('Location not configured, showing setup modal')
+          appStatus.setLocationConfigured(false)
           showLocationSetup.value = true
+        } else {
+          appStatus.setLocationConfigured(true)
         }
       } catch (error) {
         logger.error('Failed to check location setup', { error: error.message })
+        appStatus.setLocationConfigured(false)
       }
     }
 

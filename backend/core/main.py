@@ -475,12 +475,27 @@ if __name__ == "__main__":
     # Register signal handlers for graceful shutdown
     signal.signal(signal.SIGTERM, signal_handler)  # Docker stop
     signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
-    
+
     logger.info(f"🎵 {DISPLAY_NAME} v{__version__} starting", extra={
         'recording_dir': RECORDING_DIR,
         'recording_length': RECORDING_LENGTH,
         'analysis_chunk_length': ANALYSIS_CHUNK_LENGTH
     })
+
+    # Wait for location to be configured before starting detection
+    if not LOCATION_CONFIGURED:
+        logger.info("⏳ Location not configured. Waiting for user to set location in the web interface...")
+        # Sit idle until backend restarts (triggered when user saves location)
+        while not stop_flag.is_set():
+            time.sleep(1)
+        logger.info("Shutdown received while waiting for location configuration")
+        import sys
+        sys.exit(0)
+
+    # Start weather service early to fetch timezone from API
+    # (singleton - detection processing will reuse this instance)
+    if LAT is not None and LON is not None:
+        get_weather_service(LAT, LON)
 
     # Start the recording thread
     recording_logger = get_logger(f"{__name__}.recording")

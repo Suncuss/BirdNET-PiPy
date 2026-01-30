@@ -201,7 +201,7 @@ describe('useTableData', () => {
 
       await fetchDetections()
 
-      expect(error.value).toBe('Failed to load detections. Please try again.')
+      expect(error.value).toBe('Hmm, cannot reach the server')
       expect(detections.value).toEqual([])
       expect(totalItems.value).toBe(0)
     })
@@ -297,7 +297,7 @@ describe('useTableData', () => {
 
 	      expect(result).toBe(false)
 	      expect(error.value).toBeNull()
-	      expect(actionError.value).toBe('Authentication required to delete detections.')
+	      expect(actionError.value).toBe('Please log in to delete')
 	    })
 
 	    it('handles 404 error', async () => {
@@ -311,7 +311,7 @@ describe('useTableData', () => {
 
 	      expect(result).toBe(false)
 	      expect(error.value).toBeNull()
-	      expect(actionError.value).toBe('Detection not found.')
+	      expect(actionError.value).toBe('Detection not found')
 	    })
 
 	    it('handles generic errors', async () => {
@@ -323,7 +323,7 @@ describe('useTableData', () => {
 
 	      expect(result).toBe(false)
 	      expect(error.value).toBeNull()
-	      expect(actionError.value).toBe('Failed to delete detection. Please try again.')
+	      expect(actionError.value).toBe('Hmm, cannot reach the server')
 	    })
 	  })
 

@@ -55,7 +55,7 @@ export function useFetchBirdData() {
         : hourlyBirdActivityResponse.data;
 
       hourlyBirdActivityError.value = hourlyBirdActivityResponse.error
-        ? "Failed to fetch hourly activity data."
+        ? "Hmm, cannot reach the server"
         : null;
 
       detailedBirdActivityData.value = detailedBirdActivityResponse.error
@@ -63,7 +63,7 @@ export function useFetchBirdData() {
         : detailedBirdActivityResponse.data;
 
       detailedBirdActivityError.value = detailedBirdActivityResponse.error
-        ? "Failed to fetch detailed activity data."
+        ? "Hmm, cannot reach the server"
         : null;
       
       logger.debug('Charts data fetched successfully', {
@@ -123,7 +123,7 @@ export function useFetchBirdData() {
         : latestObservationResponse.data;
 
       latestObservationError.value = latestObservationResponse.error
-        ? "Failed to fetch latest observation data."
+        ? "Hmm, cannot reach the server"
         : null;
 
       recentObservationsData.value = recentObservationsResponse.error
@@ -131,13 +131,13 @@ export function useFetchBirdData() {
         : recentObservationsResponse.data;
 
       recentObservationsError.value = recentObservationsResponse.error
-        ? "Failed to fetch recent observations data."
+        ? "Hmm, cannot reach the server"
         : null;
 
       summaryData.value = summaryResponse.error ? {} : summaryResponse.data;
 
       summaryError.value = summaryResponse.error
-        ? "Failed to fetch summary data."
+        ? "Hmm, cannot reach the server"
         : null;
 
       if (latestObservationData.value) {
@@ -185,7 +185,7 @@ export function useFetchBirdData() {
       return response.data;
     } catch (error) {
       logger.error('Failed to fetch trends data', error);
-      trendsError.value = 'Failed to fetch detection trends data.';
+      trendsError.value = 'Hmm, cannot reach the server';
       trendsData.value = { labels: [], data: [] };
       return null;
     }
