@@ -283,13 +283,14 @@ export default {
         });
 
         // Watch for latest observation data to initialize canvas when it becomes available
+        // Use { once: true } to only initialize once, not on every data refresh
         watch(latestObservationData, (newData) => {
             if (newData) {
                 nextTick(() => {
                     initializeCanvas();
                 });
             }
-        });
+        }, { once: true });
 
         onUnmounted(() => {
             // Clear intervals
