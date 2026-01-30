@@ -265,6 +265,11 @@ export default {
                 createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: initialLoad.value, title: null });
             }
             chartUpdateInterval = setInterval(redrawCharts, 4500)
+
+            // Initialize spectrogram canvas after DOM updates with new data
+            nextTick(() => {
+                initializeCanvas();
+            });
         }
 
         // Lifecycle hooks
@@ -281,16 +286,6 @@ export default {
                 await startDashboard();
             }
         });
-
-        // Watch for latest observation data to initialize canvas when it becomes available
-        // Use { once: true } to only initialize once, not on every data refresh
-        watch(latestObservationData, (newData) => {
-            if (newData) {
-                nextTick(() => {
-                    initializeCanvas();
-                });
-            }
-        }, { once: true });
 
         onUnmounted(() => {
             // Clear intervals

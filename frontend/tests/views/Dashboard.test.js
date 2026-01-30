@@ -3,8 +3,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ref } from 'vue'
 import Dashboard from '@/views/Dashboard.vue'
 import { useFetchBirdData } from '@/composables/useFetchBirdData'
+import { useAppStatus } from '@/composables/useAppStatus'
 
 vi.mock('@/composables/useFetchBirdData')
+vi.mock('@/composables/useAppStatus')
 
 // Mock chart libraries
 vi.mock('chart.js/auto', () => {
@@ -64,6 +66,13 @@ describe('Dashboard', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     useFetchBirdData.mockReturnValue(baseState())
+    useAppStatus.mockReturnValue({
+      locationConfigured: ref(true),
+      isRestarting: ref(false),
+      setLocationConfigured: vi.fn(),
+      setRestarting: vi.fn(),
+      isReady: vi.fn(() => true)
+    })
     getContextSpy = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(mockCanvasContext)
   })
 
@@ -132,27 +141,55 @@ describe('Dashboard', () => {
     expect(formatted).toMatch(/\d{2}:\d{2}/)
   })
 
-  it('initializes spectrogram canvas when latest observation data loads', async () => {
+  it('initializes spectrogram canvas when dashboard starts with data', async () => {
     const state = baseState()
+    // Simulate fetchDashboardData populating the data
+    state.fetchDashboardData.mockImplementation(() => {
+      state.latestObservationData.value = {
+        common_name: 'Robin',
+        scientific_name: 'Turdus migratorius',
+        timestamp: '2024-01-01T12:00:00Z',
+        bird_song_file_name: 'test.mp3'
+      }
+    })
     useFetchBirdData.mockReturnValue(state)
 
     const wrapper = mountDashboard()
     await flushPromises()
 
-    // Canvas shouldn't exist yet (no data)
-    expect(wrapper.find({ ref: 'spectrogramCanvas' }).exists()).toBe(false)
+    // Canvas should exist and be initialized after startDashboard runs
+    expect(wrapper.find({ ref: 'spectrogramCanvas' }).exists()).toBe(true)
+    expect(getContextSpy).toHaveBeenCalled()
+  })
 
-    // Simulate data loading
+  it('does not reinitialize canvas on data refresh', async () => {
+    const state = baseState()
+    state.fetchDashboardData.mockImplementation(() => {
+      state.latestObservationData.value = {
+        common_name: 'Robin',
+        scientific_name: 'Turdus migratorius',
+        timestamp: '2024-01-01T12:00:00Z',
+        bird_song_file_name: 'test.mp3'
+      }
+    })
+    useFetchBirdData.mockReturnValue(state)
+
+    const wrapper = mountDashboard()
+    await flushPromises()
+
+    // Canvas initialized once
+    expect(getContextSpy).toHaveBeenCalledTimes(1)
+
+    // Simulate data refresh (happens every 4.5 seconds)
     state.latestObservationData.value = {
-      common_name: 'Robin',
-      scientific_name: 'Turdus migratorius',
-      timestamp: '2024-01-01T12:00:00Z',
-      bird_song_file_name: 'test.mp3'
+      common_name: 'Blue Jay',
+      scientific_name: 'Cyanocitta cristata',
+      timestamp: '2024-01-01T12:05:00Z',
+      bird_song_file_name: 'test2.mp3'
     }
     await flushPromises()
 
-    // Now canvas should exist and be initialized
-    expect(wrapper.find({ ref: 'spectrogramCanvas' }).exists()).toBe(true)
-    expect(getContextSpy).toHaveBeenCalled()
+    // Canvas should NOT be reinitialized
+    expect(getContextSpy).toHaveBeenCalledTimes(1)
   })
 })
