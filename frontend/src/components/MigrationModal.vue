@@ -335,7 +335,8 @@
             <div v-if="!migration.audioScanResult.value" class="bg-green-50 rounded-lg p-3 mb-3 text-sm">
               <p class="font-medium text-green-800 mb-1">To import audio files:</p>
               <ol class="list-decimal list-inside text-green-700 space-y-0.5 text-xs">
-                <li>Copy <code class="bg-white px-1 rounded">~/BirdSongs/Extracted/By_Date</code> to <code class="bg-white px-1 rounded">data</code></li>
+                <li>Find <code class="bg-white px-1 rounded">~/BirdSongs/Extracted/By_Date</code> on your BirdNET-Pi</li>
+                <li>Copy to <code class="bg-white px-1 rounded">~/BirdNET-PiPy/data</code> on this system</li>
                 <li>Select the folder below and click Scan</li>
               </ol>
             </div>

@@ -163,7 +163,7 @@
 </template>
 
 <script>
-import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import Chart from 'chart.js/auto'
 import { MatrixController, MatrixElement } from 'chartjs-chart-matrix'
 
@@ -269,7 +269,6 @@ export default {
 
         // Lifecycle hooks
         onMounted(async () => {
-            initializeCanvas();
             // Only start fetching if location is already configured
             if (locationConfigured.value === true) {
                 await startDashboard();
@@ -280,6 +279,15 @@ export default {
         watch(locationConfigured, async (configured) => {
             if (configured === true && !dataFetchInterval) {
                 await startDashboard();
+            }
+        });
+
+        // Watch for latest observation data to initialize canvas when it becomes available
+        watch(latestObservationData, (newData) => {
+            if (newData) {
+                nextTick(() => {
+                    initializeCanvas();
+                });
             }
         });
 

@@ -131,4 +131,28 @@ describe('Dashboard', () => {
     const formatted = wrapper.vm.formatTimestamp('2024-01-01T14:35:00Z')
     expect(formatted).toMatch(/\d{2}:\d{2}/)
   })
+
+  it('initializes spectrogram canvas when latest observation data loads', async () => {
+    const state = baseState()
+    useFetchBirdData.mockReturnValue(state)
+
+    const wrapper = mountDashboard()
+    await flushPromises()
+
+    // Canvas shouldn't exist yet (no data)
+    expect(wrapper.find({ ref: 'spectrogramCanvas' }).exists()).toBe(false)
+
+    // Simulate data loading
+    state.latestObservationData.value = {
+      common_name: 'Robin',
+      scientific_name: 'Turdus migratorius',
+      timestamp: '2024-01-01T12:00:00Z',
+      bird_song_file_name: 'test.mp3'
+    }
+    await flushPromises()
+
+    // Now canvas should exist and be initialized
+    expect(wrapper.find({ ref: 'spectrogramCanvas' }).exists()).toBe(true)
+    expect(getContextSpy).toHaveBeenCalled()
+  })
 })

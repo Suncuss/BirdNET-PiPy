@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fixed live spectrogram display not initializing in Dashboard (regression from first-time user experience changes)
+- Improved migration modal instructions with clearer 3-step process for importing audio files
 - Added date picker validation in Table view (start date cannot be in the future, end date cannot be before start date)
 - Added automatic timezone detection from location via Open-Meteo API at startup (ensures correct timestamps for BirdWeather uploads)
 - Changed location setup to be required before detection starts (removed "Skip for now" option)
