@@ -21,14 +21,8 @@ export function useAuth() {
   const logger = useLogger('useAuth')
 
   // Computed properties
-  const needsSetup = computed(() =>
-    authStatus.value.authEnabled && !authStatus.value.setupComplete
-  )
-
   const needsLogin = computed(() =>
-    authStatus.value.authEnabled &&
-    authStatus.value.setupComplete &&
-    !authStatus.value.authenticated
+    authStatus.value.authEnabled && !authStatus.value.authenticated
   )
 
   const isAuthenticated = computed(() =>
@@ -251,7 +245,6 @@ export function useAuth() {
     error,
 
     // Computed
-    needsSetup,
     needsLogin,
     isAuthenticated,
 

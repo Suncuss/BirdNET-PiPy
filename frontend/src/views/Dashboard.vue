@@ -1,5 +1,18 @@
 <template>
     <div class="dashboard">
+        <!-- Update FAB -->
+        <router-link
+            v-if="systemUpdate.showUpdateIndicator.value"
+            to="/settings"
+            class="fixed bottom-4 right-4 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-full shadow-lg hidden md:flex items-center gap-2 z-50 transition-colors"
+            title="System update available"
+        >
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7 7 7M12 3v18"/>
+            </svg>
+            <span class="text-sm font-medium">Update Available</span>
+        </router-link>
+
         <!-- Dashboard content (hidden during setup via locationConfigured check) -->
         <div v-if="locationConfigured !== false" class="p-4 grid grid-cols-1 lg:grid-cols-3 gap-4">
             <!-- Bird Activity Overview -->
@@ -175,6 +188,7 @@ import { faPlay, faPause, faCircleInfo, faExternalLinkAlt } from '@fortawesome/f
 	import { useBirdCharts } from '@/composables/useBirdCharts';
 	import { useAudioPlayer } from '@/composables/useAudioPlayer';
 	import { useAppStatus } from '@/composables/useAppStatus';
+	import { useSystemUpdate } from '@/composables/useSystemUpdate';
 	import SpectrogramModal from '@/components/SpectrogramModal.vue';
 	import { getAudioUrl, getSpectrogramUrl } from '@/services/media'
 
@@ -252,10 +266,16 @@ export default {
         // App status for coordinating with setup flow
         const { locationConfigured } = useAppStatus()
 
+        // System update composable for silent auto-check
+        const systemUpdate = useSystemUpdate()
+
         // Start data fetching and charts
         const startDashboard = async () => {
             await fetchDashboardData();
             dataFetchInterval = setInterval(fetchDashboardData, 4500)
+
+            // Silent auto-check for updates (no status messages, uses backend cache)
+            systemUpdate.checkForUpdates({ silent: true }).catch(() => {})
 
             if (!hourlyBirdActivityError.value) {
                 createHourlyChart(hourlyActivityChart, hourlyBirdActivityData.value, { animate: initialLoad.value });
@@ -511,7 +531,8 @@ export default {
             hourlyBirdActivityError,
             togglePlayBirdCall,
             currentPlayingId,
-            latestObservationimageUrl
+            latestObservationimageUrl,
+            systemUpdate
         }
     }
 }

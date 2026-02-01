@@ -17,7 +17,6 @@ vi.mock('@/composables/useLogger', () => ({
 vi.mock('@/composables/useAuth', () => ({
   useAuth: () => ({
     authStatus: ref({ authEnabled: false, setupComplete: true, authenticated: false }),
-    needsSetup: ref(false),
     needsLogin: ref(false),
     loading: ref(false),
     error: ref(''),

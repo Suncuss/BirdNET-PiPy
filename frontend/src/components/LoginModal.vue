@@ -27,13 +27,10 @@
             </svg>
           </div>
           <h2 class="text-xl font-semibold text-gray-900">
-            {{ isSetup ? 'Set Up Password' : 'Authentication Required' }}
+            Authentication Required
           </h2>
           <p class="mt-2 text-sm text-gray-600">
-            {{ isSetup
-              ? 'Create a password to protect your settings and audio stream.'
-              : 'Enter your password to access protected features.'
-            }}
+            Enter your password to access protected features.
           </p>
         </div>
 
@@ -47,33 +44,17 @@
           <!-- Password input -->
           <div>
             <label for="password" class="block text-sm text-gray-600 mb-1">
-              {{ isSetup ? 'Choose a password' : 'Password' }}
+              Password
             </label>
             <input
               id="password"
               ref="passwordInput"
               v-model="password"
               type="password"
-              :placeholder="isSetup ? 'Enter password (min 8 characters)' : 'Enter your password'"
+              placeholder="Enter your password"
               class="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-green-500 focus:ring-1 focus:ring-green-500"
               :disabled="loading"
-              :autocomplete="isSetup ? 'new-password' : 'current-password'"
-            >
-          </div>
-
-          <!-- Confirm password (setup mode only) -->
-          <div v-if="isSetup">
-            <label for="confirmPassword" class="block text-sm text-gray-600 mb-1">
-              Confirm password
-            </label>
-            <input
-              id="confirmPassword"
-              v-model="confirmPassword"
-              type="password"
-              placeholder="Confirm password"
-              class="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-green-500 focus:ring-1 focus:ring-green-500"
-              :disabled="loading"
-              autocomplete="new-password"
+              autocomplete="current-password"
             >
           </div>
 
@@ -87,17 +68,12 @@
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
               <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
             </svg>
-            {{ loading ? 'Please wait...' : (isSetup ? 'Set Password' : 'Login') }}
+            {{ loading ? 'Please wait...' : 'Login' }}
           </button>
         </form>
 
-        <!-- Password requirements (setup mode) -->
-        <p v-if="isSetup" class="mt-4 text-xs text-gray-500 text-center">
-          Password must be at least 8 characters.
-        </p>
-
         <!-- Forgot password help -->
-        <p v-if="!isSetup" class="mt-4 text-xs text-gray-500 text-center">
+        <p class="mt-4 text-xs text-gray-500 text-center">
           Forgot password? Create a file named <code class="bg-gray-100 px-1 rounded">RESET_PASSWORD</code>
           in <code class="bg-gray-100 px-1 rounded">data/config/</code> on your device to reset.
         </p>
@@ -116,10 +92,6 @@ export default {
     isVisible: {
       type: Boolean,
       default: false
-    },
-    isSetup: {
-      type: Boolean,
-      default: false
     }
   },
   emits: ['success', 'cancel'],
@@ -128,26 +100,18 @@ export default {
 
     // Local state
     const password = ref('')
-    const confirmPassword = ref('')
     const passwordInput = ref(null)
 
     // Computed
     const loading = computed(() => auth.loading.value)
     const error = computed(() => auth.error.value)
-
-    const isValid = computed(() => {
-      if (props.isSetup) {
-        return password.value.length >= 8 && password.value === confirmPassword.value
-      }
-      return password.value.length > 0
-    })
+    const isValid = computed(() => password.value.length > 0)
 
     // Focus input when modal becomes visible
     watch(() => props.isVisible, async (visible) => {
       if (visible) {
         // Clear form
         password.value = ''
-        confirmPassword.value = ''
         auth.clearError()
 
         // Focus input
@@ -160,36 +124,22 @@ export default {
     const handleSubmit = async () => {
       if (!isValid.value || loading.value) return
 
-      let success = false
-
-      if (props.isSetup) {
-        // Validate passwords match
-        if (password.value !== confirmPassword.value) {
-          auth.error.value = 'Passwords do not match'
-          return
-        }
-        success = await auth.setup(password.value)
-      } else {
-        success = await auth.login(password.value)
-      }
+      const success = await auth.login(password.value)
 
       if (success) {
         password.value = ''
-        confirmPassword.value = ''
         emit('success')
       }
     }
 
     const handleCancel = () => {
       password.value = ''
-      confirmPassword.value = ''
       auth.clearError()
       emit('cancel')
     }
 
     return {
       password,
-      confirmPassword,
       passwordInput,
       loading,
       error,

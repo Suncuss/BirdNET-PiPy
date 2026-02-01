@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Added automatic update checking with dismissible pill-shaped FAB on dashboard (desktop/tablet only)
+- Fixed authentication bypass that allowed enabling auth without a password via API
+- Fixed dashboard not loading when authentication is enabled but user isn't logged in
+- Fixed spectrogram canvas resetting during audio playback
+- Fixed unnecessary service restart when settings didn't actually change
 - Fixed live spectrogram display not initializing in Dashboard (regression from first-time user experience changes)
 - Improved migration modal instructions with clearer 3-step process for importing audio files
 - Added date picker validation in Table view (start date cannot be in the future, end date cannot be before start date)

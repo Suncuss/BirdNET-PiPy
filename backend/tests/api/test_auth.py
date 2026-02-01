@@ -149,7 +149,7 @@ class TestAuthEndpoints:
                               content_type='application/json')
 
         assert response.status_code == 400
-        assert 'not set up' in response.get_json()['error']
+        assert 'not configured' in response.get_json()['error']
 
     def test_logout_clears_session(self, auth_client):
         """Test that logout clears the session."""
@@ -385,6 +385,22 @@ class TestAuthToggle:
                               content_type='application/json')
 
         assert response.status_code == 401
+
+    def test_toggle_enable_without_setup_fails(self, auth_client):
+        """Test that enabling auth without password setup fails."""
+        client, _ = auth_client
+
+        # Try to enable auth without setting up password first
+        response = client.post('/api/auth/toggle',
+                              data=json.dumps({'enabled': True}),
+                              content_type='application/json')
+
+        assert response.status_code == 400
+        assert 'without setting a password' in response.get_json()['error']
+
+        # Verify auth is still disabled
+        response = client.get('/api/auth/status')
+        assert response.get_json()['auth_enabled'] is False
 
 
 class TestChangePassword:

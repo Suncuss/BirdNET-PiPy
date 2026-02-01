@@ -10,7 +10,6 @@ const mockAuth = {
   loading: { value: false },
   error: { value: '' },
   login: vi.fn(),
-  setup: vi.fn(),
   clearError: vi.fn()
 }
 
@@ -24,7 +23,6 @@ describe('LoginModal', () => {
     mockAuth.loading.value = false
     mockAuth.error.value = ''
     mockAuth.login.mockResolvedValue(true)
-    mockAuth.setup.mockResolvedValue(true)
   })
 
   afterEach(() => {
@@ -34,7 +32,6 @@ describe('LoginModal', () => {
   const mountModal = (props = {}) => mount(LoginModal, {
     props: {
       isVisible: true,
-      isSetup: false,
       ...props
     }
   })
@@ -50,16 +47,10 @@ describe('LoginModal', () => {
       expect(wrapper.text()).not.toContain('Authentication Required')
     })
 
-    it('shows login mode title when isSetup is false', () => {
-      const wrapper = mountModal({ isSetup: false })
+    it('shows login title and description', () => {
+      const wrapper = mountModal()
       expect(wrapper.text()).toContain('Authentication Required')
       expect(wrapper.text()).toContain('Enter your password')
-    })
-
-    it('shows setup mode title when isSetup is true', () => {
-      const wrapper = mountModal({ isSetup: true })
-      expect(wrapper.text()).toContain('Set Up Password')
-      expect(wrapper.text()).toContain('Create a password')
     })
 
     it('shows password input field', () => {
@@ -67,24 +58,10 @@ describe('LoginModal', () => {
       expect(wrapper.find('#password').exists()).toBe(true)
     })
 
-    it('shows confirm password field only in setup mode', () => {
-      const wrapperLogin = mountModal({ isSetup: false })
-      expect(wrapperLogin.find('#confirmPassword').exists()).toBe(false)
-
-      const wrapperSetup = mountModal({ isSetup: true })
-      expect(wrapperSetup.find('#confirmPassword').exists()).toBe(true)
-    })
-
-    it('shows login button in login mode', () => {
-      const wrapper = mountModal({ isSetup: false })
+    it('shows login button', () => {
+      const wrapper = mountModal()
       const button = wrapper.find('button[type="submit"]')
       expect(button.text()).toBe('Login')
-    })
-
-    it('shows set password button in setup mode', () => {
-      const wrapper = mountModal({ isSetup: true })
-      const button = wrapper.find('button[type="submit"]')
-      expect(button.text()).toBe('Set Password')
     })
 
     it('shows close button (X icon)', () => {
@@ -93,15 +70,10 @@ describe('LoginModal', () => {
       expect(closeButton.exists()).toBe(true)
     })
 
-    it('shows password reset help text in login mode', () => {
-      const wrapper = mountModal({ isSetup: false })
+    it('shows password reset help text', () => {
+      const wrapper = mountModal()
       expect(wrapper.text()).toContain('Forgot password?')
       expect(wrapper.text()).toContain('RESET_PASSWORD')
-    })
-
-    it('shows password requirements in setup mode', () => {
-      const wrapper = mountModal({ isSetup: true })
-      expect(wrapper.text()).toContain('at least 8 characters')
     })
   })
 
@@ -112,38 +84,11 @@ describe('LoginModal', () => {
       expect(button.attributes('disabled')).toBeDefined()
     })
 
-    it('enables submit button when password is entered (login mode)', async () => {
+    it('enables submit button when password is entered', async () => {
       const wrapper = mountModal()
       await wrapper.find('#password').setValue('testpassword')
       const button = wrapper.find('button[type="submit"]')
       expect(button.attributes('disabled')).toBeUndefined()
-    })
-
-    it('requires password and confirm password to match in setup mode', async () => {
-      const wrapper = mountModal({ isSetup: true })
-      await wrapper.find('#password').setValue('testpass')
-      await wrapper.find('#confirmPassword').setValue('different')
-
-      const button = wrapper.find('button[type="submit"]')
-      expect(button.attributes('disabled')).toBeDefined()
-    })
-
-    it('enables submit when passwords match in setup mode', async () => {
-      const wrapper = mountModal({ isSetup: true })
-      await wrapper.find('#password').setValue('testpass')
-      await wrapper.find('#confirmPassword').setValue('testpass')
-
-      const button = wrapper.find('button[type="submit"]')
-      expect(button.attributes('disabled')).toBeUndefined()
-    })
-
-    it('requires minimum password length in setup mode', async () => {
-      const wrapper = mountModal({ isSetup: true })
-      await wrapper.find('#password').setValue('short12') // 7 chars, less than required 8
-      await wrapper.find('#confirmPassword').setValue('short12')
-
-      const button = wrapper.find('button[type="submit"]')
-      expect(button.attributes('disabled')).toBeDefined()
     })
   })
 
@@ -177,30 +122,6 @@ describe('LoginModal', () => {
       await flushPromises()
 
       expect(wrapper.emitted('success')).toBeFalsy()
-    })
-  })
-
-  describe('Setup Flow', () => {
-    it('calls setup with password on submit', async () => {
-      const wrapper = mountModal({ isSetup: true })
-      await wrapper.find('#password').setValue('newpassword')
-      await wrapper.find('#confirmPassword').setValue('newpassword')
-      await wrapper.find('form').trigger('submit')
-      await flushPromises()
-
-      expect(mockAuth.setup).toHaveBeenCalledWith('newpassword')
-    })
-
-    it('emits success event on successful setup', async () => {
-      mockAuth.setup.mockResolvedValue(true)
-      const wrapper = mountModal({ isSetup: true })
-
-      await wrapper.find('#password').setValue('newpassword')
-      await wrapper.find('#confirmPassword').setValue('newpassword')
-      await wrapper.find('form').trigger('submit')
-      await flushPromises()
-
-      expect(wrapper.emitted('success')).toBeTruthy()
     })
   })
 
@@ -298,19 +219,6 @@ describe('LoginModal', () => {
       await flushPromises()
 
       expect(passwordInput.element.value).toBe('')
-    })
-
-    it('clears both password fields on successful setup', async () => {
-      mockAuth.setup.mockResolvedValue(true)
-      const wrapper = mountModal({ isSetup: true })
-
-      await wrapper.find('#password').setValue('newpass1')  // 8 chars minimum
-      await wrapper.find('#confirmPassword').setValue('newpass1')
-      await wrapper.find('form').trigger('submit')
-      await flushPromises()
-
-      expect(wrapper.find('#password').element.value).toBe('')
-      expect(wrapper.find('#confirmPassword').element.value).toBe('')
     })
   })
 })

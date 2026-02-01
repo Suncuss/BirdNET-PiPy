@@ -33,6 +33,9 @@ vi.mock('@/composables/useSystemUpdate', () => ({
     updating: { value: false },
     statusMessage: { value: null },
     statusType: { value: null },
+    // New dismissal state
+    showUpdateIndicator: { value: false },
+    dismissUpdate: vi.fn(),
     // Exposed from internal useServiceRestart
     restartMessage: { value: '' },
     isRestarting: { value: false },
@@ -48,7 +51,6 @@ vi.mock('@/composables/useAuth', () => ({
     authStatus: { value: { authEnabled: false, setupComplete: true, authenticated: false } },
     loading: { value: false },
     error: { value: '' },
-    needsSetup: { value: false },
     needsLogin: { value: false },
     isAuthenticated: { value: true },
     checkAuthStatus: vi.fn().mockResolvedValue(undefined),
@@ -313,6 +315,10 @@ describe('Settings', () => {
         }
       })
 
+      // Make a change so hasUnsavedChanges becomes true
+      wrapper.vm.settings.location.latitude = 50.0
+      await wrapper.vm.$nextTick()
+
       const saveButton = wrapper.findAll('button').find(btn => btn.text() === 'Save' || btn.text() === 'Saving...')
       await saveButton.trigger('click')
       await flushPromises()
@@ -328,6 +334,10 @@ describe('Settings', () => {
 
       mockApi.put.mockRejectedValueOnce(new Error('Failed to save settings'))
 
+      // Make a change so hasUnsavedChanges becomes true
+      wrapper.vm.settings.location.latitude = 50.0
+      await wrapper.vm.$nextTick()
+
       const saveButton = wrapper.findAll('button').find(btn => btn.text() === 'Save' || btn.text() === 'Saving...')
       await saveButton.trigger('click')
       await flushPromises()
@@ -340,6 +350,10 @@ describe('Settings', () => {
       await flushPromises()
 
       mockApi.put.mockImplementationOnce(() => new Promise(resolve => setTimeout(resolve, 100)))
+
+      // Make a change so hasUnsavedChanges becomes true
+      wrapper.vm.settings.location.latitude = 50.0
+      await wrapper.vm.$nextTick()
 
       const saveButton = wrapper.findAll('button').find(btn => btn.text() === 'Save' || btn.text() === 'Saving...')
       await saveButton.trigger('click')
@@ -608,8 +622,9 @@ describe('Settings', () => {
       const wrapper = mountSettings()
       await flushPromises()
 
-      // Mock API failure
-      mockApi.put.mockRejectedValueOnce(new Error('API error'))
+      // Reset and mock API failure
+      mockApi.put.mockReset()
+      mockApi.put.mockRejectedValue(new Error('API error'))
 
       // Set up modal state with a pending change
       wrapper.vm.settings.location.latitude = 50.0
@@ -621,6 +636,9 @@ describe('Settings', () => {
       // Trigger save
       await wrapper.vm.handleUnsavedSave()
       await flushPromises()
+
+      // Verify put was called and rejected
+      expect(mockApi.put).toHaveBeenCalled()
 
       // Modal should stay open, navigation should NOT be resolved
       expect(wrapper.vm.showUnsavedModal).toBe(true)

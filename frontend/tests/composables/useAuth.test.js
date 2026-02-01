@@ -36,7 +36,6 @@ describe('useAuth', () => {
       expect(auth).toHaveProperty('authStatus')
       expect(auth).toHaveProperty('loading')
       expect(auth).toHaveProperty('error')
-      expect(auth).toHaveProperty('needsSetup')
       expect(auth).toHaveProperty('needsLogin')
       expect(auth).toHaveProperty('isAuthenticated')
       expect(auth).toHaveProperty('checkAuthStatus')
@@ -70,27 +69,7 @@ describe('useAuth', () => {
   })
 
   describe('computed properties', () => {
-    it('needsSetup is true when auth enabled but setup not complete', () => {
-      const auth = useAuth()
-      auth.authStatus.value = {
-        authEnabled: true,
-        setupComplete: false,
-        authenticated: false
-      }
-      expect(auth.needsSetup.value).toBe(true)
-    })
-
-    it('needsSetup is false when setup is complete', () => {
-      const auth = useAuth()
-      auth.authStatus.value = {
-        authEnabled: true,
-        setupComplete: true,
-        authenticated: false
-      }
-      expect(auth.needsSetup.value).toBe(false)
-    })
-
-    it('needsLogin is true when auth enabled, setup complete, not authenticated', () => {
+    it('needsLogin is true when auth enabled and not authenticated', () => {
       const auth = useAuth()
       auth.authStatus.value = {
         authEnabled: true,
@@ -106,6 +85,16 @@ describe('useAuth', () => {
         authEnabled: true,
         setupComplete: true,
         authenticated: true
+      }
+      expect(auth.needsLogin.value).toBe(false)
+    })
+
+    it('needsLogin is false when auth disabled', () => {
+      const auth = useAuth()
+      auth.authStatus.value = {
+        authEnabled: false,
+        setupComplete: false,
+        authenticated: false
       }
       expect(auth.needsLogin.value).toBe(false)
     })

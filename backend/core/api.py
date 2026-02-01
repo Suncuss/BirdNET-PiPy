@@ -118,6 +118,40 @@ image_cache = {}
 CACHE_EXPIRATION = 172800  # Cache expiration time in seconds (48 hours)
 MAX_CACHE_SIZE = 1000  # Maximum number of cached entries
 
+# Update check cache (only cache successful responses)
+_update_check_cache = {
+    'result': None,
+    'timestamp': 0,
+    'cache_key': None  # format: "channel:current_commit"
+}
+UPDATE_CHECK_CACHE_TTL = 3600  # 1 hour in seconds
+
+
+def _build_update_check_result(update_available, current_commit, remote_commit,
+                                commits_behind, current_branch, target_branch,
+                                channel, preview_commits, fresh_sync, update_note):
+    """Build the update check response dictionary."""
+    return {
+        'update_available': update_available,
+        'current_commit': current_commit,
+        'remote_commit': remote_commit,
+        'commits_behind': commits_behind,
+        'current_branch': current_branch,
+        'target_branch': target_branch,
+        'channel': channel,
+        'preview_commits': preview_commits,
+        'fresh_sync': fresh_sync,
+        'update_note': update_note
+    }
+
+
+def _cache_and_return_update_result(result, cache_key, now):
+    """Cache the result and return JSON response."""
+    _update_check_cache['result'] = result
+    _update_check_cache['timestamp'] = now
+    _update_check_cache['cache_key'] = cache_key
+    return jsonify(result), 200
+
 
 def _cleanup_expired_cache():
     """Remove expired entries from image cache."""
@@ -1288,8 +1322,13 @@ def check_for_updates():
     Compares current commit against the HEAD of the configured channel's branch:
     - release channel: compares against main branch
     - latest channel: compares against staging branch
+
+    Query params:
+    - force: Set to 'true' to bypass cache (used by manual "Check for Updates" button)
     """
     try:
+        force = request.args.get('force', 'false').lower() == 'true'
+
         # Load current version info
         version_info = load_version_info()
 
@@ -1304,11 +1343,24 @@ def check_for_updates():
         # Get target branch based on channel setting
         channel, target_branch = get_channel_branch()
 
+        # Build cache key and check cache (skip if force=true)
+        cache_key = f"{channel}:{current_commit}"
+        now = time.time()
+
+        if not force and _update_check_cache['cache_key'] == cache_key:
+            if now - _update_check_cache['timestamp'] < UPDATE_CHECK_CACHE_TTL:
+                logger.debug("Returning cached update check result", extra={
+                    'cache_key': cache_key,
+                    'cache_age_seconds': int(now - _update_check_cache['timestamp'])
+                })
+                return jsonify(_update_check_cache['result']), 200
+
         logger.info("Update check initiated", extra={
             'current_commit': current_commit,
             'current_branch': current_branch,
             'channel': channel,
-            'target_branch': target_branch
+            'target_branch': target_branch,
+            'force': force
         })
 
         if not current_commit or current_commit == 'unknown':
@@ -1352,19 +1404,16 @@ def check_for_updates():
                     if should_show_update_note(current_commit, note_data):
                         update_note = note_data.get('message')
 
-                return jsonify({
-                    'update_available': update_available,
-                    'current_commit': current_commit,
-                    'remote_commit': remote_commit,
-                    'commits_behind': None,  # Unknown for fresh sync
-                    'current_branch': current_branch,
-                    'target_branch': target_branch,
-                    'channel': channel,
-                    'preview_commits': [],  # No commit history available
-                    'fresh_sync': fresh_sync,
-                    'update_note': update_note
-                }), 200
+                result = _build_update_check_result(
+                    update_available, current_commit, remote_commit,
+                    commits_behind=None,  # Unknown for fresh sync
+                    current_branch=current_branch, target_branch=target_branch,
+                    channel=channel, preview_commits=[],  # No history available
+                    fresh_sync=fresh_sync, update_note=update_note
+                )
+                return _cache_and_return_update_result(result, cache_key, now)
             else:
+                # Do NOT cache error responses - let them retry
                 logger.error("GitHub API comparison failed", extra={'error': error})
                 return jsonify({'error': f'Failed to check for updates: {error}'}), 500
 
@@ -1405,20 +1454,15 @@ def check_for_updates():
             if should_show_update_note(current_commit, note_data):
                 update_note = note_data.get('message')
 
-        return jsonify({
-            'update_available': update_available,
-            'current_commit': current_commit,
-            'remote_commit': remote_commit,
-            'commits_behind': commits_behind,
-            'current_branch': current_branch,
-            'target_branch': target_branch,
-            'channel': channel,
-            'preview_commits': comparison['commits'],
-            'fresh_sync': fresh_sync,
-            'update_note': update_note
-        }), 200
+        result = _build_update_check_result(
+            update_available, current_commit, remote_commit,
+            commits_behind, current_branch, target_branch,
+            channel, comparison['commits'], fresh_sync, update_note
+        )
+        return _cache_and_return_update_result(result, cache_key, now)
 
     except Exception as e:
+        # Do NOT cache error responses - let them retry
         return jsonify({'error': f'Failed to check for updates: {str(e)}'}), 500
 
 @api.route('/api/system/update', methods=['POST'])
@@ -1493,7 +1537,7 @@ def auth_login():
             return jsonify({'error': 'Password required'}), 400
 
         if not is_setup_complete():
-            return jsonify({'error': 'Password not set up. Use /api/auth/setup first.'}), 400
+            return jsonify({'error': 'Password not configured. Create a RESET_PASSWORD file in data/config/ to reset authentication.'}), 400
 
         if authenticate(data['password']):
             return jsonify({'success': True, 'message': 'Login successful'}), 200
@@ -1564,6 +1608,11 @@ def auth_toggle():
             return jsonify({'error': 'enabled field required'}), 400
 
         enabled = data['enabled']
+
+        # Prevent enabling auth without a password set
+        if enabled and not is_setup_complete():
+            return jsonify({'error': 'Cannot enable authentication without setting a password first'}), 400
+
         set_auth_enabled(enabled)
 
         return jsonify({

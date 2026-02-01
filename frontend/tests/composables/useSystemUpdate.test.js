@@ -33,6 +33,16 @@ describe('useSystemUpdate', () => {
     global.window.confirm = vi.fn()
     global.window.location = { reload: vi.fn() }
     vi.useFakeTimers()
+
+    // Reset singleton state between tests
+    const { versionInfo, updateInfo, updateAvailable, checking, updating, statusMessage, statusType } = useSystemUpdate()
+    versionInfo.value = null
+    updateInfo.value = null
+    updateAvailable.value = false
+    checking.value = false
+    updating.value = false
+    statusMessage.value = null
+    statusType.value = null
   })
 
   afterEach(() => {
@@ -237,5 +247,81 @@ describe('useSystemUpdate', () => {
     // Error message should still be there
     expect(statusMessage.value).toBeTruthy()
     expect(statusType.value).toBe('error')
+  })
+
+  it('showUpdateIndicator is false when no update available', () => {
+    const { showUpdateIndicator, updateAvailable } = useSystemUpdate()
+    updateAvailable.value = false
+    expect(showUpdateIndicator.value).toBe(false)
+  })
+
+  it('showUpdateIndicator is true when update available and not dismissed', async () => {
+    // Clear any stored dismissal
+    localStorage.removeItem('birdnet_update_dismissed_until')
+
+    mockApi.get.mockResolvedValueOnce({
+      data: {
+        update_available: true,
+        remote_commit: 'abc123',
+        channel: 'release',
+        commits_behind: 3
+      }
+    })
+
+    const { checkForUpdates, showUpdateIndicator } = useSystemUpdate()
+    await checkForUpdates()
+
+    expect(showUpdateIndicator.value).toBe(true)
+  })
+
+  it('dismissUpdate hides the update indicator', async () => {
+    // Clear any stored dismissal
+    localStorage.removeItem('birdnet_update_dismissed_until')
+
+    mockApi.get.mockResolvedValueOnce({
+      data: {
+        update_available: true,
+        remote_commit: 'abc123',
+        channel: 'release',
+        commits_behind: 3
+      }
+    })
+
+    const { checkForUpdates, showUpdateIndicator, dismissUpdate } = useSystemUpdate()
+    await checkForUpdates()
+
+    expect(showUpdateIndicator.value).toBe(true)
+
+    dismissUpdate()
+
+    expect(showUpdateIndicator.value).toBe(false)
+  })
+
+  it('checkForUpdates with silent option does not set status message', async () => {
+    mockApi.get.mockResolvedValueOnce({
+      data: {
+        update_available: false,
+        commits_behind: 0
+      }
+    })
+
+    const { checkForUpdates, statusMessage } = useSystemUpdate()
+    await checkForUpdates({ silent: true })
+
+    expect(statusMessage.value).toBeNull()
+  })
+
+  it('checkForUpdates with force option adds query param', async () => {
+    mockApi.get.mockResolvedValueOnce({
+      data: {
+        update_available: false,
+        commits_behind: 0
+      }
+    })
+
+    const { checkForUpdates } = useSystemUpdate()
+    await checkForUpdates({ force: true })
+
+    expect(mockApi.get).toHaveBeenCalledWith('/system/update-check?force=true')
   })
 })

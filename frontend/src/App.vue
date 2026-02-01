@@ -41,7 +41,6 @@
     <!-- Login Modal -->
     <LoginModal
       :isVisible="showLoginModal"
-      :isSetup="auth.needsSetup.value"
       @success="onLoginSuccess"
       @cancel="onLoginCancel"
     />
@@ -100,7 +99,7 @@ export default {
     const handleAuthRequired = async () => {
       logger.info('Auth required event received')
       await auth.checkAuthStatus()
-      if (auth.needsLogin.value || auth.needsSetup.value) {
+      if (auth.needsLogin.value) {
         showLoginModal.value = true
       }
     }
@@ -144,7 +143,7 @@ export default {
         if (authQuery === 'required') {
           // Refresh auth status and show login modal
           await auth.checkAuthStatus()
-          if (auth.needsLogin.value || auth.needsSetup.value) {
+          if (auth.needsLogin.value) {
             showLoginModal.value = true
           }
           // Clear the query parameter
@@ -169,8 +168,12 @@ export default {
       // Check auth status
       await auth.checkAuthStatus()
 
-      // Check if location setup is needed (only if not showing login)
-      if (!auth.needsLogin.value && !auth.needsSetup.value) {
+      // Check if location setup is needed
+      if (auth.needsLogin.value) {
+        // Auth enabled means initial setup (including location) was already done
+        // Allow dashboard to work without login (public access)
+        appStatus.setLocationConfigured(true)
+      } else {
         checkLocationSetup()
       }
     })
