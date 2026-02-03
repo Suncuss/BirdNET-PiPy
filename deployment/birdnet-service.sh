@@ -38,21 +38,6 @@ log_debug() {
     echo -e "${BLUE}[BIRDNET-SERVICE]${NC} $1"
 }
 
-# Detect and export timezone if not already set
-detect_timezone() {
-    if [ -z "$TZ" ]; then
-        if [ -f /etc/timezone ]; then
-            TZ=$(cat /etc/timezone)
-        elif [ -L /etc/localtime ]; then
-            TZ=$(readlink /etc/localtime | sed 's|.*/zoneinfo/||')
-        else
-            TZ="UTC"
-        fi
-    fi
-    export TZ
-    log_info "Using timezone: $TZ"
-}
-
 # Cleanup function for graceful shutdown
 cleanup() {
     log_info "Shutting down BirdNET-PiPy services..."
@@ -87,6 +72,35 @@ cleanup() {
 
 # Set up signal handlers for graceful shutdown
 trap cleanup SIGTERM SIGINT
+
+# Function to ensure /run/pulse directory has correct permissions for Docker access
+# This fixes GitHub issue #6 where manual PulseAudio setup or race conditions
+# could leave /run/pulse with restrictive permissions (700), preventing the
+# birdnet user in Docker containers from accessing the socket.
+#
+# The directory needs to be accessible by:
+#   - pulse user (owner) - for PulseAudio daemon
+#   - pulse-access group - for authorized users
+#   - Docker containers mounting /run/pulse (birdnet user, uid 1000)
+#
+# We use 755 permissions which allows read/execute for all users, enabling
+# Docker containers to traverse the directory and access the socket file.
+ensure_pulse_dir_permissions() {
+    local pulse_dir="$1"
+
+    if [ ! -d "$pulse_dir" ]; then
+        return 0
+    fi
+
+    # Set ownership to pulse:pulse-access if possible, otherwise leave as-is
+    sudo chown pulse:pulse-access "$pulse_dir" 2>/dev/null || true
+
+    # Always ensure directory is world-readable/executable (755)
+    # This allows Docker containers to access the socket inside
+    sudo chmod 755 "$pulse_dir"
+
+    log_debug "Ensured permissions on $pulse_dir (755, pulse:pulse-access)"
+}
 
 # Function to ensure PulseAudio socket is available at /run/pulse/native
 # This works for both:
@@ -161,17 +175,21 @@ setup_audio_socket() {
     # Case 2: System socket already exists (system-wide PA already running)
     if [ -S "$system_socket" ]; then
         log_info "System-wide audio socket found at $system_socket"
+        # Ensure permissions are correct even if socket already exists
+        # This handles cases where PulseAudio was started manually or by another process
+        # with restrictive permissions (see GitHub issue #6)
+        ensure_pulse_dir_permissions "$system_pulse_dir"
         return 0
     fi
 
     # Case 3: No socket found - start system-wide PulseAudio (Pi OS Lite)
     log_info "No audio socket found, starting system-wide PulseAudio..."
 
-    # Ensure /run/pulse directory exists with proper permissions
-    if [ ! -d "$system_pulse_dir" ]; then
-        sudo mkdir -p "$system_pulse_dir"
-        sudo chown pulse:pulse-access "$system_pulse_dir" 2>/dev/null || sudo chmod 777 "$system_pulse_dir"
-    fi
+    # Ensure /run/pulse directory exists with proper permissions for Docker containers
+    # The birdnet user (uid 1000) in containers needs read access to the socket
+    # /run/pulse is on tmpfs and recreated each boot, so we must always set permissions
+    sudo mkdir -p "$system_pulse_dir"
+    ensure_pulse_dir_permissions "$system_pulse_dir"
 
     # Start PulseAudio in system mode (requires root privileges)
     sudo pulseaudio --system --daemonize --disallow-exit \
@@ -348,9 +366,6 @@ monitor_flags() {
 main() {
     log_info "BirdNET-PiPy Service Starting..."
     log_info "Working directory: $PROJECT_ROOT"
-
-    # Detect timezone for Docker containers
-    detect_timezone
 
     # Enable swap if available (for low-memory systems like Pi Zero)
     enable_swap_if_available

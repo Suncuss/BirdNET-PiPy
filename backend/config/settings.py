@@ -123,6 +123,19 @@ LON = user_settings['location']['longitude']
 LOCATION_CONFIGURED = user_settings['location'].get('configured', False)
 TIMEZONE = user_settings['location'].get('timezone')
 
+# Validate timezone before considering location "ready"
+_timezone_valid = False
+if TIMEZONE:
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(TIMEZONE)
+        _timezone_valid = True
+    except Exception:
+        pass
+
+# Both location AND valid timezone must be set for system to be ready
+LOCATION_READY = LOCATION_CONFIGURED and _timezone_valid
+
 # Prediction configuration - from user settings
 SENSITIVITY = user_settings['detection']['sensitivity']
 CUTOFF = user_settings['detection']['cutoff']

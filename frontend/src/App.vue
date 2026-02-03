@@ -81,9 +81,9 @@ export default {
         const { data: settings } = await api.get('/settings')
         // Sync unit preference from settings
         unitSettings.setUseMetricUnits(settings.display?.use_metric_units ?? true)
-        // Show setup modal if location has not been configured
-        if (!settings.location?.configured) {
-          logger.info('Location not configured, showing setup modal')
+        // Show setup modal if location or timezone has not been configured
+        if (!settings.location?.configured || !settings.location?.timezone) {
+          logger.info('Location or timezone not configured, showing setup modal')
           appStatus.setLocationConfigured(false)
           showLocationSetup.value = true
         } else {

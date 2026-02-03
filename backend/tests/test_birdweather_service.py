@@ -10,6 +10,13 @@ from unittest.mock import patch, MagicMock, mock_open
 import requests
 
 
+@pytest.fixture(autouse=True)
+def set_timezone():
+    """Ensure TZ is set for tests since tzlocal is removed."""
+    with patch.dict(os.environ, {'TZ': 'UTC'}):
+        yield
+
+
 class TestBirdWeatherService:
     """Test BirdWeatherService class functionality."""
 

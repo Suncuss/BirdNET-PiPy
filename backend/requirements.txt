@@ -20,7 +20,7 @@ tflite-runtime==2.14.0  # Keep stable version for model compatibility
 requests>=2.32.4
 
 # Timezone utilities
-tzlocal>=5.2
+timezonefinder>=6.2.0
 
 # Visualization
 matplotlib==3.10.3

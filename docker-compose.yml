@@ -17,7 +17,6 @@ services:
       - BIRDNET_SERVICE_PORT=5001
       - LOG_FORMAT=human
       - LOG_LEVEL=INFO
-      - TZ=${TZ:-}
     ports:
       - "127.0.0.1:5001:5001"
 
@@ -39,7 +38,6 @@ services:
       - API_PORT=5002
       - LOG_FORMAT=human
       - LOG_LEVEL=INFO
-      - TZ=${TZ:-}
     ports:
       # Bind to localhost only - nginx proxies external requests via docker network
       # This prevents direct access to internal endpoints like /api/broadcast/detection
@@ -66,7 +64,6 @@ services:
       - PULSE_SERVER=unix:/run/pulse/native
       - LOG_FORMAT=human
       - LOG_LEVEL=INFO
-      - TZ=${TZ:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -91,7 +88,7 @@ services:
       - PULSE_SERVER=unix:/run/pulse/native
       - ICECAST_PASSWORD=${ICECAST_PASSWORD:-}
       - STREAM_BITRATE=${STREAM_BITRATE:-320k}
-      - TZ=${TZ:-}
+      - TZ=UTC
     ports:
       # Bind to localhost only - nginx proxies /stream/ requests via docker network
       # This enforces authentication via nginx auth_request
@@ -105,7 +102,7 @@ services:
     ports:
       - "80:80"
     environment:
-      - TZ=${TZ:-}
+      - TZ=UTC
     depends_on:
       - api
     

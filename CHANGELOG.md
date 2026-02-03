@@ -10,7 +10,9 @@
 - Fixed live spectrogram display not initializing in Dashboard (regression from first-time user experience changes)
 - Improved migration modal instructions with clearer 3-step process for importing audio files
 - Added date picker validation in Table view (start date cannot be in the future, end date cannot be before start date)
-- Added automatic timezone detection from location via Open-Meteo API at startup (ensures correct timestamps for BirdWeather uploads)
+- Added offline timezone detection from coordinates using timezonefinder (no external API calls)
+- Fixed shutdown signal handling before threads are created (issue #6)
+- Fixed PulseAudio socket permissions for Docker access (issue #6)
 - Changed location setup to be required before detection starts (removed "Skip for now" option)
 - Changed audio/spectrogram filenames to use dashes instead of colons in timestamps (better compatibility)
 - Added BirdNET-Pi migration - import historical detections, audio files, and generate spectrograms from BirdNET-Pi via Settings

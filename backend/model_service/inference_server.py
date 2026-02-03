@@ -448,6 +448,7 @@ if __name__ == '__main__':
     logger.info("Inference service starting", extra={
         'port': settings.BIRDNET_SERVICE_PORT,
         'model': model.name,
-        'model_version': model.version
+        'model_version': model.version,
+        'timezone': os.environ.get('TZ', 'UTC')
     })
     app.run(host='0.0.0.0', debug=False, port=settings.BIRDNET_SERVICE_PORT)

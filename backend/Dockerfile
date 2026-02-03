@@ -12,6 +12,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     sox \
     ffmpeg \
     curl \
+    tzdata \
     # PulseAudio client library for audio access via socket
     libpulse0
 
@@ -34,6 +35,10 @@ RUN groupadd -g ${GID} birdnet && \
     useradd -u ${UID} -g birdnet -m birdnet && \
     chown -R birdnet:birdnet /app
 
+# Copy entrypoint script
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 # Switch to non-root user
 USER birdnet
 
@@ -41,3 +46,5 @@ USER birdnet
 ENV BASE_DIR=/app
 ENV BIRDNET_SERVICE_PORT=5001
 ENV API_PORT=5002
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

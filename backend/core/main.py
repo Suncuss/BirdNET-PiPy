@@ -2,7 +2,7 @@ from config.settings import (
     RECORDING_DIR, RECORDING_LENGTH, EXTRACTED_AUDIO_DIR, SPECTROGRAM_DIR,
     BIRDNET_SERVER_ENDPOINT, ANALYSIS_CHUNK_LENGTH, API_PORT, API_HOST, SAMPLE_RATE,
     RECORDING_MODE, PULSEAUDIO_SOURCE, STREAM_URL, RTSP_URL, LAT, LON, LOCATION_CONFIGURED,
-    BIRDWEATHER_ID
+    LOCATION_READY, BIRDWEATHER_ID
 )
 from config.constants import RecordingMode
 from core.db import DatabaseManager
@@ -451,17 +451,24 @@ def shutdown():
     logger.info("Shutdown initiated")
     stop_flag.set()  # Signal all threads to stop
 
-    # Give recording thread more time to finish current recording
-    recording_thread.join(timeout=RECORDING_THREAD_SHUTDOWN_TIMEOUT)
+    # Threads may not exist if shutdown occurs before they're created
+    # (e.g., signal received while waiting for location configuration)
+    # Also handle the race where thread is created but not yet started
+    if 'recording_thread' in globals():
+        try:
+            recording_thread.join(timeout=RECORDING_THREAD_SHUTDOWN_TIMEOUT)
+            if recording_thread.is_alive():
+                logger.warning("Recording thread did not stop cleanly")
+        except RuntimeError:
+            pass  # Thread was created but not started yet
 
-    # Processing thread can finish faster
-    processing_thread.join(timeout=PROCESSING_THREAD_SHUTDOWN_TIMEOUT)
-
-    # If threads are still alive, they're blocked; force stop them
-    if recording_thread.is_alive():
-        logger.warning("Recording thread did not stop cleanly")
-    if processing_thread.is_alive():
-        logger.warning("Processing thread did not stop cleanly")
+    if 'processing_thread' in globals():
+        try:
+            processing_thread.join(timeout=PROCESSING_THREAD_SHUTDOWN_TIMEOUT)
+            if processing_thread.is_alive():
+                logger.warning("Processing thread did not stop cleanly")
+        except RuntimeError:
+            pass  # Thread was created but not started yet
 
     logger.info("Shutdown complete")
 
@@ -479,16 +486,20 @@ if __name__ == "__main__":
     logger.info(f"🎵 {DISPLAY_NAME} v{__version__} starting", extra={
         'recording_dir': RECORDING_DIR,
         'recording_length': RECORDING_LENGTH,
-        'analysis_chunk_length': ANALYSIS_CHUNK_LENGTH
+        'analysis_chunk_length': ANALYSIS_CHUNK_LENGTH,
+        'timezone': os.environ.get('TZ', 'UTC')
     })
 
-    # Wait for location to be configured before starting detection
-    if not LOCATION_CONFIGURED:
-        logger.info("⏳ Location not configured. Waiting for user to set location in the web interface...")
+    # Wait for location and timezone to be configured before starting detection
+    if not LOCATION_READY:
+        if not LOCATION_CONFIGURED:
+            logger.info("⏳ Location not configured. Waiting for user to set location in the web interface...")
+        else:
+            logger.info("⏳ Timezone not configured. Please re-save your location in the web interface...")
         # Sit idle until backend restarts (triggered when user saves location)
         while not stop_flag.is_set():
             time.sleep(1)
-        logger.info("Shutdown received while waiting for location configuration")
+        logger.info("Shutdown received while waiting for location/timezone configuration")
         import sys
         sys.exit(0)
 

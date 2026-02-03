@@ -22,6 +22,7 @@ from core.migration_audio import (
     start_spectrogram_generation_if_not_running
 )
 import threading
+from timezonefinder import TimezoneFinder
 from config.settings import SPECTROGRAM_DIR, EXTRACTED_AUDIO_DIR, DEFAULT_AUDIO_PATH, DEFAULT_IMAGE_PATH, API_PORT, BASE_DIR, STREAM_URL, RTSP_URL, RECORDING_MODE, LABELS_PATH, load_user_settings, get_default_settings
 from config.constants import (
     RecordingMode,
@@ -72,6 +73,34 @@ logger = get_logger(__name__)
 
 api = Blueprint('api', __name__)
 db_manager = DatabaseManager()
+
+# Singleton TimezoneFinder (loads ~40MB shape data on first use)
+_timezone_finder: TimezoneFinder | None = None
+_tz_finder_lock = threading.Lock()
+
+
+def _get_timezone_finder() -> TimezoneFinder:
+    """Lazy-load TimezoneFinder (loads ~40MB shape data)."""
+    global _timezone_finder
+    with _tz_finder_lock:
+        if _timezone_finder is None:
+            _timezone_finder = TimezoneFinder()
+        return _timezone_finder
+
+
+def get_timezone_for_location(lat: float, lon: float) -> str | None:
+    """Offline timezone lookup. Returns IANA timezone or None on failure."""
+    try:
+        tf = _get_timezone_finder()
+        timezone = tf.timezone_at(lat=lat, lng=lon)
+        if timezone:
+            logger.info(f"Resolved timezone: {timezone}")
+            return timezone
+        logger.warning(f"No timezone found for ({lat}, {lon})")
+        return None
+    except Exception as e:
+        logger.error(f"Timezone lookup failed: {e}")
+        return None
 
 
 def is_internal_request():
@@ -1215,6 +1244,32 @@ def update_settings():
             if overlap is not None and overlap not in OVERLAP_OPTIONS:
                 return jsonify({'error': 'Invalid overlap. Must be 0.0, 0.5, 1.0, 1.5, 2.0, or 2.5 seconds'}), 400
 
+        # Compute timezone when location is being saved and timezone is missing or location changed
+        # This ensures all containers have correct timezone on next restart
+        if 'location' in new_settings:
+            location = new_settings['location']
+            lat = location.get('latitude')
+            lon = location.get('longitude')
+            if lat is not None and lon is not None:
+                # Load current settings to check for changes and preserve timezone
+                current_settings = load_user_settings()
+                current_loc = current_settings.get('location', {})
+                location_changed = (
+                    current_loc.get('latitude') != lat or
+                    current_loc.get('longitude') != lon
+                )
+                timezone_missing = not location.get('timezone') and not current_loc.get('timezone')
+
+                if timezone_missing or location_changed:
+                    # Compute new timezone when location changed or never had one
+                    timezone = get_timezone_for_location(lat, lon)
+                    if timezone:
+                        new_settings['location']['timezone'] = timezone
+                    # If lookup fails, leave timezone unset - user can retry by saving again
+                elif not location.get('timezone') and current_loc.get('timezone'):
+                    # Preserve existing timezone if not in incoming payload
+                    new_settings['location']['timezone'] = current_loc['timezone']
+
         # Save settings to JSON file
         save_user_settings(new_settings)
         
@@ -2336,7 +2391,8 @@ def broadcast_detection(detection_data):
 if __name__ == '__main__':
     logger.info("🌐 API server starting", extra={
         'port': API_PORT,
-        'websocket': 'enabled'
+        'websocket': 'enabled',
+        'timezone': os.environ.get('TZ', 'UTC')
     })
     app, socketio = create_app()
     socketio.run(app, host='0.0.0.0', port=API_PORT, debug=False, allow_unsafe_werkzeug=True)

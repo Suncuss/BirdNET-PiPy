@@ -3,19 +3,13 @@
 This module provides background hourly weather fetching with caching.
 Weather is fetched automatically when location is configured and the service is started.
 The get_current_weather() method returns cached data immediately without blocking.
-
-Additionally, this service extracts timezone from the API response and caches it
-for use by other services (e.g., BirdWeather uploads).
 """
 
-import json
-import os
 import threading
 import time
 import requests
 from typing import Optional, Dict
 
-from config.settings import USER_SETTINGS_PATH
 from core.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -95,11 +89,6 @@ class WeatherService:
             response.raise_for_status()
             data = response.json()
 
-            # Extract and cache timezone from API response
-            api_timezone = data.get('timezone')
-            if api_timezone:
-                self._update_timezone_cache(api_timezone)
-
             current = data.get('current') or {}
             weather = {
                 'temp': current.get('temperature_2m'),
@@ -127,51 +116,6 @@ class WeatherService:
             # ValueError covers json.JSONDecodeError (its parent class)
             logger.warning(f"Weather API response parse error: {e}")
         return None
-
-    def _update_timezone_cache(self, timezone: str) -> None:
-        """Update timezone in memory cache and persist to settings file.
-
-        Only writes to disk if timezone has actually changed to avoid
-        unnecessary disk writes.
-
-        Args:
-            timezone: IANA timezone name (e.g., "America/New_York")
-        """
-        # Import here to avoid circular import at module load time
-        from core.timezone_service import update_cached_timezone, _get_cached_timezone
-
-        # Check if timezone changed
-        current = _get_cached_timezone()
-        if current == timezone:
-            return
-
-        # Update in-memory cache
-        update_cached_timezone(timezone)
-
-        # Persist to settings file using atomic write
-        settings_path = USER_SETTINGS_PATH
-        try:
-            # Read current settings
-            settings = {}
-            if os.path.exists(settings_path):
-                with open(settings_path, 'r') as f:
-                    settings = json.load(f)
-
-            # Update timezone
-            if 'location' not in settings:
-                settings['location'] = {}
-            settings['location']['timezone'] = timezone
-
-            # Atomic write: temp file + rename
-            temp_path = settings_path + '.tmp'
-            with open(temp_path, 'w') as f:
-                json.dump(settings, f, indent=2)
-            os.replace(temp_path, settings_path)
-
-            logger.info(f"Timezone cached to settings: {timezone}")
-
-        except Exception as e:
-            logger.warning(f"Failed to persist timezone to settings: {e}")
 
     def get_current_weather(self) -> Optional[Dict]:
         """Get current cached weather data.

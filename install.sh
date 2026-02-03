@@ -161,22 +161,6 @@ detect_platform() {
     fi
 }
 
-# Detect host timezone
-detect_timezone() {
-    if [ -f /etc/timezone ]; then
-        TZ=$(cat /etc/timezone)
-    elif [ -L /etc/localtime ]; then
-        # Extract timezone from symlink (e.g., /usr/share/zoneinfo/America/New_York)
-        TZ=$(readlink /etc/localtime | sed 's|.*/zoneinfo/||')
-    elif [ -n "$TZ" ]; then
-        : # Use existing TZ
-    else
-        TZ="UTC"
-    fi
-    export TZ
-    print_status "Detected timezone: $TZ"
-}
-
 # Show usage
 show_usage() {
     echo "BirdNET-PiPy Unified Installation Script"
@@ -567,9 +551,6 @@ StandardError=journal
 Restart=always
 RestartSec=10
 
-# Environment variables
-Environment=TZ=$TZ
-
 # Graceful shutdown (90s for slow systems like Pi Zero)
 TimeoutStopSec=90
 KillMode=mixed
@@ -629,7 +610,7 @@ $ACTUAL_USER ALL=(ALL) NOPASSWD: $UMOUNT_BIN /run/pulse
 # Directory operations in /run/pulse
 $ACTUAL_USER ALL=(ALL) NOPASSWD: $MKDIR_BIN -p /run/pulse
 $ACTUAL_USER ALL=(ALL) NOPASSWD: $CHOWN_BIN pulse\:pulse-access /run/pulse
-$ACTUAL_USER ALL=(ALL) NOPASSWD: $CHMOD_BIN 777 /run/pulse
+$ACTUAL_USER ALL=(ALL) NOPASSWD: $CHMOD_BIN 755 /run/pulse
 $ACTUAL_USER ALL=(ALL) NOPASSWD: $RM_BIN -f /run/pulse/native
 
 # Enable swap (optional, only if /swapfile-birdnet-pipy exists)
@@ -939,9 +920,6 @@ main() {
             exit 1
         fi
 
-        # Detect timezone for systemd service file
-        detect_timezone
-
         # Perform update and exit (never returns)
         perform_update
     fi
@@ -966,9 +944,6 @@ main() {
     # Stage 2: Local installation (from cloned repo)
     print_status "Running in local mode (installing from: $PROJECT_ROOT)"
     echo ""
-
-    # Detect timezone for Docker containers
-    detect_timezone
 
     # Docker setup
     if ! check_docker || ! check_docker_compose; then
