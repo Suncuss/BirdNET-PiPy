@@ -151,10 +151,16 @@ export function useSystemUpdate() {
         message: 'System updating'
       })
     } catch (error) {
-      logger.error('Failed to trigger update', error)
-      setStatus('error', `Update failed: ${error.message}`)
       updating.value = false
-      throw error
+      // Timeout is not a failure - just taking longer than expected
+      if (error.message === 'RESTART_TIMEOUT') {
+        logger.warn('Update restart timeout - may still be in progress')
+        setStatus('info', 'Update taking longer than expected. Try refreshing later.')
+      } else {
+        logger.error('Failed to trigger update', error)
+        setStatus('error', `Update failed: ${error.message}`)
+        throw error
+      }
     }
   }
 
@@ -190,6 +196,7 @@ export function useSystemUpdate() {
     dismissUpdate,
     // Expose service restart state for UI
     restartMessage: serviceRestart.restartMessage,
+    restartError: serviceRestart.restartError,
     isRestarting: serviceRestart.isRestarting,
     // Methods
     loadVersionInfo,

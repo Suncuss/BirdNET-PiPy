@@ -47,6 +47,19 @@
         </div>
       </div>
 
+      <!-- Update Timeout Banner (shown when update is taking longer than expected) -->
+      <div
+        v-else-if="systemUpdate.restartError.value"
+        class="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg"
+      >
+        <div class="flex items-center gap-2 text-amber-700 text-sm">
+          <svg class="h-4 w-4 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <span>{{ systemUpdate.restartError.value }}</span>
+        </div>
+      </div>
+
       <!-- Update Available Banner (shown when not restarting/updating) -->
       <div
         v-else-if="systemUpdate.showUpdateIndicator.value && systemUpdate.updateInfo.value"

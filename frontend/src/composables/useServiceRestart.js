@@ -72,9 +72,9 @@ export function useServiceRestart() {
           if (attempts >= maxAttempts) {
             logger.warn('Service restart taking longer than expected')
             restartMessage.value = ''
-            restartError.value = 'Update is taking longer than expected. Please refresh the page manually to check status.'
+            restartError.value = 'Update taking longer than expected. Try refreshing later.'
             isRestarting.value = false
-            reject(new Error('Service restart taking longer than expected'))
+            reject(new Error('RESTART_TIMEOUT'))
           } else {
             // Update message periodically
             const elapsed = Math.floor((attempts * pollInterval) / 1000)
