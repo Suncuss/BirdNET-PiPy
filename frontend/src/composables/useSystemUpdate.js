@@ -146,7 +146,7 @@ export function useSystemUpdate() {
 
       // Use shared service restart monitoring
       await serviceRestart.waitForRestart({
-        maxWaitSeconds: 300, // 5 minutes for updates (longer than settings save)
+        maxWaitSeconds: 600, // 10 minutes for updates
         autoReload: true,
         message: 'System updating'
       })
