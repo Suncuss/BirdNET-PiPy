@@ -1,9 +1,9 @@
 """Tests for the weather service module."""
 
-import pytest
-from unittest.mock import patch, MagicMock
 import threading
 import time
+from unittest.mock import MagicMock, patch
+
 import requests
 
 

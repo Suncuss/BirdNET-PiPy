@@ -2,13 +2,21 @@
   <div class="bird-gallery px-4 sm:px-6 lg:px-8">
     <div class="mb-4 sm:mb-6 overflow-x-auto">
       <nav class="flex space-x-2 sm:space-x-4 border-b whitespace-nowrap">
-        <button v-for="tab in tabs" :key="tab.value" @click="selectTab(tab.value)" :class="[
-          'py-2 px-3 sm:px-4 text-xs sm:text-sm font-medium flex items-center',
-          selectedTab === tab.value
-            ? 'border-b-2 border-blue-500 text-blue-600'
-            : 'text-gray-500 hover:text-gray-700'
-        ]">
-          <span class="mr-1.5" v-html="tab.icon"></span>
+        <button
+          v-for="tab in tabs"
+          :key="tab.value"
+          :class="[
+            'py-2 px-3 sm:px-4 text-xs sm:text-sm font-medium flex items-center',
+            selectedTab === tab.value
+              ? 'border-b-2 border-blue-500 text-blue-600'
+              : 'text-gray-500 hover:text-gray-700'
+          ]"
+          @click="selectTab(tab.value)"
+        >
+          <span
+            class="mr-1.5"
+            v-html="tab.icon"
+          />
           {{ tab.label }}
         </button>
       </nav>
@@ -16,52 +24,82 @@
 
     <div>
       <!-- Conditional check for displayedBirds -->
-      <div v-if="displayedBirds.length === 0" class="text-center text-gray-500 p-4">
+      <div
+        v-if="displayedBirds.length === 0"
+        class="text-center text-gray-500 p-4"
+      >
         No birds to display yet.
       </div>
 
       <!-- Grid of bird cards -->
-      <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
-        <div v-for="bird in displayedBirds" :key="bird.id"
-          class="bird-card bg-white rounded-lg shadow-md overflow-hidden transition-all duration-300 hover:shadow-lg">
-
+      <div
+        v-else
+        class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6"
+      >
+        <div
+          v-for="bird in displayedBirds"
+          :key="bird.id"
+          class="bird-card bg-white rounded-lg shadow-md overflow-hidden transition-all duration-300 hover:shadow-lg"
+        >
           <!-- Wrap the image and related content inside the router-link -->
-          <router-link :to="{ name: 'BirdDetails', params: { name: bird.name } }" class="group">
+          <router-link
+            :to="{ name: 'BirdDetails', params: { name: bird.name } }"
+            class="group"
+          >
             <div class="relative aspect-square overflow-hidden bg-gray-200">
-              <img :src="bird.imageUrl" :alt="bird.name"
+              <img
+                :src="bird.imageUrl"
+                :alt="bird.name"
                 class="absolute inset-0 w-full h-full object-cover transition-[opacity,transform] duration-200 group-hover:scale-110"
                 :class="{ 'opacity-0': !bird.focalPointReady, 'opacity-100': bird.focalPointReady }"
                 :style="{ objectPosition: bird.focalPoint || '50% 50%' }"
-                loading="lazy">
+                loading="lazy"
+              >
               <div
-                class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                <font-awesome-icon icon="fas fa-info-circle" class="text-white text-2xl" />
+                class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300"
+              >
+                <font-awesome-icon
+                  icon="fas fa-info-circle"
+                  class="text-white text-2xl"
+                />
               </div>
             </div>
           </router-link>
 
           <div class="p-3 sm:p-4 bg-gray-100 text-xs text-gray-600">
             <p>
-              Photo by <a :href="bird.authorUrl" target="_blank" rel="noopener noreferrer" class="text-blue-600 underline">{{ bird.authorName
-                }}</a>
+              Photo by <a
+                :href="bird.authorUrl"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-blue-600 underline"
+              >{{ bird.authorName
+              }}</a>
             </p>
             <p>
               Licensed under {{ bird.licenseType }}
             </p>
           </div>
           <div class="p-3 sm:p-4">
-            <h2 class="text-lg font-semibold mb-2">{{ bird.name }}</h2>
-            <p class="text-sm text-gray-600 mb-1">{{ bird.scientificName }}</p>
-            <p class="text-xs text-gray-500">{{ bird.lastDetected ? `Last detected: ${formatDate(bird.lastDetected)}` : 'Detection info available in details' }}</p>
-            <AppButton :to="{ name: 'BirdDetails', params: { name: bird.name } }" class="mt-2">
+            <h2 class="text-lg font-semibold mb-2">
+              {{ bird.name }}
+            </h2>
+            <p class="text-sm text-gray-600 mb-1">
+              {{ bird.scientificName }}
+            </p>
+            <p class="text-xs text-gray-500">
+              {{ bird.lastDetected ? `Last detected: ${formatDate(bird.lastDetected)}` : 'Detection info available in details' }}
+            </p>
+            <AppButton
+              :to="{ name: 'BirdDetails', params: { name: bird.name } }"
+              class="mt-2"
+            >
               Learn More
             </AppButton>
           </div>
         </div>
       </div>
-
     </div>
-
   </div>
 </template>
 
@@ -146,7 +184,7 @@ export default {
                 imageUrl: '/default_bird.webp',
                 focalPointReady: true,  // Show placeholder immediately
               }
-            } catch (error) {
+            } catch (_error) {
               // If details fetch fails, still show the bird
               return {
                 id: species.common_name,

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Fixed BirdNET-Pi audio import to match files with underscores when database has colons in timestamps
+- Fixed database migration to prevent parallel imports when user navigates away and returns
+- Moved dev scripts to `scripts/` folder for cleaner root directory
 - Added automatic update checking with dismissible pill-shaped FAB on dashboard (desktop/tablet only)
 - Fixed authentication bypass that allowed enabling auth without a password via API
 - Fixed dashboard not loading when authentication is enabled but user isn't logged in

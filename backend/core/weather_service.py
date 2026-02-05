@@ -7,8 +7,8 @@ The get_current_weather() method returns cached data immediately without blockin
 
 import threading
 import time
+
 import requests
-from typing import Optional, Dict
 
 from core.logging_config import get_logger
 
@@ -36,8 +36,8 @@ class WeatherService:
         """
         self._lat = lat
         self._lon = lon
-        self._cache: Optional[Dict] = None
-        self._cache_time: Optional[float] = None  # time.time() based
+        self._cache: dict | None = None
+        self._cache_time: float | None = None  # time.time() based
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._fetch_thread = threading.Thread(target=self._fetch_loop, daemon=True)
@@ -67,7 +67,7 @@ class WeatherService:
                 time.sleep(RETRY_DELAY)
         logger.warning(f"Weather fetch failed after {RETRY_COUNT} attempts")
 
-    def _fetch_weather(self) -> Optional[Dict]:
+    def _fetch_weather(self) -> dict | None:
         """Make API request to Open-Meteo.
 
         Returns:
@@ -117,7 +117,7 @@ class WeatherService:
             logger.warning(f"Weather API response parse error: {e}")
         return None
 
-    def get_current_weather(self) -> Optional[Dict]:
+    def get_current_weather(self) -> dict | None:
         """Get current cached weather data.
 
         Returns immediately with cached data or None if unavailable/stale.
@@ -150,11 +150,11 @@ class WeatherService:
 
 
 # Singleton
-_weather_service: Optional[WeatherService] = None
+_weather_service: WeatherService | None = None
 _weather_service_lock = threading.Lock()
 
 
-def get_weather_service(lat: Optional[float] = None, lon: Optional[float] = None) -> Optional[WeatherService]:
+def get_weather_service(lat: float | None = None, lon: float | None = None) -> WeatherService | None:
     """Get or create weather service singleton.
 
     Args:

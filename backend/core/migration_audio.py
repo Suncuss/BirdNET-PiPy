@@ -8,15 +8,14 @@ Handles:
 import os
 import re
 import shutil
-import threading
-import tempfile
 import subprocess
-from datetime import datetime
+import tempfile
+import threading
 
+from config.settings import BASE_DIR, EXTRACTED_AUDIO_DIR, SPECTROGRAM_DIR
 from core.logging_config import get_logger
-from core.utils import build_detection_filenames, generate_spectrogram
 from core.storage_manager import get_disk_usage
-from config.settings import EXTRACTED_AUDIO_DIR, SPECTROGRAM_DIR, BASE_DIR
+from core.utils import build_detection_filenames, generate_spectrogram
 
 logger = get_logger(__name__)
 
@@ -198,7 +197,7 @@ def list_available_folders():
 
         # Count audio files in this folder (recursively)
         audio_count = 0
-        for root, dirs, files in os.walk(item_path):
+        for _root, _dirs, files in os.walk(item_path):
             for filename in files:
                 if filename.lower().endswith(AUDIO_EXTENSIONS):
                     audio_count += 1
@@ -258,7 +257,7 @@ def build_source_file_index(source_dir):
     if not os.path.exists(source_dir):
         return index
 
-    for root, dirs, files in os.walk(source_dir):
+    for root, _dirs, files in os.walk(source_dir):
         for filename in files:
             if filename.lower().endswith(AUDIO_EXTENSIONS):
                 # Key by basename (case-insensitive) for matching
@@ -342,8 +341,19 @@ def scan_audio_files(db_manager, source_folder=None):
         # Get just the basename for matching
         basename = os.path.basename(original_name).lower()
 
+        # Try exact match first, then fallback to underscore variant
+        # (BirdNET-Pi stores colons in DB but some systems save files with underscores)
+        matched_basename = None
         if basename in file_index:
-            source_path = file_index[basename]
+            matched_basename = basename
+        elif ':' in basename:
+            # Try replacing colons with underscores (common filesystem workaround)
+            underscore_variant = basename.replace(':', '_')
+            if underscore_variant in file_index:
+                matched_basename = underscore_variant
+
+        if matched_basename:
+            source_path = file_index[matched_basename]
             try:
                 file_size = os.path.getsize(source_path)
                 result['matched_files'].append((detection['id'], source_path, file_size))
@@ -429,7 +439,7 @@ def import_audio_files(db_manager, matched_files, import_id):
     try:
         update_progress('running')
 
-        for detection_id, source_path, size_bytes in matched_files:
+        for detection_id, source_path, _size_bytes in matched_files:
             try:
                 # Get detection record
                 detection = db_manager.get_detection_by_id(detection_id)

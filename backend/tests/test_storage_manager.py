@@ -8,17 +8,17 @@ Tests cover:
 - Cleanup candidate selection
 - File deletion logic
 """
-import pytest
-import tempfile
 import os
 import sys
+import tempfile
 from datetime import datetime, timedelta
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
+
+import pytest
 
 # Add tests directory to path for fixtures import
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 from fixtures.test_config import TEST_DATABASE_SCHEMA
-
 
 
 @pytest.fixture
@@ -317,7 +317,9 @@ class TestDeleteDetectionFiles:
                 with patch('config.settings.SPECTROGRAM_DIR', spectrogram_dir):
                     with patch('config.settings.BASE_DIR', tmpdir):
                         with patch('config.settings.user_settings', {'storage': {}}):
-                            from core.storage_manager import delete_detection_files, get_detection_files
+                            from core.storage_manager import (
+                                delete_detection_files,
+                            )
 
                             # Mock get_detection_files to return our test paths
                             detection = {
@@ -334,8 +336,8 @@ class TestDeleteDetectionFiles:
 
                                 result = delete_detection_files(detection)
 
-                                assert result['deleted_audio'] == True
-                                assert result['deleted_spectrogram'] == True
+                                assert result['deleted_audio']
+                                assert result['deleted_spectrogram']
                                 assert result['bytes_freed'] == 1500
                                 assert not os.path.exists(audio_file)
                                 assert not os.path.exists(spectrogram_file)
@@ -356,8 +358,8 @@ class TestDeleteDetectionFiles:
 
                         result = delete_detection_files(detection)
 
-                        assert result['deleted_audio'] == False
-                        assert result['deleted_spectrogram'] == False
+                        assert not result['deleted_audio']
+                        assert not result['deleted_spectrogram']
                         assert result['bytes_freed'] == 0
 
 
@@ -383,7 +385,7 @@ class TestCleanupStorage:
 
                     assert result['files_deleted'] == 0
                     assert result['bytes_freed'] == 0
-                    assert result['target_reached'] == True
+                    assert result['target_reached']
 
     def test_cleanup_respects_keep_per_species(self, populated_db_for_cleanup):
         """Should keep top N recordings per species by confidence."""
@@ -457,5 +459,5 @@ class TestCleanupStorage:
                                     )
 
                                     # Should flag that target is not achievable
-                                    assert result['target_achievable'] == False
-                                    assert result['target_reached'] == False
+                                    assert not result['target_achievable']
+                                    assert not result['target_reached']

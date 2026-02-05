@@ -1,13 +1,11 @@
 """Tests for BirdNET-Pi migration API endpoints."""
 
-import os
-import tempfile
-import sqlite3
-import pytest
-import json
 import io
+import json
+import os
+import sqlite3
+import tempfile
 import time
-from unittest.mock import patch, Mock
 
 
 def wait_for_migration(api_client, migration_id, timeout=30):
@@ -411,35 +409,40 @@ class TestMigrationImportEndpoint:
                 os.unlink(db_path)
 
     def test_race_protection_prevents_duplicate_migrations(self, api_client, real_db_manager):
-        """Test that the race protection prevents duplicate migrations for the same temp_path."""
+        """Test that the race protection prevents ANY duplicate migrations globally."""
         from core.migration import (
+            clear_migration_progress,
             start_migration_if_not_running,
-            clear_migration_progress
         )
 
-        temp_path = '/fake/temp/path/for/testing.db'
+        temp_path1 = '/fake/temp/path/for/testing1.db'
+        temp_path2 = '/fake/temp/path/for/testing2.db'
 
         try:
-            # First call should succeed (returns True = can start)
-            can_start1 = start_migration_if_not_running(temp_path, 100)
+            # First call should succeed (returns True, None)
+            can_start1, running_id1 = start_migration_if_not_running(temp_path1, 100)
             assert can_start1 is True
+            assert running_id1 is None
 
-            # Second call with same temp_path should return False (already running)
-            can_start2 = start_migration_if_not_running(temp_path, 100)
+            # Second call with same temp_path should fail and return the running ID
+            can_start2, running_id2 = start_migration_if_not_running(temp_path1, 100)
             assert can_start2 is False
+            assert running_id2 == temp_path1
 
-            # Third call should also fail
-            can_start3 = start_migration_if_not_running(temp_path, 100)
+            # Third call with DIFFERENT temp_path should also fail (global check)
+            can_start3, running_id3 = start_migration_if_not_running(temp_path2, 100)
             assert can_start3 is False
+            assert running_id3 == temp_path1  # Returns the ID of the running job
 
         finally:
             # Clean up
-            clear_migration_progress(temp_path)
+            clear_migration_progress(temp_path1)
 
         # After cleanup, should be able to start again
-        can_start4 = start_migration_if_not_running(temp_path, 100)
+        can_start4, running_id4 = start_migration_if_not_running(temp_path1, 100)
         assert can_start4 is True
-        clear_migration_progress(temp_path)
+        assert running_id4 is None
+        clear_migration_progress(temp_path1)
 
 
 class TestMigrationCancelEndpoint:

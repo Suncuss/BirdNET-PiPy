@@ -1,14 +1,15 @@
+import json
+import logging
+import os
+import sqlite3
+import time
+from contextlib import contextmanager
+from datetime import datetime, timedelta
+
 from config.settings import DATABASE_PATH, DATABASE_SCHEMA
 from core.logging_config import get_logger
 from core.utils import build_detection_filenames
 
-import json
-import sqlite3
-from contextlib import contextmanager
-from datetime import datetime, timedelta
-import os
-import time
-import logging
 
 # Create a custom logger adapter that adds a prefix to all messages
 class DBLoggerAdapter(logging.LoggerAdapter):
@@ -20,7 +21,7 @@ _base_logger = get_logger(__name__)
 logger = DBLoggerAdapter(_base_logger, {})
 
 class DatabaseManager:
-    
+
     def __init__(self, db_path=DATABASE_PATH):
         self.db_path = db_path
         self.ensure_db_directory_exists()
@@ -32,8 +33,8 @@ class DatabaseManager:
     def ensure_db_directory_exists(self):
         db_directory = os.path.dirname(self.db_path)
         if not os.path.exists(db_directory):
-            os.makedirs(db_directory)    
-        
+            os.makedirs(db_directory)
+
     @contextmanager
     def get_db_connection(self):
         conn = sqlite3.connect(self.db_path)
@@ -95,7 +96,7 @@ class DatabaseManager:
             ))
             conn.commit()
             return cur.lastrowid
-        
+
     def get_latest_detections(self, limit=15):
         # Use window function to get highest confidence detection per (group_timestamp, common_name)
         # Previous query used WHERE (id, confidence) IN (SELECT id, MAX(confidence) ... GROUP BY)
@@ -146,17 +147,17 @@ class DatabaseManager:
 
     def get_detections_by_date_range(self, start_date, end_date, unique=False):
         start_time = time.time()
-        
+
         # Convert dates to ISO 8601 format
         start_date_iso = datetime.strptime(start_date, '%Y-%m-%d').strftime('%Y-%m-%dT00:00:00')
         end_date_iso = datetime.strptime(end_date, '%Y-%m-%d').strftime('%Y-%m-%dT23:59:59')
-        
+
         logger.debug("Fetching detections by date range", extra={
             'start_date': start_date,
             'end_date': end_date,
             'unique_only': unique
         })
-        
+
         if unique:
             query = """
             WITH RankedDetections AS (
@@ -178,14 +179,14 @@ class DatabaseManager:
             WHERE timestamp BETWEEN ? AND ?
             ORDER BY timestamp DESC
             """
-        
+
         with self.get_db_connection() as conn:
             cur = conn.cursor()
             if unique:
                 cur.execute(query, (start_date_iso, end_date_iso))
             else:
                 cur.execute(query, (start_date_iso, end_date_iso))
-            
+
             rows = cur.fetchall()
             results = []
             for row in rows:
@@ -198,7 +199,7 @@ class DatabaseManager:
                 'results_count': len(results),
                 'query_time': round(query_time, 3)
             })
-            
+
             return results
 
     def get_hourly_activity(self, date=None):
@@ -206,7 +207,7 @@ class DatabaseManager:
             start_of_day = datetime.strptime(date, "%Y-%m-%d").replace(hour=0, minute=0, second=0, microsecond=0)
         else:
             start_of_day = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        
+
         end_of_day = start_of_day + timedelta(days=1)
 
         query = """
@@ -226,13 +227,13 @@ class DatabaseManager:
             hourly_activity[row['hour']] = row['count']
 
         return [{'hour': f"{hour}:00", 'count': count} for hour, count in hourly_activity.items()]
-    
+
     def get_activity_overview(self, date=None, num_species=10):
         if date:
             start_of_day = datetime.strptime(date, "%Y-%m-%d").replace(hour=0, minute=0, second=0, microsecond=0)
         else:
             start_of_day = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        
+
         end_of_day = start_of_day + timedelta(days=1)
 
         # Date range already logged in parent function
@@ -269,12 +270,12 @@ class DatabaseManager:
         ]
 
         species_activity.sort(key=lambda x: x['totalObservations'], reverse=True)
-        
+
         logger.debug("Activity overview generated", extra={
             'total_species': len(species_hourly_activity),
             'returned_species': min(num_species, len(species_activity))
         })
-        
+
         return species_activity[:min(num_species, len(species_activity))]
 
     def get_summary_stats(self, start_date=None):
@@ -414,20 +415,20 @@ class DatabaseManager:
 
     def get_bird_details(self, species_name):
         query = """
-        SELECT 
+        SELECT
             common_name,
             scientific_name,
             COUNT(*) as total_visits,
             MIN(timestamp) as first_detected,
             MAX(timestamp) as last_detected,
             AVG(confidence) as average_confidence,
-            (SELECT strftime('%H:00', timestamp) 
-            FROM detections d2 
-            WHERE d2.common_name = d1.common_name 
-            GROUP BY strftime('%H', timestamp) 
-            ORDER BY COUNT(*) DESC 
+            (SELECT strftime('%H:00', timestamp)
+            FROM detections d2
+            WHERE d2.common_name = d1.common_name
+            GROUP BY strftime('%H', timestamp)
+            ORDER BY COUNT(*) DESC
             LIMIT 1) as peak_activity_time,
-            CASE 
+            CASE
                 WHEN COUNT(DISTINCT strftime('%m', timestamp)) = 12 THEN 'Year-round'
                 WHEN COUNT(DISTINCT strftime('%m', timestamp)) >= 6 THEN 'Multi-season'
                 ELSE 'Seasonal'
@@ -492,7 +493,7 @@ class DatabaseManager:
             'records_count': len(recordings)
         })
         return recordings
-    
+
     def get_detection_distribution(self, species_name, view, anchor_date_str):
         import datetime
         anchor_date = datetime.datetime.strptime(anchor_date_str, '%Y-%m-%d')
@@ -501,15 +502,15 @@ class DatabaseManager:
             'view': view,
             'date': anchor_date_str
         })
-        
+
         # Initialize labels and data based on view type
         if view == 'day':
             # 24 hours for the specific day
             labels = [f"{i:02d}:00" for i in range(24)]
             data = [0] * 24
-            
+
             query = """
-            SELECT 
+            SELECT
                 strftime('%H', timestamp) as hour,
                 COUNT(*) as count
             FROM detections
@@ -517,16 +518,16 @@ class DatabaseManager:
             AND date(timestamp) = date(?)
             GROUP BY hour
             """
-            
+
             with self.get_db_connection() as conn:
                 cur = conn.cursor()
                 cur.execute(query, (species_name, anchor_date_str))
                 results = cur.fetchall()
-                
+
             for row in results:
                 hour_idx = int(row['hour'])
                 data[hour_idx] = row['count']
-                
+
         elif view == 'week':
             # 7 days for the week containing the anchor date
             # Use Sunday as week start (matching JavaScript's getDay() where Sunday=0)
@@ -538,9 +539,9 @@ class DatabaseManager:
                 day = week_start + datetime.timedelta(days=i)
                 labels.append(day.strftime('%a %m/%d'))
             data = [0] * 7
-            
+
             query = """
-            SELECT 
+            SELECT
                 date(timestamp) as day,
                 COUNT(*) as count
             FROM detections
@@ -549,18 +550,18 @@ class DatabaseManager:
             AND date(timestamp) < date(?, '+7 days')
             GROUP BY day
             """
-            
+
             with self.get_db_connection() as conn:
                 cur = conn.cursor()
                 cur.execute(query, (species_name, week_start.strftime('%Y-%m-%d'), week_start.strftime('%Y-%m-%d')))
                 results = cur.fetchall()
-                
+
             for row in results:
                 day_date = datetime.datetime.strptime(row['day'], '%Y-%m-%d')
                 day_idx = (day_date - week_start).days
                 if 0 <= day_idx < 7:
                     data[day_idx] = row['count']
-                    
+
         elif view == 'month':
             # All days in the month
             import calendar
@@ -569,9 +570,9 @@ class DatabaseManager:
             num_days = calendar.monthrange(year, month)[1]
             labels = [str(i) for i in range(1, num_days + 1)]
             data = [0] * num_days
-            
+
             query = """
-            SELECT 
+            SELECT
                 strftime('%d', timestamp) as day,
                 COUNT(*) as count
             FROM detections
@@ -579,17 +580,17 @@ class DatabaseManager:
             AND strftime('%Y-%m', timestamp) = ?
             GROUP BY day
             """
-            
+
             with self.get_db_connection() as conn:
                 cur = conn.cursor()
                 cur.execute(query, (species_name, anchor_date.strftime('%Y-%m')))
                 results = cur.fetchall()
-                
+
             for row in results:
                 day_idx = int(row['day']) - 1
                 if 0 <= day_idx < num_days:
                     data[day_idx] = row['count']
-                    
+
         elif view == '6month':
             # 6 months based on anchor date
             start_month = 1 if anchor_date.month <= 6 else 7
@@ -598,9 +599,9 @@ class DatabaseManager:
                 month_date = datetime.datetime(anchor_date.year, start_month + i, 1)
                 labels.append(month_date.strftime('%b'))
             data = [0] * 6
-            
+
             query = """
-            SELECT 
+            SELECT
                 strftime('%m', timestamp) as month,
                 COUNT(*) as count
             FROM detections
@@ -610,24 +611,24 @@ class DatabaseManager:
             AND CAST(strftime('%m', timestamp) AS INTEGER) < ?
             GROUP BY month
             """
-            
+
             with self.get_db_connection() as conn:
                 cur = conn.cursor()
                 cur.execute(query, (species_name, str(anchor_date.year), start_month, start_month + 6))
                 results = cur.fetchall()
-                
+
             for row in results:
                 month_idx = int(row['month']) - start_month
                 if 0 <= month_idx < 6:
                     data[month_idx] = row['count']
-                    
+
         elif view == 'year':
             # 12 months for the year
             labels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
             data = [0] * 12
-            
+
             query = """
-            SELECT 
+            SELECT
                 strftime('%m', timestamp) as month,
                 COUNT(*) as count
             FROM detections
@@ -635,20 +636,20 @@ class DatabaseManager:
             AND strftime('%Y', timestamp) = ?
             GROUP BY month
             """
-            
+
             with self.get_db_connection() as conn:
                 cur = conn.cursor()
                 cur.execute(query, (species_name, str(anchor_date.year)))
                 results = cur.fetchall()
-                
+
             for row in results:
                 month_idx = int(row['month']) - 1
                 if 0 <= month_idx < 12:
                     data[month_idx] = row['count']
-        
+
         else:
             raise ValueError("Invalid view. Use 'day', 'week', 'month', '6month', or 'year'.")
-            
+
         logger.debug("Detection distribution calculated", extra={
             'data_points': len([d for d in data if d > 0]),
             'total_detections': sum(data)

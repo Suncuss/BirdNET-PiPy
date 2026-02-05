@@ -1,5 +1,9 @@
 <template>
-  <canvas ref="spectrogramCanvas" :width="width" :height="height"></canvas>
+  <canvas
+    ref="spectrogramCanvas"
+    :width="width"
+    :height="height"
+  />
 </template>
 
 <script>

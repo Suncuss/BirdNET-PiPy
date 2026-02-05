@@ -28,8 +28,8 @@
       </div>
       <button
         v-if="dismissible"
-        @click="dismiss"
         :class="['text-sm underline', variantClasses.button]"
+        @click="dismiss"
       >
         Dismiss
       </button>

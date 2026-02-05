@@ -9,17 +9,16 @@ Provides three recording methods:
 All output mono WAV files at target sample rate (48kHz).
 """
 
-import subprocess
+import logging
 import os
-import time
+import subprocess
 import threading
+import time
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Optional
-import logging
 
+from config.constants import VALID_RECORDING_MODES, RecordingMode
 from core.utils import sanitize_url
-from config.constants import RecordingMode, VALID_RECORDING_MODES
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +101,7 @@ class BaseRecorder(ABC):
             self._last_error_logged = current_time
             logger.error(message)
 
-    def _record_chunk(self) -> Optional[str]:
+    def _record_chunk(self) -> str | None:
         """
         Record a single audio chunk with timestamp filename.
         Uses atomic rename to ensure file only appears when complete.

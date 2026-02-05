@@ -6,7 +6,7 @@ a common abstraction layer.
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Tuple, Optional
+
 import numpy as np
 
 
@@ -68,8 +68,8 @@ class BirdDetectionModel(ABC):
         audio_chunk: np.ndarray,
         sensitivity: float = 1.0,
         cutoff: float = 0.0,
-        chunk_index: Optional[int] = None
-    ) -> List[Tuple[str, float]]:
+        chunk_index: int | None = None
+    ) -> list[tuple[str, float]]:
         """Run inference on normalized audio chunk with filtering.
 
         This method should:
@@ -95,7 +95,7 @@ class BirdDetectionModel(ABC):
         pass
 
     @abstractmethod
-    def get_labels(self) -> List[str]:
+    def get_labels(self) -> list[str]:
         """Return all species labels this model can detect.
 
         Returns:
@@ -104,7 +104,7 @@ class BirdDetectionModel(ABC):
         """
         pass
 
-    def get_ebird_code(self, scientific_name: str) -> Optional[str]:
+    def get_ebird_code(self, scientific_name: str) -> str | None:
         """Look up eBird code for species.
 
         Override this method if the model supports eBird code lookup.
@@ -122,7 +122,7 @@ class BirdDetectionModel(ABC):
         lat: float,
         lon: float,
         week: int
-    ) -> Optional[List[str]]:
+    ) -> list[str] | None:
         """Get species likely at a location during a specific week.
 
         Override this method if the model supports location-based filtering.

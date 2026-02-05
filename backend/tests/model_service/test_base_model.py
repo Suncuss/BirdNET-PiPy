@@ -1,7 +1,7 @@
 """Tests for base model interface and factory pattern."""
 
+
 import pytest
-from abc import ABC
 
 
 class TestBaseModelInterface:
@@ -79,7 +79,7 @@ class TestModelFactory:
 
     def test_get_model_type_from_settings_default(self):
         """Test default model type is birdnet."""
-        from model_service.model_factory import get_model_type_from_settings, ModelType
+        from model_service.model_factory import ModelType, get_model_type_from_settings
 
         # Default should be birdnet
         model_type = get_model_type_from_settings()
@@ -87,7 +87,7 @@ class TestModelFactory:
 
     def test_create_model_returns_birdnet(self):
         """Test factory creates BirdNetModel for BIRDNET type."""
-        from model_service.model_factory import create_model, ModelType
+        from model_service.model_factory import ModelType, create_model
         from model_service.model_loader import BirdNetModel
 
         model = create_model(ModelType.BIRDNET)

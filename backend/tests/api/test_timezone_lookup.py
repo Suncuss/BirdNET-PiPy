@@ -1,7 +1,6 @@
 """Tests for offline timezone lookup using timezonefinder."""
 
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 
 class TestOfflineTimezoneLookup:
@@ -76,7 +75,7 @@ class TestTimezoneFinderSingleton:
 
     def test_singleton_reuses_instance(self):
         """Test that _get_timezone_finder returns same instance."""
-        from core.api import _get_timezone_finder, _timezone_finder
+        from core.api import _get_timezone_finder
 
         # First call creates instance
         tf1 = _get_timezone_finder()

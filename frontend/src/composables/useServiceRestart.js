@@ -68,7 +68,7 @@ export function useServiceRestart() {
             isRestarting.value = false
             resolve(true)
           }, postConnectDelay)
-        } catch (error) {
+        } catch (_error) {
           if (attempts >= maxAttempts) {
             logger.warn('Service restart taking longer than expected')
             restartMessage.value = ''

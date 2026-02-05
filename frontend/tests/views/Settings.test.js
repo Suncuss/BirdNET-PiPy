@@ -38,6 +38,7 @@ vi.mock('@/composables/useSystemUpdate', () => ({
     dismissUpdate: vi.fn(),
     // Exposed from internal useServiceRestart
     restartMessage: { value: '' },
+    restartError: { value: '' },
     isRestarting: { value: false },
     loadVersionInfo: vi.fn().mockResolvedValue({}),
     checkForUpdates: vi.fn().mockResolvedValue({}),

@@ -1,257 +1,418 @@
 <template>
-    <div class="charts-view p-4">
-        <div class="bg-white rounded-lg shadow p-4">
-            <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between mb-4">
-                <h2 class="text-lg font-semibold mb-2">Bird Activity Overview</h2>
-                <div class="flex flex-wrap items-stretch gap-2 justify-center lg:justify-end">
-                    <button 
-                        @click="previousDay"
-                        :class="[
-                            'p-2 rounded-lg transition-all duration-200 flex items-center justify-center',
-                            isUpdating 
-                                ? 'text-gray-300 cursor-not-allowed' 
-                                : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
-                        ]"
-                        :disabled="isUpdating"
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd" />
-                        </svg>
-                    </button>
-                    <AppDatePicker
-                        v-model="selectedDate"
-                        @change="onDateChange"
-                        :max="maxDate"
-                        :disabled="isUpdating"
-                    />
-                    <button 
-                        @click="nextDay"
-                        :class="[
-                            'p-2 rounded-lg transition-all duration-200 flex items-center justify-center',
-                            canGoForward 
-                                ? 'text-gray-600 hover:text-gray-900 hover:bg-gray-100' 
-                                : 'text-gray-300 cursor-not-allowed'
-                        ]"
-                        :disabled="!canGoForward || isUpdating"
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
-                        </svg>
-                    </button>
-                    <AppButton size="row" :disabled="isUpdating" @click="goToToday">
-                        Today
-                    </AppButton>
-                </div>
-            </div>
-
-            <div v-if="!isDataEmpty && !detailedBirdActivityError" class="flex h-[300px] lg:h-[375px]">
-                <div class="w-full lg:w-1/3 lg:pr-2">
-                    <canvas ref="totalObservationsChart" class="h-full"></canvas>
-                </div>
-                <div class="hidden lg:block lg:w-2/3 lg:pl-2 h-full">
-                    <canvas ref="hourlyActivityHeatmap" class="h-full"></canvas>
-                </div>
-            </div>
-            <div v-else-if="detailedBirdActivityError" class="flex items-center justify-center h-[300px] lg:h-[375px]">
-                <p class="text-lg text-gray-500">{{ detailedBirdActivityError }}</p>
-            </div>
-            <div v-else class="flex items-center justify-center h-[300px] lg:h-[375px]">
-                <p class="text-lg text-gray-500">No bird activity recorded for {{ formattedDate }}. Try selecting a different date.</p>
-            </div>
+  <div class="charts-view p-4">
+    <div class="bg-white rounded-lg shadow p-4">
+      <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between mb-4">
+        <h2 class="text-lg font-semibold mb-2">
+          Bird Activity Overview
+        </h2>
+        <div class="flex flex-wrap items-stretch gap-2 justify-center lg:justify-end">
+          <button 
+            :class="[
+              'p-2 rounded-lg transition-all duration-200 flex items-center justify-center',
+              isUpdating 
+                ? 'text-gray-300 cursor-not-allowed' 
+                : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+            ]"
+            :disabled="isUpdating"
+            @click="previousDay"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              class="h-5 w-5"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+            >
+              <path
+                fill-rule="evenodd"
+                d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z"
+                clip-rule="evenodd"
+              />
+            </svg>
+          </button>
+          <AppDatePicker
+            v-model="selectedDate"
+            :max="maxDate"
+            :disabled="isUpdating"
+            @change="onDateChange"
+          />
+          <button 
+            :class="[
+              'p-2 rounded-lg transition-all duration-200 flex items-center justify-center',
+              canGoForward 
+                ? 'text-gray-600 hover:text-gray-900 hover:bg-gray-100' 
+                : 'text-gray-300 cursor-not-allowed'
+            ]"
+            :disabled="!canGoForward || isUpdating"
+            @click="nextDay"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              class="h-5 w-5"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+            >
+              <path
+                fill-rule="evenodd"
+                d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
+                clip-rule="evenodd"
+              />
+            </svg>
+          </button>
+          <AppButton
+            size="row"
+            :disabled="isUpdating"
+            @click="goToToday"
+          >
+            Today
+          </AppButton>
         </div>
+      </div>
 
-        <!-- Detection Trends -->
-        <div class="bg-white rounded-lg shadow p-4 mt-4">
-            <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between mb-4">
-                <h2 class="text-lg font-semibold mb-2">Detection Trends</h2>
-                <div class="flex flex-wrap items-stretch gap-2 justify-center lg:justify-end">
-                    <!-- Time Range Dropdown -->
-                    <select
-                        v-model="trendsTimeRange"
-                        @change="onTrendsTimeRangeChange"
-                        :disabled="isUpdatingTrends"
-                        class="hidden sm:block h-9 px-3 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm"
-                    >
-                        <option value="7">Week</option>
-                        <option value="14">Two Week</option>
-                        <option value="30">Month</option>
-                        <option value="90">3 Month</option>
-                        <option value="180">6 Month</option>
-                        <option value="365">Year</option>
-                    </select>
-
-                    <!-- Date Navigation -->
-                    <button
-                        @click="previousTrendsPeriod"
-                        :class="[
-                            'p-2 rounded-lg transition-all duration-200 flex items-center justify-center',
-                            isUpdatingTrends
-                                ? 'text-gray-300 cursor-not-allowed'
-                                : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
-                        ]"
-                        :disabled="isUpdatingTrends"
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd" />
-                        </svg>
-                    </button>
-
-                    <AppDatePicker
-                        v-model="trendsEndDate"
-                        @change="onTrendsEndDateChange"
-                        :max="trendsMaxDate"
-                        :disabled="isUpdatingTrends"
-                    />
-
-                    <button
-                        @click="nextTrendsPeriod"
-                        :class="[
-                            'p-2 rounded-lg transition-all duration-200 flex items-center justify-center',
-                            canGoForwardTrends
-                                ? 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
-                                : 'text-gray-300 cursor-not-allowed'
-                        ]"
-                        :disabled="!canGoForwardTrends || isUpdatingTrends"
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
-                        </svg>
-                    </button>
-
-                    <AppButton size="row" :disabled="isUpdatingTrends" @click="goToTodayTrends">
-                        Today
-                    </AppButton>
-                </div>
-            </div>
-
-            <!-- Chart or Placeholder -->
-            <div v-if="trendsChartData.data.length > 0 && !trendsChartError" class="h-[300px] lg:h-[375px]">
-                <canvas ref="trendsChart" class="h-full"></canvas>
-            </div>
-            <div v-else-if="trendsChartError" class="flex items-center justify-center h-[300px] lg:h-[375px]">
-                <p class="text-lg text-gray-500">{{ trendsChartError }}</p>
-            </div>
-            <div v-else class="flex items-center justify-center h-[300px] lg:h-[375px]">
-                <p class="text-lg text-gray-500">No detection data available for the selected period.</p>
-            </div>
+      <div
+        v-if="!isDataEmpty && !detailedBirdActivityError"
+        class="flex h-[300px] lg:h-[375px]"
+      >
+        <div class="w-full lg:w-1/3 lg:pr-2">
+          <canvas
+            ref="totalObservationsChart"
+            class="h-full"
+          />
         </div>
-
-        <!-- Species Detection Distribution -->
-        <div class="bg-white rounded-lg shadow p-4 mt-4">
-            <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between mb-4">
-                <h2 class="text-lg font-semibold mb-2">Species Detection Distribution</h2>
-                <div class="flex flex-wrap items-center gap-4 justify-center lg:justify-end">
-                    <!-- Species Dropdown -->
-                    <div class="relative">
-                        <div class="flex items-center space-x-2">
-                            <div class="relative">
-                                <input
-                                    type="text"
-                                    v-model="searchQuery"
-                                    @focus="showDropdown = true"
-                                    @blur="handleBlur"
-                                    @input="filterSpecies"
-                                    placeholder="Search or select species..."
-                                    class="h-9 px-3 pr-8 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm w-56 sm:w-64 lg:w-72"
-                                    :disabled="isLoadingSpecies"
-                                />
-                                <button
-                                    @click="toggleDropdown"
-                                    class="absolute right-0 top-0 h-full px-2 text-gray-400 hover:text-gray-600"
-                                    :disabled="isLoadingSpecies"
-                                >
-                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
-                                    </svg>
-                                </button>
-                                
-                                <!-- Dropdown List -->
-                                <div v-show="showDropdown && !isLoadingSpecies" 
-                                    class="absolute z-10 mt-1 w-full bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-auto">
-                                    <div v-if="filteredSpecies.length === 0" class="px-3 py-2 text-sm text-gray-500">
-                                        No species found
-                                    </div>
-                                    <button
-                                        v-for="species in filteredSpecies"
-                                        :key="species.common_name"
-                                        @mousedown="selectSpecies(species)"
-                                        class="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 focus:bg-gray-100 focus:outline-none"
-                                    >
-                                        <div class="font-medium">{{ species.common_name }}</div>
-                                        <div class="text-xs text-gray-500">{{ species.scientific_name }}</div>
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- View Options and Navigation -->
-                    <div v-if="selectedSpecies" class="flex items-center space-x-2 lg:space-x-4">
-                        <select
-                            :value="speciesView"
-                            @change="onSpeciesViewChange($event.target.value)"
-                            :disabled="isUpdatingSpecies"
-                            aria-label="View period"
-                            class="hidden sm:block h-9 px-3 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm"
-                        >
-                            <option value="day">Day</option>
-                            <option value="week">Week</option>
-                            <option value="month">Month</option>
-                            <option value="6month">6 Month</option>
-                            <option value="year">Year</option>
-                        </select>
-
-                        <!-- Navigation buttons -->
-                        <div class="flex items-center space-x-2">
-                            <button 
-                                @click="previousSpeciesPeriod"
-                                :class="[
-                                    'p-2 rounded-lg transition-all duration-200',
-                                    isUpdatingSpecies 
-                                        ? 'text-gray-300 cursor-not-allowed' 
-                                        : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
-                                ]"
-                                :disabled="isUpdatingSpecies"
-                            >
-                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                                    <path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd" />
-                                </svg>
-                            </button>
-                            <span class="text-sm font-medium text-gray-700 min-w-[120px] text-center">{{ speciesDateDisplay }}</span>
-                            <button 
-                                @click="nextSpeciesPeriod"
-                                :class="[
-                                    'p-2 rounded-lg transition-all duration-200',
-                                    canGoForwardSpecies 
-                                        ? 'text-gray-600 hover:text-gray-900 hover:bg-gray-100' 
-                                        : 'text-gray-300 cursor-not-allowed'
-                                ]"
-                                :disabled="!canGoForwardSpecies || isUpdatingSpecies"
-                            >
-                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                                    <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
-                                </svg>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Chart or Placeholder -->
-            <div v-if="selectedSpecies && !speciesChartError" class="h-[300px] lg:h-[375px]">
-                <canvas ref="speciesChart" class="h-full"></canvas>
-            </div>
-            <div v-else-if="speciesChartError" class="flex items-center justify-center h-[300px] lg:h-[375px]">
-                <p class="text-lg text-gray-500">{{ speciesChartError }}</p>
-            </div>
-            <div v-else class="flex items-center justify-center h-[300px] lg:h-[375px]">
-                <p class="text-lg text-gray-500 text-center">
-                    <span class="sm:hidden">Select a species to view detections.</span>
-                    <span class="hidden sm:inline">Please select a bird species from the dropdown to view its detection distribution.</span>
-                </p>
-            </div>
+        <div class="hidden lg:block lg:w-2/3 lg:pl-2 h-full">
+          <canvas
+            ref="hourlyActivityHeatmap"
+            class="h-full"
+          />
         </div>
+      </div>
+      <div
+        v-else-if="detailedBirdActivityError"
+        class="flex items-center justify-center h-[300px] lg:h-[375px]"
+      >
+        <p class="text-lg text-gray-500">
+          {{ detailedBirdActivityError }}
+        </p>
+      </div>
+      <div
+        v-else
+        class="flex items-center justify-center h-[300px] lg:h-[375px]"
+      >
+        <p class="text-lg text-gray-500">
+          No bird activity recorded for {{ formattedDate }}. Try selecting a different date.
+        </p>
+      </div>
     </div>
+
+    <!-- Detection Trends -->
+    <div class="bg-white rounded-lg shadow p-4 mt-4">
+      <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between mb-4">
+        <h2 class="text-lg font-semibold mb-2">
+          Detection Trends
+        </h2>
+        <div class="flex flex-wrap items-stretch gap-2 justify-center lg:justify-end">
+          <!-- Time Range Dropdown -->
+          <select
+            v-model="trendsTimeRange"
+            :disabled="isUpdatingTrends"
+            class="hidden sm:block h-9 px-3 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm"
+            @change="onTrendsTimeRangeChange"
+          >
+            <option value="7">
+              Week
+            </option>
+            <option value="14">
+              Two Week
+            </option>
+            <option value="30">
+              Month
+            </option>
+            <option value="90">
+              3 Month
+            </option>
+            <option value="180">
+              6 Month
+            </option>
+            <option value="365">
+              Year
+            </option>
+          </select>
+
+          <!-- Date Navigation -->
+          <button
+            :class="[
+              'p-2 rounded-lg transition-all duration-200 flex items-center justify-center',
+              isUpdatingTrends
+                ? 'text-gray-300 cursor-not-allowed'
+                : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+            ]"
+            :disabled="isUpdatingTrends"
+            @click="previousTrendsPeriod"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              class="h-5 w-5"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+            >
+              <path
+                fill-rule="evenodd"
+                d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z"
+                clip-rule="evenodd"
+              />
+            </svg>
+          </button>
+
+          <AppDatePicker
+            v-model="trendsEndDate"
+            :max="trendsMaxDate"
+            :disabled="isUpdatingTrends"
+            @change="onTrendsEndDateChange"
+          />
+
+          <button
+            :class="[
+              'p-2 rounded-lg transition-all duration-200 flex items-center justify-center',
+              canGoForwardTrends
+                ? 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+                : 'text-gray-300 cursor-not-allowed'
+            ]"
+            :disabled="!canGoForwardTrends || isUpdatingTrends"
+            @click="nextTrendsPeriod"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              class="h-5 w-5"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+            >
+              <path
+                fill-rule="evenodd"
+                d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
+                clip-rule="evenodd"
+              />
+            </svg>
+          </button>
+
+          <AppButton
+            size="row"
+            :disabled="isUpdatingTrends"
+            @click="goToTodayTrends"
+          >
+            Today
+          </AppButton>
+        </div>
+      </div>
+
+      <!-- Chart or Placeholder -->
+      <div
+        v-if="trendsChartData.data.length > 0 && !trendsChartError"
+        class="h-[300px] lg:h-[375px]"
+      >
+        <canvas
+          ref="trendsChart"
+          class="h-full"
+        />
+      </div>
+      <div
+        v-else-if="trendsChartError"
+        class="flex items-center justify-center h-[300px] lg:h-[375px]"
+      >
+        <p class="text-lg text-gray-500">
+          {{ trendsChartError }}
+        </p>
+      </div>
+      <div
+        v-else
+        class="flex items-center justify-center h-[300px] lg:h-[375px]"
+      >
+        <p class="text-lg text-gray-500">
+          No detection data available for the selected period.
+        </p>
+      </div>
+    </div>
+
+    <!-- Species Detection Distribution -->
+    <div class="bg-white rounded-lg shadow p-4 mt-4">
+      <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between mb-4">
+        <h2 class="text-lg font-semibold mb-2">
+          Species Detection Distribution
+        </h2>
+        <div class="flex flex-wrap items-center gap-4 justify-center lg:justify-end">
+          <!-- Species Dropdown -->
+          <div class="relative">
+            <div class="flex items-center space-x-2">
+              <div class="relative">
+                <input
+                  v-model="searchQuery"
+                  type="text"
+                  placeholder="Search or select species..."
+                  class="h-9 px-3 pr-8 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm w-56 sm:w-64 lg:w-72"
+                  :disabled="isLoadingSpecies"
+                  @focus="showDropdown = true"
+                  @blur="handleBlur"
+                  @input="filterSpecies"
+                >
+                <button
+                  class="absolute right-0 top-0 h-full px-2 text-gray-400 hover:text-gray-600"
+                  :disabled="isLoadingSpecies"
+                  @click="toggleDropdown"
+                >
+                  <svg
+                    class="h-4 w-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M19 9l-7 7-7-7"
+                    />
+                  </svg>
+                </button>
+                                
+                <!-- Dropdown List -->
+                <div
+                  v-show="showDropdown && !isLoadingSpecies" 
+                  class="absolute z-10 mt-1 w-full bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-auto"
+                >
+                  <div
+                    v-if="filteredSpecies.length === 0"
+                    class="px-3 py-2 text-sm text-gray-500"
+                  >
+                    No species found
+                  </div>
+                  <button
+                    v-for="species in filteredSpecies"
+                    :key="species.common_name"
+                    class="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 focus:bg-gray-100 focus:outline-none"
+                    @mousedown="selectSpecies(species)"
+                  >
+                    <div class="font-medium">
+                      {{ species.common_name }}
+                    </div>
+                    <div class="text-xs text-gray-500">
+                      {{ species.scientific_name }}
+                    </div>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- View Options and Navigation -->
+          <div
+            v-if="selectedSpecies"
+            class="flex items-center space-x-2 lg:space-x-4"
+          >
+            <select
+              :value="speciesView"
+              :disabled="isUpdatingSpecies"
+              aria-label="View period"
+              class="hidden sm:block h-9 px-3 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm"
+              @change="onSpeciesViewChange($event.target.value)"
+            >
+              <option value="day">
+                Day
+              </option>
+              <option value="week">
+                Week
+              </option>
+              <option value="month">
+                Month
+              </option>
+              <option value="6month">
+                6 Month
+              </option>
+              <option value="year">
+                Year
+              </option>
+            </select>
+
+            <!-- Navigation buttons -->
+            <div class="flex items-center space-x-2">
+              <button 
+                :class="[
+                  'p-2 rounded-lg transition-all duration-200',
+                  isUpdatingSpecies 
+                    ? 'text-gray-300 cursor-not-allowed' 
+                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+                ]"
+                :disabled="isUpdatingSpecies"
+                @click="previousSpeciesPeriod"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  class="h-5 w-5"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                >
+                  <path
+                    fill-rule="evenodd"
+                    d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z"
+                    clip-rule="evenodd"
+                  />
+                </svg>
+              </button>
+              <span class="text-sm font-medium text-gray-700 min-w-[120px] text-center">{{ speciesDateDisplay }}</span>
+              <button 
+                :class="[
+                  'p-2 rounded-lg transition-all duration-200',
+                  canGoForwardSpecies 
+                    ? 'text-gray-600 hover:text-gray-900 hover:bg-gray-100' 
+                    : 'text-gray-300 cursor-not-allowed'
+                ]"
+                :disabled="!canGoForwardSpecies || isUpdatingSpecies"
+                @click="nextSpeciesPeriod"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  class="h-5 w-5"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                >
+                  <path
+                    fill-rule="evenodd"
+                    d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
+                    clip-rule="evenodd"
+                  />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Chart or Placeholder -->
+      <div
+        v-if="selectedSpecies && !speciesChartError"
+        class="h-[300px] lg:h-[375px]"
+      >
+        <canvas
+          ref="speciesChart"
+          class="h-full"
+        />
+      </div>
+      <div
+        v-else-if="speciesChartError"
+        class="flex items-center justify-center h-[300px] lg:h-[375px]"
+      >
+        <p class="text-lg text-gray-500">
+          {{ speciesChartError }}
+        </p>
+      </div>
+      <div
+        v-else
+        class="flex items-center justify-center h-[300px] lg:h-[375px]"
+      >
+        <p class="text-lg text-gray-500 text-center">
+          <span class="sm:hidden">Select a species to view detections.</span>
+          <span class="hidden sm:inline">Please select a bird species from the dropdown to view its detection distribution.</span>
+        </p>
+      </div>
+    </div>
+  </div>
 </template>
 
 <script>
@@ -296,14 +457,12 @@ export default {
         const {
             selectedView: speciesView,
             anchorDate: speciesAnchorDate,
-            anchorDateString: speciesAnchorDateString,
             isUpdating: isUpdatingSpecies,
             dateDisplay: speciesDateDisplay,
             canGoForward: canGoForwardSpecies,
             navigatePrevious: navPreviousSpecies,
             navigateNext: navNextSpecies,
-            changeView: changeSpeciesView,
-            setAnchorDate: setSpeciesAnchorDate
+            changeView: changeSpeciesView
         } = useDateNavigation({ initialView: 'month' })
 
         // Main date selection (for bird activity overview)

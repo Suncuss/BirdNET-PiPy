@@ -2,7 +2,6 @@
 Tests for _normalize_detection helper method.
 Ensures consistent detection normalization across all DB methods.
 """
-import pytest
 import json
 
 

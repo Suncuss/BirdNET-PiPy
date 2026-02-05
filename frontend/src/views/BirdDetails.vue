@@ -1,24 +1,39 @@
 <template>
-  <div v-if="birdDetails" class="bird-details p-4">
-
-    <h1 class="text-2xl font-semibold mb-4 text-gray-800">{{ birdDetails.common_name }}</h1>
+  <div
+    v-if="birdDetails"
+    class="bird-details p-4"
+  >
+    <h1 class="text-2xl font-semibold mb-4 text-gray-800">
+      {{ birdDetails.common_name }}
+    </h1>
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
       <!-- Bird Image, Quick Stats, and Attribution -->
       <div class="bg-white rounded-lg shadow overflow-hidden lg:col-span-1">
         <div class="relative overflow-hidden w-full aspect-square max-h-[300px] bg-gray-200">
-          <a :href="birdImageData.pageUrl" target="_blank" rel="noopener noreferrer"
+          <a
+            :href="birdImageData.pageUrl"
+            target="_blank"
+            rel="noopener noreferrer"
             class="block w-full h-full cursor-pointer"
-            :title="`View ${birdDetails.common_name} on Wikimedia Commons`">
-            <img :src="birdImageData.imageUrl" :alt="birdDetails.common_name"
+            :title="`View ${birdDetails.common_name} on Wikimedia Commons`"
+          >
+            <img
+              :src="birdImageData.imageUrl"
+              :alt="birdDetails.common_name"
               class="absolute inset-0 w-full h-full object-cover transition-[opacity,transform] duration-200 hover:scale-110"
               :class="{ 'opacity-0': !imageReady, 'opacity-100': imageReady }"
-              :style="{ objectPosition: imageFocalPoint }">
+              :style="{ objectPosition: imageFocalPoint }"
+            >
           </a>
         </div>
         <div class="p-4 bg-gray-100 text-sm text-gray-600">
           <p>
-            Photo by <a :href="birdImageData.authorUrl" target="_blank" rel="noopener noreferrer" class="text-blue-600 underline">{{
+            Photo by <a
+              :href="birdImageData.authorUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="text-blue-600 underline"
+            >{{
               birdImageData.authorName }}</a>, licensed under {{ birdImageData.licenseType }}
           </p>
         </div>
@@ -33,12 +48,15 @@
 
       <!-- Detection Distribution -->
       <div class="bg-white rounded-lg shadow p-6 lg:col-span-2">
-        <h2 class="text-lg font-semibold mb-2">Distribution</h2>
+        <h2 class="text-lg font-semibold mb-2">
+          Distribution
+        </h2>
         
         <!-- Tab Navigation -->
         <div class="flex flex-wrap gap-2 mb-4">
-          <button v-for="view in viewOptions" :key="view.value"
-            @click="changeView(view.value)"
+          <button
+            v-for="view in viewOptions"
+            :key="view.value"
             :disabled="isUpdating"
             :class="[
               'h-9 px-4 rounded-md font-medium transition-colors duration-200 inline-flex items-center justify-center',
@@ -48,23 +66,37 @@
                 : isUpdating
                   ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
                   : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-            ]">
+            ]"
+            @click="changeView(view.value)"
+          >
             {{ view.label }}
           </button>
         </div>
         
         <!-- Date Navigation -->
         <div class="flex items-center justify-between mb-4">
-          <button @click="navigatePrevious"
+          <button
             :disabled="isUpdating"
             :class="[
               'h-9 flex items-center px-2 sm:px-3 text-xs sm:text-sm font-medium rounded-md border transition-colors',
               isUpdating
                 ? 'text-gray-400 bg-gray-100 border-gray-200 cursor-not-allowed'
                 : 'text-gray-700 bg-white border-gray-300 hover:bg-gray-50'
-            ]">
-            <svg class="w-3 h-3 sm:w-4 sm:h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
+            ]"
+            @click="navigatePrevious"
+          >
+            <svg
+              class="w-3 h-3 sm:w-4 sm:h-4 mr-1"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M15 19l-7-7 7-7"
+              />
             </svg>
             <span class="hidden sm:inline">Previous</span>
             <span class="sm:hidden">Prev</span>
@@ -72,25 +104,40 @@
           
           <span class="text-sm sm:text-lg font-medium text-gray-800 text-center px-2">{{ currentDateDisplay }}</span>
           
-          <button @click="navigateNext"
+          <button
             :disabled="isNextDisabled || isUpdating"
             :class="[
               'h-9 flex items-center px-2 sm:px-3 text-xs sm:text-sm font-medium rounded-md border transition-colors',
               (isNextDisabled || isUpdating)
                 ? 'text-gray-400 bg-gray-100 border-gray-200 cursor-not-allowed' 
                 : 'text-gray-700 bg-white border-gray-300 hover:bg-gray-50'
-            ]">
+            ]"
+            @click="navigateNext"
+          >
             <span class="hidden sm:inline">Next</span>
             <span class="sm:hidden">Next</span>
-            <svg class="w-3 h-3 sm:w-4 sm:h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+            <svg
+              class="w-3 h-3 sm:w-4 sm:h-4 ml-1"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M9 5l7 7-7 7"
+              />
             </svg>
           </button>
         </div>
         
         <!-- Canvas Container with fixed aspect ratio for Safari -->
         <div class="relative w-full h-[300px]">
-          <canvas ref="detectionChart" class="absolute inset-0 w-full h-full"></canvas>
+          <canvas
+            ref="detectionChart"
+            class="absolute inset-0 w-full h-full"
+          />
         </div>
       </div>
 
@@ -98,51 +145,82 @@
       <div class="bg-white rounded-lg shadow p-6 lg:col-span-3">
         <!-- Header with Selector -->
         <div class="flex items-center justify-between mb-4">
-          <h2 class="text-lg font-semibold">Recordings</h2>
-          <select v-model="recordingSort" @change="onSortChange"
-            class="h-9 px-3 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-green-500">
-            <option value="recent">Most Recent</option>
-            <option value="best">Best Recordings</option>
+          <h2 class="text-lg font-semibold">
+            Recordings
+          </h2>
+          <select
+            v-model="recordingSort"
+            class="h-9 px-3 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-green-500"
+            @change="onSortChange"
+          >
+            <option value="recent">
+              Most Recent
+            </option>
+            <option value="best">
+              Best Recordings
+            </option>
           </select>
         </div>
 
         <!-- Recordings Grid (show 4 per page) -->
-        <div v-if="currentPageRecordings.length > 0" class="grid grid-cols-1 md:grid-cols-2 gap-6">
-	          <div v-for="(recording, index) in currentPageRecordings" :key="recording.id"
-	            class="bg-gray-50 p-4 rounded-lg shadow-sm">
-	            <div class="space-y-2">
-	              <img :src="getSpectrogramUrl(recording.spectrogram_filename)"
-	                :alt="`Spectrogram ${index + 1}`"
-	                class="w-full rounded-lg bg-gray-900 cursor-pointer hover:opacity-90 transition-opacity"
-	                @click="openSpectrogram(recording.spectrogram_filename)">
-	              <audio controls class="w-full rounded-lg shadow-sm">
-	                <source :src="getAudioUrl(recording.audio_filename)" type="audio/mpeg">
-	                Your browser does not support the audio element.
-	              </audio>
-	            </div>
-	          </div>
+        <div
+          v-if="currentPageRecordings.length > 0"
+          class="grid grid-cols-1 md:grid-cols-2 gap-6"
+        >
+          <div
+            v-for="(recording, index) in currentPageRecordings"
+            :key="recording.id"
+            class="bg-gray-50 p-4 rounded-lg shadow-sm"
+          >
+            <div class="space-y-2">
+              <img
+                :src="getSpectrogramUrl(recording.spectrogram_filename)"
+                :alt="`Spectrogram ${index + 1}`"
+                class="w-full rounded-lg bg-gray-900 cursor-pointer hover:opacity-90 transition-opacity"
+                @click="openSpectrogram(recording.spectrogram_filename)"
+              >
+              <audio
+                controls
+                class="w-full rounded-lg shadow-sm"
+              >
+                <source
+                  :src="getAudioUrl(recording.audio_filename)"
+                  type="audio/mpeg"
+                >
+                Your browser does not support the audio element.
+              </audio>
+            </div>
+          </div>
         </div>
 
         <!-- Empty state -->
-        <div v-else class="text-center py-8 text-gray-500">
+        <div
+          v-else
+          class="text-center py-8 text-gray-500"
+        >
           No recordings available for this species.
         </div>
 
         <!-- Pagination: 1 2 3 4 -->
-        <div v-if="totalPages > 1" class="flex justify-center items-center gap-2 mt-6">
-          <button v-for="page in totalPages" :key="page"
-            @click="currentPage = page"
+        <div
+          v-if="totalPages > 1"
+          class="flex justify-center items-center gap-2 mt-6"
+        >
+          <button
+            v-for="page in totalPages"
+            :key="page"
             :class="[
               'w-10 py-1 rounded-md font-medium transition-colors text-center',
               page === currentPage
                 ? 'bg-green-600 text-white'
                 : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-            ]">
+            ]"
+            @click="currentPage = page"
+          >
             {{ page }}
           </button>
         </div>
       </div>
-
     </div>
 
     <!-- Spectrogram Modal -->
@@ -157,7 +235,7 @@
 
 
 <script>
-import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
+import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import Chart from 'chart.js/auto'
 import SpectrogramModal from '@/components/SpectrogramModal.vue'
@@ -212,7 +290,6 @@ export default {
     const {
       selectedView,
       anchorDate: currentAnchorDate,
-      anchorDateString,
       isUpdating,
       dateDisplay: currentDateDisplay,
       canGoForward,
@@ -363,8 +440,6 @@ export default {
         // Destroy existing chart using composable helper
         destroyChart(detectionChart)
 
-        const ctx = detectionChart.value.getContext('2d')
-
         // Create new chart
         detectionChartInstance.value = new Chart(detectionChart.value, {
           type: 'bar',
@@ -382,7 +457,7 @@ export default {
             responsive: true,
             maintainAspectRatio: false,
             // Explicitly handle resize for Safari
-            onResize: (chart, size) => {
+            onResize: (chart, _size) => {
               // Force redraw on resize
               chart.update('none')
             },

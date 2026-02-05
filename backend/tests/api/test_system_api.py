@@ -1,5 +1,5 @@
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 
 class TestSystemAPI:
     """Test system update API endpoints"""
@@ -375,7 +375,6 @@ class TestUpdateNotes:
 
     def test_fetch_update_notes_success(self):
         """Test fetching UPDATE_NOTES.json with message"""
-        import requests
 
         with patch('core.api.requests.get') as mock_get:
             mock_response = MagicMock()

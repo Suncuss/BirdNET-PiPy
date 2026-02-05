@@ -3,6 +3,7 @@
 import json
 import os
 import tempfile
+
 import pytest
 
 
@@ -49,7 +50,7 @@ class TestBirdNetModelEbirdCodes:
 
     def test_model_loader_alias_exists(self):
         """Test that ModelLoader alias points to BirdNetModel for backwards compatibility."""
-        from model_service.model_loader import ModelLoader, BirdNetModel
+        from model_service.model_loader import BirdNetModel, ModelLoader
         assert ModelLoader is BirdNetModel
 
     def test_get_ebird_code_found(self, mock_birdnet_model):

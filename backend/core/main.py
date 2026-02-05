@@ -1,27 +1,48 @@
-from config.settings import (
-    RECORDING_DIR, RECORDING_LENGTH, EXTRACTED_AUDIO_DIR, SPECTROGRAM_DIR,
-    BIRDNET_SERVER_ENDPOINT, ANALYSIS_CHUNK_LENGTH, API_PORT, API_HOST, SAMPLE_RATE,
-    RECORDING_MODE, PULSEAUDIO_SOURCE, STREAM_URL, RTSP_URL, LAT, LON, LOCATION_CONFIGURED,
-    LOCATION_READY, BIRDWEATHER_ID
-)
-from config.constants import RecordingMode
-from core.db import DatabaseManager
-from core.utils import generate_spectrogram, trim_audio, select_audio_chunks, convert_wav_to_mp3, sanitize_url
-from core.audio_manager import BaseRecorder, create_recorder
-from core.logging_config import setup_logging, get_logger
-from core.storage_manager import storage_monitor_loop
-from core.weather_service import get_weather_service
-from core.birdweather_service import get_birdweather_service
-from version import __version__, DISPLAY_NAME
-
+import glob
 import json
 import os
-import time
-import glob
-import threading
-import requests
-from typing import List, Dict, Any
 import signal
+import threading
+import time
+from typing import Any
+
+import requests
+
+from config.constants import RecordingMode
+from config.settings import (
+    ANALYSIS_CHUNK_LENGTH,
+    API_HOST,
+    API_PORT,
+    BIRDNET_SERVER_ENDPOINT,
+    BIRDWEATHER_ID,
+    EXTRACTED_AUDIO_DIR,
+    LAT,
+    LOCATION_CONFIGURED,
+    LOCATION_READY,
+    LON,
+    PULSEAUDIO_SOURCE,
+    RECORDING_DIR,
+    RECORDING_LENGTH,
+    RECORDING_MODE,
+    RTSP_URL,
+    SAMPLE_RATE,
+    SPECTROGRAM_DIR,
+    STREAM_URL,
+)
+from core.audio_manager import BaseRecorder, create_recorder
+from core.birdweather_service import get_birdweather_service
+from core.db import DatabaseManager
+from core.logging_config import get_logger, setup_logging
+from core.storage_manager import storage_monitor_loop
+from core.utils import (
+    convert_wav_to_mp3,
+    generate_spectrogram,
+    sanitize_url,
+    select_audio_chunks,
+    trim_audio,
+)
+from core.weather_service import get_weather_service
+from version import DISPLAY_NAME, __version__
 
 # Configuration constants
 MIN_RECORDING_DURATION = 5.0  # Minimum acceptable recording duration in seconds
@@ -121,7 +142,7 @@ def continuous_audio_recording(thread_logger):
         thread_logger.info("Stopping audio recording")
         recorder.stop()
 
-def extract_detection_audio(detection: Dict[str, Any], input_file_path: str) -> str:
+def extract_detection_audio(detection: dict[str, Any], input_file_path: str) -> str:
     """Extract audio segment for detection and convert to MP3.
 
     Args:
@@ -147,7 +168,7 @@ def extract_detection_audio(detection: Dict[str, Any], input_file_path: str) -> 
     return mp3_path
 
 
-def create_detection_spectrogram(detection: Dict[str, Any], input_file_path: str) -> str:
+def create_detection_spectrogram(detection: dict[str, Any], input_file_path: str) -> str:
     """Generate spectrogram image for detection.
 
     Args:
@@ -169,7 +190,7 @@ def create_detection_spectrogram(detection: Dict[str, Any], input_file_path: str
     return spectrogram_path
 
 
-def save_detection_to_db(detection: Dict[str, Any]) -> None:
+def save_detection_to_db(detection: dict[str, Any]) -> None:
     """Insert detection record into database.
 
     Args:
@@ -190,7 +211,7 @@ def save_detection_to_db(detection: Dict[str, Any]) -> None:
     })
 
 
-def broadcast_detection(detection: Dict[str, Any], thread_logger) -> None:
+def broadcast_detection(detection: dict[str, Any], thread_logger) -> None:
     """Send detection to WebSocket clients via API.
 
     Args:
@@ -221,7 +242,7 @@ def broadcast_detection(detection: Dict[str, Any], thread_logger) -> None:
         })
 
 
-def handle_detection(detection: Dict[str, Any], input_file_path: str, thread_logger) -> None:
+def handle_detection(detection: dict[str, Any], input_file_path: str, thread_logger) -> None:
     """Process a single bird detection: create audio, spectrogram, save to DB, broadcast.
 
     Args:
@@ -371,7 +392,7 @@ def process_audio_files():
             }, exc_info=True)
             time.sleep(1)
 
-def process_audio_file(audio_file_path: str) -> List[Dict[str, Any]]:
+def process_audio_file(audio_file_path: str) -> list[dict[str, Any]]:
     """Send audio file to BirdNet service for analysis.
 
     Includes retry logic with exponential backoff for connection errors,

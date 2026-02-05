@@ -4,11 +4,12 @@ Integration test fixtures for main pipeline testing.
 Provides fixtures for testing main.py functions with proper isolation
 from global state and external services.
 """
-import pytest
-import tempfile
 import os
-from unittest.mock import Mock, patch, MagicMock
+import tempfile
 from queue import Queue
+from unittest.mock import Mock, patch
+
+import pytest
 
 
 @pytest.fixture

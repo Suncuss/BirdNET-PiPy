@@ -1,5 +1,5 @@
-import os
 import json
+import os
 
 from config.constants import DEFAULT_RECORDING_MODE
 
@@ -71,7 +71,7 @@ def load_user_settings():
 
     if os.path.exists(json_path):
         try:
-            with open(json_path, 'r') as f:
+            with open(json_path) as f:
                 user_data = json.load(f)
                 # Deep merge user settings with defaults
                 for key in defaults:
@@ -83,7 +83,7 @@ def load_user_settings():
                 return defaults
         except Exception as e:
             print(f"Error loading user settings: {e}, using defaults")
-    
+
     return defaults
 
 # Load settings on module import

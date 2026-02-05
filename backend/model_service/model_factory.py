@@ -34,8 +34,9 @@ def create_model(model_type: ModelType = ModelType.BIRDNET) -> "BirdDetectionMod
         ValueError: If the model type is not supported
     """
     if model_type == ModelType.BIRDNET:
-        from .model_loader import BirdNetModel
         from config import settings
+
+        from .model_loader import BirdNetModel
         return BirdNetModel(
             model_path=settings.MODEL_PATH,
             meta_model_path=settings.META_MODEL_PATH,

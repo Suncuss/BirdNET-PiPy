@@ -4,11 +4,11 @@ Audio test fixtures and configuration.
 Provides fixtures for testing HttpStreamRecorder, RtspRecorder, and PulseAudioRecorder
 without actual subprocess execution or audio hardware.
 """
-import pytest
 import tempfile
-import os
-from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime
+from unittest.mock import Mock, patch
+
+import pytest
 
 
 @pytest.fixture

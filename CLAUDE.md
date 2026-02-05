@@ -8,9 +8,7 @@ BirdNET-PiPy is a Python-based bird detection system based on the BirdNET model.
 
 ## Best Practices
 
-- Prefer smaller separate components over larger ones
-- Prefere simple and robust design
-- Prefer modular code over monolithic code
+Prefer simple, modular code with small focused components.
 
 ## Key Technologies
 
@@ -24,145 +22,84 @@ BirdNET-PiPy is a Python-based bird detection system based on the BirdNET model.
 - **Model Inference Server** (`backend/model_service/inference_server.py`) - Port 5001: TensorFlow Lite model inference
 - **API Server** (`backend/core/api.py`) - Port 5002: REST API and static file serving
 - **Main Processing** (`backend/core/main.py`) - Continuous audio recording and analysis pipeline
-- **Icecast Streaming** (`backend/deployment/audio/`) - Port 8888: Live audio streaming to browsers
+- **Icecast Streaming** (`deployment/audio/`) - Port 8888: Live audio streaming to browsers
 
 **Frontend:** Vue.js 3 SPA with Composition API, using composables pattern for reusable logic
-
-**Audio Architecture:**
-```
-USB Microphone → PulseAudio (Host)
-                      ↓
-    ┌─────────────────┴─────────────────┐
-    ↓                                   ↓
-Main Container                    Icecast Container
-(FFmpeg → WAV → BirdNET)          (FFmpeg → MP3 → Browser)
-```
 
 **Data Flow:** Audio recording → BirdNET analysis → Database storage → API → Frontend visualization
 
 ## Development Commands
 
-**Build & Deploy (Recommended):**
+**Build & Deploy:**
 ```bash
-# Full build and deploy with one command
 ./build.sh                  # Builds frontend + backend, then deploys
-
-# Build options
 ./build.sh --test           # Run tests before building
-./build.sh --help           # Show all available options
-
-# Note: Frontend is built inside Docker (no Node.js needed on host)
+./build.sh --help           # Show all options
 ```
+
 **Testing:**
 ```bash
-# Run all backend tests in Docker (recommended)
-cd backend/
-./docker-test.sh            # Runs full test suite in Docker container
+cd backend && ./docker-test.sh              # Backend tests in Docker
+cd frontend && npm run test                 # Frontend tests
+```
 
-# Run with coverage report
-./docker-test.sh coverage   # Generates coverage report at backend/htmlcov/index.html
-
-# Run specific test files
-./docker-test.sh tests/api/test_simple_api.py
-
-# Run frontend tests
-cd frontend/
-npm run test                # Run all frontend tests
-npm run test:watch          # Run tests in watch mode
-npm run test:coverage       # Run tests with coverage report
+**Linting:**
+```bash
+./scripts/lint.sh             # Lint both frontend and backend
+./scripts/lint.sh --fix       # Auto-fix issues
 ```
 
 ## File Organization
 
 **Root Level:**
-- `build.sh` - Full build and deploy script (frontend + backend + deploy)
-- `install.sh` - System installation script for Raspberry Pi
-- `uninstall.sh` - System uninstallation script
+- `build.sh` - Build and deploy script
+- `install.sh` / `uninstall.sh` - System installation scripts
 - `docker-compose.yml` - Multi-container Docker configuration
+
+**Scripts (`scripts/`):**
+- `lint.sh` - Run linters (ESLint + Ruff) in Docker
+- `install-tests/` - BATS tests for install/uninstall scripts
 
 **Frontend (`frontend/`):**
 - `src/views/` - Page components (Dashboard, Settings, Charts, BirdDetails, LiveFeed, etc.)
-- `src/components/` - Reusable UI components (LoginModal, LocationSetupModal, UpdateManager, etc.)
-- `src/composables/` - Vue composition functions (useAuth, useFetchBirdData, useBirdCharts, etc.)
+- `src/components/` - Reusable UI components
+- `src/composables/` - Vue composition functions (useAuth, useFetchBirdData, useMigration, useServiceRestart, etc.)
 - `src/services/` - API client configuration
 - `src/router/` - Vue Router configuration
-- `tests/` - Frontend test suite (see `tests/README.md`)
 
 **Backend (`backend/`):**
-- `core/` - Main application logic
-  - `api.py` - REST API endpoints (Flask)
-  - `auth.py` - Authentication system
-  - `db.py` - Database manager (SQLite)
-  - `main.py` - Audio processing pipeline
-  - `audio_manager.py` - Audio recording (PulseAudio, HTTP stream, RTSP)
-  - `storage_manager.py` - Disk cleanup and file management
-  - `utils.py` - Utility functions
-- `model_service/` - AI model service and TensorFlow Lite models (supports multiple models via factory pattern)
-- `config/settings.py` - Environment-aware configuration
-- `scripts/` - Database and development scripts
-- `tests/` - Backend test suite (see `tests/README.md`)
+- `core/` - Main application logic (api.py, db.py, main.py, audio_manager.py, auth.py, storage_manager.py, migration.py, birdweather_service.py, weather_service.py, timezone_service.py)
+- `model_service/` - TensorFlow Lite model inference with factory pattern
+- `config/` - Environment-aware configuration (settings.py, constants.py)
+- `tests/` - Test suite (api/, audio/, config/, database/, integration/, model_service/)
 
 **Deployment (`deployment/`):**
-- `birdnet-service.sh` - Runtime service management script
-- `audio/` - Audio streaming infrastructure (PulseAudio + Icecast)
-  - `Dockerfile` - Icecast container image
-  - `scripts/start-icecast.sh` - Icecast container entrypoint
-  - `icecast.xml` - Icecast streaming server config
-  - `pulseaudio/` - PulseAudio system configuration
+- `birdnet-service.sh` - Runtime service management
+- `audio/` - Icecast streaming infrastructure
 
 **Documentation (`docs/`):**
-- `AUTHENTICATION.md`, `OVERLAP_IMPLEMENTATION.md`, `STORAGE_CLEANUP.md`, etc.
-
-**Runtime Data (`data/`):**
-- SQLite database and audio files (created at runtime, gitignored)
-
-
-## Git Workflow
-
-**IMPORTANT: Use feature branch workflow for organized development:**
-
-**Daily development workflow:**
-```bash
-# Work on dev branch (default)
-git checkout dev
-
-# Make changes, commit frequently
-git add .
-git commit -m "feat: description of changes"
-git push origin dev
-
-# Repeat for multiple commits...
-```
+- `ARCHITECTURE.md`, `INSTALLATION.md`, `PRIVACY.md`, etc.
 
 ## Development Notes
 
-- Services communicate via HTTP APIs via nginx reverse proxy
+- Services communicate via HTTP APIs through nginx reverse proxy
 - Frontend is built inside Docker and served by nginx on port 80
-- Nginx proxies /api/ requests to the API container and /socket.io/ for WebSockets
+- Nginx proxies `/api/` requests to the API container and `/socket.io/` for WebSockets
 - Database and audio files stored in `./data/` directory
 - Real-time updates use WebSocket connections via Flask-SocketIO
 
 ## Testing Guidelines
 
-**Important Testing Patterns:**
-- All backend tests run in isolated Docker containers for consistency
-- **API tests use REAL temporary SQLite databases** for integration testing (not mocks)
-- Each test gets a fresh temporary database, ensuring test independence
-- External services (Wikimedia API, socketio) remain mocked
-- File system operations use temporary directories
+**Testing Patterns:**
+- All backend tests run in isolated Docker containers
+- API tests use real temporary SQLite databases (not mocks)
+- External services (Wikimedia API, socketio) are mocked
 - Subprocess calls (ffmpeg, curl, sox) are mocked in audio tests
-- Frontend uses Vitest with happy-dom for Vue component testing
+- Frontend uses Vitest with happy-dom
 
-**Before Committing Changes:**
+**Before Committing:**
 1. Run backend tests: `cd backend && ./docker-test.sh`
 2. Run frontend tests: `cd frontend && npm run test`
-3. If modifying API endpoints, ensure response formats remain compatible
-4. Add new tests for any new functionality
-5. Check that mocked dependencies match actual interfaces
-
-
-
-
 
 
 

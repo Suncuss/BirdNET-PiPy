@@ -1,20 +1,35 @@
 <template>
   <div class="flex flex-col items-center w-full max-w-3xl mx-auto">
     <div class="bg-white rounded-lg shadow-md p-4 w-full max-w-4xl">
-      <div v-if="isSafari" class="w-full h-32 mb-4 bg-gray-800 rounded-lg flex items-center justify-center">
+      <div
+        v-if="isSafari"
+        class="w-full h-32 mb-4 bg-gray-800 rounded-lg flex items-center justify-center"
+      >
         <div class="text-center text-white">
-          <div class="text-xl mb-2">🍎</div>
-          <div class="text-sm">Live spectrogram not available in Safari</div>
-          <div class="text-xs text-gray-400 mt-1">Audio playback works normally</div>
+          <div class="text-xl mb-2">
+            🍎
+          </div>
+          <div class="text-sm">
+            Live spectrogram not available in Safari
+          </div>
+          <div class="text-xs text-gray-400 mt-1">
+            Audio playback works normally
+          </div>
         </div>
       </div>
-      <canvas v-else ref="spectrogramCanvas" class="w-full h-48 mb-4 rounded-lg"></canvas>
+      <canvas
+        v-else
+        ref="spectrogramCanvas"
+        class="w-full h-48 mb-4 rounded-lg"
+      />
       <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-4">
-        <button @click="toggleAudio"
+        <button
           class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg shadow focus:outline-none focus:ring-2 focus:ring-blue-300 flex items-center justify-center min-w-[120px] flex-shrink-0 disabled:bg-gray-400 disabled:cursor-not-allowed"
-          :disabled="isLoading || !streamUrl || hasError">
+          :disabled="isLoading || !streamUrl || hasError"
+          @click="toggleAudio"
+        >
           <template v-if="isLoading">
-            <div class="animate-spin w-4 h-4 rounded-full border-2 border-gray-100 border-t-blue-500 mr-2"></div>
+            <div class="animate-spin w-4 h-4 rounded-full border-2 border-gray-100 border-t-blue-500 mr-2" />
             Loading...
           </template>
           <template v-else>
@@ -23,19 +38,34 @@
         </button>
 
         <div class="text-right">
-          <span class="text-sm break-words" :class="hasError ? 'text-amber-600 animate-pulse-fast' : 'text-gray-500'">Status: {{ statusMessage }}</span>
+          <span
+            class="text-sm break-words"
+            :class="hasError ? 'text-amber-600 animate-pulse-fast' : 'text-gray-500'"
+          >Status: {{ statusMessage }}</span>
           <div class="hidden sm:block text-xs text-gray-400 mt-1">
             <template v-if="streamDescription">
               {{ streamDescription }}
             </template>
-            <template v-else-if="streamType === 'none'">⚠️ No stream available</template>
-            <template v-else>❓ Unknown</template>
+            <template v-else-if="streamType === 'none'">
+              ⚠️ No stream available
+            </template>
+            <template v-else>
+              ❓ Unknown
+            </template>
           </div>
         </div>
       </div>
-      <audio ref="audioElement" :src="streamUrl" preload="none" crossorigin="anonymous"
-        @error="handleAudioError" @stalled="handleAudioBuffering" @waiting="handleAudioBuffering"
-        @playing="handleAudioPlaying" @ended="handleAudioEnded"></audio>
+      <audio
+        ref="audioElement"
+        :src="streamUrl"
+        preload="none"
+        crossorigin="anonymous"
+        @error="handleAudioError"
+        @stalled="handleAudioBuffering"
+        @waiting="handleAudioBuffering"
+        @playing="handleAudioPlaying"
+        @ended="handleAudioEnded"
+      />
       <BirdDetectionList :detections="birdDetections" />
     </div>
   </div>

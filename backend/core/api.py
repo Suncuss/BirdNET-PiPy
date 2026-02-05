@@ -1,71 +1,83 @@
-from core.db import DatabaseManager
-from core.storage_manager import delete_detection_files
-from core.migration import (
-    BirdNETPiMigrator,
-    get_migration_progress,
-    set_migration_progress,
-    clear_migration_progress,
-    start_migration_if_not_running
-)
-from core.migration_audio import (
-    list_available_folders,
-    scan_audio_files,
-    check_disk_space,
-    import_audio_files,
-    get_audio_import_progress,
-    clear_audio_import_progress,
-    start_audio_import_if_not_running,
-    scan_files_needing_spectrograms,
-    generate_spectrograms_batch,
-    get_spectrogram_progress,
-    clear_spectrogram_progress,
-    start_spectrogram_generation_if_not_running
-)
-import threading
-from timezonefinder import TimezoneFinder
-from config.settings import SPECTROGRAM_DIR, EXTRACTED_AUDIO_DIR, DEFAULT_AUDIO_PATH, DEFAULT_IMAGE_PATH, API_PORT, BASE_DIR, STREAM_URL, RTSP_URL, RECORDING_MODE, LABELS_PATH, load_user_settings, get_default_settings
-from config.constants import (
-    RecordingMode,
-    VALID_RECORDING_MODES,
-    RECORDING_LENGTH_OPTIONS,
-    OVERLAP_OPTIONS,
-    UPDATE_CHANNELS,
-)
-from core.logging_config import setup_logging, get_logger, log_api_request
-from core.api_utils import (
-    handle_api_errors,
-    validate_date_param,
-    serve_file_with_fallback,
-    validate_limit_param,
-    log_data_metrics
-)
-from core.auth import (
-    configure_session,
-    require_auth,
-    is_auth_enabled,
-    is_setup_complete,
-    is_authenticated,
-    set_auth_enabled,
-    setup_password,
-    change_password,
-    authenticate,
-    logout,
-    MIN_PASSWORD_LENGTH
-)
-from version import __version__, DISPLAY_NAME
-
-from flask import Flask, Blueprint, jsonify, request, Response, session
-from flask_socketio import SocketIO, emit
-from datetime import datetime, timedelta
-import os
-import json
-import requests
-import time
-import re
 import csv
 import io
-import tempfile
+import json
+import os
+import re
+import threading
+import time
 import uuid
+from datetime import datetime, timedelta
+
+import requests
+from flask import Blueprint, Flask, Response, jsonify, request, session
+from flask_socketio import SocketIO, emit
+from timezonefinder import TimezoneFinder
+
+from config.constants import (
+    OVERLAP_OPTIONS,
+    RECORDING_LENGTH_OPTIONS,
+    UPDATE_CHANNELS,
+    VALID_RECORDING_MODES,
+    RecordingMode,
+)
+from config.settings import (
+    API_PORT,
+    BASE_DIR,
+    DEFAULT_AUDIO_PATH,
+    DEFAULT_IMAGE_PATH,
+    EXTRACTED_AUDIO_DIR,
+    LABELS_PATH,
+    RECORDING_MODE,
+    RTSP_URL,
+    SPECTROGRAM_DIR,
+    STREAM_URL,
+    get_default_settings,
+    load_user_settings,
+)
+from core.api_utils import (
+    handle_api_errors,
+    log_data_metrics,
+    serve_file_with_fallback,
+    validate_date_param,
+    validate_limit_param,
+)
+from core.auth import (
+    authenticate,
+    change_password,
+    configure_session,
+    is_auth_enabled,
+    is_authenticated,
+    is_setup_complete,
+    logout,
+    require_auth,
+    set_auth_enabled,
+    setup_password,
+)
+from core.db import DatabaseManager
+from core.logging_config import get_logger, log_api_request, setup_logging
+from core.migration import (
+    BirdNETPiMigrator,
+    clear_migration_progress,
+    get_migration_progress,
+    set_migration_progress,
+    start_migration_if_not_running,
+)
+from core.migration_audio import (
+    check_disk_space,
+    clear_audio_import_progress,
+    clear_spectrogram_progress,
+    generate_spectrograms_batch,
+    get_audio_import_progress,
+    get_spectrogram_progress,
+    import_audio_files,
+    list_available_folders,
+    scan_audio_files,
+    scan_files_needing_spectrograms,
+    start_audio_import_if_not_running,
+    start_spectrogram_generation_if_not_running,
+)
+from core.storage_manager import delete_detection_files
+from version import DISPLAY_NAME, __version__
 
 # Setup logging
 setup_logging('api')
@@ -272,11 +284,11 @@ def fetch_wikimedia_image(species_name):
 
         pages = image_data['query']['pages']
         page = next(iter(pages.values()))
-        
+
         if 'imageinfo' in page:
             image_info = page['imageinfo'][0]
             extmetadata = image_info['extmetadata']
-            
+
             # Create a data structure with all the required information
             image_data = {
                 'imageUrl': image_info['url'],
@@ -285,10 +297,10 @@ def fetch_wikimedia_image(species_name):
                 'authorName': 'Unknown Author',
                 'authorUrl': None
             }
-            
+
             author_html = extmetadata.get('Artist', {}).get('value', 'Unknown Author')
             author_match = re.search(r'<a href="([^"]+)"[^>]*>([^<]+)</a>', author_html)
-            
+
             if author_match:
                 image_data['authorUrl'] = author_match.group(1)
                 if image_data['authorUrl'].startswith('//'):
@@ -311,12 +323,12 @@ def get_wikimedia_image():
     species_name = request.args.get('species', '')
     if not species_name:
         return jsonify({'error': 'Species name is required'}), 400
-    
+
     image_data, error = fetch_wikimedia_image(species_name)
-    
+
     if error:
         return jsonify({'error': error}), 404 if 'No results found' in error else 500
-    
+
     logger.debug("Wikimedia image fetched", extra={
         'species': species_name,
         'has_image': bool(image_data)
@@ -358,7 +370,7 @@ def get_observation_summary():
     log_data_metrics('get_observation_summary', summary, {
         'today_count': summary.get('today', {}).get('totalObservations', 0),
         'all_time_species': summary.get('allTime', {}).get('uniqueSpecies', 0)
-    })    
+    })
     return jsonify(summary)
 
 @api.route('/api/activity/hourly', methods=['GET'])
@@ -400,7 +412,7 @@ def get_unique_detections():
         'unique_species': len(unique_detections)
     })
     return jsonify(unique_detections)
-    
+
 @api.route('/api/sightings', methods=['GET'])
 @validate_limit_param(default=12)
 @handle_api_errors
@@ -420,7 +432,7 @@ def get_sightings():
         sightings = db_manager.get_species_sightings(limit=limit, most_frequent=False)
     else:
         return jsonify({"error": "Invalid sighting type. Use 'frequent' or 'rare'"}), 400
-    
+
     return jsonify(sightings)
 
 
@@ -778,7 +790,7 @@ def load_available_species():
 
     species_list = []
     try:
-        with open(LABELS_PATH, 'r') as f:
+        with open(LABELS_PATH) as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -936,7 +948,7 @@ def load_version_info():
         return None
 
     try:
-        with open(version_file, 'r') as f:
+        with open(version_file) as f:
             return json.load(f)
     except Exception as e:
         logger.error("Failed to load version.json", extra={'error': str(e)})
@@ -1083,13 +1095,13 @@ def save_user_settings(settings_dict):
     """Save settings to JSON file atomically"""
     json_path = os.path.join(BASE_DIR, 'data', 'config', 'user_settings.json')
     temp_file = json_path + '.tmp'
-    
+
     os.makedirs(os.path.dirname(json_path), exist_ok=True)
-    
+
     # Atomic write
     with open(temp_file, 'w') as f:
         json.dump(settings_dict, f, indent=2)
-    
+
     os.rename(temp_file, json_path)
     logger.info("User settings saved", extra={
         'path': json_path
@@ -1272,20 +1284,20 @@ def update_settings():
 
         # Save settings to JSON file
         save_user_settings(new_settings)
-        
+
         # Write flag to trigger container restart
         write_flag('restart-backend')
-        
+
         logger.info("Settings updated, triggering service restart", extra={
             'changed_sections': list(new_settings.keys())
         })
-        
+
         return jsonify({
-            'status': 'updated', 
+            'status': 'updated',
             'message': 'Settings saved. Services will restart in 10-30 seconds.',
             'settings': new_settings
         }), 200
-        
+
     except Exception as e:
         logger.error("Failed to update settings", extra={
             'error': str(e)
@@ -1935,14 +1947,14 @@ def migration_import():
     # Atomically check if we can start and initialize progress
     # This prevents race conditions with duplicate requests
     # temp_path is used as the migration_id (unique per upload via uuid)
-    can_start = start_migration_if_not_running(temp_path, total_records)
+    can_start, running_id = start_migration_if_not_running(temp_path, total_records)
 
     if not can_start:
-        # Already running - return temp_path as migration_id so client can poll
+        # Already running - return the ID of the running job so client can poll
         return jsonify({
             'status': 'already_running',
-            'migration_id': temp_path,
-            'message': 'Migration is already in progress'
+            'migration_id': running_id,
+            'message': 'Database migration is already in progress'
         }), 200
 
     # Start background thread
@@ -2365,17 +2377,17 @@ def create_app():
     # `cors_allowed_origins=None` lets Engine.IO compute allowed origins from the
     # request host headers (same-origin only). Do not set this to [] (blocks all origins).
     socketio = SocketIO(app, cors_allowed_origins=None, logger=False, engineio_logger=False)
-    
+
     # WebSocket event handlers
     @socketio.on('connect')
     def handle_connect():
         logger.info('WebSocket client connected')
         emit('status', {'message': 'Connected to live detection feed'})
-    
+
     @socketio.on('disconnect')
     def handle_disconnect():
         logger.info('WebSocket client disconnected')
-    
+
     return app, socketio
 
 def broadcast_detection(detection_data):

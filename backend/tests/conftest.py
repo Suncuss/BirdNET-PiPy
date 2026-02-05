@@ -4,10 +4,11 @@ Main test configuration and shared fixtures for pytest.
 This file is automatically loaded by pytest and provides
 shared utilities and configuration for all tests.
 """
-import pytest
-import sys
-import os
 import logging
+import os
+import sys
+
+import pytest
 
 # Add parent directory to path so we can import our modules
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))

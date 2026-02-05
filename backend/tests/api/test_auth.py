@@ -1,10 +1,11 @@
 """Tests for authentication endpoints and functionality."""
 
-import pytest
 import json
 import os
 import tempfile
-from unittest.mock import patch, Mock
+from unittest.mock import patch
+
+import pytest
 
 
 class TestAuthEndpoints:
@@ -528,7 +529,7 @@ class TestRateLimiting:
         client.post('/api/auth/logout')
 
         # Make max failed login attempts (5 by default)
-        for i in range(5):
+        for _i in range(5):
             response = client.post('/api/auth/login',
                                   data=json.dumps({'password': 'wrongpassword'}),
                                   content_type='application/json')

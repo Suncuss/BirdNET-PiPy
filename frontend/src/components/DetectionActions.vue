@@ -1,5 +1,8 @@
 <template>
-  <div class="flex items-center gap-1" :class="containerClass">
+  <div
+    class="flex items-center gap-1"
+    :class="containerClass"
+  >
     <button
       type="button"
       class="p-2 text-blue-500 hover:text-blue-700 disabled:opacity-50"
@@ -19,7 +22,10 @@
       :disabled="disabled"
       @click="$emit('spectrogram', detection)"
     >
-      <font-awesome-icon :icon="['fas', 'circle-info']" class="h-4 w-4" />
+      <font-awesome-icon
+        :icon="['fas', 'circle-info']"
+        class="h-4 w-4"
+      />
     </button>
     <button
       type="button"
@@ -28,7 +34,10 @@
       :disabled="disabled"
       @click="$emit('show-info', detection)"
     >
-      <font-awesome-icon :icon="['fas', 'database']" class="h-4 w-4" />
+      <font-awesome-icon
+        :icon="['fas', 'database']"
+        class="h-4 w-4"
+      />
     </button>
     <button
       type="button"
@@ -37,7 +46,10 @@
       :disabled="disabled"
       @click="$emit('delete', detection)"
     >
-      <font-awesome-icon :icon="['fas', 'trash-alt']" class="h-4 w-4" />
+      <font-awesome-icon
+        :icon="['fas', 'trash-alt']"
+        class="h-4 w-4"
+      />
     </button>
   </div>
 </template>

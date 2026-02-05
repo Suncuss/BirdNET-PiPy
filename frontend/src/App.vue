@@ -3,44 +3,84 @@
     <nav class="bg-green-700 text-white p-4">
       <div class="container mx-auto">
         <div class="flex items-center justify-between mb-4">
-          <router-link to="/" class="text-2xl font-bold hover:text-green-200">{{ DISPLAY_NAME }}</router-link>
+          <router-link
+            to="/"
+            class="text-2xl font-bold hover:text-green-200"
+          >
+            {{ DISPLAY_NAME }}
+          </router-link>
           <!-- Auth indicator -->
           <button
             v-if="auth.authStatus.value.authEnabled && auth.authStatus.value.authenticated"
-            @click="handleLogout"
             class="text-sm text-green-200 hover:text-white flex items-center gap-1"
             title="Log out"
+            @click="handleLogout"
           >
-            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75" />
+            <svg
+              class="h-4 w-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke-width="1.5"
+              stroke="currentColor"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75"
+              />
             </svg>
             Logout
           </button>
         </div>
         <div class="flex flex-wrap gap-4">
-          <router-link to="/" class="hover:text-green-200">Dashboard</router-link>
-          <router-link to="/gallery" class="hover:text-green-200">Bird Gallery</router-link>
-          <router-link to="/live" class="hover:text-green-200">Live Feed</router-link>
-          <router-link to="/charts" class="hover:text-green-200">Charts</router-link>
-          <router-link to="/settings" class="hover:text-green-200">Settings</router-link>
+          <router-link
+            to="/"
+            class="hover:text-green-200"
+          >
+            Dashboard
+          </router-link>
+          <router-link
+            to="/gallery"
+            class="hover:text-green-200"
+          >
+            Bird Gallery
+          </router-link>
+          <router-link
+            to="/live"
+            class="hover:text-green-200"
+          >
+            Live Feed
+          </router-link>
+          <router-link
+            to="/charts"
+            class="hover:text-green-200"
+          >
+            Charts
+          </router-link>
+          <router-link
+            to="/settings"
+            class="hover:text-green-200"
+          >
+            Settings
+          </router-link>
         </div>
       </div>
     </nav>
 
     <main class="container mx-auto p-1">
-      <router-view></router-view>
+      <router-view />
     </main>
 
     <!-- Location Setup Modal -->
     <LocationSetupModal
-      :isVisible="showLocationSetup"
+      :is-visible="showLocationSetup"
       @close="showLocationSetup = false"
       @location-saved="onLocationSaved"
     />
 
     <!-- Login Modal -->
     <LoginModal
-      :isVisible="showLoginModal"
+      :is-visible="showLoginModal"
       @success="onLoginSuccess"
       @cancel="onLoginCancel"
     />

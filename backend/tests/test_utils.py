@@ -1,8 +1,10 @@
 """
 Unit tests for core/utils.py
 """
-import pytest
 from datetime import datetime
+
+import pytest
+
 from core.utils import build_detection_filenames, get_legacy_filename
 
 

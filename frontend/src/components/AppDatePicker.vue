@@ -2,11 +2,11 @@
   <DatePicker
     v-model="dateValue"
     :disabled="disabled"
-    :minDate="minDateObj"
-    :maxDate="maxDateObj"
-    dateFormat="mm/dd/yy"
-    showIcon
-    iconDisplay="input"
+    :min-date="minDateObj"
+    :max-date="maxDateObj"
+    date-format="mm/dd/yy"
+    show-icon
+    icon-display="input"
     :pt="passThrough"
     @date-select="onDateSelect"
   />

@@ -1,20 +1,24 @@
-import numpy as np
 import matplotlib
+import numpy as np
+
 matplotlib.use('Agg')
+import subprocess
+from io import BytesIO
+
 import matplotlib.pyplot as plt
+from matplotlib import font_manager
+from PIL import Image
 from scipy.io import wavfile
 from scipy.signal import spectrogram
-import subprocess
-import os
-import requests
-from io import BytesIO
-from matplotlib import font_manager
-import glob
-import threading
-import time
-from PIL import Image
 
-from config.settings import SAMPLE_RATE, SPECTROGRAM_MIN_DBFS, SPECTROGRAM_MAX_DBFS, SPECTROGRAM_MAX_FREQ_IN_KHZ, SPECTROGRAM_MIN_FREQ_IN_KHZ, SPECTROGRAM_FONT_PATH
+from config.settings import (
+    SPECTROGRAM_FONT_PATH,
+    SPECTROGRAM_MAX_DBFS,
+    SPECTROGRAM_MAX_FREQ_IN_KHZ,
+    SPECTROGRAM_MIN_DBFS,
+    SPECTROGRAM_MIN_FREQ_IN_KHZ,
+)
+
 BUFFER_SIZE = 1000
 
 
@@ -36,7 +40,6 @@ def build_detection_filenames(common_name, confidence, timestamp, audio_extensio
         {'audio_filename': 'American_Robin_85_2025-11-24-birdnet-10-30-45.mp3',
          'spectrogram_filename': 'American_Robin_85_2025-11-24-birdnet-10-30-45.webp'}
     """
-    from datetime import datetime
 
     # Normalize common name to use underscores
     common_name_underscored = common_name.replace(' ', '_')
@@ -122,7 +125,7 @@ def generate_spectrogram(input_file_path, output_file_path, graph_title, start_t
 
     # Slice the data to the specified time range
     data = data[start_sample:end_sample]
-    
+
     # Normalize audio
     epsilon = 1e-10
     data = data / (np.max(np.abs(data)) + epsilon)
@@ -142,14 +145,14 @@ def generate_spectrogram(input_file_path, output_file_path, graph_title, start_t
     # Adaptive DPI based on output format
     # Use 150 DPI for web/general use, 200 for high-quality while keeping file size reasonable
     dpi = 250
-    
+
     # Plot spectrogram
     plt.figure(figsize=figsize, facecolor='white', dpi=dpi)
     plt.imshow(Sxx_dbfs, aspect='auto', cmap="Greens_r", origin='lower',
                extent=[times.min(), times.max(), frequencies.min(), frequencies.max()],
                vmin=SPECTROGRAM_MIN_DBFS, vmax=SPECTROGRAM_MAX_DBFS,
                interpolation='bilinear')  # Smoother rendering
-    
+
     plt.title(graph_title, fontsize=14*scale, fontweight='bold', pad=10*scale)
     plt.ylabel('Frequency [kHz]', fontsize=12*scale, labelpad=3*scale)
 
@@ -157,7 +160,7 @@ def generate_spectrogram(input_file_path, output_file_path, graph_title, start_t
     cbar.set_label('Intensity [dBFS]', fontsize=12*scale, labelpad=3*scale)
     cbar.ax.tick_params(labelsize=10*scale)
 
-    plt.xticks([]) 
+    plt.xticks([])
     plt.yticks([0,6,12])
     plt.yticks(fontsize=10*scale)
     plt.ylim(SPECTROGRAM_MIN_FREQ_IN_KHZ, SPECTROGRAM_MAX_FREQ_IN_KHZ)

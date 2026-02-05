@@ -7,7 +7,6 @@ interface for the BirdNET v2.4 bird detection model.
 import json
 import logging
 import threading
-from typing import List, Tuple, Optional
 
 import numpy as np
 
@@ -67,7 +66,7 @@ class BirdNetModel(BirdDetectionModel):
         model_path: str,
         meta_model_path: str,
         labels_path: str,
-        ebird_codes_path: Optional[str] = None
+        ebird_codes_path: str | None = None
     ):
         """Initialize BirdNetModel with model file paths.
 
@@ -145,8 +144,8 @@ class BirdNetModel(BirdDetectionModel):
         audio_chunk: np.ndarray,
         sensitivity: float = 1.0,
         cutoff: float = 0.0,
-        chunk_index: Optional[int] = None
-    ) -> List[Tuple[str, float]]:
+        chunk_index: int | None = None
+    ) -> list[tuple[str, float]]:
         """Run inference on audio chunk with filtering.
 
         Args:
@@ -179,7 +178,7 @@ class BirdNetModel(BirdDetectionModel):
 
         # Log top 3 raw confidence scores before cutoff filtering
         if logger.isEnabledFor(logging.INFO):
-            raw_scores = list(zip(self._labels, model_output))
+            raw_scores = list(zip(self._labels, model_output, strict=False))
             raw_scores_sorted = sorted(raw_scores, key=lambda x: x[1], reverse=True)[:3]
             top3_info = [(_label_to_common_name(label), round(float(score) * 100, 1))
                          for label, score in raw_scores_sorted]
@@ -193,7 +192,7 @@ class BirdNetModel(BirdDetectionModel):
         model_output = np.where(model_output >= cutoff, model_output, 0)
 
         # Build results dict
-        results_dict = dict(zip(self._labels, model_output))
+        results_dict = dict(zip(self._labels, model_output, strict=False))
         results_dict = {k: v for k, v in results_dict.items() if v != 0}
 
         # Sort by confidence (descending)
@@ -207,13 +206,13 @@ class BirdNetModel(BirdDetectionModel):
 
         return results
 
-    def get_labels(self) -> List[str]:
+    def get_labels(self) -> list[str]:
         """Return all species labels this model can detect."""
         if self._labels is None:
             self.load_labels()
         return self._labels
 
-    def get_ebird_code(self, scientific_name: str) -> Optional[str]:
+    def get_ebird_code(self, scientific_name: str) -> str | None:
         """Get eBird species code for a scientific name.
 
         Args:
@@ -231,7 +230,7 @@ class BirdNetModel(BirdDetectionModel):
         lat: float,
         lon: float,
         week: int
-    ) -> Optional[List[str]]:
+    ) -> list[str] | None:
         """Get species likely at a location using the meta-model.
 
         Results are cached by (lat, lon, week) since these values change infrequently.
@@ -279,7 +278,7 @@ class BirdNetModel(BirdDetectionModel):
         # Apply threshold and filter
         meta_model_output = np.where(
             meta_model_output >= SPECIES_FILTER_THRESHOLD, meta_model_output, 0)
-        species_with_probs = list(zip(meta_model_output, self._labels))
+        species_with_probs = list(zip(meta_model_output, self._labels, strict=False))
         species_with_probs = sorted(species_with_probs, key=lambda x: x[0], reverse=True)
 
         for prob, species_label in species_with_probs:
@@ -348,7 +347,7 @@ class BirdNetModel(BirdDetectionModel):
             List of species labels
         """
         if self._labels is None:
-            with open(self.labels_path, 'r') as f:
+            with open(self.labels_path) as f:
                 self._labels = [line.strip() for line in f.readlines()]
         return self._labels
 
@@ -368,7 +367,7 @@ class BirdNetModel(BirdDetectionModel):
             return self._ebird_codes
 
         try:
-            with open(self.ebird_codes_path, 'r', encoding='utf-8') as f:
+            with open(self.ebird_codes_path, encoding='utf-8') as f:
                 self._ebird_codes = json.load(f)
             logger.info(f"Loaded {len(self._ebird_codes)} eBird species codes")
         except FileNotFoundError:

@@ -1,10 +1,8 @@
 """Tests for the /api/detections paginated endpoint and DELETE endpoint."""
 
-import pytest
-from datetime import datetime, timedelta
-from unittest.mock import patch
-import tempfile
 import os
+import tempfile
+from unittest.mock import patch
 
 
 class TestDetectionsAPI:
@@ -307,7 +305,7 @@ class TestDeleteDetectionAPI:
         })
 
         # Try to delete without auth
-        response = api_client.delete(f'/api/detections/{detection_id}')
+        api_client.delete(f'/api/detections/{detection_id}')
         # Should return 401 when auth is enabled but not authenticated
         # Note: In test environment, auth may be disabled by default
         # The important thing is the endpoint exists and processes the request

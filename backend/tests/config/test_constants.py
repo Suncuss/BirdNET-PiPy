@@ -1,13 +1,12 @@
 """Tests for configuration constants."""
-import pytest
 from config.constants import (
-    RecordingMode,
-    RECORDING_MODES,
-    VALID_RECORDING_MODES,
     DEFAULT_RECORDING_MODE,
-    RECORDING_LENGTH_OPTIONS,
     OVERLAP_OPTIONS,
+    RECORDING_LENGTH_OPTIONS,
+    RECORDING_MODES,
     UPDATE_CHANNELS,
+    VALID_RECORDING_MODES,
+    RecordingMode,
 )
 
 

@@ -9,15 +9,20 @@ Tests HttpStreamRecorder, RtspRecorder, and PulseAudioRecorder functionality inc
 - Error handling and cleanup
 - Shell injection prevention (argument lists, not shell strings)
 """
-import pytest
 import os
-import tempfile
-import time
 import subprocess
-from unittest.mock import Mock, patch, MagicMock, call
 from datetime import datetime
+from unittest.mock import Mock, patch
 
-from core.audio_manager import HttpStreamRecorder, PulseAudioRecorder, RtspRecorder, BaseRecorder, create_recorder
+import pytest
+
+from core.audio_manager import (
+    BaseRecorder,
+    HttpStreamRecorder,
+    PulseAudioRecorder,
+    RtspRecorder,
+    create_recorder,
+)
 
 
 class TestCreateRecorderFactory:
@@ -201,7 +206,7 @@ class TestHttpStreamRecorderRecordChunk:
         with patch('subprocess.Popen') as mock_popen, \
              patch('os.path.exists', return_value=True), \
              patch('os.path.getsize', return_value=144000), \
-             patch('os.rename') as mock_rename:
+             patch('os.rename'):
 
             mock_curl = Mock()
             mock_curl.stdout = Mock()
@@ -341,7 +346,7 @@ class TestHttpStreamRecorderRecordChunk:
         with patch('subprocess.Popen') as mock_popen, \
              patch('os.path.exists', return_value=True), \
              patch('os.path.getsize', return_value=0), \
-             patch('os.unlink') as mock_unlink, \
+             patch('os.unlink'), \
              patch('os.rename') as mock_rename:
 
             mock_curl = Mock()
@@ -596,7 +601,7 @@ class TestPulseAudioRecorderRecordChunk:
         with patch('subprocess.run') as mock_run, \
              patch('os.path.exists', return_value=True), \
              patch('os.path.getsize', return_value=144000), \
-             patch('os.rename') as mock_rename, \
+             patch('os.rename'), \
              patch('core.audio_manager.datetime') as mock_dt:
 
             mock_dt.now.return_value = datetime(2025, 11, 26, 10, 30, 0)
@@ -737,7 +742,7 @@ class TestRecorderComparison:
         with patch('subprocess.Popen') as mock_popen, \
              patch('os.path.exists', return_value=True), \
              patch('os.path.getsize', return_value=144000), \
-             patch('os.rename') as mock_rename:
+             patch('os.rename'):
 
             mock_curl = Mock()
             mock_curl.stdout = Mock()
@@ -881,7 +886,7 @@ class TestRtspRecorderRecordChunk:
         with patch('subprocess.run') as mock_run, \
              patch('os.path.exists', return_value=True), \
              patch('os.path.getsize', return_value=144000), \
-             patch('os.rename') as mock_rename:
+             patch('os.rename'):
 
             mock_run.return_value = Mock(returncode=0)
 

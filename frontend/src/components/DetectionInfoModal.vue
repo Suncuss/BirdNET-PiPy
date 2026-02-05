@@ -15,8 +15,13 @@
       <div class="relative bg-white rounded-lg shadow-xl max-w-md w-full max-h-[85vh] overflow-hidden">
         <!-- Header -->
         <div class="px-5 py-4 border-b border-gray-200 bg-gray-50">
-          <h3 class="text-lg font-semibold text-gray-900">Detection Info</h3>
-          <p v-if="detection" class="text-sm text-gray-500 mt-0.5">
+          <h3 class="text-lg font-semibold text-gray-900">
+            Detection Info
+          </h3>
+          <p
+            v-if="detection"
+            class="text-sm text-gray-500 mt-0.5"
+          >
             {{ detection.common_name }}
           </p>
         </div>
@@ -25,7 +30,10 @@
         <div class="px-5 py-4 overflow-y-auto max-h-[60vh]">
           <template v-if="detection">
             <!-- Weather Section -->
-            <div v-if="hasWeatherData" class="mb-6">
+            <div
+              v-if="hasWeatherData"
+              class="mb-6"
+            >
               <h4 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
                 Weather Conditions
               </h4>
@@ -46,24 +54,44 @@
                 <!-- Weather Details Grid -->
                 <div class="grid grid-cols-3 gap-x-4 gap-y-2 text-sm">
                   <div>
-                    <div class="text-gray-500 text-xs">Humidity</div>
-                    <div class="font-medium">{{ weatherData.humidity }}%</div>
+                    <div class="text-gray-500 text-xs">
+                      Humidity
+                    </div>
+                    <div class="font-medium">
+                      {{ weatherData.humidity }}%
+                    </div>
                   </div>
                   <div>
-                    <div class="text-gray-500 text-xs">Wind</div>
-                    <div class="font-medium">{{ formatWindSpeed(weatherData.wind) }}</div>
+                    <div class="text-gray-500 text-xs">
+                      Wind
+                    </div>
+                    <div class="font-medium">
+                      {{ formatWindSpeed(weatherData.wind) }}
+                    </div>
                   </div>
                   <div>
-                    <div class="text-gray-500 text-xs">Clouds</div>
-                    <div class="font-medium">{{ weatherData.cloud_cover }}%</div>
+                    <div class="text-gray-500 text-xs">
+                      Clouds
+                    </div>
+                    <div class="font-medium">
+                      {{ weatherData.cloud_cover }}%
+                    </div>
                   </div>
                   <div>
-                    <div class="text-gray-500 text-xs">Precip</div>
-                    <div class="font-medium">{{ formatPrecipitation(weatherData.precip) }}</div>
+                    <div class="text-gray-500 text-xs">
+                      Precip
+                    </div>
+                    <div class="font-medium">
+                      {{ formatPrecipitation(weatherData.precip) }}
+                    </div>
                   </div>
                   <div>
-                    <div class="text-gray-500 text-xs">Pressure</div>
-                    <div class="font-medium">{{ formatPressure(weatherData.pressure) }}</div>
+                    <div class="text-gray-500 text-xs">
+                      Pressure
+                    </div>
+                    <div class="font-medium">
+                      {{ formatPressure(weatherData.pressure) }}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -99,8 +127,13 @@
             </div>
 
             <!-- No Extra Data -->
-            <div v-if="!hasWeatherData && !hasFilteredExtraData" class="text-center py-6">
-              <p class="text-sm text-gray-500">No additional metadata available.</p>
+            <div
+              v-if="!hasWeatherData && !hasFilteredExtraData"
+              class="text-center py-6"
+            >
+              <p class="text-sm text-gray-500">
+                No additional metadata available.
+              </p>
             </div>
           </template>
         </div>
@@ -108,8 +141,8 @@
         <!-- Footer -->
         <div class="px-5 py-3 border-t border-gray-200 bg-gray-50">
           <button
-            @click="close"
             class="w-full px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+            @click="close"
           >
             Close
           </button>
@@ -117,12 +150,22 @@
 
         <!-- Close button -->
         <button
-          @click="close"
           class="absolute top-3 right-3 p-1 rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
           title="Close"
+          @click="close"
         >
-          <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+          <svg
+            class="h-5 w-5"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke-width="2"
+            stroke="currentColor"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M6 18L18 6M6 6l12 12"
+            />
           </svg>
         </button>
       </div>

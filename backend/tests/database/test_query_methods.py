@@ -2,7 +2,6 @@
 """
 Additional database query method tests for coverage.
 """
-import pytest
 from datetime import datetime, timedelta
 
 
@@ -12,14 +11,14 @@ class TestDatabaseQueryMethods:
     def test_get_activity_overview(self, test_db_manager):
         """Test get_activity_overview() method."""
         test_date = '2024-01-15'
-        
+
         # Insert detections for different species at different hours
         species_hours = {
             'American Robin': [6, 7, 8, 17, 18],
             'Blue Jay': [9, 10, 11, 12],
             'Northern Cardinal': [6, 12, 18]
         }
-        
+
         for species, hours in species_hours.items():
             for hour in hours:
                 detection = {
@@ -35,19 +34,19 @@ class TestDatabaseQueryMethods:
                     'overlap': 0.25
                 }
                 test_db_manager.insert_detection(detection)
-        
+
         overview = test_db_manager.get_activity_overview(test_date, num_species=2)
-        
+
         # Should get top 2 species
         assert len(overview) == 2
         assert overview[0]['species'] == 'American Robin'  # 5 detections
         assert overview[0]['totalObservations'] == 5
         assert len(overview[0]['hourlyActivity']) == 24
-        
+
         # Check hourly activity array
         assert overview[0]['hourlyActivity'][6] == 1  # 6 AM
         assert overview[0]['hourlyActivity'][0] == 0  # Midnight
-    
+
     def test_get_species_sightings_most_frequent(self, test_db_manager):
         """Test get_species_sightings() for most frequent species."""
         # Insert varying numbers of detections for different species
@@ -57,7 +56,7 @@ class TestDatabaseQueryMethods:
             ('Northern Cardinal', 2),
             ('Hooded Warbler', 1)
         ]
-        
+
         base_time = datetime(2024, 1, 15, 10, 0, 0)
         for species, count in species_counts:
             for i in range(count):
@@ -74,15 +73,15 @@ class TestDatabaseQueryMethods:
                     'overlap': 0.25
                 }
                 test_db_manager.insert_detection(detection)
-        
+
         # Get most frequent
         most_frequent = test_db_manager.get_species_sightings(limit=2, most_frequent=True)
-        
+
         assert len(most_frequent) == 2
         # Should return the most recent detection of the most frequent species
         assert most_frequent[0]['common_name'] == 'American Robin'
         assert most_frequent[1]['common_name'] == 'Blue Jay'
-    
+
     def test_get_species_sightings_rarest(self, test_db_manager):
         """Test get_species_sightings() for rarest species."""
         # Use same data as above
@@ -92,7 +91,7 @@ class TestDatabaseQueryMethods:
             ('Northern Cardinal', 2),
             ('Hooded Warbler', 1)
         ]
-        
+
         base_time = datetime(2024, 1, 15, 10, 0, 0)
         for species, count in species_counts:
             for i in range(count):
@@ -109,15 +108,15 @@ class TestDatabaseQueryMethods:
                     'overlap': 0.25
                 }
                 test_db_manager.insert_detection(detection)
-        
+
         # Get rarest
         rarest = test_db_manager.get_species_sightings(limit=2, most_frequent=False)
-        
+
         assert len(rarest) == 2
         # Should return the most recent detection of the rarest species
         assert rarest[0]['common_name'] == 'Hooded Warbler'
         assert rarest[1]['common_name'] == 'Northern Cardinal'
-    
+
     def test_get_detection_distribution_week_view(self, test_db_manager):
         """Test get_detection_distribution() for week view."""
         # Use Jan 14, 2024 (Sunday) as anchor - this is the start of the week
@@ -154,12 +153,12 @@ class TestDatabaseQueryMethods:
 
         # Each day should have 1 detection
         assert all(count == 1 for count in result['data'])
-    
+
     def test_get_detection_distribution_month_view(self, test_db_manager):
         """Test get_detection_distribution() for month view."""
         anchor_date = '2024-01-15'
         species = 'American Robin'
-        
+
         # Insert detections on specific days
         for day in [1, 5, 10, 15, 20, 25, 31]:
             detection = {
@@ -175,19 +174,19 @@ class TestDatabaseQueryMethods:
                 'overlap': 0.25
             }
             test_db_manager.insert_detection(detection)
-        
+
         result = test_db_manager.get_detection_distribution(species, 'month', anchor_date)
-        
+
         assert len(result['labels']) == 31  # January has 31 days
         assert result['data'][0] == 1  # Day 1
         assert result['data'][4] == 1  # Day 5
         assert result['data'][2] == 0  # Day 3 (no detection)
-    
+
     def test_get_detection_distribution_year_view(self, test_db_manager):
         """Test get_detection_distribution() for year view."""
         anchor_date = '2024-06-15'
         species = 'American Robin'
-        
+
         # Insert detections in different months
         for month in [1, 3, 6, 9, 12]:
             detection = {
@@ -203,16 +202,16 @@ class TestDatabaseQueryMethods:
                 'overlap': 0.25
             }
             test_db_manager.insert_detection(detection)
-        
+
         result = test_db_manager.get_detection_distribution(species, 'year', anchor_date)
-        
+
         assert len(result['labels']) == 12
-        assert result['labels'] == ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
+        assert result['labels'] == ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                                    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
         assert result['data'][0] == 1  # January
         assert result['data'][1] == 0  # February (no detection)
         assert result['data'][2] == 1  # March
-    
+
     def test_empty_database_queries(self, test_db_manager):
         """Test various queries on empty database."""
         # Test methods that should handle empty database gracefully

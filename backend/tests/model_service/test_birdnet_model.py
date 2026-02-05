@@ -1,9 +1,10 @@
 """Tests for BirdNetModel prediction and privacy filter."""
 
+import threading
+from unittest.mock import MagicMock
+
 import numpy as np
 import pytest
-import threading
-from unittest.mock import MagicMock, patch
 
 
 class TestBirdNetModelPredict:
@@ -75,7 +76,7 @@ class TestBirdNetModelPredict:
         results = mock_birdnet_model.predict(audio_chunk, sensitivity=1.0, cutoff=0.9)
 
         # Only high confidence results should remain
-        for label, confidence in results:
+        for _label, confidence in results:
             assert confidence >= 0.9
 
     def test_predict_privacy_filter_human_detected(self, mock_birdnet_model):

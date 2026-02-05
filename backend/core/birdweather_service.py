@@ -10,13 +10,13 @@ import subprocess
 import tempfile
 import threading
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Any
 
 import requests
 
-from config.settings import LAT, LON, BIRDWEATHER_ID
-from core.timezone_service import get_timezone
+from config.settings import BIRDWEATHER_ID, LAT, LON
 from core.logging_config import get_logger
+from core.timezone_service import get_timezone
 
 logger = get_logger(__name__)
 
@@ -48,7 +48,7 @@ class BirdWeatherService:
         self._worker.start()
         logger.info("BirdWeather service started", extra={'station_id': station_id[:8] + '...'})
 
-    def publish(self, detection: Dict[str, Any], audio_path: str, start_time: float, end_time: float) -> None:
+    def publish(self, detection: dict[str, Any], audio_path: str, start_time: float, end_time: float) -> None:
         """Queue detection for async upload. Returns immediately.
 
         Extracts audio to FLAC synchronously (before file is deleted by main thread),
@@ -84,7 +84,7 @@ class BirdWeatherService:
             except Exception as e:
                 logger.error("BirdWeather upload failed", extra={'error': str(e)})
 
-    def _do_publish(self, detection: Dict[str, Any], flac_path: str,
+    def _do_publish(self, detection: dict[str, Any], flac_path: str,
                     clip_duration: float) -> None:
         """Perform the actual upload to BirdWeather API.
 
@@ -118,7 +118,7 @@ class BirdWeatherService:
                 except OSError:
                     pass
 
-    def _extract_flac(self, audio_path: str, start_time: float, end_time: float) -> Optional[str]:
+    def _extract_flac(self, audio_path: str, start_time: float, end_time: float) -> str | None:
         """Extract audio segment and convert to FLAC."""
         if not os.path.exists(audio_path):
             logger.warning("Audio file not found for BirdWeather", extra={'path': audio_path})
@@ -144,7 +144,7 @@ class BirdWeatherService:
             os.remove(flac_path)
         return None
 
-    def _upload_soundscape(self, flac_path: str, timestamp: str) -> Optional[str]:
+    def _upload_soundscape(self, flac_path: str, timestamp: str) -> str | None:
         """Upload audio file to BirdWeather soundscapes endpoint.
 
         Returns:
@@ -188,7 +188,7 @@ class BirdWeatherService:
             logger.warning("Soundscape upload error", extra={'error': str(e)})
             return None
 
-    def _upload_detection(self, detection: Dict[str, Any], soundscape_id: str,
+    def _upload_detection(self, detection: dict[str, Any], soundscape_id: str,
                           timestamp: str, clip_duration: float) -> bool:
         """Upload detection metadata to BirdWeather detections endpoint.
 
@@ -239,10 +239,10 @@ class BirdWeatherService:
 
 
 # Singleton
-_birdweather_service: Optional[BirdWeatherService] = None
+_birdweather_service: BirdWeatherService | None = None
 
 
-def get_birdweather_service() -> Optional[BirdWeatherService]:
+def get_birdweather_service() -> BirdWeatherService | None:
     """Get or create BirdWeather service singleton.
 
     Returns:

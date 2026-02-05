@@ -1,14 +1,16 @@
 """
 Database-specific test fixtures and configuration.
 """
-import pytest
-import tempfile
 import os
-from datetime import datetime, timedelta
-from unittest.mock import patch
 
 # Import test configuration
 import sys
+import tempfile
+from datetime import datetime, timedelta
+from unittest.mock import patch
+
+import pytest
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from fixtures.test_config import TEST_DATABASE_SCHEMA
 
@@ -18,14 +20,14 @@ def test_db_manager():
     """Create a DatabaseManager with temporary test database."""
     with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
         db_path = tmp.name
-    
+
     # Patch the settings before importing
     with patch('config.settings.DATABASE_PATH', db_path):
         with patch('config.settings.DATABASE_SCHEMA', TEST_DATABASE_SCHEMA):
             from core.db import DatabaseManager
             manager = DatabaseManager(db_path=db_path)
             yield manager
-    
+
     # Cleanup
     if os.path.exists(db_path):
         os.unlink(db_path)
@@ -63,7 +65,7 @@ def multiple_species_data():
 def populated_db(test_db_manager, multiple_species_data):
     """Database populated with test data."""
     base_time = datetime(2024, 1, 15, 10, 0, 0)
-    
+
     for common, scientific, count in multiple_species_data:
         for i in range(count):
             detection = {
@@ -79,5 +81,5 @@ def populated_db(test_db_manager, multiple_species_data):
                 'overlap': 0.25
             }
             test_db_manager.insert_detection(detection)
-    
+
     return test_db_manager

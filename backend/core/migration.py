@@ -5,11 +5,11 @@ to BirdNET-PiPy's detections table format.
 """
 
 import json
-import sqlite3
 import os
+import sqlite3
 import threading
-from datetime import datetime
 from contextlib import contextmanager
+from datetime import datetime
 
 from core.logging_config import get_logger
 
@@ -63,12 +63,15 @@ def start_migration_if_not_running(temp_path, total_records):
         total_records: Total number of records to import
 
     Returns:
-        bool: True if migration can start, False if already running
+        tuple: (can_start: bool, running_id: str or None)
+               - (True, None) if migration can start
+               - (False, existing_id) if another migration is already running
     """
     with _progress_lock:
-        existing = _migration_progress.get(temp_path)
-        if existing and existing.get('status') in ('starting', 'loading', 'running'):
-            return False
+        # Check if ANY migration is currently running (not just this ID)
+        for existing_id, existing in _migration_progress.items():
+            if existing.get('status') in ('starting', 'loading', 'running'):
+                return False, existing_id
 
         _migration_progress[temp_path] = {
             'status': 'starting',
@@ -78,7 +81,7 @@ def start_migration_if_not_running(temp_path, total_records):
             'skipped': 0,
             'errors': 0
         }
-        return True
+        return True, None
 
 
 class BirdNETPiMigrator:
@@ -212,7 +215,7 @@ class BirdNETPiMigrator:
         try:
             with self._get_source_connection(source_path) as conn:
                 cursor = conn.cursor()
-                cursor.execute(f"""
+                cursor.execute("""
                     SELECT Date, Time, Sci_Name, Com_Name, Confidence,
                            Lat, Lon, Cutoff, Sens, Overlap, File_Name
                     FROM detections

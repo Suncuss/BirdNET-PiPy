@@ -5,17 +5,17 @@ Provides password-based authentication for protecting settings and audio stream.
 Uses bcrypt for password hashing and Flask sessions for session management.
 """
 
-import os
 import json
+import os
 import secrets
 import time
+from collections import defaultdict
 from datetime import datetime, timedelta
 from functools import wraps
-from collections import defaultdict
 from threading import Lock
 
 import bcrypt
-from flask import session, jsonify, request
+from flask import jsonify, request, session
 
 from core.logging_config import get_logger
 
@@ -56,7 +56,7 @@ def load_auth_config(check_reset=True):
 
     if os.path.exists(AUTH_CONFIG_FILE):
         try:
-            with open(AUTH_CONFIG_FILE, 'r') as f:
+            with open(AUTH_CONFIG_FILE) as f:
                 return json.load(f)
         except Exception as e:
             logger.error("Failed to load auth config", extra={'error': str(e)})

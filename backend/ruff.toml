@@ -1,0 +1,46 @@
+# Ruff configuration for BirdNET-PiPy backend
+# https://docs.astral.sh/ruff/configuration/
+
+# Target Python version
+target-version = "py311"
+
+# Line length (matches Black default)
+line-length = 88
+
+# Exclude common non-source directories
+exclude = [
+    ".git",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "*.egg-info",
+]
+
+[lint]
+# Enable recommended rules plus some useful extras
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # Pyflakes
+    "I",      # isort (import sorting)
+    "B",      # flake8-bugbear (common bugs)
+    "UP",     # pyupgrade (modern Python syntax)
+]
+
+# Rules to ignore
+ignore = [
+    "E501",   # Line too long (let formatter handle it)
+]
+
+# Per-file rule ignores
+[lint.per-file-ignores]
+"tests/*" = ["B011"]  # Allow assert in tests
+"model_service/inference_server.py" = ["E402"]  # Imports after warnings.filterwarnings and sys.path
+"core/logging_config.py" = ["E402"]  # Imports inside function-like sections
+
+[format]
+# Use double quotes (matches Black)
+quote-style = "double"
+
+# Indent with spaces
+indent-style = "space"

@@ -1,20 +1,21 @@
 """Simple API tests that demonstrate working patterns."""
 
+import json
 import os
 import tempfile
-import pytest
-import json
-from unittest.mock import patch, Mock
 from datetime import datetime
+from unittest.mock import Mock, patch
+
+import pytest
 
 
 class TestSimpleAPI:
     """Basic API tests with proper mocking."""
-    
+
     def test_database_tests_working(self):
         """Verify our test setup works."""
         assert True  # Simple sanity check
-    
+
     def test_api_with_real_db(self, api_client, real_db_manager):
         """Test API endpoints with REAL database integration."""
         # Test 1: Latest observation with data
@@ -73,11 +74,11 @@ class TestSimpleAPI:
         response = api_client.get('/api/observations/latest')
         assert response.status_code == 200
         assert response.get_json() is None
-    
+
     def test_activity_endpoints(self, api_client, real_db_manager):
         """Test activity-related endpoints with real database."""
         # Insert detections across different hours
-        from datetime import datetime, timedelta
+        from datetime import timedelta
         base_time = datetime(2024, 1, 15, 10, 0, 0)
 
         for i in range(5):
@@ -121,7 +122,7 @@ class TestSimpleAPI:
         data = response.get_json()
         # Should have at least 2 species
         assert len(data) >= 2
-    
+
     def test_species_endpoints(self, api_client, real_db_manager):
         """Test species-related endpoints with real database."""
         # Insert detections for multiple species
@@ -165,23 +166,23 @@ class TestSimpleAPI:
         assert 'average_confidence' in data
         assert 'first_detected' in data or 'first_detection' in data
         assert 'last_detected' in data or 'last_detection' in data
-    
+
     def test_file_serving_endpoints(self):
         """Test file serving with mocked paths."""
         with tempfile.TemporaryDirectory() as tmpdir:
             audio_dir = os.path.join(tmpdir, 'audio')
             os.makedirs(audio_dir)
-            
+
             # Create test file
             test_file = os.path.join(audio_dir, 'test.mp3')
             with open(test_file, 'wb') as f:
                 f.write(b'fake audio data')
-            
+
             # Create default file
             default_file = os.path.join(tmpdir, 'default.mp3')
             with open(default_file, 'wb') as f:
                 f.write(b'default audio')
-            
+
             # Patch the paths (including auth config to prevent writing to backend/data/)
             with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
@@ -193,17 +194,17 @@ class TestSimpleAPI:
                 from core.api import create_app
                 app, _ = create_app()
                 client = app.test_client()
-                
+
                 # Test existing file
                 response = client.get('/api/audio/test.mp3')
                 assert response.status_code == 200
                 assert response.data == b'fake audio data'
-                
+
                 # Test non-existent file (should return default)
                 response = client.get('/api/audio/missing.mp3')
                 assert response.status_code == 200
                 assert response.data == b'default audio'
-    
+
     def test_sightings_endpoints(self, api_client, real_db_manager):
         """Test sightings-related endpoints with real database."""
         # Insert varied detections
@@ -262,7 +263,7 @@ class TestSimpleAPI:
         response = api_client.get('/api/sightings?type=invalid')
         assert response.status_code == 400
         assert 'Invalid sighting type' in response.get_json()['error']
-    
+
     def test_wikimedia_endpoints(self):
         """Test Wikimedia image fetching."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -313,7 +314,7 @@ class TestSimpleAPI:
                 # Test missing species parameter
                 response = client.get('/api/wikimedia_image')
                 assert response.status_code == 400
-    
+
     def test_settings_endpoints(self):
         """Test settings management."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -598,7 +599,7 @@ class TestSimpleAPI:
         assert response.status_code == 200
         data = response.get_json()
         assert data == []
-    
+
     def test_broadcast_detection_endpoint(self):
         """Test detection broadcasting."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -606,7 +607,7 @@ class TestSimpleAPI:
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
                  patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
                  patch('core.db.DatabaseManager') as MockDB, \
-                 patch('core.api.socketio') as mock_socketio:
+                 patch('core.api.socketio'):
 
                 mock_db_instance = Mock()
                 MockDB.return_value = mock_db_instance
@@ -634,7 +635,7 @@ class TestSimpleAPI:
                                      data=json.dumps({}),
                                      content_type='application/json')
                 assert response.status_code == 200  # Still succeeds but broadcasts empty
-    
+
     def test_stream_config_endpoint(self):
         """Test stream configuration endpoint."""
         with tempfile.TemporaryDirectory() as tmpdir:

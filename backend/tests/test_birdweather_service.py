@@ -1,12 +1,11 @@
 """Tests for the BirdWeather service module."""
 
 import os
-import pytest
 import tempfile
-import threading
 import time
-from unittest.mock import patch, MagicMock, mock_open
+from unittest.mock import MagicMock, mock_open, patch
 
+import pytest
 import requests
 
 
@@ -323,7 +322,10 @@ class TestBirdWeatherServiceSingleton:
             import core.birdweather_service as bws
             bws._birdweather_service = None  # Reset
 
-            from core.birdweather_service import get_birdweather_service, BirdWeatherService
+            from core.birdweather_service import (
+                BirdWeatherService,
+                get_birdweather_service,
+            )
             service = get_birdweather_service()
 
             assert service is not None

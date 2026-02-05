@@ -4,23 +4,28 @@ This module provides a Flask API for analyzing audio files using the configured
 bird detection model. It supports multiple model types through the factory pattern.
 """
 
-from config import settings
 import datetime
 import warnings
+
 import numpy as np
+
+from config import settings
+
 # Suppress NumPy floating point limit warnings
 warnings.filterwarnings('ignore', category=UserWarning, module='numpy.core.getlimits')
-from flask import Flask, request, jsonify
-from scipy.io import wavfile
-import time
-import sys
 import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.logging_config import setup_logging, get_logger, log_execution_time
-from core.utils import build_detection_filenames
-from .model_factory import create_model, get_model_type_from_settings
-from .base_model import BirdDetectionModel
+import sys
+import time
 
+from flask import Flask, jsonify, request
+from scipy.io import wavfile
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.logging_config import get_logger, log_execution_time, setup_logging
+from core.utils import build_detection_filenames
+
+from .base_model import BirdDetectionModel
+from .model_factory import create_model, get_model_type_from_settings
 
 app = Flask(__name__)
 
@@ -41,7 +46,7 @@ try:
         'model_version': model.version,
         'num_species': len(model.get_labels())
     })
-except Exception as e:
+except Exception:
     logger.error("Failed to load model", exc_info=True)
     raise
 

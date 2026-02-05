@@ -3,10 +3,12 @@ API utility functions and decorators for BirdNet-PiPy
 Provides common functionality for error handling, logging, validation, and file serving
 """
 
-from functools import wraps
-from flask import jsonify, request, send_from_directory, make_response
-from datetime import datetime
 import os
+from datetime import datetime
+from functools import wraps
+
+from flask import jsonify, make_response, request, send_from_directory
+
 from core.logging_config import get_logger
 from core.utils import get_legacy_filename
 
@@ -16,10 +18,10 @@ logger = get_logger(__name__)
 def handle_api_errors(f):
     """
     Decorator to handle common API errors in a standardized way
-    
+
     Catches and formats various exceptions into consistent JSON responses:
     - ValueError: 400 Bad Request
-    - FileNotFoundError: 404 Not Found  
+    - FileNotFoundError: 404 Not Found
     - KeyError: 400 Bad Request
     - Exception: 500 Internal Server Error
     """
@@ -59,7 +61,7 @@ def handle_api_errors(f):
 def validate_date_param(param_name='date', required=False, default_today=True):
     """
     Decorator to validate date parameters in YYYY-MM-DD format
-    
+
     Args:
         param_name: Name of the date parameter to validate
         required: Whether the parameter is required
@@ -69,23 +71,23 @@ def validate_date_param(param_name='date', required=False, default_today=True):
         @wraps(f)
         def decorated_function(*args, **kwargs):
             date_str = request.args.get(param_name)
-            
+
             # Handle missing parameter
             if not date_str:
                 if required:
-                    return jsonify({"error": f"Date parameter is required"}), 400
+                    return jsonify({"error": "Date parameter is required"}), 400
                 elif default_today:
                     # No need to validate, will use default in endpoint
                     return f(*args, **kwargs)
                 else:
                     return f(*args, **kwargs)
-            
+
             # Validate format
             try:
                 datetime.strptime(date_str, '%Y-%m-%d')
             except ValueError:
-                return jsonify({"error": f"Invalid date format. Use YYYY-MM-DD."}), 400
-                
+                return jsonify({"error": "Invalid date format. Use YYYY-MM-DD."}), 400
+
             return f(*args, **kwargs)
         return decorated_function
     return decorator
@@ -176,7 +178,7 @@ def serve_file_with_fallback(directory, filename, default_file_path, file_type="
 def validate_limit_param(default=10, min_val=1, max_val=100):
     """
     Decorator to validate and constrain 'limit' parameter
-    
+
     Args:
         default: Default value if not provided
         min_val: Minimum allowed value
@@ -191,7 +193,7 @@ def validate_limit_param(default=10, min_val=1, max_val=100):
                     return jsonify({"error": f"Limit must be between {min_val} and {max_val}"}), 400
             except ValueError:
                 return jsonify({"error": "Limit must be a valid integer"}), 400
-                
+
             return f(*args, **kwargs)
         return decorated_function
     return decorator
@@ -200,7 +202,7 @@ def validate_limit_param(default=10, min_val=1, max_val=100):
 def log_data_metrics(endpoint_name, data, custom_metrics=None):
     """
     Log standardized metrics about returned data
-    
+
     Args:
         endpoint_name: Name of the endpoint
         data: The data being returned
@@ -209,15 +211,15 @@ def log_data_metrics(endpoint_name, data, custom_metrics=None):
     metrics = {
         'endpoint': endpoint_name
     }
-    
+
     # Add standard metrics based on data type
     if isinstance(data, list):
         metrics['count'] = len(data)
     elif isinstance(data, dict):
         metrics['keys'] = list(data.keys())
-        
+
     # Add custom metrics
     if custom_metrics:
         metrics.update(custom_metrics)
-        
+
     logger.debug(f"Data returned from {endpoint_name}", extra=metrics)

@@ -6,10 +6,10 @@ Tests the core functions:
 - process_audio_file()
 - process_audio_files() (directory scanning)
 """
-import pytest
 import os
-import tempfile
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
+
+import pytest
 import requests
 
 
@@ -136,7 +136,7 @@ class TestProcessAudioFile:
             mock_response.json.return_value = []
             mock_post.return_value = mock_response
 
-            from core.main import process_audio_file, BIRDNET_REQUEST_TIMEOUT
+            from core.main import BIRDNET_REQUEST_TIMEOUT, process_audio_file
 
             process_audio_file('/tmp/test_audio.wav')
 
@@ -277,7 +277,7 @@ class TestDirectoryScanningArchitecture:
         """Test that processing thread scans directory for .wav files."""
         # Create a valid recording file
         valid_size = 6 * 48000 * 2
-        file_path = create_test_wav_file('test_recording.wav', valid_size)
+        create_test_wav_file('test_recording.wav', valid_size)
 
         call_count = [0]
         def stop_after_processing():
@@ -1250,7 +1250,7 @@ class TestFullPipelineIntegration:
         """Test that all detection fields are correctly persisted to database."""
 
         # Create valid WAV file
-        wav_file = create_valid_wav_file('20251127_140000.wav', duration_seconds=9)
+        create_valid_wav_file('20251127_140000.wav', duration_seconds=9)
 
         # Setup: Patch all configuration and dependencies
         with patch('core.main.RECORDING_DIR', pipeline_temp_dirs['recording']), \
@@ -1329,7 +1329,7 @@ class TestFullPipelineIntegration:
         """Test that extracted audio files are created in the correct directory."""
 
         # Create valid WAV file
-        wav_file = create_valid_wav_file('20251127_150000.wav', duration_seconds=9)
+        create_valid_wav_file('20251127_150000.wav', duration_seconds=9)
 
         # Setup: Patch all configuration and dependencies
         with patch('core.main.RECORDING_DIR', pipeline_temp_dirs['recording']), \
@@ -1389,7 +1389,7 @@ class TestFullPipelineIntegration:
         """Test that spectrogram files are created in the correct directory."""
 
         # Create valid WAV file
-        wav_file = create_valid_wav_file('20251127_160000.wav', duration_seconds=9)
+        create_valid_wav_file('20251127_160000.wav', duration_seconds=9)
 
         # Setup: Patch all configuration and dependencies
         with patch('core.main.RECORDING_DIR', pipeline_temp_dirs['recording']), \
@@ -1746,6 +1746,7 @@ class TestHandleDetectionErrors:
     ):
         """Document that trim_audio() subprocess failure currently crashes (no error handling)."""
         import subprocess
+
         import pytest
 
         input_file = os.path.join(temp_recording_dir, 'test.wav')
@@ -1786,9 +1787,9 @@ class TestHandleDetectionErrors:
              patch('core.main.SPECTROGRAM_DIR', temp_extraction_dirs['spectrogram']), \
              patch('core.main.ANALYSIS_CHUNK_LENGTH', 3), \
              patch('core.main.select_audio_chunks', return_value=(0, 3)), \
-             patch('core.main.trim_audio') as mock_trim, \
-             patch('core.main.convert_wav_to_mp3') as mock_convert, \
-             patch('os.remove') as mock_remove, \
+             patch('core.main.trim_audio'), \
+             patch('core.main.convert_wav_to_mp3'), \
+             patch('os.remove'), \
              patch('core.main.generate_spectrogram') as mock_spec, \
              patch('core.main.get_logger') as mock_logger:
 
@@ -1812,6 +1813,7 @@ class TestHandleDetectionErrors:
     ):
         """Document that convert_wav_to_mp3() subprocess failure currently crashes (no error handling)."""
         import subprocess
+
         import pytest
 
         input_file = os.path.join(temp_recording_dir, 'test.wav')
@@ -1821,8 +1823,8 @@ class TestHandleDetectionErrors:
              patch('core.main.SPECTROGRAM_DIR', temp_extraction_dirs['spectrogram']), \
              patch('core.main.ANALYSIS_CHUNK_LENGTH', 3), \
              patch('core.main.select_audio_chunks', return_value=(0, 3)), \
-             patch('core.main.trim_audio') as mock_trim, \
-             patch('core.main.generate_spectrogram') as mock_spec, \
+             patch('core.main.trim_audio'), \
+             patch('core.main.generate_spectrogram'), \
              patch('core.main.convert_wav_to_mp3') as mock_convert, \
              patch('core.main.get_logger') as mock_logger:
 
@@ -2059,12 +2061,12 @@ class TestEdgeCasesAndResilience:
              patch('core.main.SPECTROGRAM_DIR', temp_extraction_dirs['spectrogram']), \
              patch('core.main.ANALYSIS_CHUNK_LENGTH', 3), \
              patch('core.main.select_audio_chunks', return_value=(0, 3)), \
-             patch('core.main.trim_audio') as mock_trim, \
-             patch('core.main.generate_spectrogram') as mock_spec, \
-             patch('core.main.convert_wav_to_mp3') as mock_convert, \
+             patch('core.main.trim_audio'), \
+             patch('core.main.generate_spectrogram'), \
+             patch('core.main.convert_wav_to_mp3'), \
              patch('core.main.db_manager') as mock_db, \
              patch('core.main.get_logger') as mock_logger, \
-             patch('core.main.requests.post') as mock_post, \
+             patch('core.main.requests.post'), \
              patch('os.remove'):
 
             # Mock db_manager.insert_detection to raise exception

@@ -4,10 +4,11 @@ Tests for split_audio function with overlap support.
 These tests verify that the audio chunking logic correctly handles
 different overlap values for BirdNET-Pi compatibility.
 """
-import pytest
-import numpy as np
-import tempfile
 import os
+import tempfile
+
+import numpy as np
+import pytest
 from scipy.io import wavfile
 
 

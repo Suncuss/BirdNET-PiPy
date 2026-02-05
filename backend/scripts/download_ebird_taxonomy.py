@@ -61,7 +61,7 @@ def download_csv(url: str) -> str:
     except Exception as e:
         if os.path.exists(temp_path):
             os.unlink(temp_path)
-        raise RuntimeError(f"Failed to download taxonomy: {e}")
+        raise RuntimeError(f"Failed to download taxonomy: {e}") from e
 
 
 def parse_ebird_csv(csv_path: str) -> dict:
@@ -80,7 +80,7 @@ def parse_ebird_csv(csv_path: str) -> dict:
     species_count = 0
     skipped_count = 0
 
-    with open(csv_path, 'r', encoding='utf-8') as f:
+    with open(csv_path, encoding='utf-8') as f:
         reader = csv.DictReader(f)
 
         for row in reader:

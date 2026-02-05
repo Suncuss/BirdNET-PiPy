@@ -3,9 +3,10 @@
 import csv
 import json
 import os
-import tempfile
-import pytest
 import sys
+import tempfile
+
+import pytest
 
 # Add scripts directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'scripts'))
@@ -164,7 +165,7 @@ class TestSaveJson:
         from pathlib import Path
         save_json(mapping, Path(path))
 
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, encoding='utf-8') as f:
             loaded = json.load(f)
 
         assert loaded == mapping
@@ -181,7 +182,7 @@ class TestSaveJson:
             save_json(mapping, output_path)
 
             assert output_path.exists()
-            with open(output_path, 'r') as f:
+            with open(output_path) as f:
                 loaded = json.load(f)
             assert loaded == mapping
 
@@ -199,7 +200,7 @@ class TestSaveJson:
         from pathlib import Path
         save_json(mapping, Path(path))
 
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, encoding='utf-8') as f:
             loaded = json.load(f)
 
         assert loaded == mapping

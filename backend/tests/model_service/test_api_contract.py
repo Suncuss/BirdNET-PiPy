@@ -1,8 +1,9 @@
 """Tests for API contract regression - ensuring response format stability."""
 
 import datetime
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 
 
 class TestBuildDetectionResult:

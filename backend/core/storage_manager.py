@@ -15,14 +15,15 @@ Key features:
 import os
 import shutil
 import time
-from core.logging_config import get_logger
-from core.utils import build_detection_filenames, get_legacy_filename
+
 from config.settings import (
+    BASE_DIR,
     EXTRACTED_AUDIO_DIR,
     SPECTROGRAM_DIR,
-    BASE_DIR,
-    user_settings
+    user_settings,
 )
+from core.logging_config import get_logger
+from core.utils import build_detection_filenames, get_legacy_filename
 
 logger = get_logger(__name__)
 

@@ -2,10 +2,10 @@
 Script to create a test database with sample data for testing.
 This can be run to generate a consistent test database.
 """
-import sqlite3
 import os
-from datetime import datetime, timedelta
 import random
+import sqlite3
+from datetime import datetime, timedelta
 
 # Test database path
 TEST_DB_PATH = os.path.join(os.path.dirname(__file__), 'test_birds.db')
@@ -42,12 +42,12 @@ BIRD_SPECIES = [
     {'common_name': 'Northern Cardinal', 'scientific_name': 'Cardinalis cardinalis', 'frequency': 'common'},
     {'common_name': 'Blue Jay', 'scientific_name': 'Cyanocitta cristata', 'frequency': 'common'},
     {'common_name': 'Black-capped Chickadee', 'scientific_name': 'Poecile atricapillus', 'frequency': 'common'},
-    
+
     # Uncommon birds (moderate detections)
     {'common_name': 'Red-bellied Woodpecker', 'scientific_name': 'Melanerpes carolinus', 'frequency': 'uncommon'},
     {'common_name': 'White-breasted Nuthatch', 'scientific_name': 'Sitta carolinensis', 'frequency': 'uncommon'},
     {'common_name': 'Eastern Bluebird', 'scientific_name': 'Sialia sialis', 'frequency': 'uncommon'},
-    
+
     # Rare birds (few detections)
     {'common_name': 'Hooded Warbler', 'scientific_name': 'Setophaga citrina', 'frequency': 'rare'},
     {'common_name': 'Scarlet Tanager', 'scientific_name': 'Piranga olivacea', 'frequency': 'rare'},
@@ -59,18 +59,18 @@ def create_test_database():
     # Remove existing test database if it exists
     if os.path.exists(TEST_DB_PATH):
         os.remove(TEST_DB_PATH)
-    
+
     # Create new database
     conn = sqlite3.connect(TEST_DB_PATH)
     cursor = conn.cursor()
-    
+
     # Create schema
     cursor.executescript(SCHEMA)
-    
+
     # Generate sample detections
     base_time = datetime.now()
     detections = []
-    
+
     for bird in BIRD_SPECIES:
         # Determine number of detections based on frequency
         if bird['frequency'] == 'common':
@@ -79,14 +79,14 @@ def create_test_database():
             num_detections = random.randint(10, 30)
         else:  # rare
             num_detections = random.randint(1, 5)
-        
+
         # Generate detections over the past 30 days
-        for i in range(num_detections):
+        for _i in range(num_detections):
             # Random time in the past 30 days
             days_ago = random.uniform(0, 30)
             hours_offset = random.uniform(0, 24)
             detection_time = base_time - timedelta(days=days_ago, hours=hours_offset)
-            
+
             # Higher confidence for common birds
             if bird['frequency'] == 'common':
                 confidence = random.uniform(0.75, 0.99)
@@ -94,7 +94,7 @@ def create_test_database():
                 confidence = random.uniform(0.65, 0.85)
             else:  # rare
                 confidence = random.uniform(0.55, 0.75)
-            
+
             detection = {
                 'timestamp': detection_time.isoformat(),
                 'group_timestamp': detection_time.isoformat(),
@@ -108,7 +108,7 @@ def create_test_database():
                 'overlap': 0.25
             }
             detections.append(detection)
-    
+
     # Insert all detections
     cursor.executemany("""
         INSERT INTO detections (
@@ -118,32 +118,32 @@ def create_test_database():
     """, [(d['timestamp'], d['group_timestamp'], d['scientific_name'],
            d['common_name'], d['confidence'], d['latitude'], d['longitude'],
            d['cutoff'], d['sensitivity'], d['overlap'], '{}') for d in detections])
-    
+
     conn.commit()
-    
+
     # Print summary
     cursor.execute("SELECT COUNT(*) FROM detections")
     total_count = cursor.fetchone()[0]
-    
+
     cursor.execute("SELECT COUNT(DISTINCT common_name) FROM detections")
     species_count = cursor.fetchone()[0]
-    
+
     print(f"Test database created at: {TEST_DB_PATH}")
     print(f"Total detections: {total_count}")
     print(f"Unique species: {species_count}")
-    
+
     # Show detection counts by species
     cursor.execute("""
-        SELECT common_name, COUNT(*) as count 
-        FROM detections 
-        GROUP BY common_name 
+        SELECT common_name, COUNT(*) as count
+        FROM detections
+        GROUP BY common_name
         ORDER BY count DESC
     """)
-    
+
     print("\nDetections by species:")
     for row in cursor.fetchall():
         print(f"  {row[0]}: {row[1]}")
-    
+
     conn.close()
 
 if __name__ == "__main__":

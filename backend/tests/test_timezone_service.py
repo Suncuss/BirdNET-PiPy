@@ -1,7 +1,6 @@
 """Tests for the timezone service module."""
 
 import os
-import pytest
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 

@@ -1,7 +1,10 @@
 <template>
-  <div v-if="isVisible" class="fixed inset-0 z-50 overflow-y-auto">
+  <div
+    v-if="isVisible"
+    class="fixed inset-0 z-50 overflow-y-auto"
+  >
     <!-- Backdrop -->
-    <div class="fixed inset-0 bg-black bg-opacity-50 transition-opacity"></div>
+    <div class="fixed inset-0 bg-black bg-opacity-50 transition-opacity" />
 
     <!-- Modal -->
     <div class="flex min-h-full items-center justify-center p-4">
@@ -9,19 +12,38 @@
         <!-- Header -->
         <div class="text-center mb-6">
           <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-green-100 mb-4">
-            <svg class="h-6 w-6 text-green-600" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
-              <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
+            <svg
+              class="h-6 w-6 text-green-600"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke-width="1.5"
+              stroke="currentColor"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z"
+              />
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z"
+              />
             </svg>
           </div>
-          <h2 class="text-xl font-semibold text-gray-900">Set Your Location</h2>
+          <h2 class="text-xl font-semibold text-gray-900">
+            Set Your Location
+          </h2>
           <p class="mt-2 text-sm text-gray-600">
             BirdNET-PiPy uses your location to filter bird species likely in your area and to retrieve local weather information.
           </p>
         </div>
 
         <!-- Error message -->
-        <div v-if="errorMessage" class="mb-4 p-3 bg-red-50 border-l-4 border-red-400 text-red-700 text-sm">
+        <div
+          v-if="errorMessage"
+          class="mb-4 p-3 bg-red-50 border-l-4 border-red-400 text-red-700 text-sm"
+        >
           {{ errorMessage }}
         </div>
 
@@ -30,33 +52,64 @@
           <div class="flex gap-2">
             <input
               v-model="searchQuery"
-              @keyup.enter="searchAddress"
               type="text"
               placeholder="City, address, or place name..."
               class="flex-1 rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring focus:ring-green-200 focus:ring-opacity-50 pl-3"
+              @keyup.enter="searchAddress"
             >
             <button
-              @click="searchAddress"
               :disabled="searching || !searchQuery.trim()"
               class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-semibold rounded-lg shadow transition-colors focus:outline-none focus:ring-2 focus:ring-blue-300"
+              @click="searchAddress"
             >
-              <svg v-if="!searching" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+              <svg
+                v-if="!searching"
+                class="h-5 w-5"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke-width="1.5"
+                stroke="currentColor"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"
+                />
               </svg>
-              <svg v-else class="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              <svg
+                v-else
+                class="animate-spin h-5 w-5"
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+              >
+                <circle
+                  class="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  stroke-width="4"
+                />
+                <path
+                  class="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                />
               </svg>
             </button>
           </div>
 
           <!-- Search Results -->
-          <div v-if="searchResults.length > 0" class="mt-2 border rounded-md shadow-sm max-h-40 overflow-y-auto">
+          <div
+            v-if="searchResults.length > 0"
+            class="mt-2 border rounded-md shadow-sm max-h-40 overflow-y-auto"
+          >
             <button
               v-for="result in searchResults"
               :key="result.place_id"
-              @click="selectSearchResult(result)"
               class="w-full text-left px-3 py-2 hover:bg-gray-100 border-b last:border-b-0 text-sm"
+              @click="selectSearchResult(result)"
             >
               {{ result.display_name }}
             </button>
@@ -66,7 +119,7 @@
         <!-- Divider -->
         <div class="relative my-4">
           <div class="absolute inset-0 flex items-center">
-            <div class="w-full border-t border-gray-300"></div>
+            <div class="w-full border-t border-gray-300" />
           </div>
           <div class="relative flex justify-center text-sm">
             <span class="bg-white px-2 text-gray-500">or enter coordinates manually</span>
@@ -76,45 +129,76 @@
         <!-- Option 2: Manual Entry -->
         <div class="grid grid-cols-2 gap-4 mb-6">
           <div>
-            <label for="latitude" class="block text-sm font-medium text-gray-700 mb-1">Latitude</label>
+            <label
+              for="latitude"
+              class="block text-sm font-medium text-gray-700 mb-1"
+            >Latitude</label>
             <input
               id="latitude"
               v-model.number="latitude"
               type="text"
               inputmode="decimal"
-              @input="limitDecimals"
               placeholder="e.g., 42.47"
               class="w-full rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring focus:ring-green-200 focus:ring-opacity-50 pl-3"
+              @input="limitDecimals"
             >
           </div>
           <div>
-            <label for="longitude" class="block text-sm font-medium text-gray-700 mb-1">Longitude</label>
+            <label
+              for="longitude"
+              class="block text-sm font-medium text-gray-700 mb-1"
+            >Longitude</label>
             <input
               id="longitude"
               v-model.number="longitude"
               type="text"
               inputmode="decimal"
-              @input="limitDecimals"
               placeholder="e.g., -76.45"
               class="w-full rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring focus:ring-green-200 focus:ring-opacity-50 pl-3"
+              @input="limitDecimals"
             >
           </div>
         </div>
 
         <!-- Selected Location Display -->
-        <div v-if="latitude && longitude" class="mb-4 p-3 bg-green-50 border border-green-200 rounded-md">
+        <div
+          v-if="latitude && longitude"
+          class="mb-4 p-3 bg-green-50 border border-green-200 rounded-md"
+        >
           <p class="text-sm text-green-800">
             <span class="font-medium">Selected:</span> {{ latitude.toFixed(2) }}, {{ longitude.toFixed(2) }}
-            <span v-if="locationName" class="block text-xs text-green-600 mt-1">{{ locationName }}</span>
+            <span
+              v-if="locationName"
+              class="block text-xs text-green-600 mt-1"
+            >{{ locationName }}</span>
           </p>
         </div>
 
         <!-- Restart message -->
-        <div v-if="serviceRestart.restartMessage.value" class="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
+        <div
+          v-if="serviceRestart.restartMessage.value"
+          class="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-md"
+        >
           <div class="flex items-center gap-2 text-sm text-blue-800">
-            <svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            <svg
+              class="animate-spin h-4 w-4"
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+            >
+              <circle
+                class="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                stroke-width="4"
+              />
+              <path
+                class="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+              />
             </svg>
             {{ serviceRestart.restartMessage.value }}
           </div>
@@ -122,13 +206,12 @@
 
         <!-- Save Button -->
         <button
-          @click="saveLocation"
           :disabled="!isValidLocation || saving || serviceRestart.isRestarting.value"
           class="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-semibold py-2 px-4 rounded-lg shadow transition-colors focus:outline-none focus:ring-2 focus:ring-green-300"
+          @click="saveLocation"
         >
           {{ saving ? 'Saving...' : 'Save Location' }}
         </button>
-
       </div>
     </div>
   </div>

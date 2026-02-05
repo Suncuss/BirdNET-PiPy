@@ -2,10 +2,9 @@
 
 import os
 import tempfile
-import time
 import threading
-import pytest
-from unittest.mock import patch, Mock
+import time
+from unittest.mock import patch
 
 
 def wait_for_audio_import(api_client, import_id, timeout=30):
@@ -249,6 +248,45 @@ class TestMigrationAudioScanEndpoint:
                 assert response.status_code == 200
                 data = response.get_json()
                 assert data['matched_count'] == 1
+
+    def test_scan_matches_underscore_variant(self, api_client, real_db_manager):
+        """Test scan matches files with underscores when DB has colons in timestamp.
+
+        BirdNET-Pi stores filenames with colons in the database (e.g., 10:30:45)
+        but some filesystems save files with underscores instead (e.g., 10_30_45).
+        """
+        # Insert detection with colon-style filename (as stored in BirdNET-Pi DB)
+        real_db_manager.insert_detection({
+            'timestamp': '2024-01-15T10:30:00',
+            'group_timestamp': '2024-01-15T10:30:00',
+            'scientific_name': 'Turdus migratorius',
+            'common_name': 'American Robin',
+            'confidence': 0.85,
+            'latitude': 40.7128,
+            'longitude': -74.0060,
+            'cutoff': 0.5,
+            'sensitivity': 0.75,
+            'overlap': 0.25,
+            'extra': {'original_file_name': 'robin_2024-01-15-10:30:45.mp3'}
+        })
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create file with underscores (as saved on some filesystems)
+            audio_folder = os.path.join(tmpdir, 'audio')
+            os.makedirs(audio_folder)
+            audio_file = os.path.join(audio_folder, 'robin_2024-01-15-10_30_45.mp3')
+            with open(audio_file, 'wb') as f:
+                f.write(b'fake audio content')
+
+            with patch('core.migration_audio.DATA_DIR', tmpdir):
+                response = api_client.post(
+                    '/api/migration/audio/scan',
+                    json={'source_folder': 'audio'}
+                )
+                assert response.status_code == 200
+                data = response.get_json()
+                assert data['matched_count'] == 1
+                assert data['unmatched_count'] == 0
 
 
 class TestMigrationAudioImportEndpoint:
