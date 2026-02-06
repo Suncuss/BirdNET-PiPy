@@ -2,37 +2,39 @@
 
 ## [Unreleased]
 
-- Fixed BirdNET-Pi audio import to match files with underscores when database has colons in timestamps
-- Fixed database migration to prevent parallel imports when user navigates away and returns
+## [0.4.0] - 2026-02-05
+
+- Added BirdNET-Pi migration - import historical detections, audio files, and generate spectrograms via Settings
+- Added BirdWeather integration - upload detections and audio to birdweather.com
+- Added weather data integration - attaches current weather from Open-Meteo API to detections
+- Added weather display in Detection Info modal (temperature, humidity, wind, precipitation, cloud cover, pressure)
+- Added automatic update checking with dismissible FAB on dashboard (desktop/tablet only)
+- Added metric/imperial unit toggle in Settings (Advanced → Display)
+- Added offline timezone detection from coordinates using timezonefinder
+- Added date picker validation in Table view (no future start dates, end date must follow start)
+- Added PrimeVue DatePicker for consistent cross-browser date styling
+- Added unsaved changes detection on Settings page with confirmation modal
+- Added Open-Meteo attribution link in Detection Info modal
+- Added `--branch` option to install.sh for installing from non-main branches
+- Changed location setup to be required before detection starts (removed "Skip for now")
+- Changed audio/spectrogram filenames to use dashes instead of colons in timestamps (better compatibility)
+- Changed lat/long inputs to limit to 2 decimal places (sufficient for species filtering)
+- Simplified install.sh
 - Moved dev scripts to `scripts/` folder for cleaner root directory
-- Added automatic update checking with dismissible pill-shaped FAB on dashboard (desktop/tablet only)
+- Improved migration modal instructions with clearer 3-step process
 - Fixed authentication bypass that allowed enabling auth without a password via API
 - Fixed dashboard not loading when authentication is enabled but user isn't logged in
 - Fixed spectrogram canvas resetting during audio playback
+- Fixed live spectrogram display not initializing in Dashboard
 - Fixed unnecessary service restart when settings didn't actually change
-- Fixed live spectrogram display not initializing in Dashboard (regression from first-time user experience changes)
-- Improved migration modal instructions with clearer 3-step process for importing audio files
-- Added date picker validation in Table view (start date cannot be in the future, end date cannot be before start date)
-- Added offline timezone detection from coordinates using timezonefinder (no external API calls)
 - Fixed shutdown signal handling before threads are created (issue #6)
 - Fixed PulseAudio socket permissions for Docker access (issue #6)
-- Changed location setup to be required before detection starts (removed "Skip for now" option)
-- Changed audio/spectrogram filenames to use dashes instead of colons in timestamps (better compatibility)
-- Added BirdNET-Pi migration - import historical detections, audio files, and generate spectrograms from BirdNET-Pi via Settings
-- Added BirdWeather integration - upload detections and audio to birdweather.com
-- Added weather data integration - attaches current weather from Open-Meteo API to bird detections
-- Added weather display in Detection Info modal (temperature, humidity, wind, precipitation, cloud cover, pressure)
-- Added metric/imperial unit toggle in Settings (Advanced → Display)
-- Added Open-Meteo attribution link in Detection Info modal
-- Added PrimeVue DatePicker for consistent cross-browser date styling
-- Added unsaved changes detection on Settings page with confirmation modal when navigating away
-- Added `--branch` option to install.sh for installing from non-main branches
+- Fixed BirdNET-Pi audio import matching files with underscores vs colons in timestamps
+- Fixed database migration to prevent parallel imports when navigating away and returning
 - Fixed date pickers displaying incorrectly on mobile in Table view
 - Fixed iOS zoom on date picker inputs
 - Fixed location check to support coordinates at 0° latitude/longitude
 - Fixed audio queue cleanup error when buffer is full
-- Changed lat/long inputs to limit to 2 decimal places (sufficient precision for species filtering)
-- Simplified install.sh - removed 75 lines of redundant code and unused options
 
 ## [0.3.2] - 2026-01-17
 

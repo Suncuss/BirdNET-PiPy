@@ -922,7 +922,7 @@
                 Generate Spectrograms
               </h2>
               <p class="mt-1 text-sm text-gray-600">
-                Create visual waveforms for your imported audio files.
+                Generate spectrograms in BirdNET-PiPy style for your imported audio.
               </p>
             </div>
 
