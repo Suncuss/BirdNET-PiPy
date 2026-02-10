@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Renamed "Bird Gallery" to "Gallery" in navigation
+- Added Table link to navigation bar
+
 ## [0.4.0] - 2026-02-05
 
 - Added BirdNET-Pi migration - import historical detections, audio files, and generate spectrograms via Settings

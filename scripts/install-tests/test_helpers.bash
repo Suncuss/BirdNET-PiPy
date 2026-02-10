@@ -193,3 +193,49 @@ assert_docker_images_exist() {
         return 1
     fi
 }
+
+# ============================================================================
+# Local fake git remote helpers (for testing update mode without network)
+# ============================================================================
+
+# Create a local bare git remote from the test project
+# Idempotent - safe to call multiple times
+# Usage: setup_fake_origin
+setup_fake_origin() {
+    local bare_repo="/tmp/birdnet-origin.git"
+
+    if [ ! -d "$bare_repo" ]; then
+        # git clone --bare reads .git directly; safe.directory needs the .git path too
+        git config --global --add safe.directory "$PROJECT_DIR/.git"
+        git clone --bare "$PROJECT_DIR" "$bare_repo"
+    fi
+
+    # Point test repo's origin to the local bare repo
+    git -C "$PROJECT_DIR" remote set-url origin "$bare_repo"
+}
+
+# Push a synthetic commit to the fake bare origin so it's ahead of the test repo
+# Usage: push_synthetic_commit
+push_synthetic_commit() {
+    local bare_repo="/tmp/birdnet-origin.git"
+    local work_dir="/tmp/birdnet-work"
+    local branch
+    branch=$(git -C "$PROJECT_DIR" rev-parse --abbrev-ref HEAD)
+
+    rm -rf "$work_dir"
+    git clone "$bare_repo" "$work_dir"
+
+    # Use a subshell to avoid changing the caller's working directory
+    (
+        cd "$work_dir"
+        git checkout "$branch"
+        git config user.email "test@test.com"
+        git config user.name "Test"
+        echo "synthetic-change-$(date +%s)" >> .birdnet-test-marker
+        git add .birdnet-test-marker
+        git commit -m "test: synthetic commit for update testing"
+        git push origin "$branch"
+    )
+
+    rm -rf "$work_dir"
+}

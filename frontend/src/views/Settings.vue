@@ -584,22 +584,6 @@
               </p>
             </div>
           </div>
-
-          <!-- Import from BirdNET-Pi -->
-          <div class="pt-4 border-t border-gray-100">
-            <h3 class="text-sm font-medium text-gray-700 mb-3">
-              Data Migration
-            </h3>
-            <p class="text-xs text-gray-400 mb-2">
-              Import historical detections from BirdNET-Pi.
-            </p>
-            <button
-              class="w-full py-2 text-sm text-center text-blue-600 hover:text-blue-800 hover:bg-blue-50 border border-blue-200 rounded-lg transition-colors"
-              @click="showMigrationModal = true"
-            >
-              Import from BirdNET-Pi
-            </button>
-          </div>
         </div>
       </div>
 
@@ -609,15 +593,15 @@
           Data
         </h2>
         <p class="text-sm text-gray-600 mb-3">
-          View and manage all bird detections stored in the database.
+          Manage bird detection data.
         </p>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          <router-link
-            to="/table"
-            class="block py-2 text-sm text-center text-gray-600 hover:text-gray-800 hover:bg-gray-50 border border-gray-200 rounded-lg transition-colors"
+          <button
+            class="py-2 text-sm text-center text-gray-600 hover:text-gray-800 hover:bg-gray-50 border border-gray-200 rounded-lg transition-colors"
+            @click="showMigrationModal = true"
           >
-            View Detections
-          </router-link>
+            Import from BirdNET-Pi
+          </button>
           <button
             :disabled="exporting"
             class="py-2 text-sm text-center text-gray-600 hover:text-gray-800 hover:bg-gray-50 border border-gray-200 rounded-lg transition-colors disabled:text-gray-400 disabled:hover:bg-transparent"

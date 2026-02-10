@@ -75,9 +75,10 @@ describe('App', () => {
     const text = wrapper.text()
     expect(text).toContain(DISPLAY_NAME)
     expect(text).toContain('Dashboard')
-    expect(text).toContain('Bird Gallery')
+    expect(text).toContain('Gallery')
     expect(text).toContain('Live Feed')
     expect(text).toContain('Charts')
+    expect(text).toContain('Table')
     expect(text).toContain('Settings')
   })
 

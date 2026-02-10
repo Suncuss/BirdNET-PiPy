@@ -127,11 +127,19 @@ get_actual_user() {
     fi
 }
 
-# Get actual user's UID/GID (not root's)
-get_actual_uid_gid() {
+# Set global user variables (called once from main after check_root)
+init_user_vars() {
     ACTUAL_USER=$(get_actual_user)
-    ACTUAL_UID=$(id -u $ACTUAL_USER)
-    ACTUAL_GID=$(id -g $ACTUAL_USER)
+    ACTUAL_UID=$(id -u "$ACTUAL_USER")
+    ACTUAL_GID=$(id -g "$ACTUAL_USER")
+}
+
+# Resolve a command's binary path (checks PATH, then common sbin locations)
+_bin() {
+    command -v "$1" 2>/dev/null \
+        || { [ -x "/usr/sbin/$1" ] && echo "/usr/sbin/$1"; } \
+        || { [ -x "/sbin/$1" ] && echo "/sbin/$1"; } \
+        || echo "/usr/bin/$1"
 }
 
 # Detect platform
@@ -235,7 +243,6 @@ clone_repository() {
     local branch="${TARGET_BRANCH:-$REPO_BRANCH}"
 
     # Determine installation directory
-    ACTUAL_USER=$(get_actual_user)
     INSTALL_DIR="/home/$ACTUAL_USER/BirdNET-PiPy"
 
     print_info "Installation directory: $INSTALL_DIR"
@@ -258,9 +265,7 @@ clone_repository() {
                     print_error "Failed to update repository"
                     exit 1
                 }
-                # Fix ownership after git pull
-                get_actual_uid_gid
-                chown -R $ACTUAL_USER:$ACTUAL_USER "$INSTALL_DIR"
+                chown -R "$ACTUAL_USER:$ACTUAL_USER" "$INSTALL_DIR"
             else
                 print_error "Directory exists but contains a different git repository"
                 print_error "Expected: $REPO_URL"
@@ -280,10 +285,7 @@ clone_repository() {
             exit 1
         }
         print_status "Repository cloned to $INSTALL_DIR (branch: $branch)"
-
-        # Fix ownership after clone
-        get_actual_uid_gid
-        chown -R $ACTUAL_USER:$ACTUAL_USER "$INSTALL_DIR"
+        chown -R "$ACTUAL_USER:$ACTUAL_USER" "$INSTALL_DIR"
     fi
 
     # Validate clone
@@ -324,28 +326,6 @@ reexec_from_clone() {
 # Stage 2: Docker Installation
 # ============================================================================
 
-# Check if Docker is installed
-check_docker() {
-    if command -v docker &> /dev/null; then
-        print_status "Docker is already installed"
-        docker --version
-        return 0
-    else
-        return 1
-    fi
-}
-
-# Check if Docker Compose plugin is available
-check_docker_compose() {
-    if docker compose version &> /dev/null 2>&1; then
-        print_status "Docker Compose plugin is available"
-        docker compose version
-        return 0
-    else
-        return 1
-    fi
-}
-
 # Install Docker using official method
 install_docker() {
     print_status "Installing Docker..."
@@ -380,9 +360,6 @@ install_docker() {
 
 # Add user to docker group
 setup_docker_user() {
-    ACTUAL_USER=$(get_actual_user)
-
-    # Add user to docker group
     if ! groups $ACTUAL_USER | grep -q docker; then
         usermod -aG docker $ACTUAL_USER
         print_status "Added $ACTUAL_USER to docker group"
@@ -404,9 +381,6 @@ configure_pulseaudio() {
     print_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     print_info "PulseAudio Setup (Required for audio recording)"
     print_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-    ACTUAL_USER=$(get_actual_user)
-    ACTUAL_UID=$(id -u $ACTUAL_USER)
 
     # Check if user-mode PulseAudio/PipeWire is already available (Desktop Pi OS)
     local user_pulse_socket="/run/user/$ACTUAL_UID/pulse/native"
@@ -479,44 +453,22 @@ build_application() {
     fi
 
     print_status "Building BirdNET-PiPy application..."
-
-    get_actual_uid_gid
     print_status "Building as user $ACTUAL_USER (UID:$ACTUAL_UID, GID:$ACTUAL_GID)..."
 
     cd "$PROJECT_ROOT"
-
-    # Make build.sh executable if not already
     chmod +x build.sh
-
-    # Run build script as actual user with correct UID/GID
-    sudo -u $ACTUAL_USER UID=$ACTUAL_UID GID=$ACTUAL_GID ./build.sh
-
-    if [ $? -eq 0 ]; then
-        print_status "Application built successfully"
-    else
-        print_error "Application build failed!"
-        exit 1
-    fi
+    sudo -u "$ACTUAL_USER" UID="$ACTUAL_UID" GID="$ACTUAL_GID" ./build.sh
+    print_status "Application built successfully"
 }
 
 # Fix existing data folder permissions
 fix_data_permissions() {
     print_status "Setting up data directory permissions..."
 
-    get_actual_uid_gid
+    # Create data and flags directories (mkdir -p handles both)
+    mkdir -p "$PROJECT_ROOT/data/flags"
 
-    # Create data directory if it doesn't exist
-    if [ ! -d "$PROJECT_ROOT/data" ]; then
-        mkdir -p "$PROJECT_ROOT/data"
-    fi
-
-    # Create flags directory for restart/update triggers
-    if [ ! -d "$PROJECT_ROOT/data/flags" ]; then
-        mkdir -p "$PROJECT_ROOT/data/flags"
-    fi
-
-    # Fix ownership
-    chown -R $ACTUAL_USER:$ACTUAL_USER "$PROJECT_ROOT/data"
+    chown -R "$ACTUAL_USER:$ACTUAL_USER" "$PROJECT_ROOT/data"
     print_status "Data permissions fixed for user $ACTUAL_USER"
 }
 
@@ -524,8 +476,7 @@ fix_data_permissions() {
 create_service_file() {
     print_status "Creating systemd service file..."
 
-    ACTUAL_USER=$(get_actual_user)
-    RUNTIME_SCRIPT="$PROJECT_ROOT/deployment/birdnet-service.sh"
+    local RUNTIME_SCRIPT="$PROJECT_ROOT/deployment/birdnet-service.sh"
 
     cat > "$SERVICE_FILE" << EOF
 [Unit]
@@ -580,18 +531,7 @@ install_service() {
 setup_sudoers() {
     print_status "Setting up sudoers for audio operations..."
 
-    ACTUAL_USER=$(get_actual_user)
-    SUDOERS_FILE="/etc/sudoers.d/birdnet-pipy"
-
-    # Get actual binary paths (may vary between /usr/bin and /bin)
-    PULSEAUDIO_BIN=$(which pulseaudio 2>/dev/null || echo "/usr/bin/pulseaudio")
-    MOUNT_BIN=$(which mount 2>/dev/null || echo "/usr/bin/mount")
-    UMOUNT_BIN=$(which umount 2>/dev/null || echo "/usr/bin/umount")
-    MKDIR_BIN=$(which mkdir 2>/dev/null || echo "/usr/bin/mkdir")
-    CHOWN_BIN=$(which chown 2>/dev/null || echo "/usr/bin/chown")
-    CHMOD_BIN=$(which chmod 2>/dev/null || echo "/usr/bin/chmod")
-    RM_BIN=$(which rm 2>/dev/null || echo "/usr/bin/rm")
-    SWAPON_BIN=$(which swapon 2>/dev/null || echo "/sbin/swapon")
+    local SUDOERS_FILE="/etc/sudoers.d/birdnet-pipy"
 
     # Create sudoers file with specific permissions for audio operations
     cat > "$SUDOERS_FILE" << EOF
@@ -600,21 +540,21 @@ setup_sudoers() {
 # Created by install.sh - remove with: sudo rm $SUDOERS_FILE
 
 # PulseAudio management
-$ACTUAL_USER ALL=(ALL) NOPASSWD: $PULSEAUDIO_BIN --system *
-$ACTUAL_USER ALL=(ALL) NOPASSWD: $PULSEAUDIO_BIN --kill
+$ACTUAL_USER ALL=(ALL) NOPASSWD: $(_bin pulseaudio) --system *
+$ACTUAL_USER ALL=(ALL) NOPASSWD: $(_bin pulseaudio) --kill
 
 # Mount operations for PulseAudio socket bind mount
-$ACTUAL_USER ALL=(ALL) NOPASSWD: $MOUNT_BIN --bind /run/user/*/pulse /run/pulse
-$ACTUAL_USER ALL=(ALL) NOPASSWD: $UMOUNT_BIN /run/pulse
+$ACTUAL_USER ALL=(ALL) NOPASSWD: $(_bin mount) --bind /run/user/*/pulse /run/pulse
+$ACTUAL_USER ALL=(ALL) NOPASSWD: $(_bin umount) /run/pulse
 
 # Directory operations in /run/pulse
-$ACTUAL_USER ALL=(ALL) NOPASSWD: $MKDIR_BIN -p /run/pulse
-$ACTUAL_USER ALL=(ALL) NOPASSWD: $CHOWN_BIN pulse\:pulse-access /run/pulse
-$ACTUAL_USER ALL=(ALL) NOPASSWD: $CHMOD_BIN 755 /run/pulse
-$ACTUAL_USER ALL=(ALL) NOPASSWD: $RM_BIN -f /run/pulse/native
+$ACTUAL_USER ALL=(ALL) NOPASSWD: $(_bin mkdir) -p /run/pulse
+$ACTUAL_USER ALL=(ALL) NOPASSWD: $(_bin chown) pulse\:pulse-access /run/pulse
+$ACTUAL_USER ALL=(ALL) NOPASSWD: $(_bin chmod) 755 /run/pulse
+$ACTUAL_USER ALL=(ALL) NOPASSWD: $(_bin rm) -f /run/pulse/native
 
 # Enable swap (optional, only if /swapfile-birdnet-pipy exists)
-$ACTUAL_USER ALL=(ALL) NOPASSWD: $SWAPON_BIN /swapfile-birdnet-pipy
+$ACTUAL_USER ALL=(ALL) NOPASSWD: $(_bin swapon) /swapfile-birdnet-pipy
 
 # System update via install.sh --update (with optional --branch)
 $ACTUAL_USER ALL=(ALL) NOPASSWD: $PROJECT_ROOT/install.sh --update
@@ -663,27 +603,28 @@ perform_update() {
     fi
     print_status "Target branch: $target_branch"
 
-    # Step 1: Stop containers IMMEDIATELY so frontend can detect update in progress
-    print_status "Stopping Docker containers..."
-    docker compose down || true
+    # Step 1: Stop containers and fetch in parallel for speed
+    print_status "Stopping containers and fetching latest code..."
+    docker compose down &
+    local stop_pid=$!
 
     # Step 2: Fetch target branch with explicit refspec
     # This ensures origin/$target_branch is created even in shallow/single-branch clones
-    print_status "Fetching latest code from origin/$target_branch..."
     if ! git fetch origin "+refs/heads/$target_branch:refs/remotes/origin/$target_branch" 2>&1; then
+        wait $stop_pid 2>/dev/null || true
         print_error "Git fetch failed - branch '$target_branch' may not exist on remote"
         restart_containers_on_failure
         exit 1
     fi
+
+    wait $stop_pid 2>/dev/null || true
 
     LOCAL=$(git rev-parse HEAD)
     REMOTE=$(git rev-parse "origin/$target_branch")
 
     if [ "$LOCAL" = "$REMOTE" ]; then
         print_status "Already up to date, no code changes needed"
-        print_status "Updating system configurations..."
-        # Still update system configs even if code is current
-        # (user may have run this to fix missing configs)
+        print_status "Refreshing system configurations..."
         configure_pulseaudio
         create_service_file
         install_service
@@ -730,9 +671,9 @@ perform_update() {
         exit 1
     fi
 
-    # Fix ownership after git operations
-    get_actual_uid_gid
-    chown -R $ACTUAL_USER:$ACTUAL_USER "$PROJECT_ROOT"
+    # Fix ownership of git-tracked files only (skip data/ which has large audio files)
+    find "$PROJECT_ROOT" -maxdepth 1 -mindepth 1 -not -name data \
+        -exec chown -R "$ACTUAL_USER:$ACTUAL_USER" {} +
 
     # Step 5: Build new images (as actual user)
     print_status "Building application..."
@@ -864,7 +805,7 @@ prompt_reboot() {
     fi
 
     print_status "Rebooting to apply changes..."
-    sleep 2  # Brief pause to ensure output is flushed
+    sleep 1
     reboot
 }
 
@@ -911,6 +852,9 @@ main() {
     detect_platform
     check_root
 
+    # Compute actual user details once (used by all functions below)
+    init_user_vars
+
     # Handle update mode early (before any installation steps)
     if [ "$UPDATE_MODE" = true ]; then
         # Update mode requires running from existing installation
@@ -946,12 +890,13 @@ main() {
     echo ""
 
     # Docker setup
-    if ! check_docker || ! check_docker_compose; then
-        install_docker
-        setup_docker_user
+    if command -v docker &> /dev/null && docker compose version &> /dev/null 2>&1; then
+        print_status "Docker and Docker Compose already installed"
+        docker --version
     else
-        print_status "Docker and Docker Compose are already installed, skipping..."
+        install_docker
     fi
+    setup_docker_user
 
     # PulseAudio configuration (packages already installed by install_prerequisites)
     configure_pulseaudio

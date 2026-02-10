@@ -43,7 +43,7 @@
             to="/gallery"
             class="hover:text-green-200"
           >
-            Bird Gallery
+            Gallery
           </router-link>
           <router-link
             to="/live"
@@ -56,6 +56,12 @@
             class="hover:text-green-200"
           >
             Charts
+          </router-link>
+          <router-link
+            to="/table"
+            class="hover:text-green-200"
+          >
+            Table
           </router-link>
           <router-link
             to="/settings"

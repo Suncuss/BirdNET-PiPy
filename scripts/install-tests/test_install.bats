@@ -170,13 +170,50 @@ setup() {
 # Update Mode Tests
 # ============================================================================
 
-@test "integration: update mode works after installation" {
-    # Skip: Update mode requires the feature branch to exist on the public remote.
-    # This test can only run after the install.sh changes are merged to main.
-    skip "Update mode requires git remote access (skipped in DinD environment)"
+@test "integration: no-op update reapplies system configs" {
+    # Set up local fake git remote (same commit as local - no-op scenario)
+    setup_fake_origin
+
+    # Corrupt config artifacts that --update should restore
+    rm -f /etc/systemd/system/birdnet-pipy.service
+    rm -f /etc/sudoers.d/birdnet-pipy
+
+    # Run update (no code changes, should still refresh configs)
+    run sudo SUDO_USER=testuser bash "$PROJECT_DIR/install.sh" --update --skip-build
+    echo "Update output: $output"
+    [ "$status" -eq 0 ]
+
+    # Assert configs were restored
+    assert_service_exists "birdnet-pipy"
+    assert_file_contains "/etc/systemd/system/birdnet-pipy.service" "User=testuser"
+    assert_sudoers_valid "/etc/sudoers.d/birdnet-pipy"
 }
 
-@test "integration: data directory preserved after update" {
-    # Skip: Depends on update mode test above
-    skip "Update mode requires git remote access (skipped in DinD environment)"
+@test "integration: update with new commits fast-forwards and preserves data" {
+    # Set up local fake git remote
+    setup_fake_origin
+
+    # Create test data that should survive the update
+    echo "test-data" > "$PROJECT_DIR/data/test-preserve.txt"
+
+    # Push a synthetic commit to make origin ahead of local
+    push_synthetic_commit
+
+    # Record current HEAD
+    local old_head
+    old_head=$(git -C "$PROJECT_DIR" rev-parse HEAD)
+
+    # Run update (should fast-forward to new commit)
+    run sudo SUDO_USER=testuser bash "$PROJECT_DIR/install.sh" --update --skip-build
+    echo "Update output: $output"
+    [ "$status" -eq 0 ]
+
+    # Assert HEAD moved forward
+    local new_head
+    new_head=$(git -C "$PROJECT_DIR" rev-parse HEAD)
+    [ "$old_head" != "$new_head" ]
+
+    # Assert data was preserved (chown skips data/)
+    assert_file_exists "$PROJECT_DIR/data/test-preserve.txt"
+    assert_file_contains "$PROJECT_DIR/data/test-preserve.txt" "test-data"
 }

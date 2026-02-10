@@ -70,7 +70,7 @@
                 </svg>
               </div>
               <h2 class="text-xl font-semibold text-gray-900">
-                Import from BirdNET-Pi
+                Import data from BirdNET-Pi
               </h2>
               <p class="mt-1 text-sm text-gray-600">
                 Upload your <code class="bg-gray-100 px-1 rounded">birds.db</code> file to import detections.
