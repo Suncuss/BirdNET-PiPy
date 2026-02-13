@@ -5,6 +5,14 @@ All validation and default values should reference these constants.
 Bash scripts should document their source as this file.
 """
 
+from enum import Enum
+
+
+class ModelType(Enum):
+    """Supported model types."""
+    BIRDNET = "birdnet"
+    BIRDNET_V3 = "birdnet_v3"
+
 
 class RecordingMode:
     """Recording mode constants for type-safe comparisons."""
@@ -34,3 +42,12 @@ OVERLAP_OPTIONS = (0.0, 0.5, 1.0, 1.5, 2.0, 2.5)
 
 # Update channels
 UPDATE_CHANNELS = ('release', 'latest')
+
+# Valid model types (derived from ModelType enum)
+VALID_MODEL_TYPES = tuple(m.value for m in ModelType)
+
+# Sample rates per model type (Hz)
+MODEL_SAMPLE_RATES = {
+    ModelType.BIRDNET: 48000,
+    ModelType.BIRDNET_V3: 32000,
+}

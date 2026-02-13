@@ -13,7 +13,7 @@ class TestBirdNetModelPredict:
     @pytest.fixture
     def mock_birdnet_model(self):
         """Create a BirdNetModel with mocked TFLite interpreter."""
-        from model_service.model_loader import BirdNetModel
+        from model_service.birdnet_v2_model import BirdNetModel
 
         model = BirdNetModel.__new__(BirdNetModel)
         model.model_path = "/fake/model.tflite"
@@ -123,7 +123,7 @@ class TestBirdNetModelPredict:
 
     def test_predict_raises_if_model_not_loaded(self):
         """Test predict raises RuntimeError if model not loaded."""
-        from model_service.model_loader import BirdNetModel
+        from model_service.birdnet_v2_model import BirdNetModel
 
         model = BirdNetModel.__new__(BirdNetModel)
         model._model = None
@@ -140,7 +140,7 @@ class TestCustomSigmoid:
 
     def test_sigmoid_basic(self):
         """Test basic sigmoid behavior."""
-        from model_service.model_loader import custom_sigmoid
+        from model_service.birdnet_v2_model import custom_sigmoid
 
         # At x=0, sigmoid should return 0.5
         result = custom_sigmoid(np.array([0.0]), sensitivity=1.0)
@@ -148,7 +148,7 @@ class TestCustomSigmoid:
 
     def test_sigmoid_sensitivity(self):
         """Test sensitivity affects steepness."""
-        from model_service.model_loader import custom_sigmoid
+        from model_service.birdnet_v2_model import custom_sigmoid
 
         x = np.array([1.0])
 
@@ -160,7 +160,7 @@ class TestCustomSigmoid:
 
     def test_sigmoid_output_range(self):
         """Test sigmoid output is always in [0, 1]."""
-        from model_service.model_loader import custom_sigmoid
+        from model_service.birdnet_v2_model import custom_sigmoid
 
         x = np.array([-100.0, -10.0, 0.0, 10.0, 100.0])
         result = custom_sigmoid(x, sensitivity=1.0)
@@ -174,7 +174,7 @@ class TestBirdNetModelFilterByLocation:
     @pytest.fixture
     def mock_birdnet_model_with_meta(self):
         """Create a BirdNetModel with mocked meta model."""
-        from model_service.model_loader import BirdNetModel
+        from model_service.birdnet_v2_model import BirdNetModel
 
         model = BirdNetModel.__new__(BirdNetModel)
         model.model_path = "/fake/model.tflite"
@@ -232,7 +232,7 @@ class TestBirdNetModelFilterByLocation:
 
     def test_filter_by_location_raises_if_not_loaded(self):
         """Test filter_by_location raises RuntimeError if meta model not loaded."""
-        from model_service.model_loader import BirdNetModel
+        from model_service.birdnet_v2_model import BirdNetModel
 
         model = BirdNetModel.__new__(BirdNetModel)
         model._meta_model = None

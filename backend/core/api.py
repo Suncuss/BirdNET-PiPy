@@ -17,6 +17,7 @@ from config.constants import (
     OVERLAP_OPTIONS,
     RECORDING_LENGTH_OPTIONS,
     UPDATE_CHANNELS,
+    VALID_MODEL_TYPES,
     VALID_RECORDING_MODES,
     RecordingMode,
 )
@@ -27,6 +28,8 @@ from config.settings import (
     DEFAULT_IMAGE_PATH,
     EXTRACTED_AUDIO_DIR,
     LABELS_PATH,
+    LABELS_V3_PATH,
+    MODEL_TYPE,
     RECORDING_MODE,
     RTSP_URL,
     SPECTROGRAM_DIR,
@@ -77,6 +80,7 @@ from core.migration_audio import (
     start_spectrogram_generation_if_not_running,
 )
 from core.storage_manager import delete_detection_files
+from model_service.label_utils import parse_v3_labels
 from version import DISPLAY_NAME, __version__
 
 # Setup logging
@@ -774,48 +778,56 @@ def delete_detections_batch():
 
 
 # Cache for available species (loaded from model labels file)
-_available_species_cache = None
+# Keyed by model type so switching models invalidates cache
+_available_species_cache = {}
 
 
 def load_available_species():
     """Load all available species from the BirdNET model labels file.
 
     Returns list of dicts with scientific_name and common_name.
-    Results are cached since the labels file doesn't change at runtime.
+    Results are cached per model type since the labels file doesn't change at runtime.
     """
-    global _available_species_cache
-
-    if _available_species_cache is not None:
-        return _available_species_cache
+    if MODEL_TYPE in _available_species_cache:
+        return _available_species_cache[MODEL_TYPE]
 
     species_list = []
     try:
-        with open(LABELS_PATH) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                # Format: "Scientific Name_Common Name"
-                # e.g., "Turdus migratorius_American Robin"
-                parts = line.split('_')
-                if len(parts) >= 2:
-                    scientific_name = parts[0]
-                    common_name = parts[1]
-                    species_list.append({
-                        'scientific_name': scientific_name,
-                        'common_name': common_name
-                    })
+        if MODEL_TYPE == 'birdnet_v3':
+            # V3.0: semicolon-delimited CSV with BOM
+            species_list = [
+                {'scientific_name': sci, 'common_name': com}
+                for sci, com in parse_v3_labels(LABELS_V3_PATH)
+            ]
+            labels_path = LABELS_V3_PATH
+        else:
+            # V2.4: plain text, "SciName_CommonName" per line
+            with open(LABELS_PATH) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    parts = line.split('_')
+                    if len(parts) >= 2:
+                        scientific_name = parts[0]
+                        common_name = parts[1]
+                        species_list.append({
+                            'scientific_name': scientific_name,
+                            'common_name': common_name
+                        })
+            labels_path = LABELS_PATH
 
         # Sort by common name for easier browsing
         species_list.sort(key=lambda x: x['common_name'])
-        _available_species_cache = species_list
+        _available_species_cache[MODEL_TYPE] = species_list
         logger.info("Loaded available species from labels", extra={
-            'count': len(species_list)
+            'count': len(species_list),
+            'model_type': MODEL_TYPE
         })
     except Exception as e:
         logger.error("Failed to load species labels", extra={
             'error': str(e),
-            'path': LABELS_PATH
+            'path': labels_path if 'labels_path' in dir() else MODEL_TYPE
         })
 
     return species_list
@@ -825,10 +837,11 @@ def load_available_species():
 @log_api_request
 @handle_api_errors
 def get_available_species():
-    """Get all species available in the BirdNET model (6521 species).
+    """Get all species available in the BirdNET model.
 
     Used for building include/exclude filter lists in the UI.
     Returns list of {scientific_name, common_name} sorted by common_name.
+    Species count depends on model type: ~6K for V2.4, ~11K for V3.0.
     """
     search = request.args.get('search', '').lower()
     species_list = load_available_species()
@@ -1255,6 +1268,12 @@ def update_settings():
             overlap = new_settings['audio'].get('overlap')
             if overlap is not None and overlap not in OVERLAP_OPTIONS:
                 return jsonify({'error': 'Invalid overlap. Must be 0.0, 0.5, 1.0, 1.5, 2.0, or 2.5 seconds'}), 400
+
+        # Validate model type
+        if 'model' in new_settings:
+            model_type = new_settings['model'].get('type')
+            if model_type and model_type not in VALID_MODEL_TYPES:
+                return jsonify({'error': f'Invalid model type. Must be one of: {", ".join(VALID_MODEL_TYPES)}'}), 400
 
         # Compute timezone when location is being saved and timezone is missing or location changed
         # This ensures all containers have correct timezone on next restart

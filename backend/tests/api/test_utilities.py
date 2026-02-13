@@ -89,7 +89,7 @@ class TestSettingsManagement:
                 assert settings['location']['latitude'] == 40.0
                 assert settings['detection']['sensitivity'] == 0.9
                 # But other defaults should remain
-                assert settings['audio']['sample_rate'] == 48000
+                assert settings['audio']['recording_length'] == 9
 
     def test_save_user_settings_atomic(self):
         """Test atomic save of user settings."""
@@ -189,5 +189,5 @@ class TestSettingsMerge:
 
                 # Default values should still be there
                 assert settings['location']['longitude'] == -76.45  # default
-                assert settings['audio']['sample_rate'] == 48000  # default
+                assert settings['audio']['recording_length'] == 9  # default
                 assert settings['detection']['sensitivity'] == 0.75  # completely default section

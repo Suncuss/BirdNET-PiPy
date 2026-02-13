@@ -1,12 +1,9 @@
 import json
 import os
 
-from config.constants import DEFAULT_RECORDING_MODE
+from config.constants import DEFAULT_RECORDING_MODE, MODEL_SAMPLE_RATES, ModelType
 
-# Base directory (always in Docker)
 BASE_DIR = '/app'
-
-# User settings file path
 USER_SETTINGS_PATH = f'{BASE_DIR}/data/config/user_settings.json'
 
 # Default settings structure - single source of truth
@@ -19,12 +16,11 @@ DEFAULT_SETTINGS = {
     },
     "audio": {
         "recording_mode": DEFAULT_RECORDING_MODE,  # "pulseaudio", "http_stream", or "rtsp"
-        "stream_url": None,  # Custom stream URL for http_stream mode
-        "rtsp_url": None,  # RTSP stream URL for rtsp mode
-        "pulseaudio_source": None,  # PulseAudio source name (e.g., "default")
+        "stream_url": None,
+        "rtsp_url": None,
+        "pulseaudio_source": None,
         "recording_length": 9,
-        "overlap": 0.0,  # Overlap in seconds for future use
-        "sample_rate": 48000,  # Default sample rate in Hz
+        "overlap": 0.0,
         "recording_chunk_length": 3
     },
     "spectrogram": {
@@ -34,20 +30,19 @@ DEFAULT_SETTINGS = {
         "min_dbfs": -120
     },
     "storage": {
-        "auto_cleanup_enabled": True,  # Enable automatic storage cleanup
-        "trigger_percent": 85,  # Start cleanup when disk usage exceeds this
-        "target_percent": 80,  # Free space until usage drops to this
-        "keep_per_species": 60,  # Keep top N recordings per species by confidence
-        "check_interval_minutes": 30  # How often to check disk usage
+        "auto_cleanup_enabled": True,
+        "trigger_percent": 85,
+        "target_percent": 80,
+        "keep_per_species": 60,
+        "check_interval_minutes": 30
     },
     "updates": {
         "channel": "release"  # "release" = main branch, "latest" = staging branch
     },
     "model": {
-        "type": "birdnet"  # Options: "birdnet" (future: "perch")
+        "type": "birdnet"  # "birdnet" (v2.4, 6K species) or "birdnet_v3" (v3.0, 11K species)
     },
     "display": {
-        # Default to metric because 0°C = freezing and 100°C = boiling just makes sense
         "use_metric_units": True
     },
     "birdweather": {
@@ -63,17 +58,13 @@ def get_default_settings():
 
 
 def load_user_settings():
-    """Load user settings from JSON file"""
-    json_path = USER_SETTINGS_PATH
-
-    # Get a copy of defaults to merge with
+    """Load user settings from JSON file, merged with defaults."""
     defaults = get_default_settings()
 
-    if os.path.exists(json_path):
+    if os.path.exists(USER_SETTINGS_PATH):
         try:
-            with open(json_path) as f:
+            with open(USER_SETTINGS_PATH) as f:
                 user_data = json.load(f)
-                # Deep merge user settings with defaults
                 for key in defaults:
                     if key in user_data:
                         if isinstance(defaults[key], dict):
@@ -86,96 +77,100 @@ def load_user_settings():
 
     return defaults
 
+
 # Load settings on module import
 user_settings = load_user_settings()
 
-# Ports
+# ── Services ──────────────────────────────────────────────────────────────────
+
 BIRDNET_SERVICE_PORT = 5001
 API_PORT = 5002
-
-# Service hostnames (Docker container names)
 API_HOST = 'api'
 BIRDNET_HOST = 'model-server'
+BIRDNET_SERVER_ENDPOINT = f'http://{BIRDNET_HOST}:{BIRDNET_SERVICE_PORT}/api/analyze_audio_file'
 
-# Recording mode configuration
-RECORDING_MODE = user_settings['audio'].get('recording_mode', DEFAULT_RECORDING_MODE)
+# ── Model ─────────────────────────────────────────────────────────────────────
 
-# Stream URL configuration (for http_stream mode) - directly from JSON
-STREAM_URL = user_settings['audio'].get('stream_url', None)
+MODEL_TYPE = user_settings['model']['type']
 
-# RTSP URL configuration (for rtsp mode) - directly from JSON
-RTSP_URL = user_settings['audio'].get('rtsp_url', None)
+MODELS_DIR = f'{BASE_DIR}/model_service/models'
+EBIRD_CODES_PATH = f'{MODELS_DIR}/ebird_codes.json'
 
-# PulseAudio source configuration (for pulseaudio mode) - directly from JSON
-PULSEAUDIO_SOURCE = user_settings['audio'].get('pulseaudio_source', 'default')
+# V2.4 (TFLite, bundled with source)
+MODEL_PATH = f'{MODELS_DIR}/v2.4/BirdNET_GLOBAL_6K_V2.4_Model_FP32.tflite'
+META_MODEL_PATH = f'{MODELS_DIR}/v2.4/BirdNET_GLOBAL_6K_V2.4_MData_Model_FP16.tflite'
+LABELS_PATH = f'{MODELS_DIR}/v2.4/labels/BirdNET_GLOBAL_6K_V2.4_Labels_en.txt'
 
+# V3.0 (ONNX, downloaded on first use; labels bundled with source)
+MODEL_V3_PATH = f'{MODELS_DIR}/v3.0/BirdNET_V3.0_Global_11K_FP32.onnx'
+MODEL_V3_URL = 'https://zenodo.org/records/18247420/files/BirdNET+_V3.0-preview3_Global_11K_FP32.onnx?download=1'
+LABELS_V3_PATH = f'{MODELS_DIR}/v3.0/BirdNET_V3.0_Global_11K_Labels.csv'
 
-# Model configuration (always in Docker)
-MODEL_TYPE = user_settings.get('model', {}).get('type', 'birdnet')
-MODEL_PATH = f'{BASE_DIR}/model_service/models/BirdNET_GLOBAL_6K_V2.4_Model_FP32.tflite'
-META_MODEL_PATH = f'{BASE_DIR}/model_service/models/BirdNET_GLOBAL_6K_V2.4_MData_Model_FP16.tflite'
-LABELS_PATH = f'{BASE_DIR}/model_service/models/labels.txt'
-EBIRD_CODES_PATH = f'{BASE_DIR}/model_service/models/ebird_codes.json'
+# ── Audio ─────────────────────────────────────────────────────────────────────
 
-# Geolocation configuration - from user settings
-LAT = user_settings['location']['latitude']
-LON = user_settings['location']['longitude']
-LOCATION_CONFIGURED = user_settings['location'].get('configured', False)
-TIMEZONE = user_settings['location'].get('timezone')
+RECORDING_MODE = user_settings['audio']['recording_mode']
+STREAM_URL = user_settings['audio']['stream_url']
+RTSP_URL = user_settings['audio']['rtsp_url']
+PULSEAUDIO_SOURCE = user_settings['audio']['pulseaudio_source'] or 'default'
+RECORDING_LENGTH = user_settings['audio']['recording_length']
+OVERLAP = user_settings['audio']['overlap']
+ANALYSIS_CHUNK_LENGTH = user_settings['audio']['recording_chunk_length']
 
-# Validate timezone before considering location "ready"
-_timezone_valid = False
-if TIMEZONE:
-    try:
-        from zoneinfo import ZoneInfo
-        ZoneInfo(TIMEZONE)
-        _timezone_valid = True
-    except Exception:
-        pass
+# Sample rate is determined by model, not user-configurable
+try:
+    SAMPLE_RATE = MODEL_SAMPLE_RATES[ModelType(MODEL_TYPE)]
+except ValueError:
+    SAMPLE_RATE = MODEL_SAMPLE_RATES[ModelType.BIRDNET]
 
-# Both location AND valid timezone must be set for system to be ready
-LOCATION_READY = LOCATION_CONFIGURED and _timezone_valid
+# ── Detection ─────────────────────────────────────────────────────────────────
 
-# Prediction configuration - from user settings
 SENSITIVITY = user_settings['detection']['sensitivity']
 CUTOFF = user_settings['detection']['cutoff']
+ALLOWED_SPECIES = user_settings['species_filter']['allowed_species']
+BLOCKED_SPECIES = user_settings['species_filter']['blocked_species']
 
-# Species filter configuration - from user settings
-ALLOWED_SPECIES = user_settings.get('species_filter', {}).get('allowed_species', [])
-BLOCKED_SPECIES = user_settings.get('species_filter', {}).get('blocked_species', [])
+# ── Location ──────────────────────────────────────────────────────────────────
 
-# BirdWeather configuration - from user settings
-BIRDWEATHER_ID = user_settings.get('birdweather', {}).get('id')
+LAT = user_settings['location']['latitude']
+LON = user_settings['location']['longitude']
+LOCATION_CONFIGURED = user_settings['location']['configured']
+TIMEZONE = user_settings['location']['timezone']
 
-# Folders configuration
-RECORDING_DIR = f'{BASE_DIR}/data/audio/recordings'
-EXTRACTED_AUDIO_DIR = f'{BASE_DIR}/data/audio/extracted_songs'
-SPECTROGRAM_DIR = f'{BASE_DIR}/data/spectrograms'
 
-# Default placeholder files (always in Docker)
-DEFAULT_AUDIO_PATH = f'{BASE_DIR}/assets/default_audio.mp3'
-DEFAULT_IMAGE_PATH = f'{BASE_DIR}/assets/default_spectrogram.webp'
+def _is_valid_timezone(tz):
+    if not tz:
+        return False
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(tz)
+        return True
+    except Exception:
+        return False
 
-# Audio configuration - from user settings
-RECORDING_LENGTH = user_settings['audio']['recording_length']
-OVERLAP = user_settings['audio']['overlap']  # Overlap in seconds for future use
-SAMPLE_RATE = user_settings['audio']['sample_rate']
-ANALYSIS_CHUNK_LENGTH = user_settings['audio']['recording_chunk_length']  # BirdNet analysis window (3s)
 
-# Spectrogram configuration - from user settings
+LOCATION_READY = LOCATION_CONFIGURED and _is_valid_timezone(TIMEZONE)
+
+# ── BirdWeather ───────────────────────────────────────────────────────────────
+
+BIRDWEATHER_ID = user_settings['birdweather']['id']
+
+# ── Spectrogram ───────────────────────────────────────────────────────────────
+
 SPECTROGRAM_MAX_FREQ_IN_KHZ = user_settings['spectrogram']['max_freq_khz']
 SPECTROGRAM_MIN_FREQ_IN_KHZ = user_settings['spectrogram']['min_freq_khz']
 SPECTROGRAM_MAX_DBFS = user_settings['spectrogram']['max_dbfs']
 SPECTROGRAM_MIN_DBFS = user_settings['spectrogram']['min_dbfs']
-
-# Spectrogram font (always in Docker)
 SPECTROGRAM_FONT_PATH = f'{BASE_DIR}/assets/Inter-Regular.ttf'
 
-# Birdnet Server Configuration (always in Docker)
-BIRDNET_SERVER_ENDPOINT = f'http://{BIRDNET_HOST}:{BIRDNET_SERVICE_PORT}/api/analyze_audio_file'
+# ── Storage ───────────────────────────────────────────────────────────────────
 
-# Database configuration
+RECORDING_DIR = f'{BASE_DIR}/data/audio/recordings'
+EXTRACTED_AUDIO_DIR = f'{BASE_DIR}/data/audio/extracted_songs'
+SPECTROGRAM_DIR = f'{BASE_DIR}/data/spectrograms'
+DEFAULT_AUDIO_PATH = f'{BASE_DIR}/assets/default_audio.mp3'
+DEFAULT_IMAGE_PATH = f'{BASE_DIR}/assets/default_spectrogram.webp'
 DATABASE_PATH = f'{BASE_DIR}/data/db/birds.db'
+
 DATABASE_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS detections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

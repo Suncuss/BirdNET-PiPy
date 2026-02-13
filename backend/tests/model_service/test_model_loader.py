@@ -28,7 +28,7 @@ class TestBirdNetModelEbirdCodes:
     @pytest.fixture
     def mock_birdnet_model(self, temp_ebird_codes_file):
         """Create a BirdNetModel with mocked model paths but real eBird codes."""
-        from model_service.model_loader import BirdNetModel
+        from model_service.birdnet_v2_model import BirdNetModel
 
         # Create minimal mock paths (won't actually load models)
         loader = BirdNetModel.__new__(BirdNetModel)
@@ -47,11 +47,6 @@ class TestBirdNetModelEbirdCodes:
         loader._meta_model_cache = {}
         loader._inference_lock = None
         return loader
-
-    def test_model_loader_alias_exists(self):
-        """Test that ModelLoader alias points to BirdNetModel for backwards compatibility."""
-        from model_service.model_loader import BirdNetModel, ModelLoader
-        assert ModelLoader is BirdNetModel
 
     def test_get_ebird_code_found(self, mock_birdnet_model):
         """Test lookup returns correct eBird code for known species."""
@@ -83,7 +78,7 @@ class TestBirdNetModelEbirdCodes:
 
     def test_load_missing_ebird_file(self):
         """Test graceful handling of missing ebird_codes.json."""
-        from model_service.model_loader import BirdNetModel
+        from model_service.birdnet_v2_model import BirdNetModel
 
         loader = BirdNetModel.__new__(BirdNetModel)
         loader.ebird_codes_path = "/nonexistent/path/ebird_codes.json"
@@ -95,7 +90,7 @@ class TestBirdNetModelEbirdCodes:
 
     def test_load_no_ebird_path(self):
         """Test works without ebird_codes_path (backwards compatible)."""
-        from model_service.model_loader import BirdNetModel
+        from model_service.birdnet_v2_model import BirdNetModel
 
         loader = BirdNetModel.__new__(BirdNetModel)
         loader.ebird_codes_path = None
@@ -107,7 +102,7 @@ class TestBirdNetModelEbirdCodes:
 
     def test_load_invalid_json(self):
         """Test graceful handling of invalid JSON in ebird_codes.json."""
-        from model_service.model_loader import BirdNetModel
+        from model_service.birdnet_v2_model import BirdNetModel
 
         # Create a temporary file with invalid JSON
         fd, path = tempfile.mkstemp(suffix='.json')
@@ -142,20 +137,20 @@ class TestBirdNetModelProperties:
 
     def test_model_name(self):
         """Test name property returns expected value."""
-        from model_service.model_loader import BirdNetModel
+        from model_service.birdnet_v2_model import BirdNetModel
         assert BirdNetModel.MODEL_NAME == "birdnet"
 
     def test_model_version(self):
         """Test version property returns expected value."""
-        from model_service.model_loader import BirdNetModel
+        from model_service.birdnet_v2_model import BirdNetModel
         assert BirdNetModel.MODEL_VERSION == "2.4"
 
     def test_sample_rate(self):
         """Test sample rate class constant."""
-        from model_service.model_loader import BirdNetModel
+        from model_service.birdnet_v2_model import BirdNetModel
         assert BirdNetModel.SAMPLE_RATE == 48000
 
     def test_chunk_length_seconds(self):
         """Test chunk length class constant."""
-        from model_service.model_loader import BirdNetModel
+        from model_service.birdnet_v2_model import BirdNetModel
         assert BirdNetModel.CHUNK_LENGTH_SECONDS == 3.0

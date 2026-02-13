@@ -60,5 +60,8 @@ AGENTS.md
 venv/
 .venv/
 
+# Large model files
+backend/model_service/models/**/*.onnx
+
 # Local/internal documentation not meant for the repo
 internal_docs/

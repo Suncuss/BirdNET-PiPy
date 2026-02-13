@@ -2,8 +2,16 @@
 
 ## [Unreleased]
 
-- Renamed "Bird Gallery" to "Gallery" in navigation
+## [0.5.0] - 2026-02-13
+
+- Added BirdNET V3.0 model support (ONNX, 11K species, 32kHz) with auto-download and settings UI
+- Added graceful fallback when V3 model download fails (API stays up, retries on next restart)
 - Added Table link to navigation bar
+- Changed "Bird Gallery" to "Gallery" in navigation
+- Refactored model service: shared post-processing, centralized label parsing, single-source-of-truth constants
+- Fixed dangling Docker images accumulating on Pi after each rebuild
+- Fixed invalid model type in settings crashing the service instead of falling back gracefully
+- Fixed axios CVE by upgrading to 1.13.5
 
 ## [0.4.0] - 2026-02-05
 

@@ -16,7 +16,7 @@ This document details the internal architecture, service management, and advance
 
 ---
 
-For audio architecture details, see **[Audio Architecture](../README.md#audio-architecture)** in the main README.
+For audio architecture details, see **[Audio Architecture](../docs/ARCHITECTURE.md#audio-architecture)** in the Architecture docs.
 
 ---
 

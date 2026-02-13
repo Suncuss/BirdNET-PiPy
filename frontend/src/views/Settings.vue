@@ -337,6 +337,35 @@
           v-show="showAdvancedSettings"
           class="border-t border-gray-100 p-5 space-y-6"
         >
+          <!-- Model Selection -->
+          <div>
+            <h3 class="text-sm font-medium text-gray-700 mb-3">
+              Model
+            </h3>
+            <div>
+              <label
+                for="modelType"
+                class="block text-sm text-gray-600 mb-1"
+              >Detection Model</label>
+              <select
+                id="modelType"
+                v-model="settings.model.type"
+                class="block w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+              >
+                <option
+                  v-for="m in modelTypeOptions"
+                  :key="m.value"
+                  :value="m.value"
+                >
+                  {{ m.label }}
+                </option>
+              </select>
+              <p class="text-xs text-gray-400 mt-1">
+                V3.0 is a developer preview with 11K species. Model will be downloaded on first use (~541 MB).
+              </p>
+            </div>
+          </div>
+
           <!-- Detection Settings -->
           <div>
             <h3 class="text-sm font-medium text-gray-700 mb-3">
@@ -994,6 +1023,10 @@ export default {
       { value: 2.0, label: '2.0s' },
       { value: 2.5, label: '2.5s' }
     ]
+    const modelTypeOptions = [
+      { value: 'birdnet', label: 'BirdNET v2.4 (6K species)' },
+      { value: 'birdnet_v3', label: 'BirdNET v3.0 (11K species, preview)' }
+    ]
 
     // State
     const loading = ref(false)
@@ -1046,6 +1079,7 @@ export default {
       audio: {},
       spectrogram: {},
       updates: {},
+      model: { type: 'birdnet' },
       display: {},
       birdweather: { id: null }
     })
@@ -1070,6 +1104,7 @@ export default {
         allowed_species: s.species_filter?.allowed_species || [],
         blocked_species: s.species_filter?.blocked_species || []
       },
+      model: { type: s.model?.type },
       birdweather: { id: s.birdweather?.id }
     })
 
@@ -1123,20 +1158,14 @@ export default {
       try {
         loading.value = true
         const { data } = await api.get('/settings')
-        settings.value = data
-        recordingMode.value = settings.value.audio?.recording_mode || 'pulseaudio'
+        // Ensure required objects exist before assigning (prevents template errors)
+        if (!data.updates) data.updates = { channel: 'release' }
+        if (!data.display) data.display = { use_metric_units: true }
+        if (!data.model) data.model = { type: 'birdnet' }
         // Normalize old "stable" channel to "release" for backward compatibility
-        if (settings.value.updates?.channel === 'stable') {
-          settings.value.updates.channel = 'release'
-        }
-        // Ensure updates object exists
-        if (!settings.value.updates) {
-          settings.value.updates = { channel: 'release' }
-        }
-        // Ensure display object exists and sync with composable
-        if (!settings.value.display) {
-          settings.value.display = { use_metric_units: true }
-        }
+        if (data.updates.channel === 'stable') data.updates.channel = 'release'
+        settings.value = data
+        recordingMode.value = data.audio?.recording_mode || 'pulseaudio'
         unitSettings.setUseMetricUnits(settings.value.display.use_metric_units ?? true)
         if (saveStatus.value?.type === 'error') {
           saveStatus.value = null
@@ -1151,6 +1180,7 @@ export default {
           // Fallback to defaults on failure
           try {
             const { data } = await api.get('/settings/defaults')
+            if (!data.model) data.model = { type: 'birdnet' }
             settings.value = data
             recordingMode.value = data.audio?.recording_mode || 'pulseaudio'
             // Take snapshot for unsaved changes tracking
@@ -1199,9 +1229,19 @@ export default {
       if (!hasUnsavedChanges.value) {
         return // Nothing changed, skip save and restart
       }
+
+      // Detect if switching to V3 model (may need to download ~541MB)
+      const switchingToV3 = settings.value.model?.type === 'birdnet_v3' &&
+        originalSettings.value?.model?.type !== 'birdnet_v3'
+
       const success = await saveSettingsOnly()
       if (success) {
-        await serviceRestart.waitForRestart({ autoReload: true, message: 'Updating settings' })
+        const restartOptions = { autoReload: true, message: 'Updating settings' }
+        if (switchingToV3) {
+          restartOptions.maxWaitSeconds = 600
+          restartOptions.message = 'Downloading model and restarting services'
+        }
+        await serviceRestart.waitForRestart(restartOptions)
       }
     }
 
@@ -1216,6 +1256,7 @@ export default {
       if (confirm('Reset all settings to defaults?')) {
         try {
           const { data: defaults } = await api.get('/settings/defaults')
+          if (!defaults.model) defaults.model = { type: 'birdnet' }
           settings.value = defaults
           recordingMode.value = defaults.audio?.recording_mode || 'pulseaudio'
           await saveSettings()
@@ -1603,6 +1644,7 @@ export default {
       recordingModeOptions,
       recordingLengthOptions,
       overlapOptions,
+      modelTypeOptions,
       // Unsaved changes
       hasUnsavedChanges,
       showUnsavedModal,

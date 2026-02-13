@@ -251,6 +251,10 @@ else
     export DOCKER_BUILDKIT=1
     print_status "Building Docker images..."
     docker compose build
+
+    # Prune dangling images left behind when 'latest' tag is reassigned
+    # (low-memory path already does this between builds)
+    docker image prune -f 2>/dev/null || true
 fi
 
 if [ $? -eq 0 ]; then

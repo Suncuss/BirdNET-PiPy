@@ -1,5 +1,6 @@
 """Simple API tests that demonstrate working patterns."""
 
+import csv
 import json
 import os
 import tempfile
@@ -713,3 +714,97 @@ class TestSimpleAPI:
         data = response.get_json()
         assert len(data['labels']) == 7
         assert all(count == 0 for count in data['data'])
+
+    def test_available_species_v24(self):
+        """Test /api/species/available returns V2.4 species when model type is 'birdnet'."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a V2.4-style labels file
+            labels_file = os.path.join(tmpdir, 'labels.txt')
+            with open(labels_file, 'w') as f:
+                f.write('Turdus migratorius_American Robin\n')
+                f.write('Cyanocitta cristata_Blue Jay\n')
+                f.write('Cardinalis cardinalis_Northern Cardinal\n')
+
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+                 patch('core.db.DatabaseManager'), \
+                 patch('core.api.LABELS_PATH', labels_file), \
+                 patch('core.api.MODEL_TYPE', 'birdnet'), \
+                 patch('core.api._available_species_cache', {}):
+
+                from core.api import create_app
+                app, _ = create_app()
+                client = app.test_client()
+
+                response = client.get('/api/species/available')
+                assert response.status_code == 200
+                data = response.get_json()
+                assert data['total'] == 3
+                species_names = [s['common_name'] for s in data['species']]
+                assert 'American Robin' in species_names
+                assert 'Blue Jay' in species_names
+
+    def test_available_species_v3(self):
+        """Test /api/species/available returns V3.0 species when model type is 'birdnet_v3'."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a V3.0-style labels CSV (semicolon-delimited with BOM)
+            labels_csv = os.path.join(tmpdir, 'labels_v3.csv')
+            with open(labels_csv, 'w', encoding='utf-8-sig', newline='') as f:
+                writer = csv.writer(f, delimiter=';')
+                writer.writerow(['idx', 'id', 'sci_name', 'com_name', 'class', 'order'])
+                writer.writerow(['0', 'turdmig1', 'Turdus migratorius', 'American Robin', 'Aves', 'Passeriformes'])
+                writer.writerow(['1', 'cyacri1', 'Cyanocitta cristata', 'Blue Jay', 'Aves', 'Passeriformes'])
+                writer.writerow(['2', 'carcar3', 'Cardinalis cardinalis', 'Northern Cardinal', 'Aves', 'Passeriformes'])
+                writer.writerow(['3', 'passer1', 'Passer domesticus', 'House Sparrow', 'Aves', 'Passeriformes'])
+
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+                 patch('core.db.DatabaseManager'), \
+                 patch('core.api.LABELS_V3_PATH', labels_csv), \
+                 patch('core.api.MODEL_TYPE', 'birdnet_v3'), \
+                 patch('core.api._available_species_cache', {}):
+
+                from core.api import create_app
+                app, _ = create_app()
+                client = app.test_client()
+
+                response = client.get('/api/species/available')
+                assert response.status_code == 200
+                data = response.get_json()
+                assert data['total'] == 4
+                species_names = [s['common_name'] for s in data['species']]
+                assert 'American Robin' in species_names
+                assert 'House Sparrow' in species_names
+
+    def test_settings_invalid_model_type(self):
+        """Test PUT /api/settings rejects invalid model type."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+                 patch('core.db.DatabaseManager'), \
+                 patch('core.api.load_user_settings') as mock_load, \
+                 patch('core.api.save_user_settings'), \
+                 patch('core.api.write_flag'):
+
+                mock_load.return_value = {}
+
+                from core.api import create_app
+                app, _ = create_app()
+                client = app.test_client()
+
+                # Invalid model type should be rejected
+                response = client.put('/api/settings',
+                                      data=json.dumps({'model': {'type': 'invalid_model'}}),
+                                      content_type='application/json')
+                assert response.status_code == 400
+                assert 'Invalid model type' in response.get_json()['error']
+
+                # Valid model types should be accepted
+                for model_type in ('birdnet', 'birdnet_v3'):
+                    response = client.put('/api/settings',
+                                          data=json.dumps({'model': {'type': model_type}}),
+                                          content_type='application/json')
+                    assert response.status_code == 200

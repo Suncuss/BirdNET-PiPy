@@ -6,19 +6,14 @@ based on configuration. It allows the system to support multiple model types
 """
 
 import logging
-from enum import Enum
 from typing import TYPE_CHECKING
+
+from config.constants import ModelType
 
 if TYPE_CHECKING:
     from .base_model import BirdDetectionModel
 
 logger = logging.getLogger(__name__)
-
-
-class ModelType(Enum):
-    """Supported model types."""
-    BIRDNET = "birdnet"
-    # PERCH = "perch"  # Future: Add when Perch model is implemented
 
 
 def create_model(model_type: ModelType = ModelType.BIRDNET) -> "BirdDetectionModel":
@@ -36,11 +31,21 @@ def create_model(model_type: ModelType = ModelType.BIRDNET) -> "BirdDetectionMod
     if model_type == ModelType.BIRDNET:
         from config import settings
 
-        from .model_loader import BirdNetModel
+        from .birdnet_v2_model import BirdNetModel
         return BirdNetModel(
             model_path=settings.MODEL_PATH,
             meta_model_path=settings.META_MODEL_PATH,
             labels_path=settings.LABELS_PATH,
+            ebird_codes_path=settings.EBIRD_CODES_PATH
+        )
+
+    if model_type == ModelType.BIRDNET_V3:
+        from config import settings
+
+        from .birdnet_v3_model import BirdNetV3Model
+        return BirdNetV3Model(
+            model_path=settings.MODEL_V3_PATH,
+            labels_path=settings.LABELS_V3_PATH,
             ebird_codes_path=settings.EBIRD_CODES_PATH
         )
 

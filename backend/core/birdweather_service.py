@@ -129,7 +129,7 @@ class BirdWeatherService:
 
         try:
             cmd = ['ffmpeg', '-y', '-ss', str(start_time), '-t', str(end_time - start_time),
-                   '-i', audio_path, '-c:a', 'flac', '-ar', '48000', '-ac', '1', flac_path]
+                   '-i', audio_path, '-c:a', 'flac', '-ac', '1', flac_path]
             result = subprocess.run(cmd, capture_output=True, timeout=30)
             if result.returncode == 0:
                 return flac_path

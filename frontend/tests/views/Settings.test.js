@@ -12,13 +12,14 @@ vi.mock('@/services/api', () => ({
   default: mockApi
 }))
 
-// Mock the useServiceRestart composable
+// Mock the useServiceRestart composable (expose waitForRestart for assertions)
+const mockWaitForRestart = vi.hoisted(() => vi.fn().mockResolvedValue(true))
 vi.mock('@/composables/useServiceRestart', () => ({
   useServiceRestart: () => ({
     isRestarting: { value: false },
     restartMessage: { value: '' },
     restartError: { value: '' },
-    waitForRestart: vi.fn().mockResolvedValue(true),
+    waitForRestart: mockWaitForRestart,
     reset: vi.fn()
   })
 }))
@@ -87,6 +88,9 @@ const mockSettings = {
     min_freq_khz: 0,
     max_dbfs: 0,
     min_dbfs: -120
+  },
+  model: {
+    type: 'birdnet'
   },
   general: {
     timezone: 'UTC',
@@ -449,6 +453,81 @@ describe('Settings', () => {
       // URLs are intentionally preserved when switching modes
       // This allows users to switch back without re-entering URLs
       expect(wrapper.vm.settings.audio.stream_url).toBe('http://example.com/stream.mp3')
+    })
+  })
+
+  describe('Model Type Selection', () => {
+    it('shows model type selector with correct options', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      const select = wrapper.find('#modelType')
+      expect(select.exists()).toBe(true)
+
+      const options = select.findAll('option')
+      expect(options).toHaveLength(2)
+      expect(options[0].attributes('value')).toBe('birdnet')
+      expect(options[1].attributes('value')).toBe('birdnet_v3')
+    })
+
+    it('changing model type marks hasUnsavedChanges', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      expect(wrapper.vm.hasUnsavedChanges).toBe(false)
+
+      wrapper.vm.settings.model.type = 'birdnet_v3'
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.vm.hasUnsavedChanges).toBe(true)
+    })
+
+    it('uses extended timeout when switching to V3 model', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      // Mock successful save
+      mockApi.put.mockResolvedValueOnce({ data: { status: 'updated' } })
+
+      // Switch to V3 model
+      wrapper.vm.settings.model.type = 'birdnet_v3'
+      await wrapper.vm.$nextTick()
+
+      await wrapper.vm.saveSettings()
+      await flushPromises()
+
+      expect(mockWaitForRestart).toHaveBeenCalledWith(
+        expect.objectContaining({
+          maxWaitSeconds: 600,
+          message: 'Downloading model and restarting services'
+        })
+      )
+    })
+
+    it('uses default timeout when not switching to V3', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      // Mock successful save
+      mockApi.put.mockResolvedValueOnce({ data: { status: 'updated' } })
+
+      // Change a non-model setting
+      wrapper.vm.settings.location.latitude = 50.0
+      await wrapper.vm.$nextTick()
+
+      await wrapper.vm.saveSettings()
+      await flushPromises()
+
+      expect(mockWaitForRestart).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: 'Updating settings'
+        })
+      )
+      expect(mockWaitForRestart).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          maxWaitSeconds: 600
+        })
+      )
     })
   })
 

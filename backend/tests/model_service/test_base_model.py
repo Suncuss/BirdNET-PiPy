@@ -42,13 +42,13 @@ class TestBirdNetModelImplementation:
     def test_birdnet_model_is_subclass(self):
         """Test BirdNetModel inherits from BirdDetectionModel."""
         from model_service.base_model import BirdDetectionModel
-        from model_service.model_loader import BirdNetModel
+        from model_service.birdnet_v2_model import BirdNetModel
 
         assert issubclass(BirdNetModel, BirdDetectionModel)
 
     def test_birdnet_model_implements_properties(self):
         """Test BirdNetModel has all required property implementations."""
-        from model_service.model_loader import BirdNetModel
+        from model_service.birdnet_v2_model import BirdNetModel
 
         # These should be class-level constants for BirdNetModel
         assert BirdNetModel.MODEL_NAME == "birdnet"
@@ -58,7 +58,7 @@ class TestBirdNetModelImplementation:
 
     def test_birdnet_model_implements_methods(self):
         """Test BirdNetModel has all required method implementations."""
-        from model_service.model_loader import BirdNetModel
+        from model_service.birdnet_v2_model import BirdNetModel
 
         # Check method implementations exist
         assert callable(getattr(BirdNetModel, 'load', None))
@@ -87,8 +87,8 @@ class TestModelFactory:
 
     def test_create_model_returns_birdnet(self):
         """Test factory creates BirdNetModel for BIRDNET type."""
+        from model_service.birdnet_v2_model import BirdNetModel
         from model_service.model_factory import ModelType, create_model
-        from model_service.model_loader import BirdNetModel
 
         model = create_model(ModelType.BIRDNET)
         assert isinstance(model, BirdNetModel)
@@ -106,8 +106,8 @@ class TestModelFactory:
 
     def test_factory_default_is_birdnet(self):
         """Test factory default argument creates BirdNetModel."""
+        from model_service.birdnet_v2_model import BirdNetModel
         from model_service.model_factory import create_model
-        from model_service.model_loader import BirdNetModel
 
         model = create_model()
         assert isinstance(model, BirdNetModel)
