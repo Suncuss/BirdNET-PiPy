@@ -26,6 +26,7 @@ from config.settings import (
     BASE_DIR,
     DEFAULT_AUDIO_PATH,
     DEFAULT_IMAGE_PATH,
+    EBIRD_CODES_PATH,
     EXTRACTED_AUDIO_DIR,
     LABELS_PATH,
     LABELS_V3_PATH,
@@ -89,6 +90,14 @@ logger = get_logger(__name__)
 
 api = Blueprint('api', __name__)
 db_manager = DatabaseManager()
+
+# Load eBird codes mapping (scientific_name -> ebird_code)
+_ebird_codes: dict[str, str] = {}
+try:
+    with open(EBIRD_CODES_PATH) as f:
+        _ebird_codes = json.load(f)
+except Exception:
+    pass
 
 # Singleton TimezoneFinder (loads ~40MB shape data on first use)
 _timezone_finder: TimezoneFinder | None = None
@@ -453,6 +462,8 @@ def serve_spectrogram(filename):
 def get_bird_details(species_name):
     details = db_manager.get_bird_details(species_name)
     if details:
+        sci_name = details.get('scientific_name', '')
+        details['ebird_code'] = _ebird_codes.get(sci_name)
         logger.debug("Bird details retrieved", extra={
             'species': species_name,
             'total_detections': details.get('detectionCount', 0)

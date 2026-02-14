@@ -42,6 +42,15 @@
           <p><span class="font-semibold text-gray-700">First Detected:</span> {{ formatDate(firstDetected) }}</p>
           <p><span class="font-semibold text-gray-700">Last Detected:</span> {{ formatDate(lastDetected) }}</p>
           <p><span class="font-semibold text-gray-700">Most Activity Time:</span> {{ peakActivityTime }}</p>
+          <div class="flex flex-col gap-1 mt-2">
+            <a
+              v-if="birdDetails.ebird_code"
+              :href="`https://ebird.org/species/${birdDetails.ebird_code}`"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="text-blue-600 hover:text-blue-800 font-medium underline"
+            >eBird</a>
+          </div>
         </div>
       </div>
 
