@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-02-15
+
+- Fixed version displaying as "unknown" on Pi deployments (build.sh used node which isn't on the host)
+
 ## [0.5.1] - 2026-02-15
 
 - Added custom bird image upload support in Gallery
