@@ -10,32 +10,103 @@
       <!-- Bird Image, Quick Stats, and Attribution -->
       <div class="bg-white rounded-lg shadow overflow-hidden lg:col-span-1">
         <div class="relative overflow-hidden w-full aspect-square max-h-[300px] bg-gray-200">
-          <a
-            :href="birdImageData.pageUrl"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="block w-full h-full cursor-pointer"
-            :title="`View ${birdDetails.common_name} on Wikimedia Commons`"
-          >
+          <template v-if="hasCustomImage">
             <img
-              :src="birdImageData.imageUrl"
+              :src="customImageSrc"
               :alt="birdDetails.common_name"
-              class="absolute inset-0 w-full h-full object-cover transition-[opacity,transform] duration-200 hover:scale-110"
-              :class="{ 'opacity-0': !imageReady, 'opacity-100': imageReady }"
-              :style="{ objectPosition: imageFocalPoint }"
+              class="absolute inset-0 w-full h-full object-cover"
+              style="object-position: 50% 50%"
             >
-          </a>
-        </div>
-        <div class="p-4 bg-gray-100 text-sm text-gray-600">
-          <p>
-            Photo by <a
-              :href="birdImageData.authorUrl"
+          </template>
+          <template v-else>
+            <a
+              :href="birdImageData.pageUrl"
               target="_blank"
               rel="noopener noreferrer"
-              class="text-blue-600 underline"
-            >{{
-              birdImageData.authorName }}</a>, licensed under {{ birdImageData.licenseType }}
-          </p>
+              class="block w-full h-full cursor-pointer"
+              :title="`View ${birdDetails.common_name} on Wikimedia Commons`"
+            >
+              <img
+                :src="birdImageData.imageUrl"
+                :alt="birdDetails.common_name"
+                class="absolute inset-0 w-full h-full object-cover transition-[opacity,transform] duration-200 hover:scale-110"
+                :class="{ 'opacity-0': !imageReady, 'opacity-100': imageReady }"
+                :style="{ objectPosition: imageFocalPoint }"
+              >
+            </a>
+          </template>
+          <button
+            class="absolute bottom-2 right-2 bg-black/50 hover:bg-black/70 text-white rounded-full w-9 h-9 flex items-center justify-center transition-colors"
+            title="Upload custom image"
+            :disabled="isUploading"
+            @click="triggerFileUpload"
+          >
+            <svg
+              v-if="!isUploading"
+              xmlns="http://www.w3.org/2000/svg"
+              class="w-5 h-5"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+            >
+              <path
+                fill-rule="evenodd"
+                d="M4 5a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2V7a2 2 0 00-2-2h-1.586a1 1 0 01-.707-.293l-1.121-1.121A2 2 0 0011.172 3H8.828a2 2 0 00-1.414.586L6.293 4.707A1 1 0 015.586 5H4zm6 9a3 3 0 100-6 3 3 0 000 6z"
+                clip-rule="evenodd"
+              />
+            </svg>
+            <svg
+              v-else
+              class="animate-spin w-5 h-5"
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+            >
+              <circle
+                class="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                stroke-width="4"
+              />
+              <path
+                class="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+              />
+            </svg>
+          </button>
+          <input
+            ref="imageFileInput"
+            type="file"
+            accept="image/*"
+            class="hidden"
+            @change="handleImageUpload"
+          >
+        </div>
+        <div class="p-4 bg-gray-100 text-sm text-gray-600">
+          <template v-if="hasCustomImage">
+            <div class="flex items-center justify-between">
+              <p>Custom image</p>
+              <button
+                class="text-blue-600 underline hover:text-blue-800"
+                @click="revertToWikimedia"
+              >
+                Revert to default
+              </button>
+            </div>
+          </template>
+          <template v-else>
+            <p>
+              Photo by <a
+                :href="birdImageData.authorUrl"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-blue-600 underline"
+              >{{
+                birdImageData.authorName }}</a>, licensed under {{ birdImageData.licenseType }}
+            </p>
+          </template>
         </div>
         <div class="p-6 space-y-2">
           <p><span class="font-semibold text-gray-700">Total Detections:</span> {{ totalVisits }}</p>
@@ -244,7 +315,7 @@ import { useChartHelpers } from '@/composables/useChartHelpers'
 import { useChartColors } from '@/composables/useChartColors'
 import { useSmartCrop } from '@/composables/useSmartCrop'
 import api from '@/services/api'
-import { getAudioUrl, getSpectrogramUrl } from '@/services/media'
+import { getAudioUrl, getBirdImageUrl, getSpectrogramUrl } from '@/services/media'
 
 export default {
   name: 'BirdDetails',
@@ -269,6 +340,11 @@ export default {
     const recordingsPerPage = 4
     const isLoadingRecordings = ref(false)
     const selectedSpectrogramUrl = ref(null)
+
+    const hasCustomImage = ref(false)
+    const imageFileInput = ref(null)
+    const isUploading = ref(false)
+    const customImageSrc = ref(getBirdImageUrl(route.params.name))
 
     const birdImageData = ref({
       imageUrl: '/default_bird.webp',
@@ -369,10 +445,17 @@ export default {
           params: { species: birdDetails.value.common_name }
         })
 
-        birdImageData.value = imageData
+        // Always store wikimedia data for revert fallback
+        if (imageData.imageUrl) {
+          birdImageData.value = imageData
+        }
 
-        // Calculate focal point for smart cropping
-        await updateFocalPoint(imageData.imageUrl)
+        if (imageData.hasCustomImage) {
+          hasCustomImage.value = true
+        } else {
+          // Calculate focal point for smart cropping
+          await updateFocalPoint(imageData.imageUrl)
+        }
 
         // Fetch recordings
         await fetchRecordings()
@@ -556,6 +639,55 @@ export default {
       updateChart()
     }
 
+    const triggerFileUpload = () => {
+      imageFileInput.value?.click()
+    }
+
+    const handleImageUpload = async (event) => {
+      const file = event.target.files?.[0]
+      if (!file) return
+
+      if (!file.type.startsWith('image/')) {
+        console.error('Invalid file type')
+        return
+      }
+
+      if (file.size > 10 * 1024 * 1024) {
+        console.error('File too large (max 10MB)')
+        return
+      }
+
+      isUploading.value = true
+      try {
+        const formData = new FormData()
+        formData.append('file', file)
+        await api.post(`/bird/${route.params.name}/image`, formData, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        })
+        hasCustomImage.value = true
+        customImageSrc.value = `${getBirdImageUrl(route.params.name)}?t=${Date.now()}`
+      } catch (error) {
+        console.error('Error uploading image:', error)
+      } finally {
+        isUploading.value = false
+        // Reset file input so the same file can be re-selected
+        if (imageFileInput.value) imageFileInput.value.value = ''
+      }
+    }
+
+    const revertToWikimedia = async () => {
+      try {
+        await api.delete(`/bird/${route.params.name}/image`)
+        hasCustomImage.value = false
+        // Recalculate focal point for wikimedia image
+        if (birdImageData.value.imageUrl && birdImageData.value.imageUrl !== '/default_bird.webp') {
+          await updateFocalPoint(birdImageData.value.imageUrl)
+        }
+      } catch (error) {
+        console.error('Error reverting to default image:', error)
+      }
+    }
+
     const formatDate = (date) => {
       return date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
     }
@@ -601,6 +733,13 @@ export default {
       birdImageData,
       imageFocalPoint,
       imageReady,
+      hasCustomImage,
+      customImageSrc,
+      imageFileInput,
+      isUploading,
+      triggerFileUpload,
+      handleImageUpload,
+      revertToWikimedia,
       averageConfidence,
       peakActivityTime,
       seasonality,

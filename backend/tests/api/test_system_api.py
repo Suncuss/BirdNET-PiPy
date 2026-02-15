@@ -6,6 +6,7 @@ class TestSystemAPI:
 
     # Sample version.json content
     SAMPLE_VERSION_INFO = {
+        'version': '0.5.0',
         'commit': '1a081f5',
         'commit_date': '2025-11-28T08:49:00Z',
         'branch': 'develop',
@@ -21,6 +22,7 @@ class TestSystemAPI:
             response = api_client.get('/api/system/version')
             assert response.status_code == 200
             data = response.get_json()
+            assert data['version'] == '0.5.0'
             assert data['current_commit'] == '1a081f5'
             assert data['current_branch'] == 'develop'
             assert data['remote_url'] == 'https://github.com/Suncuss/BirdNET-PiPy'
@@ -569,6 +571,7 @@ class TestUpdateCheckWithNotes:
     """Test update-check endpoint includes update notes"""
 
     SAMPLE_VERSION_INFO = {
+        'version': '0.5.0',
         'commit': '1a081f5',
         'commit_date': '2025-11-28T08:49:00Z',
         'branch': 'develop',

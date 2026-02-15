@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-02-15
+
+- Added custom bird image upload support in Gallery
+- Added GitHub repository link to Settings system section
+- Added version number display alongside commit hash in Settings
+- Fixed misleading download banner when switching models
+- Fixed custom image attribution height alignment in gallery cards
+- Fixed lint warnings in AppButton and BirdGallery
+
 ## [0.5.0] - 2026-02-13
 
 - Added BirdNET V3.0 model support (ONNX, 11K species, 32kHz) with auto-download and settings UI

@@ -124,4 +124,64 @@ describe('BirdGallery', () => {
 
     expect(wrapper.text()).toContain('No birds to display yet.')
   })
+
+  it('shows custom image label when bird has custom image', async () => {
+    mockApi.get.mockImplementation((url) => {
+      if (url === '/sightings/unique') {
+        return Promise.resolve({
+          data: [
+            { id: 1, common_name: 'Sparrow', scientific_name: 'Passer domesticus', timestamp: '2024-08-01T12:00:00Z' }
+          ]
+        })
+      }
+      if (url === '/wikimedia_image') {
+        return Promise.resolve({
+          data: {
+            imageUrl: '/sparrow.jpg',
+            authorName: 'Jane Doe',
+            authorUrl: 'https://example.com',
+            licenseType: 'CC BY-SA 4.0',
+            hasCustomImage: true
+          }
+        })
+      }
+      return Promise.resolve({ data: [] })
+    })
+
+    const wrapper = mountGallery()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Custom image')
+    expect(wrapper.text()).not.toContain('Photo by')
+  })
+
+  it('shows wikimedia attribution when bird has no custom image', async () => {
+    mockApi.get.mockImplementation((url) => {
+      if (url === '/sightings/unique') {
+        return Promise.resolve({
+          data: [
+            { id: 1, common_name: 'Sparrow', scientific_name: 'Passer domesticus', timestamp: '2024-08-01T12:00:00Z' }
+          ]
+        })
+      }
+      if (url === '/wikimedia_image') {
+        return Promise.resolve({
+          data: {
+            imageUrl: '/sparrow.jpg',
+            authorName: 'Jane Doe',
+            authorUrl: 'https://example.com',
+            licenseType: 'CC BY-SA 4.0',
+            hasCustomImage: false
+          }
+        })
+      }
+      return Promise.resolve({ data: [] })
+    })
+
+    const wrapper = mountGallery()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Photo by')
+    expect(wrapper.text()).toContain('Jane Doe')
+  })
 })

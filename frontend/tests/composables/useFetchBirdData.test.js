@@ -233,6 +233,36 @@ describe('useFetchBirdData', () => {
       expect(latestObservationimageUrl.value).toBe('/robin.jpg')
     })
 
+    it('uses custom image URL when hasCustomImage is true', async () => {
+      const mockLatest = { common_name: 'American Robin', confidence: 0.95 }
+
+      mockApi.get.mockImplementation((url) => {
+        if (url.includes('/observations/latest')) {
+          return Promise.resolve({ data: mockLatest })
+        }
+        if (url.includes('/observations/recent')) {
+          return Promise.resolve({ data: [] })
+        }
+        if (url.includes('/observations/summary')) {
+          return Promise.resolve({ data: {} })
+        }
+        if (url.includes('/activity/')) {
+          return Promise.resolve({ data: [] })
+        }
+        if (url.includes('/wikimedia_image')) {
+          return Promise.resolve({ data: { imageUrl: '/robin.jpg', hasCustomImage: true } })
+        }
+        return Promise.reject(new Error(`Unknown URL: ${url}`))
+      })
+
+      const { fetchDashboardData, latestObservationimageUrl } = useFetchBirdData()
+
+      await fetchDashboardData()
+
+      // Should use the custom image URL instead of wikimedia
+      expect(latestObservationimageUrl.value).toContain('/bird/American%20Robin/image')
+    })
+
     it('keeps default image when no latest observation', async () => {
       mockApi.get.mockImplementation((url) => {
         if (url.includes('/observations/latest')) {

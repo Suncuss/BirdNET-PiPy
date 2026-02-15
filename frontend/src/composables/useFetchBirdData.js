@@ -1,5 +1,6 @@
 import { ref } from "vue";
 import api from "@/services/api";
+import { getBirdImageUrl } from "@/services/media";
 import { useLogger } from "./useLogger";
 
 export function useFetchBirdData() {
@@ -150,8 +151,13 @@ export function useFetchBirdData() {
           { species: latestObservationData.value.common_name },
           wikimediaImageResponse);
         if (!wikimediaImageResponse.error) {
-          latestObservationimageUrl.value =
-            wikimediaImageResponse.data.imageUrl;
+          if (wikimediaImageResponse.data.hasCustomImage) {
+            latestObservationimageUrl.value =
+              getBirdImageUrl(latestObservationData.value.common_name);
+          } else {
+            latestObservationimageUrl.value =
+              wikimediaImageResponse.data.imageUrl;
+          }
         }
       }
       

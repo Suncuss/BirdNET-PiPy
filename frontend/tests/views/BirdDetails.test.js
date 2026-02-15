@@ -8,7 +8,9 @@ import BirdDetails from '@/views/BirdDetails.vue'
 
 // Mock the api service
 const mockApi = vi.hoisted(() => ({
-  get: vi.fn()
+  get: vi.fn(),
+  post: vi.fn(),
+  delete: vi.fn()
 }))
 
 vi.mock('@/services/api', () => ({
@@ -68,7 +70,8 @@ const mockImageData = {
   pageUrl: 'https://commons.wikimedia.org/wiki/File:Robin.jpg',
   authorName: 'John Doe',
   authorUrl: 'https://example.com/john',
-  licenseType: 'CC BY-SA'
+  licenseType: 'CC BY-SA',
+  hasCustomImage: false
 }
 
 const mockRecordings = [
@@ -303,5 +306,131 @@ describe('BirdDetails Recordings Section', () => {
       /^[1-4]$/.test(btn.text())
     )
     expect(paginationButtons.length).toBe(0)
+  })
+})
+
+describe('BirdDetails Custom Image', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('shows wikimedia image and attribution when no custom image', async () => {
+    mockApi.get.mockImplementation((url) => {
+      if (url.includes('/bird/') && url.includes('/recordings')) {
+        return Promise.resolve({ data: [] })
+      }
+      if (url.includes('/bird/') && url.includes('/detection_distribution')) {
+        return Promise.resolve({ data: { labels: [], data: [] } })
+      }
+      if (url.includes('/bird/')) {
+        return Promise.resolve({ data: mockBirdDetails })
+      }
+      if (url.includes('/wikimedia_image')) {
+        return Promise.resolve({ data: { ...mockImageData, hasCustomImage: false } })
+      }
+      return Promise.resolve({ data: {} })
+    })
+
+    const wrapper = mountComponent()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Photo by')
+    expect(wrapper.text()).toContain('John Doe')
+    expect(wrapper.text()).not.toContain('Custom image')
+  })
+
+  it('shows custom image label when hasCustomImage is true', async () => {
+    mockApi.get.mockImplementation((url) => {
+      if (url.includes('/bird/') && url.includes('/recordings')) {
+        return Promise.resolve({ data: [] })
+      }
+      if (url.includes('/bird/') && url.includes('/detection_distribution')) {
+        return Promise.resolve({ data: { labels: [], data: [] } })
+      }
+      if (url.includes('/bird/')) {
+        return Promise.resolve({ data: mockBirdDetails })
+      }
+      if (url.includes('/wikimedia_image')) {
+        return Promise.resolve({ data: { ...mockImageData, hasCustomImage: true } })
+      }
+      return Promise.resolve({ data: {} })
+    })
+
+    const wrapper = mountComponent()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Custom image')
+    expect(wrapper.text()).toContain('Revert to default')
+  })
+
+  it('renders upload button', async () => {
+    mockApi.get.mockImplementation((url) => {
+      if (url.includes('/bird/') && url.includes('/recordings')) {
+        return Promise.resolve({ data: [] })
+      }
+      if (url.includes('/bird/') && url.includes('/detection_distribution')) {
+        return Promise.resolve({ data: { labels: [], data: [] } })
+      }
+      if (url.includes('/bird/')) {
+        return Promise.resolve({ data: mockBirdDetails })
+      }
+      if (url.includes('/wikimedia_image')) {
+        return Promise.resolve({ data: { ...mockImageData, hasCustomImage: false } })
+      }
+      return Promise.resolve({ data: {} })
+    })
+
+    const wrapper = mountComponent()
+    await flushPromises()
+
+    // Should have the camera upload button
+    const uploadButton = wrapper.find('button[title="Upload custom image"]')
+    expect(uploadButton.exists()).toBe(true)
+
+    // Should have a hidden file input
+    const fileInput = wrapper.find('input[type="file"]')
+    expect(fileInput.exists()).toBe(true)
+    expect(fileInput.classes()).toContain('hidden')
+  })
+
+  it('reverts to wikimedia on delete', async () => {
+    mockApi.get.mockImplementation((url) => {
+      if (url.includes('/bird/') && url.includes('/recordings')) {
+        return Promise.resolve({ data: [] })
+      }
+      if (url.includes('/bird/') && url.includes('/detection_distribution')) {
+        return Promise.resolve({ data: { labels: [], data: [] } })
+      }
+      if (url.includes('/bird/')) {
+        return Promise.resolve({ data: mockBirdDetails })
+      }
+      if (url.includes('/wikimedia_image')) {
+        return Promise.resolve({ data: { ...mockImageData, hasCustomImage: true } })
+      }
+      return Promise.resolve({ data: {} })
+    })
+    mockApi.delete.mockResolvedValue({ data: { hasCustomImage: false } })
+
+    const wrapper = mountComponent()
+    await flushPromises()
+
+    // Should show custom image state
+    expect(wrapper.text()).toContain('Custom image')
+
+    // Click revert
+    const revertButton = wrapper.findAll('button').find(btn => btn.text().includes('Revert'))
+    expect(revertButton).toBeTruthy()
+    await revertButton.trigger('click')
+    await flushPromises()
+
+    // Should have called delete API
+    expect(mockApi.delete).toHaveBeenCalledWith('/bird/American Robin/image')
+
+    // Should now show wikimedia attribution
+    expect(wrapper.text()).toContain('Photo by')
   })
 })

@@ -26,12 +26,18 @@ const props = defineProps({
   },
   disabled: Boolean,
   loading: Boolean,
-  label: String,
+  label: {
+    type: String,
+    default: undefined
+  },
   loadingText: {
     type: String,
     default: 'Loading...'
   },
-  to: [String, Object] // For router-link support
+  to: {
+    type: [String, Object],
+    default: undefined
+  }
 })
 
 const isDisabled = computed(() => props.disabled || props.loading)

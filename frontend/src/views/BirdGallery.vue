@@ -13,10 +13,12 @@
           ]"
           @click="selectTab(tab.value)"
         >
+          <!-- eslint-disable vue/no-v-html -- icons are hardcoded constants, not user input -->
           <span
             class="mr-1.5"
             v-html="tab.icon"
           />
+          <!-- eslint-enable vue/no-v-html -->
           {{ tab.label }}
         </button>
       </nav>
@@ -67,18 +69,24 @@
           </router-link>
 
           <div class="p-3 sm:p-4 bg-gray-100 text-xs text-gray-600">
-            <p>
-              Photo by <a
-                :href="bird.authorUrl"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="text-blue-600 underline"
-              >{{ bird.authorName
-              }}</a>
-            </p>
-            <p>
-              Licensed under {{ bird.licenseType }}
-            </p>
+            <template v-if="bird.hasCustomImage">
+              <p>Custom image</p>
+              <p>Uploaded by you</p>
+            </template>
+            <template v-else>
+              <p>
+                Photo by <a
+                  :href="bird.authorUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-blue-600 underline"
+                >{{ bird.authorName
+                }}</a>
+              </p>
+              <p>
+                Licensed under {{ bird.licenseType }}
+              </p>
+            </template>
           </div>
           <div class="p-3 sm:p-4">
             <h2 class="text-lg font-semibold mb-2">
@@ -106,6 +114,7 @@
 <script>
 import { ref, computed, onMounted } from 'vue'
 import api from '@/services/api'
+import { getBirdImageUrl } from '@/services/media'
 import { useSmartCrop } from '@/composables/useSmartCrop'
 import AppButton from '@/components/AppButton.vue'
 
@@ -209,24 +218,33 @@ export default {
         // Keep showing placeholder while loading real image
         const imageData = await fetchWikimediaImage(bird.name)
         if (imageData) {
-          // Calculate focal point first (this preloads image into browser cache)
-          const newFocalPoint = await calculateFocalPoint(imageData.imageUrl)
+          if (imageData.hasCustomImage) {
+            bird.focalPointReady = false
+            bird.imageUrl = getBirdImageUrl(bird.name)
+            bird.hasCustomImage = true
+            bird.focalPoint = '50% 50%'
+            await new Promise(r => requestAnimationFrame(r))
+            bird.focalPointReady = true
+          } else {
+            // Calculate focal point first (this preloads image into browser cache)
+            const newFocalPoint = await calculateFocalPoint(imageData.imageUrl)
 
-          // Brief hide to trigger fade transition
-          bird.focalPointReady = false
+            // Brief hide to trigger fade transition
+            bird.focalPointReady = false
 
-          // Update all image data
-          bird.imageUrl = imageData.imageUrl
-          bird.authorName = imageData.authorName
-          bird.authorUrl = imageData.authorUrl
-          bird.licenseType = imageData.licenseType
-          bird.focalPoint = newFocalPoint
+            // Update all image data
+            bird.imageUrl = imageData.imageUrl
+            bird.authorName = imageData.authorName
+            bird.authorUrl = imageData.authorUrl
+            bird.licenseType = imageData.licenseType
+            bird.focalPoint = newFocalPoint
 
-          // Small delay to ensure opacity-0 is applied before fading in
-          await new Promise(r => requestAnimationFrame(r))
+            // Small delay to ensure opacity-0 is applied before fading in
+            await new Promise(r => requestAnimationFrame(r))
 
-          // Fade in the new image
-          bird.focalPointReady = true
+            // Fade in the new image
+            bird.focalPointReady = true
+          }
         }
       }
     }

@@ -499,7 +499,7 @@ describe('Settings', () => {
       expect(mockWaitForRestart).toHaveBeenCalledWith(
         expect.objectContaining({
           maxWaitSeconds: 600,
-          message: 'Downloading model and restarting services'
+          message: 'Updating settings'
         })
       )
     })

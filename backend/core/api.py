@@ -9,7 +9,15 @@ import uuid
 from datetime import datetime, timedelta
 
 import requests
-from flask import Blueprint, Flask, Response, jsonify, request, session
+from flask import (
+    Blueprint,
+    Flask,
+    Response,
+    jsonify,
+    request,
+    send_from_directory,
+    session,
+)
 from flask_socketio import SocketIO, emit
 from timezonefinder import TimezoneFinder
 
@@ -24,6 +32,7 @@ from config.constants import (
 from config.settings import (
     API_PORT,
     BASE_DIR,
+    CUSTOM_BIRD_IMAGES_DIR,
     DEFAULT_AUDIO_PATH,
     DEFAULT_IMAGE_PATH,
     EXTRACTED_AUDIO_DIR,
@@ -239,6 +248,48 @@ def set_cached_image(species_name, data):
         'timestamp': time.time()
     }
 
+ALLOWED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
+MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10MB
+IMAGE_MAGIC_PREFIXES = (b'\xff\xd8\xff', b'\x89PNG', b'RIFF', b'GIF8')
+
+
+def _sanitize_species_filename(species_name):
+    """Convert species name to a safe filename (spaces/special chars to underscores)."""
+    sanitized = re.sub(r'[^\w\-]', '_', species_name)
+    sanitized = re.sub(r'_+', '_', sanitized)
+    return sanitized.strip('_')
+
+
+def _get_custom_image_path(species_name):
+    """Check if a custom image exists for the species. Returns (filepath, filename) or (None, None)."""
+    sanitized = _sanitize_species_filename(species_name)
+    for ext in ALLOWED_IMAGE_EXTENSIONS:
+        filename = sanitized + ext
+        filepath = os.path.join(CUSTOM_BIRD_IMAGES_DIR, filename)
+        if os.path.exists(filepath):
+            return filepath, filename
+    return None, None
+
+
+def _delete_custom_image(species_name):
+    """Delete all custom images for species. Returns True if any were deleted."""
+    sanitized = _sanitize_species_filename(species_name)
+    deleted = False
+    for ext in ALLOWED_IMAGE_EXTENSIONS:
+        filepath = os.path.join(CUSTOM_BIRD_IMAGES_DIR, sanitized + ext)
+        if os.path.exists(filepath):
+            os.remove(filepath)
+            deleted = True
+    return deleted
+
+
+def _validate_image_magic_bytes(file_stream):
+    """Validate that the file starts with known image magic bytes."""
+    header = file_stream.read(4)
+    file_stream.seek(0)
+    return any(header[:len(m)] == m for m in IMAGE_MAGIC_PREFIXES)
+
+
 def fetch_wikimedia_image(species_name):
     cached_data = get_cached_image(species_name)
     if cached_data:
@@ -328,14 +379,22 @@ def get_wikimedia_image():
     if not species_name:
         return jsonify({'error': 'Species name is required'}), 400
 
+    custom_path, _ = _get_custom_image_path(species_name)
+    has_custom = custom_path is not None
+
     image_data, error = fetch_wikimedia_image(species_name)
 
     if error:
+        if has_custom:
+            return jsonify({'hasCustomImage': True}), 200
         return jsonify({'error': error}), 404 if 'No results found' in error else 500
+
+    image_data['hasCustomImage'] = has_custom
 
     logger.debug("Wikimedia image fetched", extra={
         'species': species_name,
-        'has_image': bool(image_data)
+        'has_image': bool(image_data),
+        'has_custom_image': has_custom
     })
     return jsonify(image_data)
 
@@ -459,6 +518,67 @@ def get_bird_details(species_name):
         })
         return jsonify(details)
     return jsonify({"error": "Bird species not found"}), 404
+
+@api.route('/api/bird/<species_name>/image', methods=['POST'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def upload_bird_image(species_name):
+    """Upload a custom image for a bird species."""
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+
+    file = request.files['file']
+    if not file.filename:
+        return jsonify({'error': 'No file selected'}), 400
+
+    # Validate extension
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in ALLOWED_IMAGE_EXTENSIONS:
+        return jsonify({'error': f'Invalid file type. Allowed: {", ".join(sorted(ALLOWED_IMAGE_EXTENSIONS))}'}), 400
+
+    # Validate file size
+    file.seek(0, 2)
+    size = file.tell()
+    file.seek(0)
+    if size > MAX_IMAGE_SIZE:
+        return jsonify({'error': f'File too large. Maximum size is {MAX_IMAGE_SIZE // (1024 * 1024)}MB'}), 400
+
+    if size == 0:
+        return jsonify({'error': 'File is empty'}), 400
+
+    # Validate magic bytes
+    if not _validate_image_magic_bytes(file):
+        return jsonify({'error': 'File does not appear to be a valid image'}), 400
+
+    os.makedirs(CUSTOM_BIRD_IMAGES_DIR, exist_ok=True)
+    _delete_custom_image(species_name)
+    final_path = os.path.join(CUSTOM_BIRD_IMAGES_DIR, _sanitize_species_filename(species_name) + ext)
+    file.save(final_path)
+
+    logger.info("Custom bird image uploaded", extra={'species': species_name})
+    return jsonify({'hasCustomImage': True})
+
+
+@api.route('/api/bird/<species_name>/image', methods=['GET'])
+def serve_bird_image(species_name):
+    """Serve a custom bird image."""
+    _, filename = _get_custom_image_path(species_name)
+    if filename:
+        return send_from_directory(CUSTOM_BIRD_IMAGES_DIR, filename)
+    return jsonify({'error': 'No custom image found'}), 404
+
+
+@api.route('/api/bird/<species_name>/image', methods=['DELETE'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def delete_bird_image(species_name):
+    """Delete a custom bird image. Idempotent - always returns 200."""
+    _delete_custom_image(species_name)
+    logger.info("Custom bird image deleted", extra={'species': species_name})
+    return jsonify({'hasCustomImage': False})
+
 
 @api.route('/api/bird/<species_name>/recordings', methods=['GET'])
 @log_api_request
@@ -1372,6 +1492,7 @@ def get_system_version():
             }), 500
 
         return jsonify({
+            'version': version_info.get('version', 'unknown'),
             'current_commit': version_info.get('commit', 'unknown'),
             'current_commit_date': version_info.get('commit_date', 'unknown'),
             'current_branch': version_info.get('branch', 'unknown'),
