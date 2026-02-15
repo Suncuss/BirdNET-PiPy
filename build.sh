@@ -141,7 +141,7 @@ generate_version_info() {
     COMMIT_DATE=$(git log -1 --pretty=%cI 2>/dev/null || echo "unknown")
     BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
     REMOTE_URL=$(git config --get remote.origin.url 2>/dev/null || echo "unknown")
-    VERSION=$(node -p "require('./frontend/package.json').version" 2>/dev/null || echo "unknown")
+    VERSION=$(grep '"version"' frontend/package.json | sed 's/.*"version": *"\([^"]*\)".*/\1/' 2>/dev/null || echo "unknown")
     BUILD_TIME=$(date -Iseconds)
 
     # Convert SSH URL to HTTPS for display
