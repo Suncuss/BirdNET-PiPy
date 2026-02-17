@@ -132,7 +132,7 @@ export function useBirdCharts() {
         scales: {
           x: {
             title: { display: true, text: 'Detections', color: colorPalette.text },
-            ticks: { color: colorPalette.text }
+            ticks: { color: colorPalette.text, precision: 0 }
           },
           y: {
             ticks: { color: colorPalette.text }
