@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Consolidated Dashboard API into single `/api/dashboard` endpoint, reducing 5-6 concurrent requests to 1
+- Added tab visibility handling — polling pauses when tab is hidden and resumes on focus
+
 ## [0.5.3] - 2026-02-16
 
 - Added eBird species link to bird details page

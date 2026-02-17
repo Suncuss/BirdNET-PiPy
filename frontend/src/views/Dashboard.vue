@@ -385,8 +385,7 @@ export default {
             summaryError,
 
             // Methods
-            fetchDashboardData,
-            fetchChartsData
+            fetchDashboardData
         } = useFetchBirdData();
 
 
@@ -433,10 +432,34 @@ export default {
 
         const currentOrder = () => showLeastCommon.value ? 'least' : 'most'
 
+        // Idempotent polling helpers
+        const startPolling = () => {
+            if (!dataFetchInterval) {
+                dataFetchInterval = setInterval(() => fetchDashboardData(currentOrder()), 9000)
+            }
+            if (!chartUpdateInterval) {
+                chartUpdateInterval = setInterval(redrawCharts, 9000)
+            }
+        }
+
+        const stopPolling = () => {
+            if (dataFetchInterval) {
+                clearInterval(dataFetchInterval)
+                dataFetchInterval = null
+            }
+            if (chartUpdateInterval) {
+                clearInterval(chartUpdateInterval)
+                chartUpdateInterval = null
+            }
+        }
+
+        // Visibility change handler
+        let visibilityHandler = null
+
         // Start data fetching and charts
         const startDashboard = async () => {
             await fetchDashboardData(currentOrder());
-            dataFetchInterval = setInterval(() => fetchDashboardData(currentOrder()), 4500)
+            startPolling()
 
             // Silent auto-check for updates (no status messages, uses backend cache)
             systemUpdate.checkForUpdates({ silent: true }).catch(() => {})
@@ -448,7 +471,20 @@ export default {
                 createTotalObsChart(totalObservationsChart, detailedBirdActivityData.value, { animate: initialLoad.value, title: null });
                 createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: initialLoad.value, title: null });
             }
-            chartUpdateInterval = setInterval(redrawCharts, 4500)
+
+            // Register visibility handler (idempotent)
+            if (!visibilityHandler) {
+                visibilityHandler = async () => {
+                    if (document.hidden) {
+                        stopPolling()
+                    } else {
+                        await fetchDashboardData(currentOrder())
+                        redrawCharts()
+                        startPolling()
+                    }
+                }
+                document.addEventListener('visibilitychange', visibilityHandler)
+            }
 
             // Initialize spectrogram canvas after DOM updates with new data
             nextTick(() => {
@@ -473,8 +509,13 @@ export default {
 
         onUnmounted(() => {
             // Clear intervals
-            if (dataFetchInterval) clearInterval(dataFetchInterval)
-            if (chartUpdateInterval) clearInterval(chartUpdateInterval)
+            stopPolling()
+
+            // Remove visibility handler
+            if (visibilityHandler) {
+                document.removeEventListener('visibilitychange', visibilityHandler)
+                visibilityHandler = null
+            }
 
             // Cancel animation frame
             if (animationId) {
@@ -662,8 +703,7 @@ export default {
             showLeastCommon.value = !showLeastCommon.value
             isActivityUpdating.value = true
             try {
-                const today = new Date().toLocaleDateString("en-CA")
-                await fetchChartsData(today, currentOrder())
+                await fetchDashboardData(currentOrder())
                 await createTotalObsChart(totalObservationsChart, detailedBirdActivityData.value, { animate: true, title: null })
                 await createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: true, title: null })
             } finally {

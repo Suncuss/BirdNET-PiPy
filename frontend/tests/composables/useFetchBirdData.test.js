@@ -161,25 +161,23 @@ describe('useFetchBirdData', () => {
   })
 
   describe('fetchDashboardData', () => {
-    it('fetches all dashboard data in parallel', async () => {
-      const mockLatest = { common_name: 'American Robin', confidence: 0.95 }
-      const mockRecent = [{ common_name: 'Blue Jay' }, { common_name: 'Cardinal' }]
-      const mockSummary = { total_detections: 100, unique_species: 25 }
+    const mockDashboardResponse = (overrides = {}) => ({
+      latestObservation: { common_name: 'American Robin', confidence: 0.95 },
+      recentObservations: [{ common_name: 'Blue Jay' }, { common_name: 'Cardinal' }],
+      summary: { today: {}, week: {}, month: {}, allTime: {} },
+      hourlyActivity: [{ hour: '00:00', count: 0 }],
+      activityOverview: [{ species: 'Robin', count: 3 }],
+      ...overrides
+    })
+
+    it('fetches all dashboard data from consolidated endpoint', async () => {
+      const dashData = mockDashboardResponse()
 
       mockApi.get.mockImplementation((url) => {
-        if (url.includes('/observations/latest')) {
-          return Promise.resolve({ data: mockLatest })
+        if (url === '/dashboard') {
+          return Promise.resolve({ data: dashData })
         }
-        if (url.includes('/observations/recent')) {
-          return Promise.resolve({ data: mockRecent })
-        }
-        if (url.includes('/observations/summary')) {
-          return Promise.resolve({ data: mockSummary })
-        }
-        if (url.includes('/activity/')) {
-          return Promise.resolve({ data: [] })
-        }
-        if (url.includes('/wikimedia_image')) {
+        if (url === '/wikimedia_image') {
           return Promise.resolve({ data: { imageUrl: '/robin.jpg' } })
         }
         return Promise.reject(new Error(`Unknown URL: ${url}`))
@@ -189,33 +187,44 @@ describe('useFetchBirdData', () => {
         fetchDashboardData,
         latestObservationData,
         recentObservationsData,
-        summaryData
+        summaryData,
+        hourlyBirdActivityData,
+        detailedBirdActivityData
       } = useFetchBirdData()
 
       await fetchDashboardData()
 
-      expect(latestObservationData.value).toEqual(mockLatest)
-      expect(recentObservationsData.value).toEqual(mockRecent)
-      expect(summaryData.value).toEqual(mockSummary)
+      expect(latestObservationData.value).toEqual(dashData.latestObservation)
+      expect(recentObservationsData.value).toEqual(dashData.recentObservations)
+      expect(summaryData.value).toEqual(dashData.summary)
+      expect(hourlyBirdActivityData.value).toEqual(dashData.hourlyActivity)
+      expect(detailedBirdActivityData.value).toEqual(dashData.activityOverview)
+    })
+
+    it('passes order parameter to dashboard endpoint', async () => {
+      mockApi.get.mockImplementation((url) => {
+        if (url === '/dashboard') {
+          return Promise.resolve({ data: mockDashboardResponse({ latestObservation: null }) })
+        }
+        return Promise.reject(new Error(`Unknown URL: ${url}`))
+      })
+
+      const { fetchDashboardData } = useFetchBirdData()
+
+      await fetchDashboardData('least')
+
+      expect(mockApi.get).toHaveBeenCalledWith(
+        '/dashboard',
+        { params: { order: 'least' } }
+      )
     })
 
     it('fetches wikimedia image when latest observation exists', async () => {
-      const mockLatest = { common_name: 'American Robin', confidence: 0.95 }
-
       mockApi.get.mockImplementation((url) => {
-        if (url.includes('/observations/latest')) {
-          return Promise.resolve({ data: mockLatest })
+        if (url === '/dashboard') {
+          return Promise.resolve({ data: mockDashboardResponse() })
         }
-        if (url.includes('/observations/recent')) {
-          return Promise.resolve({ data: [] })
-        }
-        if (url.includes('/observations/summary')) {
-          return Promise.resolve({ data: {} })
-        }
-        if (url.includes('/activity/')) {
-          return Promise.resolve({ data: [] })
-        }
-        if (url.includes('/wikimedia_image')) {
+        if (url === '/wikimedia_image') {
           return Promise.resolve({ data: { imageUrl: '/robin.jpg' } })
         }
         return Promise.reject(new Error(`Unknown URL: ${url}`))
@@ -224,32 +233,23 @@ describe('useFetchBirdData', () => {
       const { fetchDashboardData, latestObservationimageUrl } = useFetchBirdData()
 
       await fetchDashboardData()
+      // Wikimedia is fire-and-forget — flush microtasks
+      await vi.waitFor(() => {
+        expect(latestObservationimageUrl.value).toBe('/robin.jpg')
+      })
 
-      // Verify wikimedia was called with the species name
       expect(mockApi.get).toHaveBeenCalledWith(
         '/wikimedia_image',
         { params: { species: 'American Robin' } }
       )
-      expect(latestObservationimageUrl.value).toBe('/robin.jpg')
     })
 
     it('uses custom image URL when hasCustomImage is true', async () => {
-      const mockLatest = { common_name: 'American Robin', confidence: 0.95 }
-
       mockApi.get.mockImplementation((url) => {
-        if (url.includes('/observations/latest')) {
-          return Promise.resolve({ data: mockLatest })
+        if (url === '/dashboard') {
+          return Promise.resolve({ data: mockDashboardResponse() })
         }
-        if (url.includes('/observations/recent')) {
-          return Promise.resolve({ data: [] })
-        }
-        if (url.includes('/observations/summary')) {
-          return Promise.resolve({ data: {} })
-        }
-        if (url.includes('/activity/')) {
-          return Promise.resolve({ data: [] })
-        }
-        if (url.includes('/wikimedia_image')) {
+        if (url === '/wikimedia_image') {
           return Promise.resolve({ data: { imageUrl: '/robin.jpg', hasCustomImage: true } })
         }
         return Promise.reject(new Error(`Unknown URL: ${url}`))
@@ -258,24 +258,16 @@ describe('useFetchBirdData', () => {
       const { fetchDashboardData, latestObservationimageUrl } = useFetchBirdData()
 
       await fetchDashboardData()
-
-      // Should use the custom image URL instead of wikimedia
-      expect(latestObservationimageUrl.value).toContain('/bird/American%20Robin/image')
+      // Wikimedia is fire-and-forget — flush microtasks
+      await vi.waitFor(() => {
+        expect(latestObservationimageUrl.value).toContain('/bird/American%20Robin/image')
+      })
     })
 
     it('keeps default image when no latest observation', async () => {
       mockApi.get.mockImplementation((url) => {
-        if (url.includes('/observations/latest')) {
-          return Promise.reject(new Error('Not found'))
-        }
-        if (url.includes('/observations/recent')) {
-          return Promise.resolve({ data: [] })
-        }
-        if (url.includes('/observations/summary')) {
-          return Promise.resolve({ data: {} })
-        }
-        if (url.includes('/activity/')) {
-          return Promise.resolve({ data: [] })
+        if (url === '/dashboard') {
+          return Promise.resolve({ data: mockDashboardResponse({ latestObservation: null }) })
         }
         return Promise.reject(new Error(`Unknown URL: ${url}`))
       })
@@ -285,21 +277,41 @@ describe('useFetchBirdData', () => {
       await fetchDashboardData()
 
       expect(latestObservationimageUrl.value).toBe('/default_bird.webp')
+      // Should not call wikimedia at all
+      expect(mockApi.get).not.toHaveBeenCalledWith(
+        '/wikimedia_image',
+        expect.anything()
+      )
     })
 
-    it('sets error messages on API failures', async () => {
+    it('keeps default image when wikimedia call fails', async () => {
       mockApi.get.mockImplementation((url) => {
-        if (url.includes('/observations/latest')) {
-          return Promise.reject(new Error('Server error'))
+        if (url === '/dashboard') {
+          return Promise.resolve({ data: mockDashboardResponse() })
         }
-        if (url.includes('/observations/recent')) {
-          return Promise.reject(new Error('Server error'))
+        if (url === '/wikimedia_image') {
+          return Promise.reject(new Error('Wikimedia error'))
         }
-        if (url.includes('/observations/summary')) {
+        return Promise.reject(new Error(`Unknown URL: ${url}`))
+      })
+
+      const {
+        fetchDashboardData,
+        latestObservationimageUrl,
+        latestObservationError
+      } = useFetchBirdData()
+
+      await fetchDashboardData()
+
+      // Image stays at default but dashboard data is still populated
+      expect(latestObservationimageUrl.value).toBe('/default_bird.webp')
+      expect(latestObservationError.value).toBeNull()
+    })
+
+    it('sets all error messages on dashboard API failure', async () => {
+      mockApi.get.mockImplementation((url) => {
+        if (url === '/dashboard') {
           return Promise.reject(new Error('Server error'))
-        }
-        if (url.includes('/activity/')) {
-          return Promise.resolve({ data: [] })
         }
         return Promise.reject(new Error(`Unknown URL: ${url}`))
       })
@@ -308,7 +320,9 @@ describe('useFetchBirdData', () => {
         fetchDashboardData,
         latestObservationError,
         recentObservationsError,
-        summaryError
+        summaryError,
+        hourlyBirdActivityError,
+        detailedBirdActivityError
       } = useFetchBirdData()
 
       await fetchDashboardData()
@@ -316,6 +330,8 @@ describe('useFetchBirdData', () => {
       expect(latestObservationError.value).toBe('Hmm, cannot reach the server')
       expect(recentObservationsError.value).toBe('Hmm, cannot reach the server')
       expect(summaryError.value).toBe('Hmm, cannot reach the server')
+      expect(hourlyBirdActivityError.value).toBe('Hmm, cannot reach the server')
+      expect(detailedBirdActivityError.value).toBe('Hmm, cannot reach the server')
     })
   })
 

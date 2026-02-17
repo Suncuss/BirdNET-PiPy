@@ -79,88 +79,47 @@ export function useFetchBirdData() {
   const fetchDashboardData = async (order = 'most') => {
     logger.info('Fetching dashboard data', { order });
     try {
-      const today = new Date().toLocaleDateString("en-CA");
-      fetchChartsData(today, order);
+      const response = await api.get('/dashboard', { params: { order } });
+      logger.api('GET', '/dashboard', { order }, response);
 
-      const [
-        latestObservationResponse,
-        recentObservationsResponse,
-        summaryResponse,
-      ] = await Promise.all([
-        api
-          .get('/observations/latest')
-          .then(response => {
-            logger.api('GET', '/observations/latest', null, response);
-            return response;
-          })
-          .catch((error) => {
-            logger.error('Failed to fetch latest observation', error);
-            return { error };
-          }),
-        api
-          .get('/observations/recent')
-          .then(response => {
-            logger.api('GET', '/observations/recent', null, response);
-            return response;
-          })
-          .catch((error) => {
-            logger.error('Failed to fetch recent observations', error);
-            return { error };
-          }),
-        api
-          .get('/observations/summary')
-          .then(response => {
-            logger.api('GET', '/observations/summary', null, response);
-            return response;
-          })
-          .catch((error) => {
-            logger.error('Failed to fetch summary', error);
-            return { error };
-          }),
-      ]);
+      const data = response.data;
 
-      latestObservationData.value = latestObservationResponse.error
-        ? null
-        : latestObservationResponse.data;
+      latestObservationData.value = data.latestObservation;
+      latestObservationError.value = null;
 
-      latestObservationError.value = latestObservationResponse.error
-        ? "Hmm, cannot reach the server"
-        : null;
+      recentObservationsData.value = data.recentObservations;
+      recentObservationsError.value = null;
 
-      recentObservationsData.value = recentObservationsResponse.error
-        ? []
-        : recentObservationsResponse.data;
+      summaryData.value = data.summary;
+      summaryError.value = null;
 
-      recentObservationsError.value = recentObservationsResponse.error
-        ? "Hmm, cannot reach the server"
-        : null;
+      hourlyBirdActivityData.value = data.hourlyActivity;
+      hourlyBirdActivityError.value = null;
 
-      summaryData.value = summaryResponse.error ? {} : summaryResponse.data;
+      detailedBirdActivityData.value = data.activityOverview;
+      detailedBirdActivityError.value = null;
 
-      summaryError.value = summaryResponse.error
-        ? "Hmm, cannot reach the server"
-        : null;
+      latestObservationimageUrl.value = '/default_bird.webp';
 
       if (latestObservationData.value) {
-        logger.debug('Fetching wikimedia image', { species: latestObservationData.value.common_name });
-        const wikimediaImageResponse = await api.get(
-          '/wikimedia_image',
-          { params: { species: latestObservationData.value.common_name } }
-        );
-        logger.api('GET', '/wikimedia_image',
-          { species: latestObservationData.value.common_name },
-          wikimediaImageResponse);
-        if (!wikimediaImageResponse.error) {
-          if (wikimediaImageResponse.data.hasCustomImage) {
-            latestObservationimageUrl.value =
-              getBirdImageUrl(latestObservationData.value.common_name);
-          } else {
-            latestObservationimageUrl.value =
-              wikimediaImageResponse.data.imageUrl;
-          }
-        }
+        const species = latestObservationData.value.common_name;
+        logger.debug('Fetching wikimedia image', { species });
+        api.get('/wikimedia_image', { params: { species } })
+          .then(wikimediaImageResponse => {
+            if (latestObservationData.value?.common_name !== species) return;
+            logger.api('GET', '/wikimedia_image', { species }, wikimediaImageResponse);
+            if (wikimediaImageResponse.data.hasCustomImage) {
+              latestObservationimageUrl.value = getBirdImageUrl(species);
+            } else {
+              latestObservationimageUrl.value =
+                wikimediaImageResponse.data.imageUrl;
+            }
+          })
+          .catch(imageError => {
+            logger.error('Failed to fetch wikimedia image', imageError);
+          });
       }
-      
+
       logger.info('Dashboard data fetched successfully', {
         hasLatestObservation: !!latestObservationData.value,
         recentObservationsCount: recentObservationsData.value.length,
@@ -168,6 +127,18 @@ export function useFetchBirdData() {
       });
     } catch (error) {
       logger.error('Error fetching dashboard data', error);
+
+      const errMsg = 'Hmm, cannot reach the server';
+      latestObservationData.value = null;
+      latestObservationError.value = errMsg;
+      recentObservationsData.value = [];
+      recentObservationsError.value = errMsg;
+      summaryData.value = {};
+      summaryError.value = errMsg;
+      hourlyBirdActivityData.value = [];
+      hourlyBirdActivityError.value = errMsg;
+      detailedBirdActivityData.value = [];
+      detailedBirdActivityError.value = errMsg;
     }
   };
 

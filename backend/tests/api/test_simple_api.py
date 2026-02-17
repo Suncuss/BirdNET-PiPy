@@ -778,6 +778,100 @@ class TestSimpleAPI:
                 assert 'American Robin' in species_names
                 assert 'House Sparrow' in species_names
 
+    def test_dashboard_endpoint(self, api_client, real_db_manager):
+        """Test /api/dashboard consolidated endpoint with data."""
+        from datetime import timedelta
+        # Use today so activityOverview is populated
+        now = datetime.now()
+        base_time = now.replace(hour=10, minute=0, second=0, microsecond=0)
+
+        for i in range(5):
+            real_db_manager.insert_detection({
+                'timestamp': (base_time + timedelta(hours=i)).isoformat(),
+                'group_timestamp': (base_time + timedelta(hours=i)).isoformat(),
+                'common_name': 'American Robin',
+                'scientific_name': 'Turdus migratorius',
+                'confidence': 0.85,
+                'latitude': 40.7128,
+                'longitude': -74.0060,
+                'cutoff': 0.5,
+                'sensitivity': 0.75,
+                'overlap': 0.25
+            })
+
+        for i in range(3):
+            real_db_manager.insert_detection({
+                'timestamp': (base_time + timedelta(hours=i + 2)).isoformat(),
+                'group_timestamp': (base_time + timedelta(hours=i + 2)).isoformat(),
+                'common_name': 'Blue Jay',
+                'scientific_name': 'Cyanocitta cristata',
+                'confidence': 0.80,
+                'latitude': 40.7128,
+                'longitude': -74.0060,
+                'cutoff': 0.5,
+                'sensitivity': 0.75,
+                'overlap': 0.25
+            })
+
+        response = api_client.get('/api/dashboard')
+        assert response.status_code == 200
+        data = response.get_json()
+
+        # Verify all top-level keys
+        assert 'latestObservation' in data
+        assert 'recentObservations' in data
+        assert 'summary' in data
+        assert 'hourlyActivity' in data
+        assert 'activityOverview' in data
+
+        # Latest observation
+        assert data['latestObservation'] is not None
+        assert 'common_name' in data['latestObservation']
+
+        # Recent observations
+        assert len(data['recentObservations']) >= 2
+
+        # Summary periods
+        assert 'today' in data['summary']
+        assert 'week' in data['summary']
+        assert 'month' in data['summary']
+        assert 'allTime' in data['summary']
+
+        # Hourly activity (24 hours)
+        assert len(data['hourlyActivity']) == 24
+
+        # Activity overview — today's data so should have both species
+        assert len(data['activityOverview']) >= 2
+        overview_names = [s['species'] for s in data['activityOverview']]
+        assert 'American Robin' in overview_names
+        assert 'Blue Jay' in overview_names
+
+        # Default order=most: Robin (5 detections) before Blue Jay (3)
+        robin_idx = overview_names.index('American Robin')
+        jay_idx = overview_names.index('Blue Jay')
+        assert robin_idx < jay_idx
+
+        # Test order=least: Blue Jay (fewer) should come first
+        response = api_client.get('/api/dashboard?order=least')
+        assert response.status_code == 200
+        data_least = response.get_json()
+        least_names = [s['species'] for s in data_least['activityOverview']]
+        robin_idx_least = least_names.index('American Robin')
+        jay_idx_least = least_names.index('Blue Jay')
+        assert jay_idx_least < robin_idx_least
+
+    def test_dashboard_endpoint_empty_db(self, api_client, real_db_manager):
+        """Test /api/dashboard returns proper empty-state response."""
+        response = api_client.get('/api/dashboard')
+        assert response.status_code == 200
+        data = response.get_json()
+
+        assert data['latestObservation'] is None
+        assert data['recentObservations'] == []
+        assert 'today' in data['summary']
+        assert len(data['hourlyActivity']) == 24
+        assert data['activityOverview'] == []
+
     def test_settings_invalid_model_type(self):
         """Test PUT /api/settings rejects invalid model type."""
         with tempfile.TemporaryDirectory() as tmpdir:

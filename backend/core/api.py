@@ -465,6 +465,37 @@ def get_activity_overview():
     })
     return jsonify(overview)
 
+@api.route('/api/dashboard', methods=['GET'])
+@log_api_request
+@handle_api_errors
+def get_dashboard():
+    """Consolidated dashboard endpoint — all DB data in one request."""
+    today = datetime.now().strftime('%Y-%m-%d')
+    order = request.args.get('order', default='most')
+    if order not in ('most', 'least'):
+        order = 'most'
+
+    recent = db_manager.get_latest_detections(7)
+    latest = recent[0] if recent else None
+
+    summary = {
+        'today': db_manager.get_summary_stats(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)),
+        'week': db_manager.get_summary_stats(datetime.now() - timedelta(weeks=1)),
+        'month': db_manager.get_summary_stats(datetime.now() - timedelta(days=30)),
+        'allTime': db_manager.get_summary_stats()
+    }
+
+    hourly_activity = db_manager.get_hourly_activity(today)
+    activity_overview = db_manager.get_activity_overview(today, order=order)
+
+    return jsonify({
+        'latestObservation': latest,
+        'recentObservations': recent,
+        'summary': summary,
+        'hourlyActivity': hourly_activity,
+        'activityOverview': activity_overview
+    })
+
 @api.route('/api/sightings/unique', methods=['GET'])
 @log_api_request
 @validate_date_param(required=True)
