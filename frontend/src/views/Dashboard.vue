@@ -342,7 +342,7 @@
 </template>
 
 <script>
-import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, onActivated, onDeactivated, computed, watch, nextTick } from 'vue'
 import Chart from 'chart.js/auto'
 import { MatrixController, MatrixElement } from 'chartjs-chart-matrix'
 
@@ -408,7 +408,8 @@ export default {
         // Audio player composable for simple play/stop in Recent Observations list
         const {
             currentPlayingId,
-            togglePlay: audioTogglePlay
+            togglePlay: audioTogglePlay,
+            stopAudio
         } = useAudioPlayer()
 
         const summaryPeriods = [
@@ -462,7 +463,26 @@ export default {
 
         // Start data fetching and charts
         const startDashboard = async () => {
+            // Register visibility handler before any await so it's never
+            // skipped if the component is deactivated mid-fetch (idempotent)
+            if (!visibilityHandler) {
+                visibilityHandler = async () => {
+                    if (!isActive) return
+                    if (document.hidden) {
+                        stopPolling()
+                    } else {
+                        await fetchDashboardData()
+                        if (!isActive) return
+                        setActivityOrder(currentOrder())
+                        redrawCharts()
+                        startPolling()
+                    }
+                }
+                document.addEventListener('visibilitychange', visibilityHandler)
+            }
+
             await fetchDashboardData();
+            if (!isActive) return  // Deactivated while fetching — bail out
             setActivityOrder(currentOrder());
             startPolling()
 
@@ -478,21 +498,6 @@ export default {
             if (!isDataEmpty.value) {
                 createTotalObsChart(totalObservationsChart, detailedBirdActivityData.value, { animate: initialLoad.value, title: null });
                 createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: initialLoad.value, title: null });
-            }
-
-            // Register visibility handler (idempotent)
-            if (!visibilityHandler) {
-                visibilityHandler = async () => {
-                    if (document.hidden) {
-                        stopPolling()
-                    } else {
-                        await fetchDashboardData()
-                        setActivityOrder(currentOrder())
-                        redrawCharts()
-                        startPolling()
-                    }
-                }
-                document.addEventListener('visibilitychange', visibilityHandler)
             }
 
             // Initialize spectrogram canvas after DOM updates with new data
@@ -553,6 +558,40 @@ export default {
             frequencyDataArray = null
         })
 
+        onDeactivated(() => {
+            hasBeenDeactivated = true
+            isActive = false
+            stopPolling()
+
+            // Stop any playing audio (latest observation AudioContext player)
+            if (audioElement) {
+                audioElement.pause()
+                cancelAnimationFrame(animationId)
+                animationId = null
+                latestObservationIsPlaying.value = false
+            }
+
+            // Suspend AudioContext to free browser resources while cached
+            if (audioCtx && audioCtx.state === 'running') {
+                audioCtx.suspend()
+            }
+
+            // Stop any playing audio (Recent Observations list player)
+            stopAudio()
+        })
+
+        onActivated(async () => {
+            isActive = true
+            if (hasBeenDeactivated && locationConfigured.value === true) {
+                await fetchDashboardData()
+                if (!isActive) return  // Deactivated while fetching — bail out
+                setActivityOrder(currentOrder())
+                startPolling()
+                await nextTick()  // Wait for DOM to render canvases after data update
+                await redrawCharts(true)  // Animate on return for visual refresh cue
+            }
+        })
+
         // Computed properties
         const currentPeriodSummary = computed(() => {
             return summaryData.value && summaryData.value[currentSummaryPeriod.value]
@@ -573,6 +612,10 @@ export default {
         // Interval
         let dataFetchInterval;
         let chartUpdateInterval;
+
+        // Keep-alive state
+        let isActive = true
+        let hasBeenDeactivated = false
 
         // Methods
         const drawSpectrogram = () => {
@@ -721,11 +764,11 @@ export default {
         }
 
         // Redraw charts function using composable methods
-        const redrawCharts = async () => {
+        const redrawCharts = async (animate = false) => {
             initialLoad.value = false;
-            await createTotalObsChart(totalObservationsChart, detailedBirdActivityData.value, { animate: false, title: null });
-            await createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: false, title: null });
-            await createHourlyChart(hourlyActivityChart, hourlyBirdActivityData.value, { animate: false });
+            await createTotalObsChart(totalObservationsChart, detailedBirdActivityData.value, { animate, title: null });
+            await createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate, title: null });
+            await createHourlyChart(hourlyActivityChart, hourlyBirdActivityData.value, { animate });
         };
 
         return {

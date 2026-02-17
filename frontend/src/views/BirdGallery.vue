@@ -112,7 +112,7 @@
 </template>
 
 <script>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onActivated, onDeactivated } from 'vue'
 import api from '@/services/api'
 import { getBirdImageUrl } from '@/services/media'
 import { useSmartCrop } from '@/composables/useSmartCrop'
@@ -133,6 +133,11 @@ export default {
       { value: 'rare', label: 'Least Frequent', icon: '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M12 13a1 1 0 100 2h5a1 1 0 001-1V9a1 1 0 10-2 0v2.586l-4.293-4.293a1 1 0 00-1.414 0L8 9.586 3.707 5.293a1 1 0 00-1.414 1.414l5 5a1 1 0 001.414 0L11 9.414 14.586 13H12z" clip-rule="evenodd" /></svg>' },
       { value: 'all', label: 'Species Catalog', icon: '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M7 3a1 1 0 000 2h6a1 1 0 100-2H7zM4 7a1 1 0 011-1h10a1 1 0 110 2H5a1 1 0 01-1-1zM2 11a2 2 0 012-2h12a2 2 0 012 2v4a2 2 0 01-2 2H4a2 2 0 01-2-2v-4z" /></svg>' },
     ]
+
+    // Keep-alive staleness tracking
+    let lastFetchTime = 0
+    let hasBeenDeactivated = false
+    const STALE_THRESHOLD = 2 * 60 * 1000  // 2 minutes
 
     // TODO, fix bird id for non-unique birds
 
@@ -259,13 +264,25 @@ export default {
       } else if (tab === 'frequent' || tab === 'rare') {
         birds.value = await fetchSightings(tab)
       }
+      lastFetchTime = Date.now()
       await updateBirdImages(birds.value)
     }
 
     onMounted(async () => {
       if (selectedTab.value === 'recent') {
         birds.value = await fetchUniqueBirds()
+        lastFetchTime = Date.now()
         await updateBirdImages(birds.value)
+      }
+    })
+
+    onDeactivated(() => {
+      hasBeenDeactivated = true
+    })
+
+    onActivated(async () => {
+      if (hasBeenDeactivated && Date.now() - lastFetchTime > STALE_THRESHOLD) {
+        await selectTab(selectedTab.value)
       }
     })
 

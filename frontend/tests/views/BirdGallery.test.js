@@ -1,5 +1,6 @@
 import { mount, flushPromises, RouterLinkStub } from '@vue/test-utils'
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { ref, defineComponent, nextTick } from 'vue'
 import BirdGallery from '@/views/BirdGallery.vue'
 
 // Mock the api service
@@ -183,5 +184,105 @@ describe('BirdGallery', () => {
 
     expect(wrapper.text()).toContain('Photo by')
     expect(wrapper.text()).toContain('Jane Doe')
+  })
+
+  describe('keep-alive behavior', () => {
+    const Placeholder = defineComponent({
+      name: 'Placeholder',
+      template: '<div>placeholder</div>'
+    })
+
+    const mountInKeepAlive = () => {
+      const showGallery = ref(true)
+      const wrapper = mount(defineComponent({
+        components: { BirdGallery, Placeholder },
+        setup() { return { showGallery } },
+        template: `
+          <keep-alive include="BirdGallery">
+            <BirdGallery v-if="showGallery" />
+            <Placeholder v-else />
+          </keep-alive>
+        `
+      }), {
+        global: {
+          stubs: { 'font-awesome-icon': true, 'router-link': RouterLinkStub }
+        }
+      })
+      return { wrapper, showGallery }
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers()
+      mockApi.get.mockImplementation((url) => {
+        if (url === '/sightings/unique') {
+          return Promise.resolve({
+            data: [{ id: 1, common_name: 'Sparrow', scientific_name: 'Passer domesticus', timestamp: '2024-08-01T12:00:00Z' }]
+          })
+        }
+        if (url === '/wikimedia_image') {
+          return Promise.resolve({
+            data: { imageUrl: '/sparrow.jpg', authorName: 'Doe', authorUrl: '#', licenseType: 'CC' }
+          })
+        }
+        return Promise.resolve({ data: [] })
+      })
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('first mount does not double-fetch', async () => {
+      mountInKeepAlive()
+      await flushPromises()
+
+      // onActivated fires on initial mount but hasBeenDeactivated is false, so no extra fetch
+      const uniqueCalls = mockApi.get.mock.calls.filter(c => c[0] === '/sightings/unique')
+      expect(uniqueCalls).toHaveLength(1)
+    })
+
+    it('re-activation after stale threshold triggers re-fetch', async () => {
+      const { showGallery } = mountInKeepAlive()
+      await flushPromises()
+
+      const initialCalls = mockApi.get.mock.calls.filter(c => c[0] === '/sightings/unique').length
+
+      // Deactivate
+      showGallery.value = false
+      await nextTick()
+
+      // Advance time past stale threshold (2 minutes)
+      vi.advanceTimersByTime(3 * 60 * 1000)
+
+      // Reactivate
+      showGallery.value = true
+      await nextTick()
+      await flushPromises()
+
+      const totalCalls = mockApi.get.mock.calls.filter(c => c[0] === '/sightings/unique').length
+      expect(totalCalls).toBeGreaterThan(initialCalls)
+    })
+
+    it('re-activation within threshold does not re-fetch', async () => {
+      const { showGallery } = mountInKeepAlive()
+      await flushPromises()
+
+      const initialCalls = mockApi.get.mock.calls.filter(c => c[0] === '/sightings/unique').length
+
+      // Deactivate
+      showGallery.value = false
+      await nextTick()
+
+      // Advance time but stay within stale threshold
+      vi.advanceTimersByTime(30 * 1000)
+
+      // Reactivate
+      showGallery.value = true
+      await nextTick()
+      await flushPromises()
+
+      const totalCalls = mockApi.get.mock.calls.filter(c => c[0] === '/sightings/unique').length
+      expect(totalCalls).toBe(initialCalls)
+    })
   })
 })

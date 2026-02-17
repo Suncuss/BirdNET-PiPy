@@ -1,12 +1,22 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { ref } from 'vue'
+import { ref, defineComponent, nextTick } from 'vue'
 import Dashboard from '@/views/Dashboard.vue'
 import { useFetchBirdData } from '@/composables/useFetchBirdData'
 import { useAppStatus } from '@/composables/useAppStatus'
+import { useAudioPlayer } from '@/composables/useAudioPlayer'
+import { useBirdCharts } from '@/composables/useBirdCharts'
+import { useSystemUpdate } from '@/composables/useSystemUpdate'
 
 vi.mock('@/composables/useFetchBirdData')
 vi.mock('@/composables/useAppStatus')
+vi.mock('@/composables/useAudioPlayer')
+vi.mock('@/composables/useBirdCharts')
+vi.mock('@/composables/useSystemUpdate')
+vi.mock('@/services/media', () => ({
+  getAudioUrl: vi.fn((f) => f ? `/audio/${f}` : null),
+  getSpectrogramUrl: vi.fn((f) => `/spectrograms/${f}`)
+}))
 
 // Mock chart libraries
 vi.mock('chart.js/auto', () => {
@@ -63,9 +73,11 @@ const mountDashboard = () => mount(Dashboard, {
 
 describe('Dashboard', () => {
   let getContextSpy
+  let mockStopAudio
 
   beforeEach(() => {
     vi.useFakeTimers()
+    mockStopAudio = vi.fn()
     useFetchBirdData.mockReturnValue(baseState())
     useAppStatus.mockReturnValue({
       locationConfigured: ref(true),
@@ -73,6 +85,24 @@ describe('Dashboard', () => {
       setLocationConfigured: vi.fn(),
       setRestarting: vi.fn(),
       isReady: vi.fn(() => true)
+    })
+    useAudioPlayer.mockReturnValue({
+      currentPlayingId: ref(null),
+      togglePlay: vi.fn(),
+      stopAudio: mockStopAudio,
+      isPlaying: vi.fn(),
+      isLoading: ref(false),
+      error: ref(null),
+      clearError: vi.fn()
+    })
+    useBirdCharts.mockReturnValue({
+      createTotalObservationsChart: vi.fn(),
+      createHourlyActivityHeatmap: vi.fn(),
+      createHourlyActivityChart: vi.fn()
+    })
+    useSystemUpdate.mockReturnValue({
+      checkForUpdates: vi.fn().mockResolvedValue({}),
+      showUpdateIndicator: ref(false)
     })
     getContextSpy = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(mockCanvasContext)
   })
@@ -192,5 +222,215 @@ describe('Dashboard', () => {
 
     // Canvas should NOT be reinitialized
     expect(getContextSpy).toHaveBeenCalledTimes(1)
+  })
+
+  describe('keep-alive behavior', () => {
+    const Placeholder = defineComponent({
+      name: 'Placeholder',
+      template: '<div>placeholder</div>'
+    })
+
+    const mountInKeepAlive = () => {
+      const showDashboard = ref(true)
+      const wrapper = mount(defineComponent({
+        components: { Dashboard, Placeholder },
+        setup() { return { showDashboard } },
+        template: `
+          <keep-alive include="Dashboard">
+            <Dashboard v-if="showDashboard" />
+            <Placeholder v-else />
+          </keep-alive>
+        `
+      }), {
+        global: {
+          stubs: { 'font-awesome-icon': true, 'router-link': true }
+        }
+      })
+      return { wrapper, showDashboard }
+    }
+
+    it('deactivation stops polling intervals', async () => {
+      const state = baseState()
+      useFetchBirdData.mockReturnValue(state)
+
+      const { showDashboard } = mountInKeepAlive()
+      await flushPromises()
+
+      expect(state.fetchDashboardData).toHaveBeenCalledTimes(1)
+
+      // Deactivate
+      showDashboard.value = false
+      await nextTick()
+
+      // Advance past polling interval — polling should be stopped
+      vi.advanceTimersByTime(20000)
+      await flushPromises()
+
+      expect(state.fetchDashboardData).toHaveBeenCalledTimes(1)
+    })
+
+    it('deactivation stops audio playback', async () => {
+      const { showDashboard } = mountInKeepAlive()
+      await flushPromises()
+
+      // Deactivate
+      showDashboard.value = false
+      await nextTick()
+
+      expect(mockStopAudio).toHaveBeenCalled()
+    })
+
+    it('activation after deactivation triggers data refresh and polling', async () => {
+      const state = baseState()
+      useFetchBirdData.mockReturnValue(state)
+
+      const { showDashboard } = mountInKeepAlive()
+      await flushPromises()
+
+      expect(state.fetchDashboardData).toHaveBeenCalledTimes(1)
+
+      // Deactivate
+      showDashboard.value = false
+      await nextTick()
+
+      // Reactivate
+      showDashboard.value = true
+      await nextTick()
+      await flushPromises()
+
+      // Should have fetched again on reactivation
+      expect(state.fetchDashboardData).toHaveBeenCalledTimes(2)
+    })
+
+    it('first activation does not duplicate fetch', async () => {
+      const state = baseState()
+      useFetchBirdData.mockReturnValue(state)
+
+      mountInKeepAlive()
+      await flushPromises()
+
+      // Only one fetch from onMounted/startDashboard, not a second from onActivated
+      expect(state.fetchDashboardData).toHaveBeenCalledTimes(1)
+    })
+
+    it('visibility handler does not run when deactivated', async () => {
+      const state = baseState()
+      useFetchBirdData.mockReturnValue(state)
+
+      const { showDashboard } = mountInKeepAlive()
+      await flushPromises()
+
+      expect(state.fetchDashboardData).toHaveBeenCalledTimes(1)
+
+      // Deactivate
+      showDashboard.value = false
+      await nextTick()
+
+      state.fetchDashboardData.mockClear()
+
+      // Simulate visibility change while deactivated
+      document.dispatchEvent(new Event('visibilitychange'))
+      await flushPromises()
+
+      // Handler should be gated by isActive — no fetch
+      expect(state.fetchDashboardData).not.toHaveBeenCalled()
+    })
+
+    it('deactivation during in-flight visibility fetch prevents polling restart', async () => {
+      const state = baseState()
+      let resolveFetch
+      state.fetchDashboardData
+        .mockResolvedValueOnce()  // startDashboard
+        .mockImplementationOnce(() => new Promise(resolve => { resolveFetch = resolve }))  // visibility handler
+      useFetchBirdData.mockReturnValue(state)
+
+      const { showDashboard } = mountInKeepAlive()
+      await flushPromises()
+
+      // Trigger visibility handler (tab becomes visible) — fetch is deferred
+      document.dispatchEvent(new Event('visibilitychange'))
+
+      // Deactivate while visibility fetch is pending
+      showDashboard.value = false
+      await nextTick()
+
+      // Resolve the deferred fetch
+      resolveFetch()
+      await flushPromises()
+
+      // Advance timers — polling should NOT be running
+      vi.advanceTimersByTime(20000)
+      await flushPromises()
+
+      // Only 2 calls: startDashboard + visibility handler, no interval-driven ones
+      expect(state.fetchDashboardData).toHaveBeenCalledTimes(2)
+    })
+
+    it('deactivation during in-flight activation fetch prevents polling restart', async () => {
+      const state = baseState()
+      let resolveFetch
+      // First call (startDashboard) resolves immediately; second (onActivated) is deferred
+      state.fetchDashboardData
+        .mockResolvedValueOnce()
+        .mockImplementationOnce(() => new Promise(resolve => { resolveFetch = resolve }))
+      useFetchBirdData.mockReturnValue(state)
+
+      const { showDashboard } = mountInKeepAlive()
+      await flushPromises()
+
+      // Deactivate then reactivate — onActivated calls fetchDashboardData (deferred)
+      showDashboard.value = false
+      await nextTick()
+      showDashboard.value = true
+      await nextTick()
+
+      // Deactivate again while fetch is still pending
+      showDashboard.value = false
+      await nextTick()
+
+      // Now resolve the deferred fetch
+      resolveFetch()
+      await flushPromises()
+
+      // Advance timers — polling should NOT be running
+      vi.advanceTimersByTime(20000)
+      await flushPromises()
+
+      // Only the 2 explicit fetchDashboardData calls, no interval-driven ones
+      expect(state.fetchDashboardData).toHaveBeenCalledTimes(2)
+    })
+
+    it('visibility handler still works after deactivation during initial startDashboard', async () => {
+      const state = baseState()
+      let resolveFetch
+      // First call (startDashboard) is deferred so we can deactivate mid-fetch
+      state.fetchDashboardData
+        .mockImplementationOnce(() => new Promise(resolve => { resolveFetch = resolve }))
+        .mockResolvedValue()
+      useFetchBirdData.mockReturnValue(state)
+
+      const { showDashboard } = mountInKeepAlive()
+      // startDashboard is awaiting fetchDashboardData — deactivate before it resolves
+      showDashboard.value = false
+      await nextTick()
+
+      // Resolve the initial fetch — startDashboard bails out via isActive check
+      resolveFetch()
+      await flushPromises()
+
+      // Reactivate — onActivated fetches and starts polling
+      showDashboard.value = true
+      await nextTick()
+      await flushPromises()
+
+      state.fetchDashboardData.mockClear()
+
+      // Simulate tab becoming visible — visibility handler should work
+      document.dispatchEvent(new Event('visibilitychange'))
+      await flushPromises()
+
+      // Handler was registered before the await, so it should fire
+      expect(state.fetchDashboardData).toHaveBeenCalled()
+    })
   })
 })

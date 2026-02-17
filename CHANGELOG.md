@@ -4,6 +4,7 @@
 
 - Consolidated Dashboard API into single `/api/dashboard` endpoint, reducing 5-6 concurrent requests to 1
 - Added tab visibility handling — polling pauses when tab is hidden and resumes on focus
+- Added keep-alive caching for Dashboard and Gallery — navigating between pages restores them instantly instead of full remount and data refetch
 
 ## [0.5.3] - 2026-02-16
 

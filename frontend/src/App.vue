@@ -74,7 +74,11 @@
     </nav>
 
     <main class="container mx-auto p-1">
-      <router-view />
+      <router-view v-slot="{ Component }">
+        <keep-alive :include="['Dashboard', 'BirdGallery']">
+          <component :is="Component" />
+        </keep-alive>
+      </router-view>
     </main>
 
     <!-- Location Setup Modal -->
