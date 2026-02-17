@@ -588,7 +588,7 @@ export default {
                 setActivityOrder(currentOrder())
                 startPolling()
                 await nextTick()  // Wait for DOM to render canvases after data update
-                await redrawCharts(true)  // Animate on return for visual refresh cue
+                await redrawCharts(false)
             }
         })
 
