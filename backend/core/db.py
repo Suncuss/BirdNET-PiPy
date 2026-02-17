@@ -228,7 +228,7 @@ class DatabaseManager:
 
         return [{'hour': f"{hour}:00", 'count': count} for hour, count in hourly_activity.items()]
 
-    def get_activity_overview(self, date=None, num_species=10):
+    def get_activity_overview(self, date=None, num_species=10, order='most'):
         if date:
             start_of_day = datetime.strptime(date, "%Y-%m-%d").replace(hour=0, minute=0, second=0, microsecond=0)
         else:
@@ -269,7 +269,7 @@ class DatabaseManager:
             for species, hourly_activity in species_hourly_activity.items()
         ]
 
-        species_activity.sort(key=lambda x: x['totalObservations'], reverse=True)
+        species_activity.sort(key=lambda x: x['totalObservations'], reverse=(order != 'least'))
 
         logger.debug("Activity overview generated", extra={
             'total_species': len(species_hourly_activity),
@@ -432,7 +432,12 @@ class DatabaseManager:
                 WHEN COUNT(DISTINCT strftime('%m', timestamp)) = 12 THEN 'Year-round'
                 WHEN COUNT(DISTINCT strftime('%m', timestamp)) >= 6 THEN 'Multi-season'
                 ELSE 'Seasonal'
-            END as seasonality
+            END as seasonality,
+            (SELECT json_extract(d3.extra, '$.ebird_code')
+            FROM detections d3
+            WHERE d3.common_name = d1.common_name
+              AND json_extract(d3.extra, '$.ebird_code') IS NOT NULL
+            LIMIT 1) as ebird_code
         FROM detections d1
         WHERE common_name = ?
         GROUP BY common_name, scientific_name

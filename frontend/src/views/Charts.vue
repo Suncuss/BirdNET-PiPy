@@ -6,6 +6,26 @@
           Bird Activity Overview
         </h2>
         <div class="flex flex-wrap items-stretch gap-2 justify-center lg:justify-end">
+          <button
+            class="hidden sm:inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 transition-colors p-2"
+            :disabled="isUpdating"
+            @click="toggleActivityOrder"
+          >
+            Reverse
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              class="h-3.5 w-3.5 transition-transform duration-200"
+              :class="{ 'rotate-180': showLeastCommon }"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+            >
+              <path
+                fill-rule="evenodd"
+                d="M5.293 7.707a1 1 0 010-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 01-1.414 1.414L10 4.414l-3.293 3.293a1 1 0 01-1.414 0zM5.293 13.707a1 1 0 010-1.414L10 7.586l4.707 4.707a1 1 0 01-1.414 1.414L10 10.414l-3.293 3.293a1 1 0 01-1.414 0z"
+                clip-rule="evenodd"
+              />
+            </svg>
+          </button>
           <button 
             :class="[
               'p-2 rounded-lg transition-all duration-200 flex items-center justify-center',
@@ -470,6 +490,7 @@ export default {
         const maxDate = ref(getLocalDateString())
         const isLoading = ref(false)
         const isUpdating = ref(false)
+        const showLeastCommon = ref(false)
 
         // Chart refs
         const totalObservationsChart = ref(null)
@@ -537,15 +558,31 @@ export default {
             year: 'Year'
         }
 
+        const currentOrder = () => showLeastCommon.value ? 'least' : 'most'
+
         // Methods
+        const toggleActivityOrder = async () => {
+            if (isUpdating.value) return
+            showLeastCommon.value = !showLeastCommon.value
+            isUpdating.value = true
+            try {
+                await fetchChartsData(selectedDate.value, currentOrder())
+                if (!isDataEmpty.value) {
+                    await createCharts()
+                }
+            } finally {
+                isUpdating.value = false
+            }
+        }
+
         const onDateChange = async () => {
             if (isUpdating.value) return
-            
+
             isUpdating.value = true
             isLoading.value = true
-            
+
             try {
-                await fetchChartsData(selectedDate.value)
+                await fetchChartsData(selectedDate.value, currentOrder())
                 if (!isDataEmpty.value) {
                     await createCharts()
                 }
@@ -917,7 +954,7 @@ export default {
 
         // Lifecycle
         onMounted(async () => {
-            await fetchChartsData(selectedDate.value)
+            await fetchChartsData(selectedDate.value, currentOrder())
             if (!isDataEmpty.value) {
                 createCharts()
             }
@@ -955,6 +992,8 @@ export default {
             previousDay,
             nextDay,
             goToToday,
+            showLeastCommon,
+            toggleActivityOrder,
             // Species dropdown and chart
             allSpecies,
             filteredSpecies,

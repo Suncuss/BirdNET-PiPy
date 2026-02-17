@@ -455,7 +455,10 @@ def get_hourly_activity():
 @handle_api_errors
 def get_activity_overview():
     date = request.args.get('date', default=datetime.now().strftime('%Y-%m-%d'))
-    overview = db_manager.get_activity_overview(date)
+    order = request.args.get('order', default='most')
+    if order not in ('most', 'least'):
+        order = 'most'
+    overview = db_manager.get_activity_overview(date, order=order)
     log_data_metrics('get_activity_overview', overview, {
         'date': date,
         'species_count': len(overview) if overview else 0

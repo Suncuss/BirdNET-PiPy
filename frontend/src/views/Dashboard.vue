@@ -30,9 +30,31 @@
     >
       <!-- Bird Activity Overview -->
       <div class="bg-white rounded-lg shadow p-4 lg:col-span-3 h-[300px] lg:h-[375px]">
-        <h2 class="text-lg font-semibold mb-2">
-          Bird Activity Overview
-        </h2>
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="text-lg font-semibold">
+            Bird Activity Overview
+          </h2>
+          <button
+            class="hidden sm:inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 transition-colors"
+            :disabled="isActivityUpdating"
+            @click="toggleActivityOrder"
+          >
+            Reverse
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              class="h-3.5 w-3.5 transition-transform duration-200"
+              :class="{ 'rotate-180': showLeastCommon }"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+            >
+              <path
+                fill-rule="evenodd"
+                d="M5.293 7.707a1 1 0 010-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 01-1.414 1.414L10 4.414l-3.293 3.293a1 1 0 01-1.414 0zM5.293 13.707a1 1 0 010-1.414L10 7.586l4.707 4.707a1 1 0 01-1.414 1.414L10 10.414l-3.293 3.293a1 1 0 01-1.414 0z"
+                clip-rule="evenodd"
+              />
+            </svg>
+          </button>
+        </div>
         <div
           v-if="!isDataEmpty && !detailedBirdActivityError"
           class="flex h-[calc(100%-2rem)]"
@@ -363,11 +385,14 @@ export default {
             summaryError,
 
             // Methods
-            fetchDashboardData
+            fetchDashboardData,
+            fetchChartsData
         } = useFetchBirdData();
 
 
         const currentSummaryPeriod = ref('today')
+        const showLeastCommon = ref(false)
+        const isActivityUpdating = ref(false)
 
         const isSpectrogramModalVisible = ref(false)
         const currentSpectrogramUrl = ref('')
@@ -406,10 +431,12 @@ export default {
         // System update composable for silent auto-check
         const systemUpdate = useSystemUpdate()
 
+        const currentOrder = () => showLeastCommon.value ? 'least' : 'most'
+
         // Start data fetching and charts
         const startDashboard = async () => {
-            await fetchDashboardData();
-            dataFetchInterval = setInterval(fetchDashboardData, 4500)
+            await fetchDashboardData(currentOrder());
+            dataFetchInterval = setInterval(() => fetchDashboardData(currentOrder()), 4500)
 
             // Silent auto-check for updates (no status messages, uses backend cache)
             systemUpdate.checkForUpdates({ silent: true }).catch(() => {})
@@ -630,6 +657,20 @@ export default {
 	            isSpectrogramModalVisible.value = true
 	        }
 
+        const toggleActivityOrder = async () => {
+            if (isActivityUpdating.value) return
+            showLeastCommon.value = !showLeastCommon.value
+            isActivityUpdating.value = true
+            try {
+                const today = new Date().toLocaleDateString("en-CA")
+                await fetchChartsData(today, currentOrder())
+                await createTotalObsChart(totalObservationsChart, detailedBirdActivityData.value, { animate: true, title: null })
+                await createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: true, title: null })
+            } finally {
+                isActivityUpdating.value = false
+            }
+        }
+
         // Redraw charts function using composable methods
         const redrawCharts = async () => {
             initialLoad.value = false;
@@ -668,7 +709,10 @@ export default {
             togglePlayBirdCall,
             currentPlayingId,
             latestObservationimageUrl,
-            systemUpdate
+            systemUpdate,
+            showLeastCommon,
+            toggleActivityOrder,
+            isActivityUpdating
         }
     }
 }

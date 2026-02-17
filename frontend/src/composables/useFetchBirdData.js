@@ -24,8 +24,8 @@ export function useFetchBirdData() {
 
   const latestObservationimageUrl = ref("/default_bird.webp");
 
-  const fetchChartsData = async (date) => {
-    logger.info('Fetching charts data', { date });
+  const fetchChartsData = async (date, order = 'most') => {
+    logger.info('Fetching charts data', { date, order });
     try {
       const [hourlyBirdActivityResponse, detailedBirdActivityResponse] =
         await Promise.all([
@@ -40,9 +40,9 @@ export function useFetchBirdData() {
               return { error };
             }),
           api
-            .get('/activity/overview', { params: { date } })
+            .get('/activity/overview', { params: { date, order } })
             .then(response => {
-              logger.api('GET', '/activity/overview', { date }, response);
+              logger.api('GET', '/activity/overview', { date, order }, response);
               return response;
             })
             .catch((error) => {
@@ -76,11 +76,11 @@ export function useFetchBirdData() {
     }
   };
 
-  const fetchDashboardData = async () => {
-    logger.info('Fetching dashboard data');
+  const fetchDashboardData = async (order = 'most') => {
+    logger.info('Fetching dashboard data', { order });
     try {
       const today = new Date().toLocaleDateString("en-CA");
-      fetchChartsData(today);
+      fetchChartsData(today, order);
 
       const [
         latestObservationResponse,

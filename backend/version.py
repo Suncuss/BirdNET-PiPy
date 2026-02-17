@@ -2,8 +2,8 @@
 BirdNET-PiPy Version Information
 """
 
-__version__ = "0.5.2"
-__version_info__ = (0, 5, 2)
+__version__ = "0.5.3"
+__version_info__ = (0, 5, 3)
 
 # Display name for user-facing contexts
 DISPLAY_NAME = "BirdNET-PiPy"

@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-02-16
+
+- Added eBird species link to bird details page
+- Added "Reverse" toggle to Bird Activity Overview to switch between most and least common species (hidden on mobile)
+
 ## [0.5.2] - 2026-02-15
 
 - Fixed version displaying as "unknown" on Pi deployments (build.sh used node which isn't on the host)

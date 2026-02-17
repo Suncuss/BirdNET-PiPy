@@ -155,7 +155,7 @@ describe('useFetchBirdData', () => {
       )
       expect(mockApi.get).toHaveBeenCalledWith(
         '/activity/overview',
-        { params: { date: '2025-12-01' } }
+        { params: { date: '2025-12-01', order: 'most' } }
       )
     })
   })
