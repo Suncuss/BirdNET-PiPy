@@ -471,9 +471,6 @@ def get_activity_overview():
 def get_dashboard():
     """Consolidated dashboard endpoint — all DB data in one request."""
     today = datetime.now().strftime('%Y-%m-%d')
-    order = request.args.get('order', default='most')
-    if order not in ('most', 'least'):
-        order = 'most'
 
     recent = db_manager.get_latest_detections(7)
     latest = recent[0] if recent else None
@@ -486,14 +483,16 @@ def get_dashboard():
     }
 
     hourly_activity = db_manager.get_hourly_activity(today)
-    activity_overview = db_manager.get_activity_overview(today, order=order)
 
     return jsonify({
         'latestObservation': latest,
         'recentObservations': recent,
         'summary': summary,
         'hourlyActivity': hourly_activity,
-        'activityOverview': activity_overview
+        'activityOverview': {
+            'most': db_manager.get_activity_overview(today, order='most'),
+            'least': db_manager.get_activity_overview(today, order='least')
+        }
     })
 
 @api.route('/api/sightings/unique', methods=['GET'])

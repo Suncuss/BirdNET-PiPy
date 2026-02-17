@@ -385,7 +385,8 @@ export default {
             summaryError,
 
             // Methods
-            fetchDashboardData
+            fetchDashboardData,
+            setActivityOrder
         } = useFetchBirdData();
 
 
@@ -435,7 +436,10 @@ export default {
         // Idempotent polling helpers
         const startPolling = () => {
             if (!dataFetchInterval) {
-                dataFetchInterval = setInterval(() => fetchDashboardData(currentOrder()), 9000)
+                dataFetchInterval = setInterval(async () => {
+                    await fetchDashboardData()
+                    setActivityOrder(currentOrder())
+                }, 9000)
             }
             if (!chartUpdateInterval) {
                 chartUpdateInterval = setInterval(redrawCharts, 9000)
@@ -458,11 +462,15 @@ export default {
 
         // Start data fetching and charts
         const startDashboard = async () => {
-            await fetchDashboardData(currentOrder());
+            await fetchDashboardData();
+            setActivityOrder(currentOrder());
             startPolling()
 
             // Silent auto-check for updates (no status messages, uses backend cache)
             systemUpdate.checkForUpdates({ silent: true }).catch(() => {})
+
+            // Wait for DOM to render canvas elements (they're behind v-if="!isDataEmpty")
+            await nextTick()
 
             if (!hourlyBirdActivityError.value) {
                 createHourlyChart(hourlyActivityChart, hourlyBirdActivityData.value, { animate: initialLoad.value });
@@ -478,7 +486,8 @@ export default {
                     if (document.hidden) {
                         stopPolling()
                     } else {
-                        await fetchDashboardData(currentOrder())
+                        await fetchDashboardData()
+                        setActivityOrder(currentOrder())
                         redrawCharts()
                         startPolling()
                     }
@@ -703,7 +712,7 @@ export default {
             showLeastCommon.value = !showLeastCommon.value
             isActivityUpdating.value = true
             try {
-                await fetchDashboardData(currentOrder())
+                setActivityOrder(currentOrder())
                 await createTotalObsChart(totalObservationsChart, detailedBirdActivityData.value, { animate: true, title: null })
                 await createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: true, title: null })
             } finally {

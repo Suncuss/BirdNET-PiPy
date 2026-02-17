@@ -54,8 +54,10 @@ describe('useFetchBirdData', () => {
       const result = useFetchBirdData()
 
       expect(result).toHaveProperty('fetchDashboardData')
+      expect(result).toHaveProperty('setActivityOrder')
       expect(result).toHaveProperty('fetchChartsData')
       expect(typeof result.fetchDashboardData).toBe('function')
+      expect(typeof result.setActivityOrder).toBe('function')
       expect(typeof result.fetchChartsData).toBe('function')
     })
 
@@ -166,7 +168,10 @@ describe('useFetchBirdData', () => {
       recentObservations: [{ common_name: 'Blue Jay' }, { common_name: 'Cardinal' }],
       summary: { today: {}, week: {}, month: {}, allTime: {} },
       hourlyActivity: [{ hour: '00:00', count: 0 }],
-      activityOverview: [{ species: 'Robin', count: 3 }],
+      activityOverview: {
+        most: [{ species: 'Robin', count: 3 }],
+        least: [{ species: 'Sparrow', count: 1 }]
+      },
       ...overrides
     })
 
@@ -185,6 +190,7 @@ describe('useFetchBirdData', () => {
 
       const {
         fetchDashboardData,
+        setActivityOrder,
         latestObservationData,
         recentObservationsData,
         summaryData,
@@ -193,30 +199,37 @@ describe('useFetchBirdData', () => {
       } = useFetchBirdData()
 
       await fetchDashboardData()
+      setActivityOrder('most')
 
       expect(latestObservationData.value).toEqual(dashData.latestObservation)
       expect(recentObservationsData.value).toEqual(dashData.recentObservations)
       expect(summaryData.value).toEqual(dashData.summary)
       expect(hourlyBirdActivityData.value).toEqual(dashData.hourlyActivity)
-      expect(detailedBirdActivityData.value).toEqual(dashData.activityOverview)
+      expect(detailedBirdActivityData.value).toEqual(dashData.activityOverview.most)
     })
 
-    it('passes order parameter to dashboard endpoint', async () => {
+    it('switches activity order instantly via setActivityOrder', async () => {
+      const dashData = mockDashboardResponse()
+
       mockApi.get.mockImplementation((url) => {
         if (url === '/dashboard') {
-          return Promise.resolve({ data: mockDashboardResponse({ latestObservation: null }) })
+          return Promise.resolve({ data: dashData })
+        }
+        if (url === '/wikimedia_image') {
+          return Promise.resolve({ data: { imageUrl: '/robin.jpg' } })
         }
         return Promise.reject(new Error(`Unknown URL: ${url}`))
       })
 
-      const { fetchDashboardData } = useFetchBirdData()
+      const { fetchDashboardData, setActivityOrder, detailedBirdActivityData } = useFetchBirdData()
 
-      await fetchDashboardData('least')
+      await fetchDashboardData()
 
-      expect(mockApi.get).toHaveBeenCalledWith(
-        '/dashboard',
-        { params: { order: 'least' } }
-      )
+      setActivityOrder('most')
+      expect(detailedBirdActivityData.value).toEqual(dashData.activityOverview.most)
+
+      setActivityOrder('least')
+      expect(detailedBirdActivityData.value).toEqual(dashData.activityOverview.least)
     })
 
     it('fetches wikimedia image when latest observation exists', async () => {
@@ -282,6 +295,46 @@ describe('useFetchBirdData', () => {
         '/wikimedia_image',
         expect.anything()
       )
+    })
+
+    it('skips wikimedia when species has not changed', async () => {
+      mockApi.get.mockImplementation((url) => {
+        if (url === '/dashboard') {
+          return Promise.resolve({ data: mockDashboardResponse() })
+        }
+        if (url === '/wikimedia_image') {
+          return Promise.resolve({ data: { imageUrl: '/robin.jpg' } })
+        }
+        return Promise.reject(new Error(`Unknown URL: ${url}`))
+      })
+
+      const { fetchDashboardData, latestObservationimageUrl } = useFetchBirdData()
+
+      // First call — species changes from null to Robin, triggers wikimedia
+      await fetchDashboardData()
+      await vi.waitFor(() => {
+        expect(latestObservationimageUrl.value).toBe('/robin.jpg')
+      })
+
+      // Reset mock call history
+      mockApi.get.mockClear()
+      mockApi.get.mockImplementation((url) => {
+        if (url === '/dashboard') {
+          return Promise.resolve({ data: mockDashboardResponse() })
+        }
+        return Promise.reject(new Error(`Unknown URL: ${url}`))
+      })
+
+      // Second call — same species, should NOT call wikimedia
+      await fetchDashboardData()
+
+      expect(mockApi.get).toHaveBeenCalledTimes(1) // only /dashboard
+      expect(mockApi.get).not.toHaveBeenCalledWith(
+        '/wikimedia_image',
+        expect.anything()
+      )
+      // Image URL preserved from first call
+      expect(latestObservationimageUrl.value).toBe('/robin.jpg')
     })
 
     it('keeps default image when wikimedia call fails', async () => {

@@ -33,6 +33,7 @@ const baseState = () => ({
   summaryError: ref(null),
   latestObservationimageUrl: ref('/default_bird.webp'),
   fetchDashboardData: vi.fn(),
+  setActivityOrder: vi.fn(),
   fetchChartsData: vi.fn()
 })
 

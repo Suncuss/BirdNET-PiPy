@@ -840,25 +840,19 @@ class TestSimpleAPI:
         # Hourly activity (24 hours)
         assert len(data['hourlyActivity']) == 24
 
-        # Activity overview — today's data so should have both species
-        assert len(data['activityOverview']) >= 2
-        overview_names = [s['species'] for s in data['activityOverview']]
-        assert 'American Robin' in overview_names
-        assert 'Blue Jay' in overview_names
+        # Activity overview — both orders returned
+        assert 'most' in data['activityOverview']
+        assert 'least' in data['activityOverview']
 
-        # Default order=most: Robin (5 detections) before Blue Jay (3)
-        robin_idx = overview_names.index('American Robin')
-        jay_idx = overview_names.index('Blue Jay')
-        assert robin_idx < jay_idx
+        most_names = [s['species'] for s in data['activityOverview']['most']]
+        least_names = [s['species'] for s in data['activityOverview']['least']]
+        assert 'American Robin' in most_names
+        assert 'Blue Jay' in most_names
 
-        # Test order=least: Blue Jay (fewer) should come first
-        response = api_client.get('/api/dashboard?order=least')
-        assert response.status_code == 200
-        data_least = response.get_json()
-        least_names = [s['species'] for s in data_least['activityOverview']]
-        robin_idx_least = least_names.index('American Robin')
-        jay_idx_least = least_names.index('Blue Jay')
-        assert jay_idx_least < robin_idx_least
+        # order=most: Robin (5 detections) before Blue Jay (3)
+        assert most_names.index('American Robin') < most_names.index('Blue Jay')
+        # order=least: Blue Jay (fewer) first
+        assert least_names.index('Blue Jay') < least_names.index('American Robin')
 
     def test_dashboard_endpoint_empty_db(self, api_client, real_db_manager):
         """Test /api/dashboard returns proper empty-state response."""
@@ -870,7 +864,7 @@ class TestSimpleAPI:
         assert data['recentObservations'] == []
         assert 'today' in data['summary']
         assert len(data['hourlyActivity']) == 24
-        assert data['activityOverview'] == []
+        assert data['activityOverview'] == {'most': [], 'least': []}
 
     def test_settings_invalid_model_type(self):
         """Test PUT /api/settings rejects invalid model type."""
