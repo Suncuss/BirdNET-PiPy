@@ -5,6 +5,8 @@
 - Consolidated Dashboard API into single `/api/dashboard` endpoint, reducing 5-6 concurrent requests to 1
 - Added tab visibility handling — polling pauses when tab is hidden and resumes on focus
 - Added keep-alive caching for Dashboard and Gallery — navigating between pages restores them instantly instead of full remount and data refetch
+- Added 3-state loading pattern to Dashboard — shows "Fetching the latest data..." until first fetch completes, preventing false empty messages on page load
+- Fixed chart animation not playing on keep-alive reactivation, and prevented double animation from rapid page switching
 
 ## [0.5.3] - 2026-02-16
 

@@ -22,6 +22,8 @@ export function useFetchBirdData() {
   const trendsData = ref({ labels: [], data: [] });
   const trendsError = ref(null);
 
+  const hasLoadedOnce = ref(false);
+
   const latestObservationimageUrl = ref("/default_bird.webp");
 
   const fetchChartsData = async (date, order = 'most') => {
@@ -129,6 +131,8 @@ export function useFetchBirdData() {
         latestObservationimageUrl.value = '/default_bird.webp';
       }
 
+      hasLoadedOnce.value = true;
+
       logger.info('Dashboard data fetched successfully', {
         hasLatestObservation: !!latestObservationData.value,
         recentObservationsCount: recentObservationsData.value.length,
@@ -149,6 +153,7 @@ export function useFetchBirdData() {
       activityOverviewCache = { most: [], least: [] };
       detailedBirdActivityData.value = [];
       detailedBirdActivityError.value = errMsg;
+      hasLoadedOnce.value = true;
     }
   };
 
@@ -192,6 +197,7 @@ export function useFetchBirdData() {
     trendsData,
     trendsError,
     latestObservationimageUrl,
+    hasLoadedOnce,
     fetchDashboardData,
     setActivityOrder,
     fetchChartsData,

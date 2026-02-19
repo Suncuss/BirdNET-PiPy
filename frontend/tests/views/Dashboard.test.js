@@ -42,6 +42,7 @@ const baseState = () => ({
   recentObservationsError: ref(null),
   summaryError: ref(null),
   latestObservationimageUrl: ref('/default_bird.webp'),
+  hasLoadedOnce: ref(true),
   fetchDashboardData: vi.fn(),
   setActivityOrder: vi.fn(),
   fetchChartsData: vi.fn()
@@ -111,6 +112,27 @@ describe('Dashboard', () => {
     vi.clearAllTimers()
     vi.useRealTimers()
     vi.restoreAllMocks()
+  })
+
+  it('shows loading state before first fetch completes', async () => {
+    const state = baseState()
+    state.hasLoadedOnce = ref(false)
+    useFetchBirdData.mockReturnValue(state)
+
+    const wrapper = mountDashboard()
+    await flushPromises()
+
+    const text = wrapper.text()
+
+    // All sections should show loading text
+    expect(text.match(/Fetching the latest data\.\.\./g)).toHaveLength(5)
+
+    // Empty/error messages should NOT be visible
+    expect(text).not.toContain('No bird activity recorded yet for today')
+    expect(text).not.toContain('No observations available yet.')
+    expect(text).not.toContain('No recent observations available.')
+    expect(text).not.toContain('No summary data available for this period.')
+    expect(text).not.toContain('skip chart')
   })
 
   it('renders empty states when no data', async () => {
@@ -398,6 +420,44 @@ describe('Dashboard', () => {
 
       // Only the 2 explicit fetchDashboardData calls, no interval-driven ones
       expect(state.fetchDashboardData).toHaveBeenCalledTimes(2)
+    })
+
+    it('rapid reactivation discards stale activation fetch', async () => {
+      const state = baseState()
+      let resolveStale
+      state.fetchDashboardData
+        .mockResolvedValueOnce()  // startDashboard
+        .mockImplementationOnce(() => new Promise(resolve => { resolveStale = resolve }))  // stale onActivated
+        .mockResolvedValue()  // fresh onActivated
+      useFetchBirdData.mockReturnValue(state)
+
+      const { showDashboard } = mountInKeepAlive()
+      await flushPromises()
+
+      // Deactivate then reactivate — onActivated #1 starts (deferred fetch)
+      showDashboard.value = false
+      await nextTick()
+      showDashboard.value = true
+      await nextTick()
+
+      // Quickly deactivate and reactivate again — onActivated #2 starts and completes
+      showDashboard.value = false
+      await nextTick()
+      showDashboard.value = true
+      await nextTick()
+      await flushPromises()
+
+      state.fetchDashboardData.mockClear()
+
+      // Resolve stale #1 — it should bail out (activationId changed)
+      resolveStale()
+      await flushPromises()
+
+      vi.advanceTimersByTime(20000)
+      await flushPromises()
+
+      // Only interval-driven fetches from #2's polling, not doubled by #1
+      expect(state.fetchDashboardData.mock.calls.length).toBe(2)
     })
 
     it('visibility handler still works after deactivation during initial startDashboard', async () => {

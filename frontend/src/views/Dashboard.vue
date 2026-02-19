@@ -56,7 +56,15 @@
           </button>
         </div>
         <div
-          v-if="!isDataEmpty && !detailedBirdActivityError"
+          v-if="!hasLoadedOnce"
+          class="flex items-center justify-center h-[calc(100%-2rem)]"
+        >
+          <p class="text-lg text-gray-400">
+            Fetching the latest data...
+          </p>
+        </div>
+        <div
+          v-else-if="!isDataEmpty && !detailedBirdActivityError"
           class="flex h-[calc(100%-2rem)]"
         >
           <div class="w-full lg:w-1/3 lg:pr-2">
@@ -95,7 +103,15 @@
           Latest Observation
         </h2>
         <div
-          v-if="latestObservationData && !latestObservationError"
+          v-if="!hasLoadedOnce"
+          class="flex-1 flex items-center justify-center"
+        >
+          <p class="text-gray-400">
+            Fetching the latest data...
+          </p>
+        </div>
+        <div
+          v-else-if="latestObservationData && !latestObservationError"
           class="flex flex-col lg:flex-row items-center lg:items-stretch lg:space-x-2 w-full h-full"
         >
           <!-- Bird Profile -->
@@ -175,25 +191,37 @@
             </div>
           </div>
         </div>
-        <p
+        <div
           v-else-if="latestObservationError"
-          class="mt-2 text-gray-500"
+          class="flex-1 flex items-center justify-center"
         >
-          {{ latestObservationError }}
-        </p>
-        <p
+          <p class="text-gray-500">
+            {{ latestObservationError }}
+          </p>
+        </div>
+        <div
           v-else
-          class="mt-2 text-gray-500"
+          class="flex-1 flex items-center justify-center"
         >
-          No observations available yet.
-        </p>
+          <p class="text-gray-500">
+            No observations available yet.
+          </p>
+        </div>
       </div>
       <!-- Observation Summary -->
-      <div class="bg-white rounded-lg shadow p-4">
+      <div class="bg-white rounded-lg shadow p-4 flex flex-col">
         <h2 class="text-lg font-semibold mb-2">
           Observation Summary
         </h2>
-        <div v-if="!summaryError">
+        <div
+          v-if="!hasLoadedOnce"
+          class="flex-1 flex items-center justify-center"
+        >
+          <p class="text-gray-400">
+            Fetching the latest data...
+          </p>
+        </div>
+        <div v-else-if="!summaryError">
           <div class="mb-3">
             <nav
               class="flex space-x-1"
@@ -240,12 +268,14 @@
             No summary data available for this period.
           </p>
         </div>
-        <p
+        <div
           v-else
-          class="text-gray-500"
+          class="flex-1 flex items-center justify-center"
         >
-          {{ summaryError }}
-        </p>
+          <p class="text-gray-500">
+            {{ summaryError }}
+          </p>
+        </div>
       </div>
 
       <!-- Recent Observations -->
@@ -253,8 +283,16 @@
         <h2 class="text-lg font-semibold mb-2">
           Recent Observations
         </h2>
+        <div
+          v-if="!hasLoadedOnce"
+          class="flex items-center justify-center min-h-[200px]"
+        >
+          <p class="text-gray-400">
+            Fetching the latest data...
+          </p>
+        </div>
         <ul
-          v-if="recentObservationsData.length && !recentObservationsError"
+          v-else-if="recentObservationsData.length && !recentObservationsError"
           class="space-y-2"
         >
           <li
@@ -296,18 +334,22 @@
             </div>
           </li>
         </ul>
-        <p
+        <div
           v-else-if="recentObservationsError"
-          class="text-gray-500"
+          class="flex items-center justify-center min-h-[200px]"
         >
-          {{ recentObservationsError }}
-        </p>
-        <p
+          <p class="text-gray-500">
+            {{ recentObservationsError }}
+          </p>
+        </div>
+        <div
           v-else
-          class="text-gray-500"
+          class="flex items-center justify-center min-h-[200px]"
         >
-          No recent observations available.
-        </p>
+          <p class="text-gray-500">
+            No recent observations available.
+          </p>
+        </div>
       </div>
 
 
@@ -317,17 +359,27 @@
           Hourly Activity
         </h2>
         <div
-          v-if="!hourlyBirdActivityError"
+          v-if="!hasLoadedOnce"
+          class="flex items-center justify-center h-[220px]"
+        >
+          <p class="text-gray-400">
+            Fetching the latest data...
+          </p>
+        </div>
+        <div
+          v-else-if="!hourlyBirdActivityError"
           class="relative h-[220px] w-full"
         >
           <canvas ref="hourlyActivityChart" />
         </div>
-        <p
+        <div
           v-else
-          class="text-gray-500"
+          class="flex items-center justify-center h-[220px]"
         >
-          {{ hourlyBirdActivityError }}
-        </p>
+          <p class="text-gray-500">
+            {{ hourlyBirdActivityError }}
+          </p>
+        </div>
       </div>
     </div>
 
@@ -383,6 +435,9 @@ export default {
             latestObservationError,
             recentObservationsError,
             summaryError,
+
+            // Loading state
+            hasLoadedOnce,
 
             // Methods
             fetchDashboardData,
@@ -582,13 +637,14 @@ export default {
 
         onActivated(async () => {
             isActive = true
+            const myActivation = ++activationId
             if (hasBeenDeactivated && locationConfigured.value === true) {
                 await fetchDashboardData()
-                if (!isActive) return  // Deactivated while fetching — bail out
+                if (!isActive || myActivation !== activationId) return
                 setActivityOrder(currentOrder())
                 startPolling()
-                await nextTick()  // Wait for DOM to render canvases after data update
-                await redrawCharts(false)
+                await nextTick()
+                await redrawCharts(true)
             }
         })
 
@@ -616,6 +672,7 @@ export default {
         // Keep-alive state
         let isActive = true
         let hasBeenDeactivated = false
+        let activationId = 0
 
         // Methods
         const drawSpectrogram = () => {
@@ -804,7 +861,8 @@ export default {
             systemUpdate,
             showLeastCommon,
             toggleActivityOrder,
-            isActivityUpdating
+            isActivityUpdating,
+            hasLoadedOnce
         }
     }
 }
