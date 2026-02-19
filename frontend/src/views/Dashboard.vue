@@ -476,6 +476,7 @@ export default {
 
         // Use bird charts composable for chart creation
         const {
+            freezeChart,
             createTotalObservationsChart: createTotalObsChart,
             createHourlyActivityHeatmap: createHeatmap,
             createHourlyActivityChart: createHourlyChart
@@ -639,12 +640,24 @@ export default {
             isActive = true
             const myActivation = ++activationId
             if (hasBeenDeactivated && locationConfigured.value === true) {
+                // Freeze old charts so ResizeObserver renders instantly
+                // (no animation) when keep-alive re-inserts the DOM.
+                freezeChart(totalObservationsChart)
+                freezeChart(hourlyActivityHeatmap)
+                freezeChart(hourlyActivityChart)
+
+                // Immediately redraw with stale data + animation to give
+                // the impression of fresh content while we fetch.
+                await nextTick()
+                await redrawCharts(true)
+
+                // Fetch new data in background, then silently update.
                 await fetchDashboardData()
                 if (!isActive || myActivation !== activationId) return
                 setActivityOrder(currentOrder())
                 startPolling()
                 await nextTick()
-                await redrawCharts(true)
+                await redrawCharts(false)
             }
         })
 

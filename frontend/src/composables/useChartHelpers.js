@@ -22,6 +22,24 @@ export function useChartHelpers() {
   }
 
   /**
+   * Disable animation on an existing chart so that any pending
+   * ResizeObserver callback renders instantly instead of animating.
+   * The chart remains visible — call this instead of destroyChart
+   * when you want to keep stale content on screen until a redraw.
+   * @param {Ref|HTMLCanvasElement} canvasRef - Vue ref to canvas element or canvas element directly
+   */
+  const freezeChart = (canvasRef) => {
+    const isRef = canvasRef && typeof canvasRef === 'object' && 'value' in canvasRef
+    const canvas = isRef ? canvasRef.value : canvasRef
+    if (!canvas) return
+
+    const chart = Chart.getChart(canvas)
+    if (chart) {
+      chart.options.animation = false
+    }
+  }
+
+  /**
    * Generate array of hour labels for 24-hour display.
    * @returns {string[]} Array of hour strings ['00:00', '01:00', ..., '23:00']
    */
@@ -78,6 +96,7 @@ export function useChartHelpers() {
 
   return {
     destroyChart,
+    freezeChart,
     generateHourLabels,
     calculateRowStats,
     prepareDataForCategoryMatrix,

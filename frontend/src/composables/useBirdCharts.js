@@ -9,7 +9,7 @@ import { useChartHelpers } from './useChartHelpers'
  */
 export function useBirdCharts() {
   const { colorPalette, secondaryRGB } = useChartColors()
-  const { destroyChart, generateHourLabels, calculateRowStats, prepareDataForCategoryMatrix } = useChartHelpers()
+  const { destroyChart, freezeChart, generateHourLabels, calculateRowStats, prepareDataForCategoryMatrix } = useChartHelpers()
 
   /**
    * Create custom grid plugin for matrix/heatmap charts.
@@ -328,6 +328,7 @@ export function useBirdCharts() {
   return {
     colorPalette,
     destroyChart,
+    freezeChart,
     createTotalObservationsChart,
     createHourlyActivityHeatmap,
     createHourlyActivityChart

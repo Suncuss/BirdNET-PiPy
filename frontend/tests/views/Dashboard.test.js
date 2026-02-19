@@ -97,6 +97,7 @@ describe('Dashboard', () => {
       clearError: vi.fn()
     })
     useBirdCharts.mockReturnValue({
+      freezeChart: vi.fn(),
       createTotalObservationsChart: vi.fn(),
       createHourlyActivityHeatmap: vi.fn(),
       createHourlyActivityChart: vi.fn()
@@ -400,11 +401,13 @@ describe('Dashboard', () => {
       const { showDashboard } = mountInKeepAlive()
       await flushPromises()
 
-      // Deactivate then reactivate — onActivated calls fetchDashboardData (deferred)
+      // Deactivate then reactivate — onActivated redraws charts then calls fetchDashboardData
       showDashboard.value = false
       await nextTick()
       showDashboard.value = true
       await nextTick()
+      // Let the animated redraw in onActivated complete so fetchDashboardData starts
+      await flushPromises()
 
       // Deactivate again while fetch is still pending
       showDashboard.value = false
