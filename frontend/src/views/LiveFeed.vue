@@ -112,7 +112,6 @@ export default {
         source.connect(analyser);
         analyser.connect(audioContext.destination);
 
-        console.log('Audio context initialized:', audioContext.state);
       }
     }
 
@@ -146,7 +145,6 @@ export default {
         await audioContext.resume()
         await audioElement.value.play()
         statusMessage.value = 'Icecast stream connected'
-        console.log('Audio playback started successfully')
         return true
       } catch (error) {
         console.error('Error starting audio playback:', error)
@@ -167,7 +165,6 @@ export default {
       try {
         await audioElement.value.pause()
         statusMessage.value = 'Audio stopped'
-        console.log('Audio playback stopped successfully')
       } catch (error) {
         console.error('Error stopping audio playback:', error)
         statusMessage.value = 'Error stopping audio playback'
@@ -268,7 +265,6 @@ export default {
         streamUrl.value = config.stream_url || ''
         streamType.value = config.stream_type || 'none'
         streamDescription.value = config.description || ''
-        console.log(`Stream URL configured (${config.stream_type}):`, streamUrl.value)
 
         // Update status message based on stream availability
         if (!streamUrl.value || streamType.value === 'none') {
@@ -282,24 +278,13 @@ export default {
 
     const initWebSocket = () => {
       // Use relative path for Socket.IO - nginx will proxy to the API server
-      console.log('Connecting to WebSocket via nginx proxy')
       socket = io()
 
-      socket.on('connect', () => {
-        console.log('Connected to WebSocket')
-      })
+      socket.on('connect', () => {})
 
-      socket.on('disconnect', () => {
-        console.log('Disconnected from WebSocket')
-      })
-
-      socket.on('connect_error', (error) => {
-        console.warn('WebSocket connection error (will auto-retry):', error.message)
-        // Socket.IO will automatically reconnect, so just log it
-      })
+      socket.on('disconnect', () => {})
 
       socket.on('bird_detected', (detection) => {
-        console.log('Bird detected:', detection)
         
         // Find existing detection for this bird species
         const existingIndex = birdDetections.value.findIndex(
@@ -349,10 +334,6 @@ export default {
 
         canvasCtx.fillStyle = 'hsl(280, 100%, 10%)'
         canvasCtx.fillRect(0, 0, canvasWidth, canvasHeight)
-
-        console.log('Canvas initialized:', canvasWidth, 'x', canvasHeight)
-      } else {
-        console.log('Safari detected - skipping canvas initialization')
       }
 
       // Fetch stream configuration first

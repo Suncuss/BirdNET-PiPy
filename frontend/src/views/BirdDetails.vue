@@ -524,7 +524,6 @@ export default {
 
       try {
         const localDateString = getLocalDateString(currentAnchorDate.value)
-        console.log(`Updating chart for view: ${selectedView.value}, date: ${localDateString}`)
 
         const { data: chartData } = await api.get(`/bird/${route.params.name}/detection_distribution`, {
           params: {
