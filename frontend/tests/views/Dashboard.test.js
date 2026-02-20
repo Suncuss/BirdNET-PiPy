@@ -67,7 +67,8 @@ const mountDashboard = () => mount(Dashboard, {
   global: {
     stubs: {
       'font-awesome-icon': true,
-      'router-link': true
+      'router-link': true,
+      'CenteredMessage': false // render real component for text assertions
     }
   }
 })
@@ -266,7 +267,7 @@ describe('Dashboard', () => {
         `
       }), {
         global: {
-          stubs: { 'font-awesome-icon': true, 'router-link': true }
+          stubs: { 'font-awesome-icon': true, 'router-link': true, 'CenteredMessage': false }
         }
       })
       return { wrapper, showDashboard }
@@ -290,6 +291,37 @@ describe('Dashboard', () => {
       await flushPromises()
 
       expect(state.fetchDashboardData).toHaveBeenCalledTimes(1)
+    })
+
+    it('deactivation during in-flight poll tick prevents rescheduling', async () => {
+      const state = baseState()
+      let resolvePollFetch
+      state.fetchDashboardData
+        .mockResolvedValueOnce()  // startDashboard
+        .mockImplementationOnce(() => new Promise(resolve => { resolvePollFetch = resolve }))  // poll tick
+      useFetchBirdData.mockReturnValue(state)
+
+      const { showDashboard } = mountInKeepAlive()
+      await flushPromises()
+
+      // Fire the first poll tick — its fetch is deferred
+      vi.advanceTimersByTime(9000)
+      await flushPromises()
+
+      // Deactivate while poll fetch is pending
+      showDashboard.value = false
+      await nextTick()
+
+      // Resolve the deferred poll fetch
+      resolvePollFetch()
+      await flushPromises()
+
+      // Advance timers — poll should NOT have rescheduled itself
+      vi.advanceTimersByTime(20000)
+      await flushPromises()
+
+      // Only 2 calls: startDashboard + the one poll tick, nothing after deactivation
+      expect(state.fetchDashboardData).toHaveBeenCalledTimes(2)
     })
 
     it('deactivation stops audio playback', async () => {
@@ -456,7 +488,10 @@ describe('Dashboard', () => {
       resolveStale()
       await flushPromises()
 
-      vi.advanceTimersByTime(20000)
+      // Advance through two poll cycles (setTimeout chain needs interleaved flushing)
+      vi.advanceTimersByTime(9000)
+      await flushPromises()
+      vi.advanceTimersByTime(9000)
       await flushPromises()
 
       // Only interval-driven fetches from #2's polling, not doubled by #1

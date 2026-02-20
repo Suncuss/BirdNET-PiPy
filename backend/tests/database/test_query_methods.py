@@ -47,6 +47,67 @@ class TestDatabaseQueryMethods:
         assert overview[0]['hourlyActivity'][6] == 1  # 6 AM
         assert overview[0]['hourlyActivity'][0] == 0  # Midnight
 
+    def test_get_activity_overview_both(self, test_db_manager):
+        """Test get_activity_overview_both() returns correct results for both orders."""
+        test_date = '2024-01-15'
+
+        # Insert detections for different species at different hours
+        species_hours = {
+            'American Robin': [6, 7, 8, 17, 18],      # 5 detections
+            'Blue Jay': [9, 10, 11, 12],               # 4 detections
+            'Northern Cardinal': [6, 12, 18],           # 3 detections
+        }
+
+        for species, hours in species_hours.items():
+            for hour in hours:
+                detection = {
+                    'timestamp': f'2024-01-15T{hour:02d}:00:00',
+                    'group_timestamp': f'2024-01-15T{hour:02d}:00:00',
+                    'scientific_name': f'{species}_scientific',
+                    'common_name': species,
+                    'confidence': 0.8,
+                    'latitude': 40.7128,
+                    'longitude': -74.0060,
+                    'cutoff': 0.5,
+                    'sensitivity': 0.75,
+                    'overlap': 0.25
+                }
+                test_db_manager.insert_detection(detection)
+
+        result = test_db_manager.get_activity_overview_both(test_date, num_species=2)
+
+        # Should return dict with 'most' and 'least' keys
+        assert 'most' in result
+        assert 'least' in result
+
+        # 'most' order: top 2 by totalObservations DESC
+        assert len(result['most']) == 2
+        assert result['most'][0]['species'] == 'American Robin'
+        assert result['most'][0]['totalObservations'] == 5
+        assert result['most'][1]['species'] == 'Blue Jay'
+        assert result['most'][1]['totalObservations'] == 4
+
+        # 'least' order: bottom 2 by totalObservations ASC
+        assert len(result['least']) == 2
+        assert result['least'][0]['species'] == 'Northern Cardinal'
+        assert result['least'][0]['totalObservations'] == 3
+        assert result['least'][1]['species'] == 'Blue Jay'
+        assert result['least'][1]['totalObservations'] == 4
+
+        # Verify hourly activity arrays have correct length
+        assert len(result['most'][0]['hourlyActivity']) == 24
+        assert len(result['least'][0]['hourlyActivity']) == 24
+
+        # Verify specific hourly data
+        assert result['most'][0]['hourlyActivity'][6] == 1  # Robin at 6 AM
+        assert result['most'][0]['hourlyActivity'][0] == 0  # Robin at midnight
+
+    def test_get_activity_overview_both_empty_db(self, test_db_manager):
+        """Test get_activity_overview_both() on empty database."""
+        result = test_db_manager.get_activity_overview_both('2024-01-15')
+
+        assert result == {'most': [], 'least': []}
+
     def test_get_species_sightings_most_frequent(self, test_db_manager):
         """Test get_species_sightings() for most frequent species."""
         # Insert varying numbers of detections for different species

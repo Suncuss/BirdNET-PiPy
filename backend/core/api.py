@@ -489,10 +489,7 @@ def get_dashboard():
         'recentObservations': recent,
         'summary': summary,
         'hourlyActivity': hourly_activity,
-        'activityOverview': {
-            'most': db_manager.get_activity_overview(today, order='most'),
-            'least': db_manager.get_activity_overview(today, order='least')
-        }
+        'activityOverview': db_manager.get_activity_overview_both(today)
     })
 
 @api.route('/api/sightings/unique', methods=['GET'])

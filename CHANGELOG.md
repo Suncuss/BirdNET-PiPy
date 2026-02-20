@@ -7,6 +7,13 @@
 - Added keep-alive caching for Dashboard and Gallery — navigating between pages restores them instantly instead of full remount and data refetch
 - Added 3-state loading pattern to Dashboard — shows "Fetching the latest data..." until first fetch completes, preventing false empty messages on page load
 - Fixed chart animation not playing on keep-alive reactivation, and prevented double animation from rapid page switching
+- Merged two drifting polling timers into a single sequential fetch-then-redraw loop
+- Added fetch race guard to prevent stale responses from overlapping requests overwriting newer data
+- Fixed bird image not retrying after a failed wikimedia fetch (image stayed on default placeholder)
+- Reduced backend activity overview from two DB queries to one for the dashboard endpoint
+- Bar charts now update in-place instead of destroy/rebuild on each poll cycle
+- Fixed polling starvation when API latency exceeds poll interval (switched from setInterval to setTimeout chain)
+- Fixed ghost polling continuing after keep-alive deactivation during an in-flight fetch
 
 ## [0.5.3] - 2026-02-16
 

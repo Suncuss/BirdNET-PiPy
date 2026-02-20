@@ -9,7 +9,7 @@ import { useChartHelpers } from './useChartHelpers'
  */
 export function useBirdCharts() {
   const { colorPalette, secondaryRGB } = useChartColors()
-  const { destroyChart, freezeChart, generateHourLabels, calculateRowStats, prepareDataForCategoryMatrix } = useChartHelpers()
+  const { resolveCanvas, destroyChart, freezeChart, generateHourLabels, calculateRowStats, prepareDataForCategoryMatrix } = useChartHelpers()
 
   /**
    * Create custom grid plugin for matrix/heatmap charts.
@@ -90,17 +90,24 @@ export function useBirdCharts() {
   const createTotalObservationsChart = async (canvasRef, data, options = {}) => {
     const { animate = true, title = 'Total Detections by Species' } = options
 
-    // Handle both Vue refs and raw canvas elements
-    const isRef = canvasRef && typeof canvasRef === 'object' && 'value' in canvasRef
-    const canvas = isRef ? canvasRef.value : canvasRef
-
+    const canvas = resolveCanvas(canvasRef)
     if (!canvas) {
       return null
     }
 
     await nextTick()
-    destroyChart(canvasRef)
 
+    // In-place update if a bar chart already exists on this canvas
+    const existing = Chart.getChart(canvas)
+    if (existing && existing.config.type === 'bar') {
+      existing.data.labels = data.map(d => d.species)
+      existing.data.datasets[0].data = data.map(d => d.hourlyActivity.reduce((sum, val) => sum + val, 0))
+      existing.options.animation = animate
+      existing.update()
+      return existing
+    }
+
+    destroyChart(canvasRef)
     const ctx = canvas.getContext('2d')
 
     return new Chart(ctx, {
@@ -159,10 +166,7 @@ export function useBirdCharts() {
   const createHourlyActivityHeatmap = async (canvasRef, data, options = {}) => {
     const { animate = true, title = 'Hourly Activity Heatmap' } = options
 
-    // Handle both Vue refs and raw canvas elements
-    const isRef = canvasRef && typeof canvasRef === 'object' && 'value' in canvasRef
-    const canvas = isRef ? canvasRef.value : canvasRef
-
+    const canvas = resolveCanvas(canvasRef)
     if (!canvas) {
       return null
     }
@@ -258,17 +262,24 @@ export function useBirdCharts() {
   const createHourlyActivityChart = async (canvasRef, data, options = {}) => {
     const { animate = true } = options
 
-    // Handle both Vue refs and raw canvas elements
-    const isRef = canvasRef && typeof canvasRef === 'object' && 'value' in canvasRef
-    const canvas = isRef ? canvasRef.value : canvasRef
-
+    const canvas = resolveCanvas(canvasRef)
     if (!canvas) {
       return null
     }
 
     await nextTick()
-    destroyChart(canvasRef)
 
+    // In-place update if a bar chart already exists on this canvas
+    const existing = Chart.getChart(canvas)
+    if (existing && existing.config.type === 'bar') {
+      existing.data.labels = data.map(d => d.hour)
+      existing.data.datasets[0].data = data.map(d => d.count)
+      existing.options.animation = animate
+      existing.update()
+      return existing
+    }
+
+    destroyChart(canvasRef)
     const ctx = canvas.getContext('2d')
 
     return new Chart(ctx, {

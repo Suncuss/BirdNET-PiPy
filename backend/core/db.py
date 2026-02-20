@@ -278,6 +278,55 @@ class DatabaseManager:
 
         return species_activity[:min(num_species, len(species_activity))]
 
+    def get_activity_overview_both(self, date=None, num_species=10):
+        if date:
+            start_of_day = datetime.strptime(date, "%Y-%m-%d").replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            start_of_day = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+        end_of_day = start_of_day + timedelta(days=1)
+
+        query = """
+        SELECT common_name, strftime('%H', timestamp) as hour, COUNT(*) as count
+        FROM detections
+        WHERE timestamp BETWEEN ? AND ?
+        GROUP BY common_name, hour
+        """
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(query, (start_of_day, end_of_day))
+            results = cur.fetchall()
+
+        species_hourly_activity = {}
+        for row in results:
+            species = row['common_name']
+            hour = row['hour']
+            count = row['count']
+
+            if species not in species_hourly_activity:
+                species_hourly_activity[species] = [0] * 24
+
+            species_hourly_activity[species][int(hour)] = count
+
+        species_activity = [
+            {
+                'species': species,
+                'hourlyActivity': hourly_activity,
+                'totalObservations': sum(hourly_activity)
+            }
+            for species, hourly_activity in species_hourly_activity.items()
+        ]
+
+        most = sorted(species_activity, key=lambda x: x['totalObservations'], reverse=True)[:num_species]
+        least = sorted(species_activity, key=lambda x: x['totalObservations'])[:num_species]
+
+        logger.debug("Activity overview (both) generated", extra={
+            'total_species': len(species_hourly_activity),
+            'returned_species': num_species
+        })
+
+        return {'most': most, 'least': least}
+
     def get_summary_stats(self, start_date=None):
         if start_date is None:
             start_date = datetime.min.isoformat()

@@ -5,14 +5,22 @@ import Chart from 'chart.js/auto'
  */
 export function useChartHelpers() {
   /**
+   * Resolve a Vue ref or raw canvas element to the underlying HTMLCanvasElement.
+   * @param {Ref|HTMLCanvasElement} canvasRef - Vue ref to canvas element or canvas element directly
+   * @returns {HTMLCanvasElement|null} The canvas element, or null if unavailable
+   */
+  const resolveCanvas = (canvasRef) => {
+    const isRef = canvasRef && typeof canvasRef === 'object' && 'value' in canvasRef
+    return (isRef ? canvasRef.value : canvasRef) || null
+  }
+
+  /**
    * Safely destroy a chart if it exists on the given canvas.
    * Uses Chart.js best practice of Chart.getChart() to find existing instances.
    * @param {Ref|HTMLCanvasElement} canvasRef - Vue ref to canvas element or canvas element directly
    */
   const destroyChart = (canvasRef) => {
-    // Handle both Vue refs and raw canvas elements
-    const isRef = canvasRef && typeof canvasRef === 'object' && 'value' in canvasRef
-    const canvas = isRef ? canvasRef.value : canvasRef
+    const canvas = resolveCanvas(canvasRef)
     if (!canvas) return
 
     const existingChart = Chart.getChart(canvas)
@@ -29,8 +37,7 @@ export function useChartHelpers() {
    * @param {Ref|HTMLCanvasElement} canvasRef - Vue ref to canvas element or canvas element directly
    */
   const freezeChart = (canvasRef) => {
-    const isRef = canvasRef && typeof canvasRef === 'object' && 'value' in canvasRef
-    const canvas = isRef ? canvasRef.value : canvasRef
+    const canvas = resolveCanvas(canvasRef)
     if (!canvas) return
 
     const chart = Chart.getChart(canvas)
@@ -95,6 +102,7 @@ export function useChartHelpers() {
   }
 
   return {
+    resolveCanvas,
     destroyChart,
     freezeChart,
     generateHourLabels,

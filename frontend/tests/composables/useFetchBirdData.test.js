@@ -175,7 +175,7 @@ describe('useFetchBirdData', () => {
       ...overrides
     })
 
-    it('fetches all dashboard data from consolidated endpoint', async () => {
+    it('fetches all dashboard data and sets activity order from param', async () => {
       const dashData = mockDashboardResponse()
 
       mockApi.get.mockImplementation((url) => {
@@ -190,7 +190,6 @@ describe('useFetchBirdData', () => {
 
       const {
         fetchDashboardData,
-        setActivityOrder,
         latestObservationData,
         recentObservationsData,
         summaryData,
@@ -198,8 +197,7 @@ describe('useFetchBirdData', () => {
         detailedBirdActivityData
       } = useFetchBirdData()
 
-      await fetchDashboardData()
-      setActivityOrder('most')
+      await fetchDashboardData('most')
 
       expect(latestObservationData.value).toEqual(dashData.latestObservation)
       expect(recentObservationsData.value).toEqual(dashData.recentObservations)
@@ -223,13 +221,34 @@ describe('useFetchBirdData', () => {
 
       const { fetchDashboardData, setActivityOrder, detailedBirdActivityData } = useFetchBirdData()
 
-      await fetchDashboardData()
+      await fetchDashboardData('most')
 
-      setActivityOrder('most')
       expect(detailedBirdActivityData.value).toEqual(dashData.activityOverview.most)
 
       setActivityOrder('least')
       expect(detailedBirdActivityData.value).toEqual(dashData.activityOverview.least)
+    })
+
+    it('passes order param to set detailedBirdActivityData directly', async () => {
+      const dashData = mockDashboardResponse()
+
+      mockApi.get.mockImplementation((url) => {
+        if (url === '/dashboard') {
+          return Promise.resolve({ data: dashData })
+        }
+        if (url === '/wikimedia_image') {
+          return Promise.resolve({ data: { imageUrl: '/robin.jpg' } })
+        }
+        return Promise.reject(new Error(`Unknown URL: ${url}`))
+      })
+
+      const { fetchDashboardData, detailedBirdActivityData } = useFetchBirdData()
+
+      await fetchDashboardData('least')
+      expect(detailedBirdActivityData.value).toEqual(dashData.activityOverview.least)
+
+      await fetchDashboardData('most')
+      expect(detailedBirdActivityData.value).toEqual(dashData.activityOverview.most)
     })
 
     it('fetches wikimedia image when latest observation exists', async () => {
@@ -385,6 +404,148 @@ describe('useFetchBirdData', () => {
       expect(summaryError.value).toBe('Hmm, cannot reach the server')
       expect(hourlyBirdActivityError.value).toBe('Hmm, cannot reach the server')
       expect(detailedBirdActivityError.value).toBe('Hmm, cannot reach the server')
+    })
+  })
+
+  describe('fetch race guard', () => {
+    const mockDashboardResponse = (overrides = {}) => ({
+      latestObservation: null,
+      recentObservations: [],
+      summary: {},
+      hourlyActivity: [],
+      activityOverview: { most: [], least: [] },
+      ...overrides
+    })
+
+    it('discards stale response when a newer fetch starts', async () => {
+      let resolveStale
+      const staleData = mockDashboardResponse({
+        recentObservations: [{ common_name: 'Stale Robin' }]
+      })
+      const freshData = mockDashboardResponse({
+        recentObservations: [{ common_name: 'Fresh Jay' }]
+      })
+
+      mockApi.get
+        .mockImplementationOnce(() => new Promise(resolve => {
+          resolveStale = () => resolve({ data: staleData })
+        }))
+        .mockResolvedValueOnce({ data: freshData })
+
+      const { fetchDashboardData, recentObservationsData } = useFetchBirdData()
+
+      // Start first fetch (will be deferred)
+      const staleFetch = fetchDashboardData()
+
+      // Start second fetch (resolves immediately)
+      await fetchDashboardData()
+
+      // Now resolve the stale one
+      resolveStale()
+      await staleFetch
+
+      // Data should be from fresh fetch, not stale
+      expect(recentObservationsData.value).toEqual([{ common_name: 'Fresh Jay' }])
+    })
+
+    it('discards stale error when a newer fetch succeeds', async () => {
+      let rejectStale
+      const freshData = mockDashboardResponse()
+
+      mockApi.get
+        .mockImplementationOnce(() => new Promise((_, reject) => {
+          rejectStale = () => reject(new Error('Stale error'))
+        }))
+        .mockResolvedValueOnce({ data: freshData })
+
+      const { fetchDashboardData, latestObservationError } = useFetchBirdData()
+
+      const staleFetch = fetchDashboardData()
+      await fetchDashboardData()
+
+      rejectStale()
+      await staleFetch
+
+      // Error should be null (from fresh success), not from stale rejection
+      expect(latestObservationError.value).toBeNull()
+    })
+  })
+
+  describe('wikimedia retry on default image', () => {
+    const mockDashboardResponse = (overrides = {}) => ({
+      latestObservation: { common_name: 'American Robin', confidence: 0.95 },
+      recentObservations: [],
+      summary: {},
+      hourlyActivity: [],
+      activityOverview: { most: [], least: [] },
+      ...overrides
+    })
+
+    it('retries wikimedia when image is still default from previous failure', async () => {
+      let wikimediaCallCount = 0
+      mockApi.get.mockImplementation((url) => {
+        if (url === '/dashboard') {
+          return Promise.resolve({ data: mockDashboardResponse() })
+        }
+        if (url === '/wikimedia_image') {
+          wikimediaCallCount++
+          if (wikimediaCallCount === 1) {
+            return Promise.reject(new Error('Wikimedia error'))
+          }
+          return Promise.resolve({ data: { imageUrl: '/robin.jpg' } })
+        }
+        return Promise.reject(new Error(`Unknown URL: ${url}`))
+      })
+
+      const { fetchDashboardData, latestObservationimageUrl } = useFetchBirdData()
+
+      // First call — wikimedia fails, image stays at default
+      await fetchDashboardData()
+      // Let wikimedia fire-and-forget settle
+      await vi.waitFor(() => {
+        expect(wikimediaCallCount).toBe(1)
+      })
+      expect(latestObservationimageUrl.value).toBe('/default_bird.webp')
+
+      // Second call — same species but image still default, should retry
+      await fetchDashboardData()
+      await vi.waitFor(() => {
+        expect(latestObservationimageUrl.value).toBe('/robin.jpg')
+      })
+      expect(wikimediaCallCount).toBe(2)
+    })
+
+    it('does not reset image to default on retry (same species)', async () => {
+      let wikimediaCallCount = 0
+      mockApi.get.mockImplementation((url) => {
+        if (url === '/dashboard') {
+          return Promise.resolve({ data: mockDashboardResponse() })
+        }
+        if (url === '/wikimedia_image') {
+          wikimediaCallCount++
+          if (wikimediaCallCount === 1) {
+            return Promise.reject(new Error('Wikimedia error'))
+          }
+          return Promise.resolve({ data: { imageUrl: '/robin.jpg' } })
+        }
+        return Promise.reject(new Error(`Unknown URL: ${url}`))
+      })
+
+      const { fetchDashboardData, latestObservationimageUrl } = useFetchBirdData()
+
+      // First call — fails
+      await fetchDashboardData()
+      await vi.waitFor(() => { expect(wikimediaCallCount).toBe(1) })
+
+      // Manually set to some URL to verify it doesn't get reset to default
+      // (This simulates a partial load scenario — but we test the real behavior:
+      // on retry with same species, image should NOT be reset to default before fetch)
+      // The image is still at /default_bird.webp after the first failed call,
+      // so the retry should happen and succeed without resetting
+      await fetchDashboardData()
+      await vi.waitFor(() => {
+        expect(latestObservationimageUrl.value).toBe('/robin.jpg')
+      })
     })
   })
 

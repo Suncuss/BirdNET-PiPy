@@ -55,14 +55,13 @@
             </svg>
           </button>
         </div>
-        <div
+        <CenteredMessage
           v-if="!hasLoadedOnce"
-          class="flex items-center justify-center h-[calc(100%-2rem)]"
+          variant="loading"
+          container-class="h-[calc(100%-2rem)]"
         >
-          <p class="text-lg text-gray-400">
-            Fetching the latest data...
-          </p>
-        </div>
+          Fetching the latest data...
+        </CenteredMessage>
         <div
           v-else-if="!isDataEmpty && !detailedBirdActivityError"
           class="flex h-[calc(100%-2rem)]"
@@ -80,36 +79,33 @@
             />
           </div>
         </div>
-        <div
+        <CenteredMessage
           v-else-if="detailedBirdActivityError"
-          class="flex items-center justify-center h-[calc(100%-2rem)]"
+          variant="error"
+          container-class="h-[calc(100%-2rem)]"
         >
-          <p class="text-lg text-gray-500">
-            {{ detailedBirdActivityError }}
-          </p>
-        </div>
-        <div
+          {{ detailedBirdActivityError }}
+        </CenteredMessage>
+        <CenteredMessage
           v-else
-          class="flex items-center justify-center h-[calc(100%-2rem)]"
+          variant="info"
+          container-class="h-[calc(100%-2rem)]"
         >
-          <p class="text-lg text-gray-500">
-            No bird activity recorded yet for today. Check back later!
-          </p>
-        </div>
+          No bird activity recorded yet for today. Check back later!
+        </CenteredMessage>
       </div>
       <!-- Latest Observation -->
       <div class="bg-white rounded-lg shadow p-4 lg:col-span-2 flex flex-col lg:h-[220px]">
         <h2 class="text-lg font-semibold mb-2 text-left">
           Latest Observation
         </h2>
-        <div
+        <CenteredMessage
           v-if="!hasLoadedOnce"
-          class="flex-1 flex items-center justify-center"
+          variant="loading"
+          container-class="flex-1"
         >
-          <p class="text-gray-400">
-            Fetching the latest data...
-          </p>
-        </div>
+          Fetching the latest data...
+        </CenteredMessage>
         <div
           v-else-if="latestObservationData && !latestObservationError"
           class="flex flex-col lg:flex-row items-center lg:items-stretch lg:space-x-2 w-full h-full"
@@ -191,36 +187,33 @@
             </div>
           </div>
         </div>
-        <div
+        <CenteredMessage
           v-else-if="latestObservationError"
-          class="flex-1 flex items-center justify-center"
+          variant="error"
+          container-class="flex-1"
         >
-          <p class="text-gray-500">
-            {{ latestObservationError }}
-          </p>
-        </div>
-        <div
+          {{ latestObservationError }}
+        </CenteredMessage>
+        <CenteredMessage
           v-else
-          class="flex-1 flex items-center justify-center"
+          variant="info"
+          container-class="flex-1"
         >
-          <p class="text-gray-500">
-            No observations available yet.
-          </p>
-        </div>
+          No observations available yet.
+        </CenteredMessage>
       </div>
       <!-- Observation Summary -->
       <div class="bg-white rounded-lg shadow p-4 flex flex-col">
         <h2 class="text-lg font-semibold mb-2">
           Observation Summary
         </h2>
-        <div
+        <CenteredMessage
           v-if="!hasLoadedOnce"
-          class="flex-1 flex items-center justify-center"
+          variant="loading"
+          container-class="flex-1"
         >
-          <p class="text-gray-400">
-            Fetching the latest data...
-          </p>
-        </div>
+          Fetching the latest data...
+        </CenteredMessage>
         <div v-else-if="!summaryError">
           <div class="mb-3">
             <nav
@@ -268,14 +261,13 @@
             No summary data available for this period.
           </p>
         </div>
-        <div
+        <CenteredMessage
           v-else
-          class="flex-1 flex items-center justify-center"
+          variant="error"
+          container-class="flex-1"
         >
-          <p class="text-gray-500">
-            {{ summaryError }}
-          </p>
-        </div>
+          {{ summaryError }}
+        </CenteredMessage>
       </div>
 
       <!-- Recent Observations -->
@@ -283,14 +275,13 @@
         <h2 class="text-lg font-semibold mb-2">
           Recent Observations
         </h2>
-        <div
+        <CenteredMessage
           v-if="!hasLoadedOnce"
-          class="flex items-center justify-center min-h-[200px]"
+          variant="loading"
+          container-class="min-h-[200px]"
         >
-          <p class="text-gray-400">
-            Fetching the latest data...
-          </p>
-        </div>
+          Fetching the latest data...
+        </CenteredMessage>
         <ul
           v-else-if="recentObservationsData.length && !recentObservationsError"
           class="space-y-2"
@@ -334,22 +325,20 @@
             </div>
           </li>
         </ul>
-        <div
+        <CenteredMessage
           v-else-if="recentObservationsError"
-          class="flex items-center justify-center min-h-[200px]"
+          variant="error"
+          container-class="min-h-[200px]"
         >
-          <p class="text-gray-500">
-            {{ recentObservationsError }}
-          </p>
-        </div>
-        <div
+          {{ recentObservationsError }}
+        </CenteredMessage>
+        <CenteredMessage
           v-else
-          class="flex items-center justify-center min-h-[200px]"
+          variant="info"
+          container-class="min-h-[200px]"
         >
-          <p class="text-gray-500">
-            No recent observations available.
-          </p>
-        </div>
+          No recent observations available.
+        </CenteredMessage>
       </div>
 
 
@@ -358,28 +347,26 @@
         <h2 class="text-lg font-semibold mb-2">
           Hourly Activity
         </h2>
-        <div
+        <CenteredMessage
           v-if="!hasLoadedOnce"
-          class="flex items-center justify-center h-[220px]"
+          variant="loading"
+          container-class="h-[220px]"
         >
-          <p class="text-gray-400">
-            Fetching the latest data...
-          </p>
-        </div>
+          Fetching the latest data...
+        </CenteredMessage>
         <div
           v-else-if="!hourlyBirdActivityError"
           class="relative h-[220px] w-full"
         >
           <canvas ref="hourlyActivityChart" />
         </div>
-        <div
+        <CenteredMessage
           v-else
-          class="flex items-center justify-center h-[220px]"
+          variant="error"
+          container-class="h-[220px]"
         >
-          <p class="text-gray-500">
-            {{ hourlyBirdActivityError }}
-          </p>
-        </div>
+          {{ hourlyBirdActivityError }}
+        </CenteredMessage>
       </div>
     </div>
 
@@ -408,6 +395,7 @@ import { faPlay, faPause, faCircleInfo, faExternalLinkAlt } from '@fortawesome/f
 	import { useAppStatus } from '@/composables/useAppStatus';
 	import { useSystemUpdate } from '@/composables/useSystemUpdate';
 	import SpectrogramModal from '@/components/SpectrogramModal.vue';
+	import CenteredMessage from '@/components/CenteredMessage.vue';
 	import { getAudioUrl, getSpectrogramUrl } from '@/services/media'
 
 library.add(faPlay, faPause, faCircleInfo, faExternalLinkAlt);
@@ -417,7 +405,8 @@ export default {
     name: 'Dashboard',
     components: {
         FontAwesomeIcon,
-        SpectrogramModal
+        SpectrogramModal,
+        CenteredMessage
     },
     setup() {
         const {
@@ -444,6 +433,22 @@ export default {
             setActivityOrder
         } = useFetchBirdData();
 
+        // Audio state
+        let audioCtx, audioAnalyser, source, frequencyDataArray, animationId;
+        let spectrogramCanvasCtx, canvasWidth, canvasHeight;
+        let audioElement;
+
+        // Polling state (Fix 1: single merged interval)
+        const POLL_INTERVAL = 9000
+        let pollInterval;
+
+        // Keep-alive state
+        let isActive = true
+        let hasBeenDeactivated = false
+        let activationId = 0
+
+        // Visibility change handler
+        let visibilityHandler = null
 
         const currentSummaryPeriod = ref('today')
         const showLeastCommon = ref(false)
@@ -490,32 +495,26 @@ export default {
 
         const currentOrder = () => showLeastCommon.value ? 'least' : 'most'
 
-        // Idempotent polling helpers
+        // Single-in-flight poll loop: waits for the current fetch to
+        // finish before scheduling the next one, so slow responses never
+        // pile up and get discarded by the race guard.
         const startPolling = () => {
-            if (!dataFetchInterval) {
-                dataFetchInterval = setInterval(async () => {
-                    await fetchDashboardData()
-                    setActivityOrder(currentOrder())
-                }, 9000)
+            if (pollInterval) return
+            const poll = async () => {
+                await fetchDashboardData(currentOrder())
+                if (!isActive) return
+                redrawCharts()
+                pollInterval = setTimeout(poll, POLL_INTERVAL)
             }
-            if (!chartUpdateInterval) {
-                chartUpdateInterval = setInterval(redrawCharts, 9000)
-            }
+            pollInterval = setTimeout(poll, POLL_INTERVAL)
         }
 
         const stopPolling = () => {
-            if (dataFetchInterval) {
-                clearInterval(dataFetchInterval)
-                dataFetchInterval = null
-            }
-            if (chartUpdateInterval) {
-                clearInterval(chartUpdateInterval)
-                chartUpdateInterval = null
+            if (pollInterval) {
+                clearTimeout(pollInterval)
+                pollInterval = null
             }
         }
-
-        // Visibility change handler
-        let visibilityHandler = null
 
         // Start data fetching and charts
         const startDashboard = async () => {
@@ -527,9 +526,8 @@ export default {
                     if (document.hidden) {
                         stopPolling()
                     } else {
-                        await fetchDashboardData()
+                        await fetchDashboardData(currentOrder())
                         if (!isActive) return
-                        setActivityOrder(currentOrder())
                         redrawCharts()
                         startPolling()
                     }
@@ -537,9 +535,8 @@ export default {
                 document.addEventListener('visibilitychange', visibilityHandler)
             }
 
-            await fetchDashboardData();
+            await fetchDashboardData(currentOrder());
             if (!isActive) return  // Deactivated while fetching — bail out
-            setActivityOrder(currentOrder());
             startPolling()
 
             // Silent auto-check for updates (no status messages, uses backend cache)
@@ -572,7 +569,7 @@ export default {
 
         // Watch for location to become configured (after setup modal)
         watch(locationConfigured, async (configured) => {
-            if (configured === true && !dataFetchInterval) {
+            if (configured === true && !pollInterval) {
                 await startDashboard();
             }
         });
@@ -652,9 +649,8 @@ export default {
                 await redrawCharts(true)
 
                 // Fetch new data in background, then silently update.
-                await fetchDashboardData()
+                await fetchDashboardData(currentOrder())
                 if (!isActive || myActivation !== activationId) return
-                setActivityOrder(currentOrder())
                 startPolling()
                 await nextTick()
                 await redrawCharts(false)
@@ -672,20 +668,6 @@ export default {
             detailedBirdActivityData.value.length === 0 ||
             detailedBirdActivityData.value.every(bird => bird.hourlyActivity.every(count => count === 0))
         )
-
-        // Audio 
-        let audioCtx, audioAnalyser, source, frequencyDataArray, animationId;
-        let spectrogramCanvasCtx, canvasWidth, canvasHeight;
-        let audioElement;
-
-        // Interval
-        let dataFetchInterval;
-        let chartUpdateInterval;
-
-        // Keep-alive state
-        let isActive = true
-        let hasBeenDeactivated = false
-        let activationId = 0
 
         // Methods
         const drawSpectrogram = () => {

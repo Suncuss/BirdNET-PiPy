@@ -68,7 +68,7 @@ export function useFetchBirdData() {
       detailedBirdActivityError.value = detailedBirdActivityResponse.error
         ? "Hmm, cannot reach the server"
         : null;
-      
+
       logger.debug('Charts data fetched successfully', {
         hourlyDataCount: hourlyBirdActivityData.value.length,
         detailedDataCount: detailedBirdActivityData.value.length
@@ -85,10 +85,18 @@ export function useFetchBirdData() {
     detailedBirdActivityData.value = activityOverviewCache[order] || [];
   };
 
-  const fetchDashboardData = async () => {
+  // Fix 3: Fetch race guard — prevents stale responses from overwriting newer state
+  let fetchVersion = 0;
+
+  const fetchDashboardData = async (order = 'most') => {
+    const myVersion = ++fetchVersion;
     logger.info('Fetching dashboard data');
     try {
       const response = await api.get('/dashboard');
+
+      // Bail out if a newer fetch has started while we were awaiting
+      if (myVersion !== fetchVersion) return;
+
       logger.api('GET', '/dashboard', null, response);
 
       const data = response.data;
@@ -108,10 +116,16 @@ export function useFetchBirdData() {
       hourlyBirdActivityError.value = null;
 
       activityOverviewCache = data.activityOverview;
+      detailedBirdActivityData.value = activityOverviewCache[order] || [];
       detailedBirdActivityError.value = null;
 
-      if (newSpecies && newSpecies !== previousSpecies) {
-        latestObservationimageUrl.value = '/default_bird.webp';
+      // Fix 4: Retry wikimedia image when still on default (e.g. previous fetch failed)
+      const speciesChanged = newSpecies !== previousSpecies;
+      const imageIsDefault = latestObservationimageUrl.value === '/default_bird.webp';
+      if (newSpecies && (speciesChanged || imageIsDefault)) {
+        if (speciesChanged) {
+          latestObservationimageUrl.value = '/default_bird.webp';
+        }
         logger.debug('Fetching wikimedia image', { species: newSpecies });
         api.get('/wikimedia_image', { params: { species: newSpecies } })
           .then(wikimediaImageResponse => {
@@ -139,6 +153,9 @@ export function useFetchBirdData() {
         hasSummary: !!summaryData.value
       });
     } catch (error) {
+      // Bail out if a newer fetch has started
+      if (myVersion !== fetchVersion) return;
+
       logger.error('Error fetching dashboard data', error);
 
       const errMsg = 'Hmm, cannot reach the server';
