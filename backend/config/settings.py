@@ -50,9 +50,9 @@ DEFAULT_SETTINGS = {
     },
     "notifications": {
         "apprise_urls": [],
-        "every_detection": True,
+        "every_detection": False,
         "rate_limit_seconds": 300,
-        "first_of_day": True,
+        "first_of_day": False,
         "rare_species": False,
         "rare_threshold": 3,
         "rare_window_days": 7

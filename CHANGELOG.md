@@ -2,10 +2,8 @@
 
 ## [Unreleased]
 
-- Added notification system with support for 100+ services via Apprise (Telegram, ntfy, email, Home Assistant, MQTT, and more)
-- Added guided service picker modal for adding notification URLs with built-in test
+- Added notification system via Apprise with guided service picker and built-in test
 - Added notification triggers: every detection (with per-species cooldown), first of day, and rare species
-- Added confirmation dialog when removing a notification service
 - Added immediate autosave for notification settings (no restart required)
 - Added microphone volume adjustment instructions to docs
 - Fixed notification API returning 500 instead of 400 for malformed payloads
