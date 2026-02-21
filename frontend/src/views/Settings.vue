@@ -705,8 +705,9 @@
                 </p>
               </div>
               <button
+                :disabled="metricUnitsSaving"
                 :class="settings.display?.use_metric_units !== false ? 'bg-green-600' : 'bg-gray-200'"
-                class="relative inline-flex flex-shrink-0 h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+                class="relative inline-flex flex-shrink-0 h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 @click="toggleMetricUnits"
               >
                 <span
@@ -896,8 +897,9 @@
             </p>
           </div>
           <button
+            :disabled="updateChannelSaving"
             :class="settings.updates?.channel === 'latest' ? 'bg-green-600' : 'bg-gray-200'"
-            class="relative inline-flex flex-shrink-0 h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+            class="relative inline-flex flex-shrink-0 h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
             @click="toggleUpdateChannel"
           >
             <span
@@ -1361,10 +1363,11 @@ export default {
     // Last successfully saved notification settings — used as rollback target on failed autosave
     const confirmedNotifications = ref({ apprise_urls: [] })
     const cloneNotif = () => JSON.parse(JSON.stringify(settings.value.notifications))
-    let notifSaveTimeout = null
     let notifSaveSeq = 0
     let notifAppliedSeq = 0
     let notifSaveInFlight = 0
+    const updateChannelSaving = ref(false)
+    const metricUnitsSaving = ref(false)
 
     // Minimal settings skeleton - actual values loaded from API
     const settings = ref({
@@ -1574,7 +1577,9 @@ export default {
 
     // Toggle update channel between release and latest (saves immediately, no restart needed)
     const toggleUpdateChannel = async () => {
+      if (updateChannelSaving.value) return
       try {
+        updateChannelSaving.value = true
         // Toggle the channel
         if (!settings.value.updates) {
           settings.value.updates = { channel: 'release' }
@@ -1588,12 +1593,16 @@ export default {
       } catch (error) {
         console.error('Error saving channel setting:', error)
         showStatus('error', 'Failed to save channel setting')
+      } finally {
+        updateChannelSaving.value = false
       }
     }
 
     // Toggle metric/imperial units (saves immediately, no restart needed)
     const toggleMetricUnits = async () => {
+      if (metricUnitsSaving.value) return
       try {
+        metricUnitsSaving.value = true
         // Ensure display object exists
         if (!settings.value.display) {
           settings.value.display = { use_metric_units: true }
@@ -1611,6 +1620,8 @@ export default {
       } catch (error) {
         console.error('Error saving units setting:', error)
         showStatus('error', 'Failed to save units setting')
+      } finally {
+        metricUnitsSaving.value = false
       }
     }
 
@@ -1633,7 +1644,7 @@ export default {
         settings.value.notifications.apprise_urls.push(url)
       }
       showAddNotificationModal.value = false
-      saveNotificationSettings(true)
+      saveNotificationSettings()
     }
 
     // Notification autosave — persists to dedicated endpoint, no restart needed
@@ -1655,29 +1666,10 @@ export default {
       }
     }
 
-    const saveNotificationSettings = (immediate = false) => {
-      const run = () => {
-        const payload = cloneNotif()
-        const seq = ++notifSaveSeq
-        return persistNotificationSettings(payload, seq)
-      }
-      clearTimeout(notifSaveTimeout)
-      notifSaveTimeout = null
-      if (immediate) return run()
-      notifSaveTimeout = setTimeout(() => {
-        notifSaveTimeout = null
-        run()
-      }, 300)
-    }
-
-    const flushPendingNotificationSave = async () => {
-      if (notifSaveTimeout) {
-        clearTimeout(notifSaveTimeout)
-        notifSaveTimeout = null
-        const payload = cloneNotif()
-        const seq = ++notifSaveSeq
-        await persistNotificationSettings(payload, seq)
-      }
+    const saveNotificationSettings = () => {
+      const payload = cloneNotif()
+      const seq = ++notifSaveSeq
+      return persistNotificationSettings(payload, seq)
     }
 
     // Toggle a notification boolean and autosave
@@ -1689,15 +1681,15 @@ export default {
     // Notification pill setters (save immediately on click)
     const setRateLimit = (value) => {
       settings.value.notifications.rate_limit_seconds = value
-      saveNotificationSettings(true)
+      saveNotificationSettings()
     }
     const setRareThreshold = (value) => {
       settings.value.notifications.rare_threshold = value
-      saveNotificationSettings(true)
+      saveNotificationSettings()
     }
     const setRareWindow = (value) => {
       settings.value.notifications.rare_window_days = value
-      saveNotificationSettings(true)
+      saveNotificationSettings()
     }
 
     // Remove an Apprise URL from the list (with confirmation)
@@ -1710,7 +1702,7 @@ export default {
       confirmRemoveIndex.value = null
       if (index !== null) {
         settings.value.notifications.apprise_urls.splice(index, 1)
-        saveNotificationSettings(true)
+        saveNotificationSettings()
       }
     }
 
@@ -1933,7 +1925,7 @@ export default {
 
     // Browser beforeunload handler
     const handleBeforeUnload = (e) => {
-      if (hasUnsavedChanges.value || notifSaveTimeout || notifSaveInFlight > 0) {
+      if (hasUnsavedChanges.value || notifSaveInFlight > 0) {
         e.preventDefault()
         e.returnValue = '' // Required for Chrome
       }
@@ -1975,9 +1967,6 @@ export default {
 
     // Navigation guard - intercept route changes when there are unsaved changes
     onBeforeRouteLeave(async () => {
-      // Flush any pending notification autosave before navigating
-      await flushPendingNotificationSave()
-
       if (hasUnsavedChanges.value) {
         showUnsavedModal.value = true
         // Return a Promise - navigation blocked until resolved
@@ -2001,7 +1990,6 @@ export default {
     // Cleanup on unmount
     onUnmounted(() => {
       window.removeEventListener('beforeunload', handleBeforeUnload)
-      clearTimeout(notifSaveTimeout)
     })
 
     return {
@@ -2025,6 +2013,8 @@ export default {
       serviceRestart,
       settingsSaveError,
       dismissSettingsError,
+      updateChannelSaving,
+      metricUnitsSaving,
       // Advanced settings
       showAdvancedSettings,
       // Auth

@@ -843,25 +843,97 @@ describe('Settings', () => {
       expect(wrapper.vm.hasUnsavedChanges).toBe(false)
     })
 
-    it('toggleNotificationSetting triggers debounced save', async () => {
-      vi.useFakeTimers()
+    it('toggleNotificationSetting saves immediately', async () => {
       const wrapper = mountSettings()
       await flushPromises()
 
       mockApi.put = vi.fn().mockResolvedValue({ data: { success: true } })
 
       wrapper.vm.toggleNotificationSetting('every_detection')
-      await wrapper.vm.$nextTick()
-
-      // Should not have saved yet (debounced)
-      expect(mockApi.put).not.toHaveBeenCalledWith('/settings/notifications', expect.any(Object))
-
-      // Advance past debounce timeout
-      await vi.advanceTimersByTimeAsync(300)
       await flushPromises()
 
       expect(mockApi.put).toHaveBeenCalledWith('/settings/notifications', expect.any(Object))
-      vi.useRealTimers()
+    })
+
+    it('notification save sequence ignores stale success and rolls back to latest confirmed on failure', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      let resolveFirstSave
+      const firstSavePromise = new Promise((resolve) => {
+        resolveFirstSave = resolve
+      })
+
+      mockApi.put = vi.fn()
+        .mockImplementationOnce(() => firstSavePromise) // seq 1 (pending)
+        .mockResolvedValueOnce({ data: { success: true } }) // seq 2 (latest success)
+        .mockRejectedValueOnce(new Error('save failed')) // seq 3 (latest failure)
+
+      // seq 1: toggle true -> false
+      wrapper.vm.toggleNotificationSetting('every_detection')
+      await wrapper.vm.$nextTick()
+
+      // seq 2: toggle false -> true
+      wrapper.vm.toggleNotificationSetting('every_detection')
+      await flushPromises()
+
+      // Complete stale seq 1 after seq 2 already applied
+      resolveFirstSave({ data: { success: true } })
+      await flushPromises()
+
+      // seq 3: toggle true -> false, then fail -> rollback to confirmed true
+      wrapper.vm.toggleNotificationSetting('every_detection')
+      await flushPromises()
+
+      expect(wrapper.vm.settings.notifications.every_detection).toBe(true)
+    })
+  })
+
+  describe('Immediate Toggle Guards', () => {
+    it('toggleUpdateChannel ignores re-entry while request is in flight', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      wrapper.vm.settings.updates = { channel: 'release' }
+      let resolveRequest
+      mockApi.put = vi.fn().mockImplementationOnce(() => new Promise((resolve) => {
+        resolveRequest = resolve
+      }))
+
+      const firstCall = wrapper.vm.toggleUpdateChannel()
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.vm.updateChannelSaving).toBe(true)
+
+      await wrapper.vm.toggleUpdateChannel()
+      expect(mockApi.put).toHaveBeenCalledTimes(1)
+
+      resolveRequest({ data: { success: true } })
+      await firstCall
+      expect(wrapper.vm.updateChannelSaving).toBe(false)
+    })
+
+    it('toggleMetricUnits ignores re-entry while request is in flight', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      wrapper.vm.settings.display = { use_metric_units: true }
+      let resolveRequest
+      mockApi.put = vi.fn().mockImplementationOnce(() => new Promise((resolve) => {
+        resolveRequest = resolve
+      }))
+
+      const firstCall = wrapper.vm.toggleMetricUnits()
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.vm.metricUnitsSaving).toBe(true)
+
+      await wrapper.vm.toggleMetricUnits()
+      expect(mockApi.put).toHaveBeenCalledTimes(1)
+
+      resolveRequest({ data: { success: true } })
+      await firstCall
+      expect(wrapper.vm.metricUnitsSaving).toBe(false)
     })
   })
 
