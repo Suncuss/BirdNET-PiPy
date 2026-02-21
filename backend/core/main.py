@@ -33,6 +33,7 @@ from core.audio_manager import BaseRecorder, create_recorder
 from core.birdweather_service import get_birdweather_service
 from core.db import DatabaseManager
 from core.logging_config import get_logger, setup_logging
+from core.notification_service import get_notification_service
 from core.storage_manager import storage_monitor_loop
 from core.utils import (
     convert_wav_to_mp3,
@@ -293,6 +294,11 @@ def handle_detection(detection: dict[str, Any], input_file_path: str, thread_log
     })
     save_detection_to_db(detection)
     broadcast_detection(detection, thread_logger)
+
+    # Send notification if configured (service reads config from file per-detection)
+    notif_service = get_notification_service(db_manager)
+    if notif_service:
+        notif_service.notify(detection)
 
 def is_valid_recording(file_path: str, thread_logger) -> bool:
     """Check if a recording file is valid (meets minimum duration).

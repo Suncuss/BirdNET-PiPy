@@ -896,3 +896,262 @@ class TestSimpleAPI:
                                           data=json.dumps({'model': {'type': model_type}}),
                                           content_type='application/json')
                     assert response.status_code == 200
+
+    def test_notification_test_endpoint_requires_auth(self):
+        """Test notification test endpoint requires authentication when auth is enabled."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+                 patch('core.db.DatabaseManager') as MockDB, \
+                 patch('core.auth.is_auth_enabled', return_value=True), \
+                 patch('core.auth.is_authenticated', return_value=False):
+
+                mock_db_instance = Mock()
+                MockDB.return_value = mock_db_instance
+
+                from core.api import create_app
+                app, _ = create_app()
+                client = app.test_client()
+
+                response = client.post('/api/notifications/test',
+                                       data=json.dumps({'apprise_url': 'tgram://bot/chat'}),
+                                       content_type='application/json')
+                assert response.status_code == 401
+
+    def test_notification_test_endpoint_sends_notification(self):
+        """Test notification test endpoint sends notification successfully."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+                 patch('core.db.DatabaseManager') as MockDB, \
+                 patch('core.notification_service.send_test_notification', return_value=True) as mock_send:
+
+                mock_db_instance = Mock()
+                MockDB.return_value = mock_db_instance
+
+                from core.api import create_app
+                app, _ = create_app()
+                client = app.test_client()
+
+                response = client.post('/api/notifications/test',
+                                       data=json.dumps({'apprise_url': 'tgram://bot/chat'}),
+                                       content_type='application/json')
+                assert response.status_code == 200
+                assert response.get_json()['success'] is True
+                mock_send.assert_called_once_with('tgram://bot/chat')
+
+    def test_notification_test_endpoint_no_url(self):
+        """Test notification test endpoint returns 400 when no URL provided."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+                 patch('core.db.DatabaseManager') as MockDB:
+
+                mock_db_instance = Mock()
+                MockDB.return_value = mock_db_instance
+
+                from core.api import create_app
+                app, _ = create_app()
+                client = app.test_client()
+
+                response = client.post('/api/notifications/test',
+                                       data=json.dumps({}),
+                                       content_type='application/json')
+                assert response.status_code == 400
+                assert 'No Apprise URL' in response.get_json()['error']
+
+    def test_notification_settings_validation_rejects_bad_types(self):
+        """Test notification settings validation rejects invalid types."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+                 patch('core.db.DatabaseManager') as MockDB, \
+                 patch('core.api.save_user_settings'), \
+                 patch('core.api.write_flag'):
+
+                mock_db_instance = Mock()
+                MockDB.return_value = mock_db_instance
+
+                from core.api import create_app
+                app, _ = create_app()
+                client = app.test_client()
+
+                # String "false" for boolean field should be rejected
+                response = client.put('/api/settings',
+                                      data=json.dumps({'notifications': {'every_detection': 'false'}}),
+                                      content_type='application/json')
+                assert response.status_code == 400
+                assert 'must be a boolean' in response.get_json()['error']
+
+                # String for rate_limit_seconds should be rejected
+                response = client.put('/api/settings',
+                                      data=json.dumps({'notifications': {'rate_limit_seconds': 'abc'}}),
+                                      content_type='application/json')
+                assert response.status_code == 400
+                assert 'rate_limit_seconds' in response.get_json()['error']
+
+                # Negative rate_limit_seconds should be rejected
+                response = client.put('/api/settings',
+                                      data=json.dumps({'notifications': {'rate_limit_seconds': -1}}),
+                                      content_type='application/json')
+                assert response.status_code == 400
+
+                # Negative rare_window_days should be rejected
+                response = client.put('/api/settings',
+                                      data=json.dumps({'notifications': {'rare_window_days': 0}}),
+                                      content_type='application/json')
+                assert response.status_code == 400
+                assert 'rare_window_days' in response.get_json()['error']
+
+                # Float for rare_threshold should be rejected (must be int)
+                response = client.put('/api/settings',
+                                      data=json.dumps({'notifications': {'rare_threshold': 3.5}}),
+                                      content_type='application/json')
+                assert response.status_code == 400
+                assert 'rare_threshold' in response.get_json()['error']
+
+                # Non-dict notifications should be rejected with 400
+                response = client.put('/api/settings',
+                                      data=json.dumps({'notifications': []}),
+                                      content_type='application/json')
+                assert response.status_code == 400
+                assert 'must be a JSON object' in response.get_json()['error']
+
+                response = client.put('/api/settings',
+                                      data=json.dumps({'notifications': 'invalid'}),
+                                      content_type='application/json')
+                assert response.status_code == 400
+                assert 'must be a JSON object' in response.get_json()['error']
+
+                # Valid notification settings should pass
+                response = client.put('/api/settings',
+                                      data=json.dumps({'notifications': {
+                                          'apprise_urls': ['tgram://bot/chat'],
+                                          'every_detection': True,
+                                          'rate_limit_seconds': 300,
+                                          'first_of_day': True,
+                                          'rare_species': False,
+                                          'rare_threshold': 3,
+                                          'rare_window_days': 7
+                                      }}),
+                                      content_type='application/json')
+                assert response.status_code == 200
+
+    def test_notification_settings_endpoint_saves_without_restart(self):
+        """Test PUT /api/settings/notifications saves and does not write restart flag."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+                 patch('core.db.DatabaseManager') as MockDB, \
+                 patch('core.api.load_user_settings') as mock_load, \
+                 patch('core.api.save_user_settings') as mock_save, \
+                 patch('core.api.write_flag') as mock_flag:
+
+                mock_db_instance = Mock()
+                MockDB.return_value = mock_db_instance
+                mock_load.return_value = {
+                    'notifications': {
+                        'apprise_urls': [],
+                        'every_detection': True,
+                        'rate_limit_seconds': 300,
+                        'first_of_day': True,
+                        'rare_species': False,
+                        'rare_threshold': 3,
+                        'rare_window_days': 7,
+                    }
+                }
+
+                from core.api import create_app
+                app, _ = create_app()
+                client = app.test_client()
+
+                response = client.put('/api/settings/notifications',
+                                      data=json.dumps({
+                                          'every_detection': False,
+                                          'apprise_urls': ['tgram://bot/chat']
+                                      }),
+                                      content_type='application/json')
+                assert response.status_code == 200
+                data = response.get_json()
+                assert data['success'] is True
+                assert data['notifications']['every_detection'] is False
+                assert data['notifications']['apprise_urls'] == ['tgram://bot/chat']
+                # Existing fields preserved
+                assert data['notifications']['first_of_day'] is True
+
+                mock_save.assert_called_once()
+                mock_flag.assert_not_called()
+
+    def test_notification_settings_endpoint_validates_input(self):
+        """Test PUT /api/settings/notifications rejects invalid fields."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+                 patch('core.db.DatabaseManager') as MockDB, \
+                 patch('core.api.save_user_settings'):
+
+                mock_db_instance = Mock()
+                MockDB.return_value = mock_db_instance
+
+                from core.api import create_app
+                app, _ = create_app()
+                client = app.test_client()
+
+                response = client.put('/api/settings/notifications',
+                                      data=json.dumps({'every_detection': 'not_a_bool'}),
+                                      content_type='application/json')
+                assert response.status_code == 400
+                assert 'must be a boolean' in response.get_json()['error']
+
+    def test_notification_settings_endpoint_merge_semantics(self):
+        """Test PUT /api/settings/notifications preserves unspecified fields."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+                 patch('core.db.DatabaseManager') as MockDB, \
+                 patch('core.api.load_user_settings') as mock_load, \
+                 patch('core.api.save_user_settings') as mock_save:
+
+                mock_db_instance = Mock()
+                MockDB.return_value = mock_db_instance
+                mock_load.return_value = {
+                    'notifications': {
+                        'apprise_urls': ['tgram://bot/chat'],
+                        'every_detection': True,
+                        'rate_limit_seconds': 300,
+                        'first_of_day': True,
+                        'rare_species': False,
+                        'rare_threshold': 3,
+                        'rare_window_days': 7,
+                    }
+                }
+
+                from core.api import create_app
+                app, _ = create_app()
+                client = app.test_client()
+
+                # Only update rare_species, everything else should be preserved
+                response = client.put('/api/settings/notifications',
+                                      data=json.dumps({'rare_species': True}),
+                                      content_type='application/json')
+                assert response.status_code == 200
+                data = response.get_json()
+
+                # Updated field
+                assert data['notifications']['rare_species'] is True
+                # Preserved fields
+                assert data['notifications']['apprise_urls'] == ['tgram://bot/chat']
+                assert data['notifications']['every_detection'] is True
+                assert data['notifications']['rate_limit_seconds'] == 300
+
+                # Verify the full settings dict was saved (not just notifications)
+                saved = mock_save.call_args[0][0]
+                assert saved['notifications']['rare_species'] is True
+                assert saved['notifications']['apprise_urls'] == ['tgram://bot/chat']

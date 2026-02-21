@@ -1086,6 +1086,54 @@ class DatabaseManager:
         return None
 
     # -------------------------------------------------------------------------
+    # Notification query helpers
+    # -------------------------------------------------------------------------
+
+    def get_today_detection_count(self, scientific_name, before_timestamp):
+        """Count detections of a species today, up to (and including) the given timestamp.
+
+        Args:
+            scientific_name: Species scientific name
+            before_timestamp: ISO timestamp string — upper bound for the query
+
+        Returns:
+            int: Number of detections today for this species
+        """
+        # Compute midnight of the detection's day
+        day_start = before_timestamp[:10] + 'T00:00:00'
+        query = """
+        SELECT COUNT(*) as count FROM detections
+        WHERE scientific_name = ? AND timestamp >= ? AND timestamp <= ?
+        """
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(query, (scientific_name, day_start, before_timestamp))
+            return cur.fetchone()['count']
+
+    def get_recent_detection_count(self, scientific_name, days=7, before_timestamp=None):
+        """Count detections of a species within a recent window.
+
+        Args:
+            scientific_name: Species scientific name
+            days: Number of days to look back
+            before_timestamp: ISO timestamp string — upper bound (defaults to now)
+
+        Returns:
+            int: Number of detections in the window for this species
+        """
+        if before_timestamp is None:
+            before_timestamp = datetime.now().isoformat()
+        cutoff = (datetime.fromisoformat(before_timestamp) - timedelta(days=days)).isoformat()
+        query = """
+        SELECT COUNT(*) as count FROM detections
+        WHERE scientific_name = ? AND timestamp >= ? AND timestamp <= ?
+        """
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(query, (scientific_name, cutoff, before_timestamp))
+            return cur.fetchone()['count']
+
+    # -------------------------------------------------------------------------
     # Query building helpers
     # -------------------------------------------------------------------------
 

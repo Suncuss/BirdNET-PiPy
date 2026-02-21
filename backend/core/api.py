@@ -1254,6 +1254,43 @@ def should_show_update_note(current_commit, note_data):
     # 'identical' means user is AT the target commit - don't show (they already have it)
     return status == 'ahead' or ahead_by > 0
 
+VALID_NOTIFICATION_FIELDS = {
+    'apprise_urls', 'every_detection', 'rate_limit_seconds',
+    'first_of_day', 'rare_species', 'rare_threshold', 'rare_window_days'
+}
+
+def _validate_notification_settings(notif):
+    """Validate notification settings fields.
+
+    Returns error string if invalid, None if valid.
+    """
+    if not isinstance(notif, dict):
+        return 'notifications must be a JSON object'
+    unknown = set(notif.keys()) - VALID_NOTIFICATION_FIELDS
+    if unknown:
+        return f'Unknown notification fields: {", ".join(sorted(unknown))}'
+    for bool_field in ('every_detection', 'first_of_day', 'rare_species'):
+        if bool_field in notif and not isinstance(notif[bool_field], bool):
+            return f'notifications.{bool_field} must be a boolean'
+    if 'apprise_urls' in notif:
+        urls = notif['apprise_urls']
+        if not isinstance(urls, list) or not all(isinstance(u, str) for u in urls):
+            return 'notifications.apprise_urls must be a list of strings'
+    if 'rate_limit_seconds' in notif:
+        rls = notif['rate_limit_seconds']
+        if not isinstance(rls, (int, float)) or rls < 0:
+            return 'notifications.rate_limit_seconds must be a non-negative number'
+    if 'rare_threshold' in notif:
+        rt = notif['rare_threshold']
+        if not isinstance(rt, int) or rt < 0:
+            return 'notifications.rare_threshold must be a non-negative integer'
+    if 'rare_window_days' in notif:
+        rwd = notif['rare_window_days']
+        if not isinstance(rwd, int) or rwd < 1:
+            return 'notifications.rare_window_days must be a positive integer'
+    return None
+
+
 def save_user_settings(settings_dict):
     """Save settings to JSON file atomically"""
     json_path = os.path.join(BASE_DIR, 'data', 'config', 'user_settings.json')
@@ -1379,6 +1416,50 @@ def update_units_setting():
         return jsonify({'error': str(e)}), 500
 
 
+@api.route('/api/settings/notifications', methods=['PUT'])
+@log_api_request
+@require_auth
+def update_notification_settings():
+    """Update notification settings without triggering a restart.
+
+    The main container reads notification config from the settings file
+    on each detection, so changes take effect immediately.
+    Uses merge semantics: only provided fields are updated.
+    """
+    try:
+        data = request.json
+        if not data or not isinstance(data, dict):
+            return jsonify({'error': 'Request body must be a JSON object'}), 400
+
+        error = _validate_notification_settings(data)
+        if error:
+            return jsonify({'error': error}), 400
+
+        # Merge into current settings
+        current_settings = load_user_settings()
+        current_settings['notifications'].update(data)
+        # Deduplicate URLs while preserving order
+        urls = current_settings['notifications'].get('apprise_urls')
+        if urls:
+            current_settings['notifications']['apprise_urls'] = list(dict.fromkeys(urls))
+        save_user_settings(current_settings)
+
+        logger.info("Notification settings updated", extra={
+            'changed_fields': list(data.keys())
+        })
+
+        return jsonify({
+            'success': True,
+            'notifications': current_settings['notifications']
+        }), 200
+
+    except Exception as e:
+        logger.error("Failed to update notification settings", extra={
+            'error': str(e)
+        }, exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
 @api.route('/api/settings', methods=['PUT'])
 @log_api_request
 @require_auth
@@ -1424,6 +1505,12 @@ def update_settings():
             model_type = new_settings['model'].get('type')
             if model_type and model_type not in VALID_MODEL_TYPES:
                 return jsonify({'error': f'Invalid model type. Must be one of: {", ".join(VALID_MODEL_TYPES)}'}), 400
+
+        # Validate notification settings
+        if 'notifications' in new_settings:
+            error = _validate_notification_settings(new_settings['notifications'])
+            if error:
+                return jsonify({'error': error}), 400
 
         # Compute timezone when location is being saved and timezone is missing or location changed
         # This ensures all containers have correct timezone on next restart
@@ -1472,6 +1559,31 @@ def update_settings():
             'error': str(e)
         }, exc_info=True)
         return jsonify({'error': str(e)}), 500
+
+@api.route('/api/notifications/test', methods=['POST'])
+@log_api_request
+@require_auth
+def test_notification():
+    """Send a test notification to verify Apprise URL configuration."""
+    try:
+        data = request.json or {}
+        apprise_url = data.get('apprise_url')
+
+        if not apprise_url:
+            return jsonify({'error': 'No Apprise URL provided. Include {"apprise_url": "..."} in the request body.'}), 400
+
+        from core.notification_service import send_test_notification
+        success = send_test_notification(apprise_url)
+
+        if success:
+            return jsonify({'success': True, 'message': 'Test notification sent successfully'}), 200
+        else:
+            return jsonify({'error': 'Failed to send test notification'}), 500
+
+    except Exception as e:
+        logger.error("Test notification error", extra={'error': str(e)})
+        return jsonify({'error': str(e)}), 500
+
 
 @api.route('/api/system/storage', methods=['GET'])
 @log_api_request

@@ -303,6 +303,234 @@
         </p>
       </div>
 
+      <!-- Notifications (Collapsible) -->
+      <div class="bg-white rounded-lg shadow-sm border border-gray-100">
+        <button
+          class="w-full p-5 flex items-center justify-between text-left hover:bg-gray-50 transition-colors rounded-lg"
+          @click="showNotifications = !showNotifications"
+        >
+          <div>
+            <h2 class="text-base font-medium text-gray-800">
+              Notifications
+            </h2>
+            <p class="text-xs text-gray-400 mt-0.5">
+              Get alerts when birds are detected
+            </p>
+          </div>
+          <svg
+            class="w-5 h-5 text-gray-400 transition-transform duration-200"
+            :class="{ 'rotate-180': showNotifications }"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M19 9l-7 7-7-7"
+            />
+          </svg>
+        </button>
+
+        <div
+          v-show="showNotifications"
+          class="border-t border-gray-100 p-5"
+        >
+          <!-- Apprise URLs -->
+          <div class="mb-4">
+            <label class="block text-sm text-gray-600 mb-1">Notification Services</label>
+
+            <!-- Existing URLs list -->
+            <ul
+              v-if="settings.notifications.apprise_urls?.length"
+              class="mb-2 space-y-1"
+            >
+              <li
+                v-for="(url, index) in settings.notifications.apprise_urls"
+                :key="index"
+                class="flex items-center justify-between px-3 py-2 bg-gray-50 rounded-lg border border-gray-200"
+              >
+                <div class="flex items-center gap-2 min-w-0">
+                  <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700 flex-shrink-0">
+                    {{ appriseServiceName(url) }}
+                  </span>
+                  <span class="truncate text-xs text-gray-400 font-mono">{{ maskAppriseUrl(url) }}</span>
+                </div>
+                <button
+                  class="flex-shrink-0 ml-2 text-gray-400 hover:text-red-500 transition-colors"
+                  title="Remove"
+                  @click="removeAppriseUrl(index)"
+                >
+                  <svg
+                    class="w-4 h-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                </button>
+              </li>
+            </ul>
+
+            <!-- Add Service button -->
+            <button
+              class="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs text-gray-400 hover:text-blue-600 hover:border-blue-300 hover:bg-blue-50 border border-dashed border-gray-200 rounded-lg transition-colors"
+              @click="showAddNotificationModal = true"
+            >
+              <svg
+                class="w-3.5 h-3.5"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke-width="2"
+                stroke="currentColor"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  d="M12 4.5v15m7.5-7.5h-15"
+                />
+              </svg>
+              Add Service
+            </button>
+            <p class="text-xs text-gray-400 mt-1">
+              Powered by <a
+                href="https://appriseit.com/"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-blue-500 hover:underline"
+              >Apprise</a> — supports 100+ services
+            </p>
+          </div>
+
+          <!-- Trigger: Every Detection -->
+          <div class="flex items-center justify-between py-2 border-t border-gray-100">
+            <div>
+              <label class="text-sm text-gray-600">Every Detection</label>
+              <p class="text-xs text-gray-400">
+                Alert on each detection
+              </p>
+            </div>
+            <button
+              :class="settings.notifications.every_detection ? 'bg-green-600' : 'bg-gray-200'"
+              class="relative inline-flex flex-shrink-0 h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+              @click="toggleNotificationSetting('every_detection')"
+            >
+              <span
+                :class="settings.notifications.every_detection ? 'translate-x-6' : 'translate-x-1'"
+                class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"
+              />
+            </button>
+          </div>
+
+          <!-- Rate Limit (visible when Every Detection is on) -->
+          <div
+            v-if="settings.notifications.every_detection"
+            class="pl-4 pb-2"
+          >
+            <label class="block text-xs text-gray-500 mb-1.5">Cooldown per species</label>
+            <div class="flex flex-wrap gap-1.5">
+              <button
+                v-for="opt in rateLimitOptions"
+                :key="opt.value"
+                :class="settings.notifications.rate_limit_seconds === opt.value
+                  ? 'bg-blue-100 text-blue-700 border-blue-200'
+                  : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'"
+                class="px-2.5 py-1 text-xs rounded-full border transition-colors"
+                @click="setRateLimit(opt.value)"
+              >
+                {{ opt.label }}
+              </button>
+            </div>
+          </div>
+
+          <!-- Trigger: First of Day -->
+          <div class="flex items-center justify-between py-2 border-t border-gray-100">
+            <div>
+              <label class="text-sm text-gray-600">First of Day</label>
+              <p class="text-xs text-gray-400">
+                First sighting of each species per day
+              </p>
+            </div>
+            <button
+              :class="settings.notifications.first_of_day ? 'bg-green-600' : 'bg-gray-200'"
+              class="relative inline-flex flex-shrink-0 h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+              @click="toggleNotificationSetting('first_of_day')"
+            >
+              <span
+                :class="settings.notifications.first_of_day ? 'translate-x-6' : 'translate-x-1'"
+                class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"
+              />
+            </button>
+          </div>
+
+          <!-- Trigger: Rare Species -->
+          <div class="flex items-center justify-between py-2 border-t border-gray-100">
+            <div>
+              <label class="text-sm text-gray-600">Rare Species</label>
+              <p class="text-xs text-gray-400">
+                Uncommon species for your area
+              </p>
+            </div>
+            <button
+              :class="settings.notifications.rare_species ? 'bg-green-600' : 'bg-gray-200'"
+              class="relative inline-flex flex-shrink-0 h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+              @click="toggleNotificationSetting('rare_species')"
+            >
+              <span
+                :class="settings.notifications.rare_species ? 'translate-x-6' : 'translate-x-1'"
+                class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"
+              />
+            </button>
+          </div>
+
+          <!-- Rare Species Options (visible when Rare Species is on) -->
+          <div
+            v-if="settings.notifications.rare_species"
+            class="pl-4 pb-2 space-y-2"
+          >
+            <div>
+              <label class="block text-xs text-gray-500 mb-1.5">Fewer than N sightings</label>
+              <div class="flex flex-wrap gap-1.5">
+                <button
+                  v-for="opt in rareThresholdOptions"
+                  :key="opt"
+                  :class="settings.notifications.rare_threshold === opt
+                    ? 'bg-blue-100 text-blue-700 border-blue-200'
+                    : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'"
+                  class="px-2.5 py-1 text-xs rounded-full border transition-colors"
+                  @click="setRareThreshold(opt)"
+                >
+                  {{ opt }}
+                </button>
+              </div>
+            </div>
+            <div>
+              <label class="block text-xs text-gray-500 mb-1.5">In the past</label>
+              <div class="flex flex-wrap gap-1.5">
+                <button
+                  v-for="opt in rareWindowOptions"
+                  :key="opt.value"
+                  :class="settings.notifications.rare_window_days === opt.value
+                    ? 'bg-blue-100 text-blue-700 border-blue-200'
+                    : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'"
+                  class="px-2.5 py-1 text-xs rounded-full border transition-colors"
+                  @click="setRareWindow(opt.value)"
+                >
+                  {{ opt.label }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Advanced Settings (Collapsible) -->
       <div class="bg-white rounded-lg shadow-sm border border-gray-100">
         <button
@@ -986,6 +1214,23 @@
       v-if="showMigrationModal"
       @close="showMigrationModal = false"
     />
+
+    <!-- Add Notification Modal -->
+    <AddNotificationModal
+      v-if="showAddNotificationModal"
+      @close="showAddNotificationModal = false"
+      @add="handleAddNotificationUrl"
+    />
+
+    <!-- Confirm Remove Notification URL -->
+    <ConfirmModal
+      v-if="confirmRemoveIndex !== null"
+      title="Remove Service?"
+      message="This notification service will be removed. You can re-add it later."
+      confirm-label="Remove"
+      @confirm="confirmRemoveAppriseUrl"
+      @cancel="cancelRemoveAppriseUrl"
+    />
   </div>
 </template>
 
@@ -1003,6 +1248,9 @@ import AlertBanner from '@/components/AlertBanner.vue'
 import AppButton from '@/components/AppButton.vue'
 import UnsavedChangesModal from '@/components/UnsavedChangesModal.vue'
 import MigrationModal from '@/components/MigrationModal.vue'
+import AddNotificationModal from '@/components/AddNotificationModal.vue'
+import ConfirmModal from '@/components/ConfirmModal.vue'
+import { SCHEME_TO_SERVICE_NAME } from '@/utils/notificationServices'
 
 export default {
   name: 'Settings',
@@ -1011,7 +1259,9 @@ export default {
     AlertBanner,
     AppButton,
     UnsavedChangesModal,
-    MigrationModal
+    MigrationModal,
+    AddNotificationModal,
+    ConfirmModal
   },
   setup() {
     // Composables
@@ -1043,6 +1293,22 @@ export default {
       { value: 'birdnet_v3', label: 'BirdNET v3.0 (11K species, preview)' }
     ]
 
+    // Notification pill options
+    const rateLimitOptions = [
+      { value: 0, label: 'None' },
+      { value: 60, label: '1 min' },
+      { value: 300, label: '5 min' },
+      { value: 900, label: '15 min' },
+      { value: 3600, label: '1 hr' }
+    ]
+    const rareThresholdOptions = [1, 2, 3, 5, 10]
+    const rareWindowOptions = [
+      { value: 7, label: '7 days' },
+      { value: 14, label: '14 days' },
+      { value: 30, label: '30 days' },
+      { value: 90, label: '90 days' }
+    ]
+
     // State
     const loading = ref(false)
     const saveStatus = ref(null)
@@ -1060,7 +1326,8 @@ export default {
     const speciesList = ref([])
     const speciesNameMap = ref({})
 
-    // Advanced settings toggle
+    // Collapsible section toggles
+    const showNotifications = ref(false)
     const showAdvancedSettings = ref(false)
 
     // Migration modal state
@@ -1086,6 +1353,19 @@ export default {
     const confirmSetupPassword = ref('')
     const changePasswordError = ref('')
     const setupPasswordError = ref('')
+
+    // Notification modal state
+    const showAddNotificationModal = ref(false)
+    const confirmRemoveIndex = ref(null)
+
+    // Last successfully saved notification settings — used as rollback target on failed autosave
+    const confirmedNotifications = ref({ apprise_urls: [] })
+    const cloneNotif = () => JSON.parse(JSON.stringify(settings.value.notifications))
+    let notifSaveTimeout = null
+    let notifSaveSeq = 0
+    let notifAppliedSeq = 0
+    let notifSaveInFlight = 0
+
     // Minimal settings skeleton - actual values loaded from API
     const settings = ref({
       location: {},
@@ -1096,7 +1376,8 @@ export default {
       updates: {},
       model: { type: 'birdnet' },
       display: {},
-      birdweather: { id: null }
+      birdweather: { id: null },
+      notifications: { apprise_urls: [] }
     })
 
     // Unsaved changes tracking
@@ -1177,6 +1458,7 @@ export default {
         if (!data.updates) data.updates = { channel: 'release' }
         if (!data.display) data.display = { use_metric_units: true }
         if (!data.model) data.model = { type: 'birdnet' }
+        if (!data.notifications) data.notifications = {}
         // Normalize old "stable" channel to "release" for backward compatibility
         if (data.updates.channel === 'stable') data.updates.channel = 'release'
         settings.value = data
@@ -1187,6 +1469,7 @@ export default {
         }
         // Take snapshot for unsaved changes tracking
         takeSnapshot()
+        confirmedNotifications.value = cloneNotif()
       } catch (error) {
         console.error('Error loading settings:', error)
         if (retryCount < 2) {
@@ -1200,6 +1483,7 @@ export default {
             recordingMode.value = data.audio?.recording_mode || 'pulseaudio'
             // Take snapshot for unsaved changes tracking
             takeSnapshot()
+            confirmedNotifications.value = JSON.parse(JSON.stringify(data.notifications || {}))
           } catch (defaultsErr) {
             console.error('Failed to load defaults:', defaultsErr)
             showStatus('error', 'Failed to load settings')
@@ -1229,6 +1513,7 @@ export default {
         await api.put('/settings', settings.value)
         // Update snapshot after successful save
         takeSnapshot()
+        confirmedNotifications.value = cloneNotif()
         return true
       } catch (error) {
         console.error('Error saving settings:', error)
@@ -1337,6 +1622,114 @@ export default {
     // Handle BirdWeather ID update
     const updateBirdweatherId = (value) => {
       settings.value.birdweather.id = value || null
+    }
+
+    // Handle URL added from the notification modal (test already succeeded)
+    const handleAddNotificationUrl = (url) => {
+      if (!settings.value.notifications.apprise_urls) {
+        settings.value.notifications.apprise_urls = []
+      }
+      if (!settings.value.notifications.apprise_urls.includes(url)) {
+        settings.value.notifications.apprise_urls.push(url)
+      }
+      showAddNotificationModal.value = false
+      saveNotificationSettings(true)
+    }
+
+    // Notification autosave — persists to dedicated endpoint, no restart needed
+    const persistNotificationSettings = async (payload, seq) => {
+      notifSaveInFlight += 1
+      try {
+        await api.put('/settings/notifications', payload)
+        if (seq > notifAppliedSeq) {
+          notifAppliedSeq = seq
+          confirmedNotifications.value = JSON.parse(JSON.stringify(payload))
+        }
+      } catch {
+        if (seq === notifSaveSeq) {
+          settings.value.notifications = JSON.parse(JSON.stringify(confirmedNotifications.value))
+          showStatus('error', 'Failed to save notification settings')
+        }
+      } finally {
+        notifSaveInFlight -= 1
+      }
+    }
+
+    const saveNotificationSettings = (immediate = false) => {
+      const run = () => {
+        const payload = cloneNotif()
+        const seq = ++notifSaveSeq
+        return persistNotificationSettings(payload, seq)
+      }
+      clearTimeout(notifSaveTimeout)
+      notifSaveTimeout = null
+      if (immediate) return run()
+      notifSaveTimeout = setTimeout(() => {
+        notifSaveTimeout = null
+        run()
+      }, 300)
+    }
+
+    const flushPendingNotificationSave = async () => {
+      if (notifSaveTimeout) {
+        clearTimeout(notifSaveTimeout)
+        notifSaveTimeout = null
+        const payload = cloneNotif()
+        const seq = ++notifSaveSeq
+        await persistNotificationSettings(payload, seq)
+      }
+    }
+
+    // Toggle a notification boolean and autosave
+    const toggleNotificationSetting = (field) => {
+      settings.value.notifications[field] = !settings.value.notifications[field]
+      saveNotificationSettings()
+    }
+
+    // Notification pill setters (save immediately on click)
+    const setRateLimit = (value) => {
+      settings.value.notifications.rate_limit_seconds = value
+      saveNotificationSettings(true)
+    }
+    const setRareThreshold = (value) => {
+      settings.value.notifications.rare_threshold = value
+      saveNotificationSettings(true)
+    }
+    const setRareWindow = (value) => {
+      settings.value.notifications.rare_window_days = value
+      saveNotificationSettings(true)
+    }
+
+    // Remove an Apprise URL from the list (with confirmation)
+    const removeAppriseUrl = (index) => {
+      confirmRemoveIndex.value = index
+    }
+
+    const confirmRemoveAppriseUrl = () => {
+      const index = confirmRemoveIndex.value
+      confirmRemoveIndex.value = null
+      if (index !== null) {
+        settings.value.notifications.apprise_urls.splice(index, 1)
+        saveNotificationSettings(true)
+      }
+    }
+
+    const cancelRemoveAppriseUrl = () => {
+      confirmRemoveIndex.value = null
+    }
+
+    const appriseServiceName = (url) => {
+      const scheme = url.split('://')[0]?.toLowerCase() || ''
+      return SCHEME_TO_SERVICE_NAME[scheme] || scheme.toUpperCase()
+    }
+
+    // Mask sensitive parts of URL, showing only scheme and last few chars
+    const maskAppriseUrl = (url) => {
+      const parts = url.split('://')
+      if (parts.length < 2 || !parts[1]) return ''
+      const rest = parts[1]
+      if (rest.length <= 8) return rest
+      return rest.slice(0, 4) + '****' + rest.slice(-4)
     }
 
     // Confirm and trigger system update
@@ -1540,7 +1933,7 @@ export default {
 
     // Browser beforeunload handler
     const handleBeforeUnload = (e) => {
-      if (hasUnsavedChanges.value) {
+      if (hasUnsavedChanges.value || notifSaveTimeout || notifSaveInFlight > 0) {
         e.preventDefault()
         e.returnValue = '' // Required for Chrome
       }
@@ -1581,7 +1974,10 @@ export default {
     }
 
     // Navigation guard - intercept route changes when there are unsaved changes
-    onBeforeRouteLeave(() => {
+    onBeforeRouteLeave(async () => {
+      // Flush any pending notification autosave before navigating
+      await flushPendingNotificationSave()
+
       if (hasUnsavedChanges.value) {
         showUnsavedModal.value = true
         // Return a Promise - navigation blocked until resolved
@@ -1605,6 +2001,7 @@ export default {
     // Cleanup on unmount
     onUnmounted(() => {
       window.removeEventListener('beforeunload', handleBeforeUnload)
+      clearTimeout(notifSaveTimeout)
     })
 
     return {
@@ -1666,7 +2063,24 @@ export default {
       handleUnsavedDiscard,
       handleUnsavedCancel,
       // Migration
-      showMigrationModal
+      showMigrationModal,
+      // Notifications
+      showNotifications,
+      showAddNotificationModal,
+      handleAddNotificationUrl,
+      removeAppriseUrl,
+      confirmRemoveIndex,
+      confirmRemoveAppriseUrl,
+      cancelRemoveAppriseUrl,
+      appriseServiceName,
+      maskAppriseUrl,
+      toggleNotificationSetting,
+      rateLimitOptions,
+      rareThresholdOptions,
+      rareWindowOptions,
+      setRateLimit,
+      setRareThreshold,
+      setRareWindow
     }
   }
 }

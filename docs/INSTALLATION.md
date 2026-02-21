@@ -75,6 +75,21 @@ View system service logs:
 journalctl -u birdnet-pipy -f
 ```
 
+### Microphone Volume
+
+To adjust your microphone gain, run the ALSA mixer from the terminal:
+
+```bash
+alsamixer
+```
+
+- Press **F6** to select your USB sound card
+- Press **F4** to switch to the Capture view
+- Use the **arrow keys** to adjust the volume
+- Press **Esc** to exit
+
+Changes take effect immediately — no restart required.
+
 ### Troubleshooting & Advanced Config
 
 For detailed logs, advanced configuration, and architecture details, see the **[System Administration Guide](../deployment/README.md)**.

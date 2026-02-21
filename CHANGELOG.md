@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+- Added notification system with support for 100+ services via Apprise (Telegram, ntfy, email, Home Assistant, MQTT, and more)
+- Added guided service picker modal for adding notification URLs with built-in test
+- Added notification triggers: every detection (with per-species cooldown), first of day, and rare species
+- Added confirmation dialog when removing a notification service
+- Added immediate autosave for notification settings (no restart required)
+- Added microphone volume adjustment instructions to docs
+- Fixed notification API returning 500 instead of 400 for malformed payloads
+- Fixed notification URL masking crash on edge-case URLs
+
 ## [0.5.4] - 2026-02-19
 
 - Added consolidated Dashboard API into a single `/api/dashboard` endpoint, reducing 5–6 concurrent requests to 1

@@ -47,6 +47,15 @@ DEFAULT_SETTINGS = {
     },
     "birdweather": {
         "id": None  # Station token from birdweather.com
+    },
+    "notifications": {
+        "apprise_urls": [],
+        "every_detection": True,
+        "rate_limit_seconds": 300,
+        "first_of_day": True,
+        "rare_species": False,
+        "rare_threshold": 3,
+        "rare_window_days": 7
     }
 }
 
@@ -71,6 +80,7 @@ def load_user_settings():
                             defaults[key].update(user_data[key])
                         else:
                             defaults[key] = user_data[key]
+
                 return defaults
         except Exception as e:
             print(f"Error loading user settings: {e}, using defaults")
@@ -154,6 +164,16 @@ LOCATION_READY = LOCATION_CONFIGURED and _is_valid_timezone(TIMEZONE)
 
 BIRDWEATHER_ID = user_settings['birdweather']['id']
 
+# ── Notifications ────────────────────────────────────────────────────────────
+
+NOTIFICATIONS_APPRISE_URLS = user_settings['notifications']['apprise_urls']
+NOTIFICATIONS_EVERY_DETECTION = user_settings['notifications']['every_detection']
+NOTIFICATIONS_RATE_LIMIT_SECONDS = user_settings['notifications']['rate_limit_seconds']
+NOTIFICATIONS_FIRST_OF_DAY = user_settings['notifications']['first_of_day']
+NOTIFICATIONS_RARE_SPECIES = user_settings['notifications']['rare_species']
+NOTIFICATIONS_RARE_THRESHOLD = user_settings['notifications']['rare_threshold']
+NOTIFICATIONS_RARE_WINDOW_DAYS = user_settings['notifications']['rare_window_days']
+
 # ── Spectrogram ───────────────────────────────────────────────────────────────
 
 SPECTROGRAM_MAX_FREQ_IN_KHZ = user_settings['spectrogram']['max_freq_khz']
@@ -196,4 +216,5 @@ CREATE INDEX IF NOT EXISTS idx_detections_week ON detections(week);
 CREATE INDEX IF NOT EXISTS idx_detections_location ON detections(latitude, longitude);
 CREATE INDEX IF NOT EXISTS idx_detections_timestamp_date ON detections(date(timestamp));
 CREATE INDEX IF NOT EXISTS idx_detections_species_date ON detections(common_name, date(timestamp));
+CREATE INDEX IF NOT EXISTS idx_detections_scientific_timestamp ON detections(scientific_name, timestamp DESC);
 '''

@@ -95,6 +95,16 @@ const mockSettings = {
   general: {
     timezone: 'UTC',
     language: 'en'
+  },
+  notifications: {
+    enabled: false,
+    apprise_url: null,
+    every_detection: true,
+    rate_limit_seconds: 300,
+    first_of_day: true,
+    rare_species: false,
+    rare_threshold: 3,
+    rare_window_days: 7
   }
 }
 
@@ -724,6 +734,134 @@ describe('Settings', () => {
       expect(wrapper.vm.showUnsavedModal).toBe(true)
       expect(navigationResolved).toBe(null)
       expect(wrapper.vm.settingsSaveError).toContain('Failed to save')
+    })
+  })
+
+  describe('Notifications Section', () => {
+    it('displays Notifications section', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('Notifications')
+    })
+
+    it('shows notification sub-settings when section is expanded', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      wrapper.vm.settings.notifications = {
+        apprise_urls: [],
+        every_detection: true,
+        rate_limit_seconds: 300,
+        first_of_day: true,
+        rare_species: false,
+        rare_threshold: 3,
+        rare_window_days: 7
+      }
+      wrapper.vm.showNotifications = true
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.text()).toContain('Add Service')
+      expect(wrapper.text()).toContain('Every Detection')
+      expect(wrapper.text()).toContain('First of Day')
+      expect(wrapper.text()).toContain('Rare Species')
+    })
+
+    it('notification section is collapsed by default', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      expect(wrapper.vm.showNotifications).toBe(false)
+    })
+
+    it('handleAddNotificationUrl adds URL, closes modal, and saves immediately', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      wrapper.vm.settings.notifications = {
+        apprise_urls: [],
+        every_detection: true,
+        rate_limit_seconds: 300,
+        first_of_day: true,
+        rare_species: false,
+        rare_threshold: 3,
+        rare_window_days: 7
+      }
+      wrapper.vm.showAddNotificationModal = true
+      await wrapper.vm.$nextTick()
+
+      mockApi.put = vi.fn().mockResolvedValue({ data: { success: true } })
+
+      wrapper.vm.handleAddNotificationUrl('tgram://bot/chat')
+      await flushPromises()
+
+      expect(wrapper.vm.settings.notifications.apprise_urls).toContain('tgram://bot/chat')
+      expect(wrapper.vm.showAddNotificationModal).toBe(false)
+      expect(mockApi.put).toHaveBeenCalledWith('/settings/notifications', expect.objectContaining({
+        apprise_urls: ['tgram://bot/chat']
+      }))
+    })
+
+    it('removeAppriseUrl removes URL from list and saves immediately', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      wrapper.vm.settings.notifications = {
+        apprise_urls: ['tgram://bot/chat', 'discord://webhook'],
+        every_detection: true
+      }
+      await wrapper.vm.$nextTick()
+
+      mockApi.put = vi.fn().mockResolvedValue({ data: { success: true } })
+
+      // removeAppriseUrl now shows confirmation first
+      wrapper.vm.removeAppriseUrl(0)
+      await wrapper.vm.$nextTick()
+      expect(wrapper.vm.confirmRemoveIndex).toBe(0)
+
+      // Confirm the removal
+      wrapper.vm.confirmRemoveAppriseUrl()
+      await wrapper.vm.$nextTick()
+      await flushPromises()
+
+      expect(wrapper.vm.settings.notifications.apprise_urls).toEqual(['discord://webhook'])
+      expect(mockApi.put).toHaveBeenCalledWith('/settings/notifications', expect.objectContaining({
+        apprise_urls: ['discord://webhook']
+      }))
+    })
+
+    it('notification settings changes do NOT mark hasUnsavedChanges', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      expect(wrapper.vm.hasUnsavedChanges).toBe(false)
+
+      wrapper.vm.settings.notifications.apprise_urls = ['tgram://bot/chat']
+      await wrapper.vm.$nextTick()
+
+      // Notification settings are auto-saved, so they should NOT trigger unsaved changes
+      expect(wrapper.vm.hasUnsavedChanges).toBe(false)
+    })
+
+    it('toggleNotificationSetting triggers debounced save', async () => {
+      vi.useFakeTimers()
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      mockApi.put = vi.fn().mockResolvedValue({ data: { success: true } })
+
+      wrapper.vm.toggleNotificationSetting('every_detection')
+      await wrapper.vm.$nextTick()
+
+      // Should not have saved yet (debounced)
+      expect(mockApi.put).not.toHaveBeenCalledWith('/settings/notifications', expect.any(Object))
+
+      // Advance past debounce timeout
+      await vi.advanceTimersByTimeAsync(300)
+      await flushPromises()
+
+      expect(mockApi.put).toHaveBeenCalledWith('/settings/notifications', expect.any(Object))
+      vi.useRealTimers()
     })
   })
 

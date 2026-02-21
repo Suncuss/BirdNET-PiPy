@@ -20,6 +20,9 @@ onnxruntime>=1.16.0  # ONNX Runtime for BirdNET V3.0 model
 # Requests
 requests>=2.32.4
 
+# Notifications
+apprise>=1.8.0
+
 # Timezone utilities
 timezonefinder>=6.2.0
 
