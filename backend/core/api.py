@@ -1769,6 +1769,12 @@ def check_for_updates():
     - force: Set to 'true' to bypass cache (used by manual "Check for Updates" button)
     """
     try:
+        if is_home_assistant_mode():
+            return jsonify({
+                'update_available': False,
+                'message': 'Updates are managed by Home Assistant'
+            }), 200
+
         force = request.args.get('force', 'false').lower() == 'true'
 
         # Load current version info

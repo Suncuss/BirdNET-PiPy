@@ -891,6 +891,7 @@
             >
               {{ systemUpdate.versionInfo.value.version && systemUpdate.versionInfo.value.version !== 'unknown' ? `v${systemUpdate.versionInfo.value.version}` : '' }}
               <template v-if="!isHomeAssistantMode">({{ systemUpdate.versionInfo.value.current_commit }})</template>
+              <template v-if="isHomeAssistantMode && systemUpdate.versionInfo.value.app_source_commit">({{ systemUpdate.versionInfo.value.app_source_commit.slice(0, 7) }})</template>
             </a>
             <span
               v-if="!isHomeAssistantMode && systemUpdate.versionInfo.value"
