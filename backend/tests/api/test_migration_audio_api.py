@@ -6,7 +6,6 @@ import threading
 import time
 from unittest.mock import patch
 
-
 MOCK_DISK_OK = {
     'current_percent': 50.0,
     'after_import_percent': 51.0,
