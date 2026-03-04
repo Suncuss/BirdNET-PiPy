@@ -7,6 +7,14 @@ import time
 from unittest.mock import patch
 
 
+MOCK_DISK_OK = {
+    'current_percent': 50.0,
+    'after_import_percent': 51.0,
+    'has_enough_space': True,
+    'available_bytes': 1_000_000_000
+}
+
+
 def wait_for_audio_import(api_client, import_id, timeout=30):
     """Wait for an audio import to complete by polling the status endpoint.
 
@@ -381,19 +389,20 @@ class TestMigrationAudioImportEndpoint:
 
                 with patch('core.migration_audio.DATA_DIR', tmpdir):
                     with patch('core.migration_audio.EXTRACTED_AUDIO_DIR', dest_dir):
-                        response = api_client.post(
-                            '/api/migration/audio/import',
-                            json={'source_folder': 'audio'}
-                        )
-                        assert response.status_code == 200
-                        data = response.get_json()
-                        assert data['status'] in ('started', 'already_running')
-                        assert 'import_id' in data
+                        with patch('core.api.check_disk_space', return_value=MOCK_DISK_OK):
+                            response = api_client.post(
+                                '/api/migration/audio/import',
+                                json={'source_folder': 'audio'}
+                            )
+                            assert response.status_code == 200
+                            data = response.get_json()
+                            assert data['status'] in ('started', 'already_running')
+                            assert 'import_id' in data
 
-                        # Wait for completion
-                        result = wait_for_audio_import(api_client, data['import_id'])
-                        assert result['status'] == 'completed'
-                        assert result['imported'] == 1
+                            # Wait for completion
+                            result = wait_for_audio_import(api_client, data['import_id'])
+                            assert result['status'] == 'completed'
+                            assert result['imported'] == 1
 
     def test_import_already_running_returns_existing_id(self, api_client, real_db_manager):
         """Test import returns running job ID when another import is in progress."""
@@ -446,30 +455,31 @@ class TestMigrationAudioImportEndpoint:
 
                 with patch('core.migration_audio.DATA_DIR', tmpdir):
                     with patch('core.migration_audio.EXTRACTED_AUDIO_DIR', dest_dir):
-                        with patch('core.api.import_audio_files', side_effect=blocking_import):
-                            # Start first import (will block)
-                            response1 = api_client.post(
-                                '/api/migration/audio/import',
-                                json={'source_folder': 'audio'}
-                            )
-                            assert response1.status_code == 200
-                            data1 = response1.get_json()
-                            assert data1['status'] == 'started'
+                        with patch('core.api.check_disk_space', return_value=MOCK_DISK_OK):
+                            with patch('core.api.import_audio_files', side_effect=blocking_import):
+                                # Start first import (will block)
+                                response1 = api_client.post(
+                                    '/api/migration/audio/import',
+                                    json={'source_folder': 'audio'}
+                                )
+                                assert response1.status_code == 200
+                                data1 = response1.get_json()
+                                assert data1['status'] == 'started'
 
-                            # Start second import while first is running
-                            response2 = api_client.post(
-                                '/api/migration/audio/import',
-                                json={'source_folder': 'audio'}
-                            )
-                            assert response2.status_code == 200
-                            data2 = response2.get_json()
-                            assert data2['status'] == 'already_running'
-                            assert data2['import_id'] == data1['import_id']
+                                # Start second import while first is running
+                                response2 = api_client.post(
+                                    '/api/migration/audio/import',
+                                    json={'source_folder': 'audio'}
+                                )
+                                assert response2.status_code == 200
+                                data2 = response2.get_json()
+                                assert data2['status'] == 'already_running'
+                                assert data2['import_id'] == data1['import_id']
 
-                            # Unblock and ensure completion
-                            block_event.set()
-                            result = wait_for_audio_import(api_client, data1['import_id'])
-                            assert result['status'] == 'completed'
+                                # Unblock and ensure completion
+                                block_event.set()
+                                result = wait_for_audio_import(api_client, data1['import_id'])
+                                assert result['status'] == 'completed'
 
 
 class TestMigrationAudioStatusEndpoint:
@@ -618,15 +628,16 @@ class TestMigrationSpectrogramGenerateEndpoint:
                 with patch('core.migration_audio.AUDIO_EXTENSIONS', ('.mp3', '.wav')):
                     with patch('core.migration_audio.EXTRACTED_AUDIO_DIR', audio_dir):
                         with patch('core.migration_audio.SPECTROGRAM_DIR', spec_dir):
-                            response = api_client.post('/api/migration/spectrogram/generate')
-                            assert response.status_code == 200
-                            data = response.get_json()
-                            assert data['status'] == 'started'
-                            assert 'generation_id' in data
+                            with patch('core.migration_audio.check_disk_space', return_value=MOCK_DISK_OK):
+                                response = api_client.post('/api/migration/spectrogram/generate')
+                                assert response.status_code == 200
+                                data = response.get_json()
+                                assert data['status'] == 'started'
+                                assert 'generation_id' in data
 
-                            # Wait for completion
-                            result = wait_for_spectrogram_generation(api_client, data['generation_id'])
-                            assert result['status'] == 'completed'
+                                # Wait for completion
+                                result = wait_for_spectrogram_generation(api_client, data['generation_id'])
+                                assert result['status'] == 'completed'
                             assert result['generated'] == 1
 
     def test_generate_already_running_returns_existing_id(self, api_client):
@@ -661,24 +672,25 @@ class TestMigrationSpectrogramGenerateEndpoint:
 
                 with patch('core.migration_audio.EXTRACTED_AUDIO_DIR', audio_dir):
                     with patch('core.migration_audio.SPECTROGRAM_DIR', spec_dir):
-                        with patch('core.api.generate_spectrograms_batch', side_effect=blocking_generate):
-                            # Start first generation (will block)
-                            response1 = api_client.post('/api/migration/spectrogram/generate')
-                            assert response1.status_code == 200
-                            data1 = response1.get_json()
-                            assert data1['status'] == 'started'
+                        with patch('core.migration_audio.check_disk_space', return_value=MOCK_DISK_OK):
+                            with patch('core.api.generate_spectrograms_batch', side_effect=blocking_generate):
+                                # Start first generation (will block)
+                                response1 = api_client.post('/api/migration/spectrogram/generate')
+                                assert response1.status_code == 200
+                                data1 = response1.get_json()
+                                assert data1['status'] == 'started'
 
-                            # Start second generation while first is running
-                            response2 = api_client.post('/api/migration/spectrogram/generate')
-                            assert response2.status_code == 200
-                            data2 = response2.get_json()
-                            assert data2['status'] == 'already_running'
-                            assert data2['generation_id'] == data1['generation_id']
+                                # Start second generation while first is running
+                                response2 = api_client.post('/api/migration/spectrogram/generate')
+                                assert response2.status_code == 200
+                                data2 = response2.get_json()
+                                assert data2['status'] == 'already_running'
+                                assert data2['generation_id'] == data1['generation_id']
 
-                            # Unblock and ensure completion
-                            block_event.set()
-                            result = wait_for_spectrogram_generation(api_client, data1['generation_id'])
-                            assert result['status'] == 'completed'
+                                # Unblock and ensure completion
+                                block_event.set()
+                                result = wait_for_spectrogram_generation(api_client, data1['generation_id'])
+                                assert result['status'] == 'completed'
 
 
 class TestMigrationSpectrogramStatusEndpoint:
@@ -749,42 +761,43 @@ class TestMigrationAudioIntegration:
 
                 with patch('core.migration_audio.DATA_DIR', tmpdir):
                     with patch('core.migration_audio.EXTRACTED_AUDIO_DIR', dest_dir):
-                        # Patch list_available_folders where it's used (in api.py)
-                        with patch('core.api.list_available_folders', return_value=mock_folders):
-                            # Step 1: List folders
-                            response = api_client.get('/api/migration/audio/folders')
+                        with patch('core.api.check_disk_space', return_value=MOCK_DISK_OK):
+                            # Patch list_available_folders where it's used (in api.py)
+                            with patch('core.api.list_available_folders', return_value=mock_folders):
+                                # Step 1: List folders
+                                response = api_client.get('/api/migration/audio/folders')
+                                assert response.status_code == 200
+                                folders_data = response.get_json()
+                                assert len(folders_data['folders']) == 1
+                                assert folders_data['folders'][0]['name'] == 'audio'
+
+                            # Step 2: Scan (outside of folder mock)
+                            response = api_client.post(
+                                '/api/migration/audio/scan',
+                                json={'source_folder': 'audio'}
+                            )
                             assert response.status_code == 200
-                            folders_data = response.get_json()
-                            assert len(folders_data['folders']) == 1
-                            assert folders_data['folders'][0]['name'] == 'audio'
+                            scan_data = response.get_json()
+                            assert scan_data['matched_count'] == 1
+                            assert scan_data['disk_usage']['has_enough_space'] is True
 
-                        # Step 2: Scan (outside of folder mock)
-                        response = api_client.post(
-                            '/api/migration/audio/scan',
-                            json={'source_folder': 'audio'}
-                        )
-                        assert response.status_code == 200
-                        scan_data = response.get_json()
-                        assert scan_data['matched_count'] == 1
-                        assert scan_data['disk_usage']['has_enough_space'] is True
+                            # Step 3: Import
+                            response = api_client.post(
+                                '/api/migration/audio/import',
+                                json={'source_folder': 'audio'}
+                            )
+                            assert response.status_code == 200
+                            import_data = response.get_json()
+                            assert import_data['status'] == 'started'
 
-                        # Step 3: Import
-                        response = api_client.post(
-                            '/api/migration/audio/import',
-                            json={'source_folder': 'audio'}
-                        )
-                        assert response.status_code == 200
-                        import_data = response.get_json()
-                        assert import_data['status'] == 'started'
+                            # Step 4: Wait and verify
+                            result = wait_for_audio_import(api_client, import_data['import_id'])
+                            assert result['status'] == 'completed'
+                            assert result['imported'] == 1
+                            assert result['errors'] == 0
 
-                        # Step 4: Wait and verify
-                        result = wait_for_audio_import(api_client, import_data['import_id'])
-                        assert result['status'] == 'completed'
-                        assert result['imported'] == 1
-                        assert result['errors'] == 0
-
-                        # Verify file was copied to destination
-                        files = os.listdir(dest_dir)
-                        assert len(files) == 1
-                        # File should be renamed to BirdNET-PiPy format
-                        assert 'American_Robin' in files[0]
+                            # Verify file was copied to destination
+                            files = os.listdir(dest_dir)
+                            assert len(files) == 1
+                            # File should be renamed to BirdNET-PiPy format
+                            assert 'American_Robin' in files[0]
