@@ -15,48 +15,12 @@ const DEFAULT_TIMEOUT = 15000
 // Long timeout for operations like system updates (5 minutes)
 const LONG_TIMEOUT = 300000
 
-const stripTrailingSlash = (value) => (value?.endsWith('/') ? value.slice(0, -1) : value)
-
-const getIngressBaseFromPathname = (pathname) => {
-  const match = String(pathname || '').match(/^\/api\/hassio_ingress\/[^/]+/)
-  return match ? match[0] : ''
-}
-
-/**
- * Resolve API base URL for native and Home Assistant ingress modes.
- * In ingress mode, HA normally injects:
- *   <base href="/api/hassio_ingress/<token>/">
- * This also includes a pathname fallback so ingress still works if <base> is not present.
- */
-export function getApiBaseUrl() {
-  if (typeof window === 'undefined' || typeof document === 'undefined') return '/api'
-
-  const baseHref = document.querySelector('base')?.getAttribute('href')
-  if (baseHref) {
-    return `${stripTrailingSlash(baseHref)}/api`
-  }
-
-  const ingressBase = getIngressBaseFromPathname(window.location.pathname)
-  if (ingressBase) {
-    return `${ingressBase}/api`
-  }
-
-  return '/api'
-}
-
-export function getAppBaseUrl() {
-  const apiBase = stripTrailingSlash(getApiBaseUrl())
-  return apiBase.endsWith('/api') ? apiBase.slice(0, -4) : ''
-}
-
-const API_BASE_URL = getApiBaseUrl()
-
 /**
  * Pre-configured axios instance for internal API calls.
  * Use this for all /api/* endpoints.
  */
 const api = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: '/api',
   timeout: DEFAULT_TIMEOUT,
   headers: {
     'Content-Type': 'application/json'
@@ -95,7 +59,7 @@ api.interceptors.response.use(
  */
 export function createLongRequest(timeout = LONG_TIMEOUT) {
   const instance = axios.create({
-    baseURL: API_BASE_URL,
+    baseURL: '/api',
     timeout,
     headers: {
       'Content-Type': 'application/json'

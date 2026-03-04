@@ -1,6 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import Dashboard from '../views/Dashboard.vue'
-import { getApiBaseUrl } from '../services/api'
 
 const routes = [
   {
@@ -54,7 +53,7 @@ const router = createRouter({
  */
 async function checkAuthStatus() {
   try {
-    const response = await fetch(`${getApiBaseUrl()}/auth/status`)
+    const response = await fetch('/api/auth/status')
     if (response.ok) {
       const data = await response.json()
       return {

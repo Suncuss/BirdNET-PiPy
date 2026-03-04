@@ -8,9 +8,7 @@ const mockApi = vi.hoisted(() => ({
 }))
 
 vi.mock('@/services/api', () => ({
-  default: mockApi,
-  getAppBaseUrl: () => '',
-  getApiBaseUrl: () => '/api'
+  default: mockApi
 }))
 
 // Mock socket.io client
