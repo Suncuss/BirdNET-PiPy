@@ -1,6 +1,6 @@
 import { ref } from "vue";
 import api from "@/services/api";
-import { getBirdImageUrl } from "@/services/media";
+import { getBirdImageUrl, getDefaultBirdImageUrl, isDefaultBirdImageUrl } from "@/services/media";
 import { useLogger } from "./useLogger";
 
 export function useFetchBirdData() {
@@ -24,7 +24,7 @@ export function useFetchBirdData() {
 
   const hasLoadedOnce = ref(false);
 
-  const latestObservationimageUrl = ref("/default_bird.webp");
+  const latestObservationimageUrl = ref(getDefaultBirdImageUrl());
 
   const fetchChartsData = async (date, order = 'most') => {
     logger.info('Fetching charts data', { date, order });
@@ -121,10 +121,10 @@ export function useFetchBirdData() {
 
       // Fix 4: Retry wikimedia image when still on default (e.g. previous fetch failed)
       const speciesChanged = newSpecies !== previousSpecies;
-      const imageIsDefault = latestObservationimageUrl.value === '/default_bird.webp';
+      const imageIsDefault = isDefaultBirdImageUrl(latestObservationimageUrl.value);
       if (newSpecies && (speciesChanged || imageIsDefault)) {
         if (speciesChanged) {
-          latestObservationimageUrl.value = '/default_bird.webp';
+          latestObservationimageUrl.value = getDefaultBirdImageUrl();
         }
         logger.debug('Fetching wikimedia image', { species: newSpecies });
         api.get('/wikimedia_image', { params: { species: newSpecies } })
@@ -135,14 +135,16 @@ export function useFetchBirdData() {
               latestObservationimageUrl.value = getBirdImageUrl(newSpecies);
             } else {
               latestObservationimageUrl.value =
-                wikimediaImageResponse.data.imageUrl;
+                isDefaultBirdImageUrl(wikimediaImageResponse.data.imageUrl)
+                  ? getDefaultBirdImageUrl()
+                  : wikimediaImageResponse.data.imageUrl;
             }
           })
           .catch(imageError => {
             logger.error('Failed to fetch wikimedia image', imageError);
           });
       } else if (!newSpecies) {
-        latestObservationimageUrl.value = '/default_bird.webp';
+        latestObservationimageUrl.value = getDefaultBirdImageUrl();
       }
 
       hasLoadedOnce.value = true;

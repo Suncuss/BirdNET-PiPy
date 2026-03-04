@@ -114,7 +114,7 @@
 <script>
 import { ref, computed, onMounted, onActivated, onDeactivated } from 'vue'
 import api from '@/services/api'
-import { getBirdImageUrl } from '@/services/media'
+import { getBirdImageUrl, getDefaultBirdImageUrl } from '@/services/media'
 import { useSmartCrop } from '@/composables/useSmartCrop'
 import AppButton from '@/components/AppButton.vue'
 
@@ -153,7 +153,7 @@ export default {
           name: bird.common_name,
           scientificName: bird.scientific_name,
           lastDetected: new Date(bird.timestamp),
-          imageUrl: '/default_bird.webp',
+          imageUrl: getDefaultBirdImageUrl(),
           focalPointReady: true,  // Show placeholder immediately
         }))
       } catch (error) {
@@ -172,7 +172,7 @@ export default {
           name: bird.common_name,
           scientificName: bird.scientific_name,
           lastDetected: new Date(bird.timestamp),
-          imageUrl: '/default_bird.webp',
+          imageUrl: getDefaultBirdImageUrl(),
           focalPointReady: true,  // Show placeholder immediately
         }))
       } catch (error) {
@@ -195,7 +195,7 @@ export default {
                 name: species.common_name,
                 scientificName: species.scientific_name,
                 lastDetected: details.last_detected ? new Date(details.last_detected) : null,
-                imageUrl: '/default_bird.webp',
+                imageUrl: getDefaultBirdImageUrl(),
                 focalPointReady: true,  // Show placeholder immediately
               }
             } catch (_error) {
@@ -205,7 +205,7 @@ export default {
                 name: species.common_name,
                 scientificName: species.scientific_name,
                 lastDetected: null,
-                imageUrl: '/default_bird.webp',
+                imageUrl: getDefaultBirdImageUrl(),
                 focalPointReady: true,  // Show placeholder immediately
               }
             }

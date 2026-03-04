@@ -1,21 +1,37 @@
 import api from '@/services/api'
 
-const getApiBaseUrl = () => {
+const resolveApiBaseUrl = () => {
   const base = api?.defaults?.baseURL || '/api'
   return base.endsWith('/') ? base.slice(0, -1) : base
 }
 
+const getAppBaseUrl = () => {
+  const apiBase = resolveApiBaseUrl()
+  return apiBase.endsWith('/api') ? apiBase.slice(0, -4) : ''
+}
+
+export const getDefaultBirdImageUrl = () => {
+  const appBase = getAppBaseUrl()
+  return `${appBase}/default_bird.webp`
+}
+
+export const isDefaultBirdImageUrl = (url) => {
+  if (!url) return false
+  const normalized = String(url).split('?')[0].split('#')[0]
+  return normalized === '/default_bird.webp' || normalized.endsWith('/default_bird.webp')
+}
+
 export const getAudioUrl = (filename) => {
   if (!filename) return ''
-  return `${getApiBaseUrl()}/audio/${encodeURIComponent(filename)}`
+  return `${resolveApiBaseUrl()}/audio/${encodeURIComponent(filename)}`
 }
 
 export const getSpectrogramUrl = (filename) => {
   if (!filename) return ''
-  return `${getApiBaseUrl()}/spectrogram/${encodeURIComponent(filename)}`
+  return `${resolveApiBaseUrl()}/spectrogram/${encodeURIComponent(filename)}`
 }
 
 export const getBirdImageUrl = (speciesName) => {
   if (!speciesName) return ''
-  return `${getApiBaseUrl()}/bird/${encodeURIComponent(speciesName)}/image`
+  return `${resolveApiBaseUrl()}/bird/${encodeURIComponent(speciesName)}/image`
 }

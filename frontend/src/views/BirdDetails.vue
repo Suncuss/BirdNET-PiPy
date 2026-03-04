@@ -342,7 +342,13 @@ import { useChartHelpers } from '@/composables/useChartHelpers'
 import { useChartColors } from '@/composables/useChartColors'
 import { useSmartCrop } from '@/composables/useSmartCrop'
 import api from '@/services/api'
-import { getAudioUrl, getBirdImageUrl, getSpectrogramUrl } from '@/services/media'
+import {
+  getAudioUrl,
+  getBirdImageUrl,
+  getDefaultBirdImageUrl,
+  getSpectrogramUrl,
+  isDefaultBirdImageUrl
+} from '@/services/media'
 
 export default {
   name: 'BirdDetails',
@@ -375,7 +381,7 @@ export default {
     const customImageSrc = ref(getBirdImageUrl(route.params.name))
 
     const birdImageData = ref({
-      imageUrl: '/default_bird.webp',
+      imageUrl: getDefaultBirdImageUrl(),
       pageUrl: '',
       authorName: 'N/A',
       authorUrl: '',
@@ -722,7 +728,7 @@ export default {
         await api.delete(`/bird/${route.params.name}/image`)
         hasCustomImage.value = false
         // Recalculate focal point for wikimedia image
-        if (birdImageData.value.imageUrl && birdImageData.value.imageUrl !== '/default_bird.webp') {
+        if (birdImageData.value.imageUrl && !isDefaultBirdImageUrl(birdImageData.value.imageUrl)) {
           await updateFocalPoint(birdImageData.value.imageUrl)
         }
       } catch (error) {

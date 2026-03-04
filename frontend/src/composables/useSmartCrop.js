@@ -1,5 +1,6 @@
 import smartcrop from 'smartcrop'
 import { ref } from 'vue'
+import { isDefaultBirdImageUrl } from '@/services/media'
 
 /**
  * Composable for smart image cropping using focal point detection.
@@ -149,7 +150,7 @@ export function useSmartCrop() {
     const isReady = ref(true) // Start visible to show placeholder
 
     const updateFocalPoint = async (url) => {
-      if (!url || url === '/default_bird.webp') {
+      if (!url || isDefaultBirdImageUrl(url)) {
         focalPoint.value = '50% 35%'
         isReady.value = true
         return
@@ -189,7 +190,7 @@ export function useSmartCrop() {
     await Promise.all(
       birds.map(async (bird) => {
         bird.focalPointReady = false
-        if (bird.imageUrl && bird.imageUrl !== '/default_bird.webp') {
+        if (bird.imageUrl && !isDefaultBirdImageUrl(bird.imageUrl)) {
           bird.focalPoint = await calculateFocalPoint(bird.imageUrl)
         } else {
           bird.focalPoint = '50% 35%'

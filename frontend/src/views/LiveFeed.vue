@@ -75,7 +75,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { io } from 'socket.io-client'
 import BirdDetectionList from './BirdDetectionList.vue'
-import api from '@/services/api'
+import api, { getAppBaseUrl } from '@/services/api'
 
 export default {
   name: 'LiveFeed',
@@ -151,7 +151,8 @@ export default {
         // Check if it might be an auth error (nginx returns 401 for unauthenticated requests)
         if (error.name === 'NotAllowedError' || error.message?.includes('401')) {
           showError('Authentication required - please log in')
-          window.location.href = '/?auth=required'
+          const appBase = getAppBaseUrl()
+          window.location.href = `${appBase || ''}/?auth=required`
         } else {
           showError('Error starting audio playback')
         }
@@ -259,26 +260,78 @@ export default {
       }
     }
 
+    const applyStreamConfig = (config) => {
+      const appBase = getAppBaseUrl()
+      const rawStreamUrl = config.stream_url || ''
+      streamUrl.value = rawStreamUrl.startsWith('/stream/')
+        ? `${appBase}${rawStreamUrl}`
+        : rawStreamUrl
+      streamType.value = config.stream_type || 'none'
+      streamDescription.value = config.description || ''
+
+      if (!streamUrl.value || streamType.value === 'none') {
+        statusMessage.value = 'No audio stream configured'
+      }
+    }
+
+    const getFallbackStreamConfig = async () => {
+      const { data: settings } = await api.get('/settings')
+      const audio = settings?.audio || {}
+      const recordingMode = audio.recording_mode || 'pulseaudio'
+      const appBase = getAppBaseUrl()
+      const localStreamUrl = `${appBase}/stream/stream.mp3`
+
+      if (recordingMode === 'pulseaudio') {
+        return {
+          stream_url: localStreamUrl,
+          stream_type: 'icecast',
+          description: 'Local Icecast audio stream'
+        }
+      }
+
+      if (recordingMode === 'rtsp' && audio.rtsp_url) {
+        return {
+          stream_url: localStreamUrl,
+          stream_type: 'icecast',
+          description: 'RTSP stream via Icecast'
+        }
+      }
+
+      if (recordingMode === 'http_stream' && audio.stream_url) {
+        return {
+          stream_url: audio.stream_url,
+          stream_type: 'custom',
+          description: 'User-defined audio stream'
+        }
+      }
+
+      return {
+        stream_url: null,
+        stream_type: 'none',
+        description: 'No audio stream configured'
+      }
+    }
+
     const fetchStreamConfig = async () => {
       try {
         const { data: config } = await api.get('/stream/config')
-        streamUrl.value = config.stream_url || ''
-        streamType.value = config.stream_type || 'none'
-        streamDescription.value = config.description || ''
-
-        // Update status message based on stream availability
-        if (!streamUrl.value || streamType.value === 'none') {
-          statusMessage.value = 'No audio stream configured'
-        }
+        applyStreamConfig(config)
       } catch (error) {
         console.error('Error fetching stream config:', error)
-        showError('Error loading stream configuration')
+        try {
+          const fallbackConfig = await getFallbackStreamConfig()
+          applyStreamConfig(fallbackConfig)
+        } catch (fallbackError) {
+          console.error('Error loading fallback stream config:', fallbackError)
+          showError('Error loading stream configuration')
+        }
       }
     }
 
     const initWebSocket = () => {
-      // Use relative path for Socket.IO - nginx will proxy to the API server
-      socket = io()
+      const appBase = getAppBaseUrl()
+      const socketPath = `${appBase || ''}/socket.io`
+      socket = io({ path: socketPath })
 
       socket.on('connect', () => {})
 
