@@ -891,7 +891,7 @@
             >
               {{ systemUpdate.versionInfo.value.version && systemUpdate.versionInfo.value.version !== 'unknown' ? `v${systemUpdate.versionInfo.value.version}` : '' }}
               <template v-if="!isHomeAssistantMode">({{ systemUpdate.versionInfo.value.current_commit }})</template>
-              <template v-if="isHomeAssistantMode && systemUpdate.versionInfo.value.app_source_commit">({{ systemUpdate.versionInfo.value.app_source_commit.slice(0, 7) }})</template>
+              <template v-if="isHomeAssistantMode && systemUpdate.versionInfo.value.current_commit !== 'unknown'">({{ systemUpdate.versionInfo.value.current_commit.slice(0, 7) }})</template>
             </a>
             <span
               v-if="!isHomeAssistantMode && systemUpdate.versionInfo.value"
@@ -1256,7 +1256,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
 import { useSystemUpdate } from '@/composables/useSystemUpdate'
-import { isLikelyRestartInProgressError, useServiceRestart } from '@/composables/useServiceRestart'
+import { requestRestart, useServiceRestart } from '@/composables/useServiceRestart'
 import { useAuth } from '@/composables/useAuth'
 import { useUnitSettings } from '@/composables/useUnitSettings'
 import { limitDecimals } from '@/utils/inputHelpers'
@@ -1573,14 +1573,7 @@ export default {
       settingsSaveError.value = ''
 
       try {
-        try {
-          await api.post('/system/restart')
-        } catch (error) {
-          if (!isLikelyRestartInProgressError(error)) {
-            throw error
-          }
-          console.warn('Restart request connection dropped; waiting for reconnection anyway', error)
-        }
+        await requestRestart()
         await serviceRestart.waitForRestart({
           autoReload: true,
           message

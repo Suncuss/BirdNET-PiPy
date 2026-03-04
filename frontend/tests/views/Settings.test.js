@@ -15,7 +15,9 @@ vi.mock('@/services/api', () => ({
 
 // Mock the useServiceRestart composable (expose waitForRestart for assertions)
 const mockWaitForRestart = vi.hoisted(() => vi.fn().mockResolvedValue(true))
+const mockRequestRestart = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
 vi.mock('@/composables/useServiceRestart', () => ({
+  requestRestart: mockRequestRestart,
   useServiceRestart: () => ({
     isRestarting: { value: false },
     restartMessage: { value: '' },
@@ -488,7 +490,7 @@ describe('Settings', () => {
           model: expect.objectContaining({ type: 'birdnet_v3' })
         })
       )
-      expect(mockApi.post).toHaveBeenCalledWith('/system/restart')
+      expect(mockRequestRestart).toHaveBeenCalled()
       expect(mockWaitForRestart).toHaveBeenCalledWith(expect.objectContaining({
         autoReload: true,
         message: 'Applying settings changes'
@@ -686,7 +688,7 @@ describe('Settings', () => {
       await flushPromises()
 
       expect(mockApi.put).toHaveBeenCalledWith('/settings', expect.any(Object))
-      expect(mockApi.post).toHaveBeenCalledWith('/system/restart')
+      expect(mockRequestRestart).toHaveBeenCalled()
       expect(mockWaitForRestart).toHaveBeenCalledWith(expect.objectContaining({
         autoReload: true,
         message: 'Applying settings changes'

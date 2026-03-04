@@ -1713,7 +1713,6 @@ def get_system_version():
                 'current_commit_date': 'unknown',
                 'current_branch': 'home_assistant',
                 'remote_url': f'https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}',
-                'app_source_commit': app_source_commit,
                 'runtime_mode': runtime_mode,
             }
             return jsonify(response), 200
@@ -1969,12 +1968,16 @@ def trigger_service_restart():
     """Trigger service restart for native mode or HA add-on mode."""
     if is_home_assistant_mode():
         token = os.environ.get('SUPERVISOR_TOKEN', '')
-        resp = requests.post(
-            "http://supervisor/addons/self/restart",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=10,
-        )
-        resp.raise_for_status()
+        try:
+            resp = requests.post(
+                "http://supervisor/addons/self/restart",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=10,
+            )
+            resp.raise_for_status()
+        except requests.RequestException as e:
+            logger.error("Failed to restart HA add-on", extra={'error': str(e)})
+            return jsonify({'error': 'Failed to restart Home Assistant add-on'}), 502
         logger.info("Home Assistant add-on restart triggered via API")
         return jsonify({
             'status': 'restart_requested',

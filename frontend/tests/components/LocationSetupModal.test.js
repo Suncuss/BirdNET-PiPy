@@ -15,7 +15,9 @@ vi.mock('@/services/api', () => ({
 
 // Mock the useServiceRestart composable
 const mockWaitForRestart = vi.hoisted(() => vi.fn().mockResolvedValue(true))
+const mockRequestRestart = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
 vi.mock('@/composables/useServiceRestart', () => ({
+  requestRestart: mockRequestRestart,
   useServiceRestart: () => ({
     isRestarting: { value: false },
     restartMessage: { value: '' },
@@ -189,7 +191,7 @@ describe('LocationSetupModal', () => {
       await saveButton.trigger('click')
       await flushPromises()
 
-      expect(mockApi.post).toHaveBeenCalledWith('/system/restart')
+      expect(mockRequestRestart).toHaveBeenCalled()
       expect(mockWaitForRestart).toHaveBeenCalledWith(
         expect.objectContaining({
           autoReload: true,

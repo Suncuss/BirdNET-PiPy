@@ -23,6 +23,20 @@ export function isLikelyRestartInProgressError(error) {
 }
 
 /**
+ * Post restart request, tolerating connection errors that indicate the restart was accepted.
+ */
+export async function requestRestart() {
+  try {
+    await api.post('/system/restart')
+  } catch (error) {
+    if (!isLikelyRestartInProgressError(error)) {
+      throw error
+    }
+    console.warn('Restart request connection dropped; waiting for reconnection anyway', error)
+  }
+}
+
+/**
  * Composable for monitoring service restart and reconnection
  * Used after settings changes or system updates that trigger a restart
  */
