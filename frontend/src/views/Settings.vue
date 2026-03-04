@@ -876,18 +876,34 @@
             v-if="systemUpdate.versionInfo.value"
             class="flex items-center gap-2 text-xs text-gray-500"
           >
+            <span
+              v-if="isHomeAssistantMode"
+              class="px-1.5 py-0.5 rounded bg-gray-100 text-gray-600"
+            >
+              Mode: Home Assistant
+            </span>
             <a
-              :href="`${systemUpdate.versionInfo.value.remote_url}/blob/${systemUpdate.versionInfo.value.current_branch}/CHANGELOG.md`"
+              v-if="systemUpdate.versionInfo.value"
+              :href="versionChangelogUrl"
               target="_blank"
               rel="noopener noreferrer"
               class="font-mono hover:text-blue-600 transition-colors"
-            >{{ systemUpdate.versionInfo.value.version && systemUpdate.versionInfo.value.version !== 'unknown' ? `v${systemUpdate.versionInfo.value.version}` : '' }}({{ systemUpdate.versionInfo.value.current_commit }})</a>
-            <span class="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600">{{ systemUpdate.versionInfo.value.current_branch }}</span>
+            >
+              {{ systemUpdate.versionInfo.value.version && systemUpdate.versionInfo.value.version !== 'unknown' ? `v${systemUpdate.versionInfo.value.version}` : '' }}
+              <template v-if="!isHomeAssistantMode">({{ systemUpdate.versionInfo.value.current_commit }})</template>
+            </a>
+            <span
+              v-if="!isHomeAssistantMode && systemUpdate.versionInfo.value"
+              class="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600"
+            >{{ systemUpdate.versionInfo.value.current_branch }}</span>
           </div>
         </div>
 
         <!-- Update Channel Toggle -->
-        <div class="flex items-center justify-between mb-4">
+        <div
+          v-if="!isHomeAssistantMode"
+          class="flex items-center justify-between mb-4"
+        >
           <div>
             <label class="text-sm text-gray-600">Try Experimental Features</label>
             <p class="text-xs text-gray-400">
@@ -954,6 +970,7 @@
 
         <!-- Check for Updates Button -->
         <button
+          v-if="!isHomeAssistantMode"
           :disabled="systemUpdate.checking.value || systemUpdate.updating.value"
           class="w-full py-2 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-50 border border-gray-200 rounded-lg transition-colors disabled:text-gray-400 disabled:hover:bg-transparent"
           @click="systemUpdate.checkForUpdates({ force: true })"
@@ -965,7 +982,7 @@
 
         <!-- GitHub Repository Link -->
         <a
-          :href="systemUpdate.versionInfo.value?.remote_url || 'https://github.com/Suncuss/BirdNET-PiPy'"
+          :href="repositoryUrl"
           target="_blank"
           rel="noopener noreferrer"
           class="mt-2 w-full py-2 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-50 border border-gray-200 rounded-lg transition-colors flex items-center justify-center gap-2"
@@ -1238,7 +1255,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
 import { useSystemUpdate } from '@/composables/useSystemUpdate'
-import { useServiceRestart } from '@/composables/useServiceRestart'
+import { isLikelyRestartInProgressError, useServiceRestart } from '@/composables/useServiceRestart'
 import { useAuth } from '@/composables/useAuth'
 import { useUnitSettings } from '@/composables/useUnitSettings'
 import { limitDecimals } from '@/utils/inputHelpers'
@@ -1251,6 +1268,8 @@ import MigrationModal from '@/components/MigrationModal.vue'
 import AddNotificationModal from '@/components/AddNotificationModal.vue'
 import ConfirmModal from '@/components/ConfirmModal.vue'
 import { SCHEME_TO_SERVICE_NAME } from '@/utils/notificationServices'
+
+const DEFAULT_REPOSITORY_URL = 'https://github.com/Suncuss/BirdNET-PiPy'
 
 export default {
   name: 'Settings',
@@ -1418,6 +1437,24 @@ export default {
 
     // System update composable
     const systemUpdate = useSystemUpdate()
+    const isHomeAssistantMode = computed(
+      () => systemUpdate?.versionInfo?.value?.runtime_mode === 'ha'
+    )
+    const repositoryUrl = computed(() => {
+      if (isHomeAssistantMode.value) {
+        return DEFAULT_REPOSITORY_URL
+      }
+      return systemUpdate.versionInfo.value?.remote_url || DEFAULT_REPOSITORY_URL
+    })
+    const versionChangelogUrl = computed(() => {
+      const info = systemUpdate.versionInfo.value
+      if (!info) return repositoryUrl.value
+      if (isHomeAssistantMode.value) {
+        return repositoryUrl.value
+      }
+      const branch = info.current_branch || 'main'
+      return `${repositoryUrl.value}/blob/${branch}/CHANGELOG.md`
+    })
 
     // Load storage info
     const loadStorageInfo = async () => {
@@ -1535,7 +1572,14 @@ export default {
       settingsSaveError.value = ''
 
       try {
-        await api.post('/system/restart')
+        try {
+          await api.post('/system/restart')
+        } catch (error) {
+          if (!isLikelyRestartInProgressError(error)) {
+            throw error
+          }
+          console.warn('Restart request connection dropped; waiting for reconnection anyway', error)
+        }
         await serviceRestart.waitForRestart({
           autoReload: true,
           message
@@ -2011,6 +2055,9 @@ export default {
       exportCSV,
       saveSettings,
       toggleUpdateChannel,
+      isHomeAssistantMode,
+      repositoryUrl,
+      versionChangelogUrl,
       toggleMetricUnits,
       onRecordingModeChange,
       limitDecimals,

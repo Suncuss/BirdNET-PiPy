@@ -62,6 +62,7 @@ from core.auth import (
     setup_password,
 )
 from core.db import DatabaseManager
+from core.ha_mode import get_runtime_mode, is_home_assistant_mode
 from core.logging_config import get_logger, log_api_request, setup_logging
 from core.migration import (
     BirdNETPiMigrator,
@@ -1024,11 +1025,13 @@ def get_available_species():
     })
 
 @api.route('/api/stream/config', methods=['GET'])
+@log_api_request
 @require_auth
+@handle_api_errors
 def get_stream_config():
     """Provide stream configuration for frontend based on recording mode"""
     settings = load_user_settings()
-    audio = settings.get('audio', {})
+    audio = settings.get('audio') or {}
     recording_mode = audio.get('recording_mode', RecordingMode.PULSEAUDIO)
     rtsp_url = audio.get('rtsp_url')
     stream_url = audio.get('stream_url')
@@ -1120,6 +1123,8 @@ def write_flag(flag_name, content=None):
 GITHUB_OWNER = "Suncuss"
 GITHUB_REPO = "BirdNET-PiPy"
 GITHUB_API_BASE = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}"
+HA_SOURCE_COMMIT_ENV = "BIRDNET_PIPY_SOURCE_COMMIT"
+HA_SOURCE_COMMIT_FILE = os.path.join(BASE_DIR, "birdnet_pipy_source_commit.txt")
 
 def load_version_info():
     """Load version information from version.json"""
@@ -1135,6 +1140,28 @@ def load_version_info():
     except Exception as e:
         logger.error("Failed to load version.json", extra={'error': str(e)})
         return None
+
+
+def load_ha_source_commit():
+    """Load BirdNET-PiPy source commit baked into HA add-on image."""
+    commit_from_env = os.environ.get(HA_SOURCE_COMMIT_ENV, "").strip()
+    if commit_from_env:
+        return commit_from_env
+
+    if not os.path.exists(HA_SOURCE_COMMIT_FILE):
+        return None
+
+    try:
+        with open(HA_SOURCE_COMMIT_FILE) as f:
+            commit = f.read().strip()
+            return commit or None
+    except Exception as e:
+        logger.warning("Failed to load Home Assistant source commit", extra={
+            'path': HA_SOURCE_COMMIT_FILE,
+            'error': str(e),
+        })
+        return None
+
 
 def call_github_api(endpoint, timeout=10):
     """Call GitHub API and return JSON response"""
@@ -1367,6 +1394,11 @@ def update_channel_setting():
     so no restart is needed.
     """
     try:
+        if is_home_assistant_mode():
+            return jsonify({
+                'error': 'Update channels are not supported in Home Assistant mode'
+            }), 400
+
         data = request.json
         if not data or 'channel' not in data:
             return jsonify({'error': 'channel field required'}), 400
@@ -1668,8 +1700,24 @@ def get_system_storage():
 @log_api_request
 @handle_api_errors
 def get_system_version():
-    """Get current system version info from version.json"""
+    """Get current system version info for native or HA mode."""
     try:
+        response = {}
+        runtime_mode = get_runtime_mode()
+
+        if runtime_mode == 'ha':
+            app_source_commit = load_ha_source_commit()
+            response = {
+                'version': os.environ.get('BUILD_VERSION', 'unknown'),
+                'current_commit': app_source_commit or 'unknown',
+                'current_commit_date': 'unknown',
+                'current_branch': 'home_assistant',
+                'remote_url': f'https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}',
+                'app_source_commit': app_source_commit,
+                'runtime_mode': runtime_mode,
+            }
+            return jsonify(response), 200
+
         version_info = load_version_info()
 
         if version_info is None:
@@ -1682,7 +1730,8 @@ def get_system_version():
             'current_commit': version_info.get('commit', 'unknown'),
             'current_commit_date': version_info.get('commit_date', 'unknown'),
             'current_branch': version_info.get('branch', 'unknown'),
-            'remote_url': version_info.get('remote_url', f'https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}')
+            'remote_url': version_info.get('remote_url', f'https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}'),
+            'runtime_mode': runtime_mode,
         }), 200
     except Exception as e:
         return jsonify({'error': f'Failed to get version info: {str(e)}'}), 500
@@ -1911,7 +1960,21 @@ def trigger_system_update():
 @log_api_request
 @handle_api_errors
 def trigger_service_restart():
-    """Trigger backend service restart by writing restart flag file."""
+    """Trigger service restart for native mode or HA add-on mode."""
+    if is_home_assistant_mode():
+        import requests as req
+        req.post(
+            "http://supervisor/addons/self/restart",
+            headers={"Authorization": f"Bearer {os.environ['SUPERVISOR_TOKEN']}"},
+            timeout=10,
+        )
+        logger.info("Home Assistant add-on restart triggered via API")
+        return jsonify({
+            'status': 'restart_requested',
+            'message': 'Home Assistant add-on restart initiated. Services will restart shortly.',
+            'estimated_downtime': '10-30 seconds',
+        }), 200
+
     write_flag('restart-backend')
     logger.info("Service restart triggered via API")
     return jsonify({

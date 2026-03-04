@@ -219,7 +219,7 @@
 
 <script>
 import { ref, computed } from 'vue'
-import { useServiceRestart } from '@/composables/useServiceRestart'
+import { isLikelyRestartInProgressError, useServiceRestart } from '@/composables/useServiceRestart'
 import { limitDecimals } from '@/utils/inputHelpers'
 import api from '@/services/api'
 
@@ -324,7 +324,14 @@ export default {
 
         if (needsFullRestart) {
           // Trigger container restart so TZ env is reloaded in all services.
-          await api.post('/system/restart')
+          try {
+            await api.post('/system/restart')
+          } catch (error) {
+            if (!isLikelyRestartInProgressError(error)) {
+              throw error
+            }
+            console.warn('Restart request connection dropped; waiting for reconnection anyway', error)
+          }
           await serviceRestart.waitForRestart({
             autoReload: true,
             message: 'Applying location and timezone settings'
