@@ -186,7 +186,7 @@ describe('BirdDetails Recordings Section', () => {
     expect(recordingsCalls.length).toBe(1) // Only initial call
   })
 
-  it('switches to best recordings when selector changes', async () => {
+  it('switches to best recordings when pill toggle is clicked', async () => {
     const wrapper = mountComponent()
     await flushPromises()
 
@@ -199,11 +199,13 @@ describe('BirdDetails Recordings Section', () => {
       return Promise.resolve({ data: {} })
     })
 
-    // Find and change the select element
-    const select = wrapper.find('select')
-    expect(select.exists()).toBe(true)
+    // Find and click the "Best" pill button
+    const bestButton = wrapper.findAll('button').find(btn =>
+      btn.text().includes('Best')
+    )
+    expect(bestButton).toBeTruthy()
 
-    await select.setValue('best')
+    await bestButton.trigger('click')
     await flushPromises()
 
     // Verify new API call with sort=best
@@ -225,9 +227,11 @@ describe('BirdDetails Recordings Section', () => {
       await flushPromises()
     }
 
-    // Change sort
-    const select = wrapper.find('select')
-    await select.setValue('best')
+    // Click the "Best" pill button to change sort
+    const bestButton = wrapper.findAll('button').find(btn =>
+      btn.text().includes('Best')
+    )
+    await bestButton.trigger('click')
     await flushPromises()
 
     // Should be back on page 1 - find in the pagination section (buttons with single digit text)
@@ -239,19 +243,18 @@ describe('BirdDetails Recordings Section', () => {
     expect(page1Button.classes()).toContain('bg-green-600')
   })
 
-  it('shows selector with correct options', async () => {
+  it('shows pill toggle with correct options', async () => {
     const wrapper = mountComponent()
     await flushPromises()
 
-    const select = wrapper.find('select')
-    expect(select.exists()).toBe(true)
+    // Find pill toggle container (bg-gray-100 distinguishes it from the buttons inside)
+    const pillContainer = wrapper.find('.bg-gray-100.rounded-full')
+    expect(pillContainer.exists()).toBe(true)
 
-    const options = select.findAll('option')
-    expect(options.length).toBe(2)
-    expect(options[0].text()).toBe('Most Recent')
-    expect(options[0].element.value).toBe('recent')
-    expect(options[1].text()).toBe('Best Recordings')
-    expect(options[1].element.value).toBe('best')
+    const pillButtons = pillContainer.findAll('button')
+    expect(pillButtons.length).toBe(2)
+    expect(pillButtons[0].text()).toContain('Recent')
+    expect(pillButtons[1].text()).toContain('Best')
   })
 
   it('shows empty state when no recordings', async () => {
