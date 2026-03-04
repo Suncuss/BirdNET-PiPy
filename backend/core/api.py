@@ -1962,12 +1962,13 @@ def trigger_system_update():
 def trigger_service_restart():
     """Trigger service restart for native mode or HA add-on mode."""
     if is_home_assistant_mode():
-        import requests as req
-        req.post(
+        token = os.environ.get('SUPERVISOR_TOKEN', '')
+        resp = requests.post(
             "http://supervisor/addons/self/restart",
-            headers={"Authorization": f"Bearer {os.environ['SUPERVISOR_TOKEN']}"},
+            headers={"Authorization": f"Bearer {token}"},
             timeout=10,
         )
+        resp.raise_for_status()
         logger.info("Home Assistant add-on restart triggered via API")
         return jsonify({
             'status': 'restart_requested',

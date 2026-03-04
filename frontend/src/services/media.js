@@ -1,13 +1,8 @@
-import api from '@/services/api'
+import api, { getAppBaseUrl } from '@/services/api'
 
 const resolveApiBaseUrl = () => {
   const base = api?.defaults?.baseURL || '/api'
   return base.endsWith('/') ? base.slice(0, -1) : base
-}
-
-const getAppBaseUrl = () => {
-  const apiBase = resolveApiBaseUrl()
-  return apiBase.endsWith('/api') ? apiBase.slice(0, -4) : ''
 }
 
 export const getDefaultBirdImageUrl = () => {
