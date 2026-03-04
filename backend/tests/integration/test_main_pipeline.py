@@ -206,7 +206,8 @@ class TestProcessAudioFile:
     def test_connection_error_returns_empty_list(self):
         """Test that connection error returns empty list."""
         with patch('core.main.requests.post') as mock_post, \
-             patch('core.main.logger'):
+             patch('core.main.logger'), \
+             patch('time.sleep'):
             mock_post.side_effect = requests.exceptions.ConnectionError("Failed to connect")
 
             from core.main import process_audio_file
@@ -291,7 +292,8 @@ class TestDirectoryScanningArchitecture:
              patch('core.main.stop_flag') as mock_stop_flag, \
              patch('core.main.process_audio_file') as mock_process, \
              patch('core.main.handle_detection'), \
-             patch('core.main.get_logger') as mock_get_logger:
+             patch('core.main.get_logger') as mock_get_logger, \
+             patch('time.sleep'):
 
             mock_stop_flag.is_set.side_effect = stop_after_processing
             mock_process.return_value = []
@@ -326,7 +328,8 @@ class TestDirectoryScanningArchitecture:
              patch('core.main.MIN_RECORDING_DURATION', 5.0), \
              patch('core.main.stop_flag') as mock_stop_flag, \
              patch('core.main.process_audio_file') as mock_process, \
-             patch('core.main.get_logger') as mock_get_logger:
+             patch('core.main.get_logger') as mock_get_logger, \
+             patch('time.sleep'):
 
             mock_stop_flag.is_set.side_effect = stop_after_processing
 
@@ -392,7 +395,8 @@ class TestDirectoryScanningArchitecture:
              patch('core.main.MIN_RECORDING_DURATION', 5.0), \
              patch('core.main.stop_flag') as mock_stop_flag, \
              patch('core.main.process_audio_file', side_effect=track_processed), \
-             patch('core.main.get_logger') as mock_get_logger:
+             patch('core.main.get_logger') as mock_get_logger, \
+             patch('time.sleep'):
 
             # Configure stop flag to stop after processing all files
             mock_stop_flag.is_set.side_effect = [False, False, False, False, True]
@@ -1020,7 +1024,8 @@ class TestFullPipelineIntegration:
              patch('core.main.generate_spectrogram', side_effect=mock_audio_processing['generate_spectrogram']), \
              patch('core.main.convert_wav_to_mp3', side_effect=mock_audio_processing['convert_wav_to_mp3']), \
              patch('core.main.select_audio_chunks') as mock_select, \
-             patch('core.main.stop_flag') as mock_stop:
+             patch('core.main.stop_flag') as mock_stop, \
+             patch('time.sleep'):
 
             # Mock select_audio_chunks to return proper range
             mock_select.return_value = (0, 2)  # inclusive range
@@ -1092,7 +1097,8 @@ class TestFullPipelineIntegration:
              patch('core.main.API_PORT', 5002), \
              patch('core.main.db_manager', pipeline_db_manager), \
              patch('core.main.requests.post') as mock_birdnet_api, \
-             patch('core.main.stop_flag') as mock_stop:
+             patch('core.main.stop_flag') as mock_stop, \
+             patch('time.sleep'):
 
             # Run one iteration then stop
             call_count = [0]
@@ -1142,7 +1148,8 @@ class TestFullPipelineIntegration:
              patch('core.main.generate_spectrogram', side_effect=mock_audio_processing['generate_spectrogram']), \
              patch('core.main.convert_wav_to_mp3', side_effect=mock_audio_processing['convert_wav_to_mp3']), \
              patch('core.main.select_audio_chunks') as mock_select, \
-             patch('core.main.stop_flag') as mock_stop:
+             patch('core.main.stop_flag') as mock_stop, \
+             patch('time.sleep'):
 
             # Mock select_audio_chunks
             mock_select.return_value = (0, 2)  # inclusive range
@@ -1201,7 +1208,8 @@ class TestFullPipelineIntegration:
              patch('core.main.generate_spectrogram', side_effect=mock_audio_processing['generate_spectrogram']), \
              patch('core.main.convert_wav_to_mp3', side_effect=mock_audio_processing['convert_wav_to_mp3']), \
              patch('core.main.select_audio_chunks') as mock_select, \
-             patch('core.main.stop_flag') as mock_stop:
+             patch('core.main.stop_flag') as mock_stop, \
+             patch('time.sleep'):
 
             # Mock select_audio_chunks
             mock_select.return_value = (0, 2)  # inclusive range
@@ -1265,7 +1273,8 @@ class TestFullPipelineIntegration:
              patch('core.main.generate_spectrogram', side_effect=mock_audio_processing['generate_spectrogram']), \
              patch('core.main.convert_wav_to_mp3', side_effect=mock_audio_processing['convert_wav_to_mp3']), \
              patch('core.main.select_audio_chunks') as mock_select, \
-             patch('core.main.stop_flag') as mock_stop:
+             patch('core.main.stop_flag') as mock_stop, \
+             patch('time.sleep'):
 
             # Mock select_audio_chunks
             mock_select.return_value = (0, 2)  # inclusive range
@@ -1344,7 +1353,8 @@ class TestFullPipelineIntegration:
              patch('core.main.generate_spectrogram', side_effect=mock_audio_processing['generate_spectrogram']), \
              patch('core.main.convert_wav_to_mp3', side_effect=mock_audio_processing['convert_wav_to_mp3']), \
              patch('core.main.select_audio_chunks') as mock_select, \
-             patch('core.main.stop_flag') as mock_stop:
+             patch('core.main.stop_flag') as mock_stop, \
+             patch('time.sleep'):
 
             # Mock select_audio_chunks
             mock_select.return_value = (0, 2)  # inclusive range
@@ -1404,7 +1414,8 @@ class TestFullPipelineIntegration:
              patch('core.main.generate_spectrogram', side_effect=mock_audio_processing['generate_spectrogram']), \
              patch('core.main.convert_wav_to_mp3', side_effect=mock_audio_processing['convert_wav_to_mp3']), \
              patch('core.main.select_audio_chunks') as mock_select, \
-             patch('core.main.stop_flag') as mock_stop:
+             patch('core.main.stop_flag') as mock_stop, \
+             patch('time.sleep'):
 
             # Mock select_audio_chunks
             mock_select.return_value = (0, 2)  # inclusive range
@@ -1463,7 +1474,8 @@ class TestFullPipelineIntegration:
              patch('core.main.generate_spectrogram', side_effect=mock_audio_processing['generate_spectrogram']), \
              patch('core.main.convert_wav_to_mp3', side_effect=mock_audio_processing['convert_wav_to_mp3']), \
              patch('core.main.select_audio_chunks') as mock_select, \
-             patch('core.main.stop_flag') as mock_stop:
+             patch('core.main.stop_flag') as mock_stop, \
+             patch('time.sleep'):
 
             # Mock select_audio_chunks
             mock_select.return_value = (0, 2)  # inclusive range
@@ -1948,7 +1960,8 @@ class TestEdgeCasesAndResilience:
              patch('core.main.generate_spectrogram', side_effect=mock_audio_processing['generate_spectrogram']), \
              patch('core.main.convert_wav_to_mp3', side_effect=mock_audio_processing['convert_wav_to_mp3']), \
              patch('core.main.select_audio_chunks', return_value=(0, 3)), \
-             patch('core.main.stop_flag') as mock_stop:
+             patch('core.main.stop_flag') as mock_stop, \
+             patch('time.sleep'):
 
             # Mock BirdNet API response with unique timestamps for each file
             call_counter = [0]
@@ -2015,7 +2028,9 @@ class TestEdgeCasesAndResilience:
 
         with patch('core.main.RECORDING_DIR', pipeline_temp_dirs['recording']), \
              patch('core.main.FILE_SCAN_INTERVAL', 0.01), \
-             patch('core.main.stop_flag') as mock_stop:
+             patch('core.main.process_audio_file', return_value=[]), \
+             patch('core.main.stop_flag') as mock_stop, \
+             patch('time.sleep'):
 
             # Stop after 2 iterations
             call_count = [0]
@@ -2067,7 +2082,8 @@ class TestEdgeCasesAndResilience:
              patch('core.main.generate_spectrogram', side_effect=mock_audio_processing['generate_spectrogram']), \
              patch('core.main.convert_wav_to_mp3', side_effect=mock_audio_processing['convert_wav_to_mp3']), \
              patch('core.main.select_audio_chunks', return_value=(0, 3)), \
-             patch('core.main.stop_flag') as mock_stop:
+             patch('core.main.stop_flag') as mock_stop, \
+             patch('time.sleep'):
 
             # Mock BirdNet API response with unique timestamps for each valid file
             call_counter = [0]
@@ -2183,7 +2199,8 @@ class TestEdgeCasesAndResilience:
              patch('core.main.db_manager', pipeline_db_manager), \
              patch('core.main.requests.post') as mock_birdnet_api, \
              patch('core.main.select_audio_chunks', return_value=(0, 3)), \
-             patch('core.main.stop_flag') as mock_stop:
+             patch('core.main.stop_flag') as mock_stop, \
+             patch('time.sleep'):
 
             # Mock BirdNet API to timeout
             mock_birdnet_api.side_effect = Timeout('Request timed out')
