@@ -26,8 +26,6 @@ from config.constants import (
     RECORDING_LENGTH_OPTIONS,
     UPDATE_CHANNELS,
     VALID_MODEL_TYPES,
-    VALID_RECORDING_MODES,
-    RecordingMode,
 )
 from config.settings import (
     API_PORT,
@@ -36,8 +34,6 @@ from config.settings import (
     DEFAULT_AUDIO_PATH,
     DEFAULT_IMAGE_PATH,
     EXTRACTED_AUDIO_DIR,
-    LABELS_PATH,
-    LABELS_V3_PATH,
     MODEL_TYPE,
     SPECTROGRAM_DIR,
     get_default_settings,
@@ -53,13 +49,25 @@ from core.auth import (
     authenticate,
     change_password,
     configure_session,
+    get_public_features,
     is_auth_enabled,
     is_authenticated,
+    is_feature_public,
     is_setup_complete,
     logout,
     require_auth,
+    require_feature,
     set_auth_enabled,
     setup_password,
+)
+from core.bird_name_utils import (
+    DEFAULT_BIRD_NAME_LANGUAGE,
+    SUPPORTED_BIRD_NAME_LANGUAGES,
+    add_display_common_name,
+    add_display_species,
+    clear_bird_name_caches,
+    get_bird_name_language,
+    get_localized_common_name_from_english,
 )
 from core.db import DatabaseManager
 from core.ha_mode import get_runtime_mode, is_home_assistant_mode
@@ -93,7 +101,8 @@ from core.runtime_config import (
     invalidate_runtime_settings_cache,
 )
 from core.storage_manager import delete_detection_files
-from model_service.label_utils import parse_v3_labels
+from core.timezone_service import get_timezone_str, local_now
+from model_service.label_utils import get_species_list
 from version import DISPLAY_NAME, __version__
 
 # Setup logging
@@ -178,6 +187,7 @@ def require_internal(f):
 
 # Simple in-memory cache
 image_cache = {}
+_image_cache_lock = threading.Lock()
 CACHE_EXPIRATION = 172800  # Cache expiration time in seconds (48 hours)
 MAX_CACHE_SIZE = 1000  # Maximum number of cached entries
 
@@ -217,7 +227,7 @@ def _cache_and_return_update_result(result, cache_key, now):
 
 
 def _cleanup_expired_cache():
-    """Remove expired entries from image cache."""
+    """Remove expired entries from image cache. Caller must hold _image_cache_lock."""
     current_time = time.time()
     expired_keys = [
         key for key, value in image_cache.items()
@@ -232,30 +242,32 @@ def _cleanup_expired_cache():
 
 
 def get_cached_image(species_name):
-    if species_name in image_cache:
-        cached_data = image_cache[species_name]
-        if time.time() - cached_data['timestamp'] < CACHE_EXPIRATION:
-            logger.debug("Image cache hit", extra={
-                'species': species_name,
-                'age_seconds': int(time.time() - cached_data['timestamp'])
-            })
-            return cached_data['data']
+    with _image_cache_lock:
+        if species_name in image_cache:
+            cached_data = image_cache[species_name]
+            if time.time() - cached_data['timestamp'] < CACHE_EXPIRATION:
+                logger.debug("Image cache hit", extra={
+                    'species': species_name,
+                    'age_seconds': int(time.time() - cached_data['timestamp'])
+                })
+                return cached_data['data']
     return None
 
 
 def set_cached_image(species_name, data):
-    # Periodically clean up expired entries when adding new ones
-    if len(image_cache) >= MAX_CACHE_SIZE:
-        _cleanup_expired_cache()
-        # If still at max after cleanup, remove oldest entry
+    with _image_cache_lock:
+        # Periodically clean up expired entries when adding new ones
         if len(image_cache) >= MAX_CACHE_SIZE:
-            oldest_key = min(image_cache, key=lambda k: image_cache[k]['timestamp'])
-            del image_cache[oldest_key]
+            _cleanup_expired_cache()
+            # If still at max after cleanup, remove oldest entry
+            if len(image_cache) >= MAX_CACHE_SIZE:
+                oldest_key = min(image_cache, key=lambda k: image_cache[k]['timestamp'])
+                del image_cache[oldest_key]
 
-    image_cache[species_name] = {
-        'data': data,
-        'timestamp': time.time()
-    }
+        image_cache[species_name] = {
+            'data': data,
+            'timestamp': time.time()
+        }
 
 ALLOWED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
 MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10MB
@@ -318,7 +330,7 @@ def fetch_wikimedia_image(species_name):
             "action": "query",
             "format": "json",
             "list": "search",
-            "srsearch": f"{species_name} filetype:bitmap",
+            "srsearch": f"{species_name} filetype:bitmap -egg -skeleton",
             "srnamespace": "6",  # File namespace
             "srlimit": "1"  # Limit to one result
         }
@@ -425,7 +437,8 @@ def get_latest_observation():
 @log_api_request
 @handle_api_errors
 def get_recent_observations():
-    observations = db_manager.get_latest_detections(7)
+    unique = request.args.get('unique', 'false').lower() == 'true'
+    observations = db_manager.get_latest_detections(7, unique=unique)
     log_data_metrics('get_recent_observations', observations)
     return jsonify(observations)
 
@@ -433,11 +446,22 @@ def get_recent_observations():
 @log_api_request
 @handle_api_errors
 def get_observation_summary():
+    now = local_now()
+    settings = load_user_settings()
     summary = {
-        'today': db_manager.get_summary_stats(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)),
-        'week': db_manager.get_summary_stats(datetime.now() - timedelta(weeks=1)),
-        'month': db_manager.get_summary_stats(datetime.now() - timedelta(days=30)),
-        'allTime': db_manager.get_summary_stats()
+        'today': _localize_summary(
+            db_manager.get_summary_stats(now.replace(hour=0, minute=0, second=0, microsecond=0)),
+            settings=settings,
+        ),
+        'week': _localize_summary(
+            db_manager.get_summary_stats(now - timedelta(weeks=1)),
+            settings=settings,
+        ),
+        'month': _localize_summary(
+            db_manager.get_summary_stats(now - timedelta(days=30)),
+            settings=settings,
+        ),
+        'allTime': _localize_summary(db_manager.get_summary_stats(), settings=settings)
     }
     log_data_metrics('get_observation_summary', summary, {
         'today_count': summary.get('today', {}).get('totalObservations', 0),
@@ -447,10 +471,11 @@ def get_observation_summary():
 
 @api.route('/api/activity/hourly', methods=['GET'])
 @log_api_request
+@require_feature('charts')
 @validate_date_param()
 @handle_api_errors
 def get_hourly_activity():
-    date = request.args.get('date', default=datetime.now().strftime('%Y-%m-%d'))
+    date = request.args.get('date', default=local_now().strftime('%Y-%m-%d'))
     activity = db_manager.get_hourly_activity(date)
     log_data_metrics('get_hourly_activity', activity, {
         'date': date,
@@ -460,14 +485,17 @@ def get_hourly_activity():
 
 @api.route('/api/activity/overview', methods=['GET'])
 @log_api_request
+@require_feature('charts')
 @validate_date_param()
 @handle_api_errors
 def get_activity_overview():
-    date = request.args.get('date', default=datetime.now().strftime('%Y-%m-%d'))
+    date = request.args.get('date', default=local_now().strftime('%Y-%m-%d'))
     order = request.args.get('order', default='most')
     if order not in ('most', 'least'):
         order = 'most'
+    settings = load_user_settings()
     overview = db_manager.get_activity_overview(date, order=order)
+    overview = _localize_activity_items(overview, settings=settings)
     log_data_metrics('get_activity_overview', overview, {
         'date': date,
         'species_count': len(overview) if overview else 0
@@ -479,26 +507,44 @@ def get_activity_overview():
 @handle_api_errors
 def get_dashboard():
     """Consolidated dashboard endpoint — all DB data in one request."""
-    today = datetime.now().strftime('%Y-%m-%d')
+    now = local_now()
+    today = now.strftime('%Y-%m-%d')
+    settings = load_user_settings()
 
-    recent = db_manager.get_latest_detections(7)
-    latest = recent[0] if recent else None
+    recent_all = db_manager.get_latest_detections(7)
+    recent_unique = db_manager.get_latest_detections(7, unique=True)
+    recent_all = _localize_detection_list(recent_all, settings=settings)
+    recent_unique = _localize_detection_list(recent_unique, settings=settings)
+    latest = recent_all[0] if recent_all else None
 
     summary = {
-        'today': db_manager.get_summary_stats(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)),
-        'week': db_manager.get_summary_stats(datetime.now() - timedelta(weeks=1)),
-        'month': db_manager.get_summary_stats(datetime.now() - timedelta(days=30)),
-        'allTime': db_manager.get_summary_stats()
+        'today': _localize_summary(
+            db_manager.get_summary_stats(now.replace(hour=0, minute=0, second=0, microsecond=0)),
+            settings=settings,
+        ),
+        'week': _localize_summary(
+            db_manager.get_summary_stats(now - timedelta(weeks=1)),
+            settings=settings,
+        ),
+        'month': _localize_summary(
+            db_manager.get_summary_stats(now - timedelta(days=30)),
+            settings=settings,
+        ),
+        'allTime': _localize_summary(db_manager.get_summary_stats(), settings=settings)
     }
 
     hourly_activity = db_manager.get_hourly_activity(today)
+    activity_overview = _localize_activity_overview(
+        db_manager.get_activity_overview_both(today),
+        settings=settings,
+    )
 
     return jsonify({
         'latestObservation': latest,
-        'recentObservations': recent,
+        'recentObservations': {'all': recent_all, 'unique': recent_unique},
         'summary': summary,
         'hourlyActivity': hourly_activity,
-        'activityOverview': db_manager.get_activity_overview_both(today)
+        'activityOverview': activity_overview
     })
 
 @api.route('/api/sightings/unique', methods=['GET'])
@@ -507,8 +553,10 @@ def get_dashboard():
 @handle_api_errors
 def get_unique_detections():
     date_str = request.args.get('date')
+    settings = load_user_settings()
     # Get the unique detections from the database
     unique_detections = db_manager.get_detections_by_date_range(date_str, date_str, unique=True)
+    unique_detections = _localize_detection_list(unique_detections, settings=settings)
     log_data_metrics('get_unique_detections', unique_detections, {
         'date': date_str,
         'unique_species': len(unique_detections)
@@ -528,6 +576,7 @@ def get_sightings():
     sighting_type = request.args.get('type', 'frequent')
     limit = request.args.get('limit', default=12, type=int)
 
+    settings = load_user_settings()
     if sighting_type == 'frequent':
         sightings = db_manager.get_species_sightings(limit=limit, most_frequent=True)
     elif sighting_type == 'rare':
@@ -535,6 +584,7 @@ def get_sightings():
     else:
         return jsonify({"error": "Invalid sighting type. Use 'frequent' or 'rare'"}), 400
 
+    sightings = _localize_detection_list(sightings, settings=settings)
     return jsonify(sightings)
 
 
@@ -549,8 +599,10 @@ def serve_spectrogram(filename):
 @api.route('/api/bird/<species_name>', methods=['GET'])
 @log_api_request
 def get_bird_details(species_name):
+    settings = load_user_settings()
     details = db_manager.get_bird_details(species_name)
     if details:
+        details = _localize_detection(details, settings=settings)
         logger.debug("Bird details retrieved", extra={
             'species': species_name,
             'total_detections': details.get('detectionCount', 0)
@@ -635,7 +687,11 @@ def get_bird_recordings(species_name):
     if sort not in ['recent', 'best']:
         return jsonify({"error": "Sort must be 'recent' or 'best'"}), 400
 
-    recordings = db_manager.get_bird_recordings(species_name, sort, limit)
+    settings = load_user_settings()
+    recordings = _localize_detection_list(
+        db_manager.get_bird_recordings(species_name, sort, limit),
+        settings=settings,
+    )
     logger.debug("Bird recordings retrieved", extra={
         'species': species_name,
         'sort': sort,
@@ -649,7 +705,7 @@ def get_bird_recordings(species_name):
 @handle_api_errors
 def get_detection_distribution(species_name):
     view = request.args.get('view', 'month')
-    date = request.args.get('date', datetime.now().strftime('%Y-%m-%d'))
+    date = request.args.get('date', local_now().strftime('%Y-%m-%d'))
     distribution = db_manager.get_detection_distribution(species_name, view, date)
     return jsonify(distribution)
 
@@ -658,13 +714,17 @@ def get_detection_distribution(species_name):
 @handle_api_errors
 def get_all_species():
     """Get all unique bird species ever detected"""
-    species_list = db_manager.get_all_unique_species()
+    species_list = _localize_species_list(
+        db_manager.get_all_unique_species(),
+        settings=load_user_settings(),
+    )
     log_data_metrics('get_all_species', species_list)
     return jsonify(species_list)
 
 
 @api.route('/api/detections/trends', methods=['GET'])
 @log_api_request
+@require_feature('charts')
 @handle_api_errors
 def get_detection_trends():
     """Get daily detection counts for trend visualization.
@@ -707,6 +767,7 @@ def get_detection_trends():
 
 @api.route('/api/detections', methods=['GET'])
 @log_api_request
+@require_feature('table')
 @handle_api_errors
 def get_detections():
     """Get paginated bird detections with optional filtering.
@@ -738,16 +799,40 @@ def get_detections():
 
     # Cap per_page at 100 (same as db method)
     per_page = min(max(1, per_page), 100)
+    settings = load_user_settings()
+    bird_name_language = get_bird_name_language(settings)
 
-    detections, total_count = db_manager.get_paginated_detections(
-        page=page,
-        per_page=per_page,
-        start_date=start_date,
-        end_date=end_date,
-        species=species,
-        sort=sort,
-        order=order
-    )
+    if sort == 'common_name' and bird_name_language != DEFAULT_BIRD_NAME_LANGUAGE:
+        # Sort the fully localized labels in memory so the rendered order matches
+        # what the user sees, even across paginated results.
+        detections = _localize_detection_list(
+            db_manager.get_all_detections(
+                start_date=start_date,
+                end_date=end_date,
+                species=species,
+            ),
+            settings=settings,
+        )
+        detections.sort(
+            key=lambda detection: (
+                detection.get('display_common_name', detection.get('common_name', '')).casefold()
+            ),
+            reverse=order.lower() != 'asc',
+        )
+        total_count = len(detections)
+        offset = (page - 1) * per_page
+        detections = detections[offset:offset + per_page]
+    else:
+        detections, total_count = db_manager.get_paginated_detections(
+            page=page,
+            per_page=per_page,
+            start_date=start_date,
+            end_date=end_date,
+            species=species,
+            sort=sort,
+            order=order
+        )
+        detections = _localize_detection_list(detections, settings=settings)
 
     total_pages = (total_count + per_page - 1) // per_page if per_page > 0 else 0
 
@@ -804,7 +889,8 @@ def export_detections_csv():
     # Write header
     writer.writerow([
         'id', 'timestamp', 'group_timestamp', 'scientific_name', 'common_name',
-        'confidence', 'latitude', 'longitude', 'cutoff', 'sensitivity', 'overlap', 'week', 'extra'
+        'confidence', 'latitude', 'longitude', 'cutoff', 'sensitivity', 'overlap',
+        'week', 'extra', 'audio_source'
     ])
 
     # Write data rows
@@ -827,11 +913,12 @@ def export_detections_csv():
             detection.get('sensitivity', ''),
             detection.get('overlap', ''),
             detection.get('week', ''),
-            extra_value
+            extra_value,
+            detection.get('audio_source', '')
         ])
 
     # Generate filename with timestamp
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    timestamp = local_now().strftime('%Y%m%d_%H%M%S')
     filename = f'birdnet_detections_{timestamp}.csv'
 
     return Response(
@@ -941,60 +1028,73 @@ def delete_detections_batch():
 _available_species_cache = {}
 
 
-def _get_configured_model_type() -> str:
-    return load_user_settings().get('model', {}).get('type', MODEL_TYPE)
+def _localize_detection(detection, settings=None):
+    return add_display_common_name(
+        detection,
+        language=get_bird_name_language(settings),
+        settings=settings,
+    )
+
+
+def _localize_detection_list(detections, settings=None):
+    return [_localize_detection(detection, settings=settings) for detection in detections]
+
+
+def _localize_species_list(species_list, settings=None):
+    localized = [_localize_detection(species, settings=settings) for species in species_list]
+    localized.sort(key=lambda species: species.get('display_common_name', species.get('common_name', '')))
+    return localized
+
+
+def _localize_summary(summary, settings=None):
+    localized_summary = dict(summary)
+
+    for key in ('mostCommonBird', 'rarestBird'):
+        bird_name = localized_summary.get(key)
+        localized_summary[f'{key}Display'] = (
+            get_localized_common_name_from_english(
+                bird_name,
+                language=get_bird_name_language(settings),
+                settings=settings,
+            )
+            if bird_name and bird_name != 'N/A'
+            else bird_name
+        )
+
+    return localized_summary
+
+
+def _localize_activity_overview(activity_overview, settings=None):
+    if not activity_overview:
+        return activity_overview
+
+    return {
+        key: [add_display_species(item, settings=settings) for item in items]
+        for key, items in activity_overview.items()
+    }
+
+
+def _localize_activity_items(items, settings=None):
+    return [add_display_species(item, settings=settings) for item in items]
 
 
 def load_available_species():
-    """Load all available species from the BirdNET model labels file.
+    """Load all available species from the species table.
 
     Returns list of dicts with scientific_name and common_name.
-    Results are cached per model type since the labels file doesn't change at runtime.
+    Results are cached per model type since the species table doesn't change at runtime.
     """
-    model_type = _get_configured_model_type()
+    model_type = load_user_settings().get('model', {}).get('type', MODEL_TYPE)
 
     if model_type in _available_species_cache:
         return _available_species_cache[model_type]
 
-    species_list = []
-    try:
-        if model_type == 'birdnet_v3':
-            # V3.0: semicolon-delimited CSV with BOM
-            species_list = [
-                {'scientific_name': sci, 'common_name': com}
-                for sci, com in parse_v3_labels(LABELS_V3_PATH)
-            ]
-            labels_path = LABELS_V3_PATH
-        else:
-            # V2.4: plain text, "SciName_CommonName" per line
-            with open(LABELS_PATH) as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    parts = line.split('_')
-                    if len(parts) >= 2:
-                        scientific_name = parts[0]
-                        common_name = parts[1]
-                        species_list.append({
-                            'scientific_name': scientific_name,
-                            'common_name': common_name
-                        })
-            labels_path = LABELS_PATH
-
-        # Sort by common name for easier browsing
-        species_list.sort(key=lambda x: x['common_name'])
-        _available_species_cache[model_type] = species_list
-        logger.info("Loaded available species from labels", extra={
-            'count': len(species_list),
-            'model_type': model_type
-        })
-    except Exception as e:
-        logger.error("Failed to load species labels", extra={
-            'error': str(e),
-            'path': labels_path if 'labels_path' in dir() else model_type
-        })
-
+    species_list = get_species_list(model_type)
+    _available_species_cache[model_type] = species_list
+    logger.info("Loaded available species", extra={
+        'count': len(species_list),
+        'model_type': model_type,
+    })
     return species_list
 
 
@@ -1008,14 +1108,19 @@ def get_available_species():
     Returns list of {scientific_name, common_name} sorted by common_name.
     Species count depends on model type: ~6K for V2.4, ~11K for V3.0.
     """
+    settings = load_user_settings()
     search = request.args.get('search', '').lower()
-    species_list = load_available_species()
+    species_list = _localize_species_list(load_available_species(), settings=settings)
 
     # Filter by search term if provided
     if search:
         species_list = [
             s for s in species_list
-            if search in s['scientific_name'].lower() or search in s['common_name'].lower()
+            if (
+                search in s['scientific_name'].lower()
+                or search in s['common_name'].lower()
+                or search in s.get('display_common_name', '').lower()
+            )
         ]
 
     return jsonify({
@@ -1026,60 +1131,25 @@ def get_available_species():
 
 @api.route('/api/stream/config', methods=['GET'])
 @log_api_request
-@require_auth
+@require_feature('live_feed')
 @handle_api_errors
 def get_stream_config():
-    """Provide stream configuration for frontend based on recording mode"""
+    """Provide stream configuration for frontend based on enabled sources."""
     settings = load_user_settings()
     audio = settings.get('audio') or {}
-    recording_mode = audio.get('recording_mode', RecordingMode.PULSEAUDIO)
-    rtsp_url = audio.get('rtsp_url')
-    stream_url = audio.get('stream_url')
+    sources = audio.get('sources', [])
+    enabled = [s for s in sources if s.get('enabled', True)]
 
-    if recording_mode == RecordingMode.PULSEAUDIO:
-        # PulseAudio mode - provide Icecast stream URL
-        return jsonify({
-            'stream_url': '/stream/stream.mp3',
-            'stream_type': 'icecast',
-            'description': 'Local Icecast audio stream'
+    streams = []
+    for source in enabled:
+        sid = source.get('id', '')
+        streams.append({
+            'source_id': sid,
+            'label': source.get('label', sid),
+            'url': f'/stream/{sid}.mp3',
         })
-    elif recording_mode == RecordingMode.RTSP:
-        # RTSP mode - use Icecast to transcode RTSP to MP3 for browser
-        if rtsp_url:
-            return jsonify({
-                'stream_url': '/stream/stream.mp3',
-                'stream_type': 'icecast',
-                'description': 'RTSP stream via Icecast'
-            })
-        else:
-            # rtsp mode but no URL configured
-            return jsonify({
-                'stream_url': None,
-                'stream_type': 'none',
-                'description': 'RTSP mode selected but no URL configured'
-            })
-    elif recording_mode == RecordingMode.HTTP_STREAM:
-        # HTTP stream mode - use custom stream URL
-        if stream_url:
-            return jsonify({
-                'stream_url': stream_url,
-                'stream_type': 'custom',
-                'description': 'User-defined audio stream'
-            })
-        else:
-            # http_stream mode but no URL configured
-            return jsonify({
-                'stream_url': None,
-                'stream_type': 'none',
-                'description': 'HTTP stream mode selected but no URL configured'
-            })
-    else:
-        # Unknown mode
-        return jsonify({
-            'stream_url': None,
-            'stream_type': 'none',
-            'description': 'Unknown recording mode'
-        })
+
+    return jsonify({'streams': streams})
 
 @api.route('/api/broadcast/detection', methods=['POST'])
 @require_internal
@@ -1100,6 +1170,42 @@ def broadcast_detection_endpoint():
         }, exc_info=True)
         return jsonify({'error': str(e)}), 500
 
+@api.route('/api/broadcast/recorder-status', methods=['POST'])
+@require_internal
+def broadcast_recorder_status_endpoint():
+    """Receive recorder health status from main container and broadcast to clients.
+
+    Internal-only endpoint - only accessible from docker network or localhost.
+    Called by the main processing container on recorder state changes.
+    """
+    global _recorder_status
+    try:
+        _recorder_status = request.json
+        if socketio:
+            socketio.emit('recorder_status', _recorder_status)
+        logger.debug("Recorder status broadcasted", extra={
+            'state': _recorder_status.get('state')
+        })
+        return jsonify({'status': 'broadcasted'}), 200
+    except Exception as e:
+        logger.error("Failed to broadcast recorder status", extra={
+            'error': str(e)
+        })
+        return jsonify({'error': str(e)}), 500
+
+@api.route('/api/recorder/status', methods=['GET'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def get_recorder_status():
+    """Return current recorder health status.
+
+    Requires authentication — the payload may contain source labels,
+    types, and error details that should not be exposed publicly.
+    Decoupled from live feed so it is not gated by live_feed_public.
+    """
+    return jsonify(_recorder_status or {})
+
 def write_flag(flag_name, content=None):
     """Write flag file to trigger host action.
 
@@ -1112,7 +1218,7 @@ def write_flag(flag_name, content=None):
     os.makedirs(flag_dir, exist_ok=True)
     flag_file = os.path.join(flag_dir, flag_name)
     with open(flag_file, 'w') as f:
-        f.write(content if content else datetime.now().isoformat())
+        f.write(content if content else local_now().isoformat())
     logger.debug("Flag file written", extra={
         'flag': flag_name,
         'content': content,
@@ -1302,7 +1408,7 @@ def should_show_update_note(current_commit, note_data):
 
 VALID_NOTIFICATION_FIELDS = {
     'apprise_urls', 'every_detection', 'rate_limit_seconds',
-    'first_of_day', 'rare_species', 'rare_threshold', 'rare_window_days'
+    'first_of_day', 'new_species', 'rare_species', 'rare_threshold', 'rare_window_days'
 }
 
 def _validate_notification_settings(notif):
@@ -1315,7 +1421,7 @@ def _validate_notification_settings(notif):
     unknown = set(notif.keys()) - VALID_NOTIFICATION_FIELDS
     if unknown:
         return f'Unknown notification fields: {", ".join(sorted(unknown))}'
-    for bool_field in ('every_detection', 'first_of_day', 'rare_species'):
+    for bool_field in ('every_detection', 'first_of_day', 'new_species', 'rare_species'):
         if bool_field in notif and not isinstance(notif[bool_field], bool):
             return f'notifications.{bool_field} must be a boolean'
     if 'apprise_urls' in notif:
@@ -1527,26 +1633,46 @@ def update_settings():
         current_settings = load_user_settings()
         new_settings = deep_merge_settings(current_settings, incoming_settings)
 
-        # Validate recording mode settings
+        # Validate audio settings
         if 'audio' in incoming_settings:
             incoming_audio = incoming_settings['audio']
-            recording_mode = incoming_audio.get('recording_mode')
-            if recording_mode and recording_mode not in VALID_RECORDING_MODES:
-                return jsonify({'error': f'Invalid recording_mode. Must be one of: {", ".join(VALID_RECORDING_MODES)}'}), 400
 
-            # Validate RTSP URL if provided
-            rtsp_url = incoming_audio.get('rtsp_url')
-            if recording_mode == RecordingMode.RTSP and not rtsp_url:
-                return jsonify({'error': 'RTSP URL required when recording_mode is "rtsp"'}), 400
-            if rtsp_url and not rtsp_url.startswith(('rtsp://', 'rtsps://')):
-                return jsonify({'error': 'Invalid RTSP URL. Must start with rtsp:// or rtsps://'}), 400
+            # Validate sources array if provided
+            sources = incoming_audio.get('sources')
+            if sources is not None:
+                if not isinstance(sources, list):
+                    return jsonify({'error': 'sources must be an array'}), 400
+                seen_ids = set()
+                mic_count = 0
+                for source in sources:
+                    sid = source.get('id', '')
+                    if not sid or not sid.startswith('source_'):
+                        return jsonify({'error': f'Invalid source id: {sid}. Must match source_<int>'}), 400
+                    if sid in seen_ids:
+                        return jsonify({'error': f'Duplicate source id: {sid}'}), 400
+                    seen_ids.add(sid)
 
-            # Validate HTTP stream URL if required
-            stream_url = incoming_audio.get('stream_url')
-            if recording_mode == RecordingMode.HTTP_STREAM and not stream_url:
-                return jsonify({'error': 'Stream URL required when recording_mode is "http_stream"'}), 400
-            if stream_url and not stream_url.startswith(('http://', 'https://')):
-                return jsonify({'error': 'Invalid Stream URL. Must start with http:// or https://'}), 400
+                    stype = source.get('type', '')
+                    if stype not in ('pulseaudio', 'rtsp'):
+                        return jsonify({'error': f'Invalid source type: {stype}. Must be pulseaudio or rtsp'}), 400
+                    if stype == 'rtsp':
+                        url = source.get('url', '')
+                        if not url or not url.startswith(('rtsp://', 'rtsps://')):
+                            return jsonify({'error': f'RTSP source {sid} must have a valid rtsp:// or rtsps:// URL'}), 400
+                    if stype == 'pulseaudio':
+                        mic_count += 1
+                if mic_count > 1:
+                    return jsonify({'error': 'Only one microphone source is allowed'}), 400
+
+                # Validate next_source_id if provided
+                next_id = incoming_audio.get('next_source_id')
+                if next_id is not None and seen_ids:
+                    max_suffix = max(
+                        (int(sid.split('_', 1)[1]) for sid in seen_ids),
+                        default=-1
+                    )
+                    if next_id <= max_suffix:
+                        return jsonify({'error': f'next_source_id ({next_id}) must be greater than max existing id suffix ({max_suffix})'}), 400
 
             # Validate recording_length
             recording_length = incoming_audio.get('recording_length')
@@ -1563,6 +1689,15 @@ def update_settings():
             model_type = new_settings['model'].get('type')
             if model_type and model_type not in VALID_MODEL_TYPES:
                 return jsonify({'error': f'Invalid model type. Must be one of: {", ".join(VALID_MODEL_TYPES)}'}), 400
+
+        # Validate display settings
+        if 'display' in incoming_settings:
+            bird_name_language = new_settings.get('display', {}).get('bird_name_language')
+            if bird_name_language and bird_name_language not in SUPPORTED_BIRD_NAME_LANGUAGES:
+                supported = ', '.join(sorted(SUPPORTED_BIRD_NAME_LANGUAGES))
+                return jsonify({
+                    'error': f'Invalid bird_name_language. Must be one of: {supported}'
+                }), 400
 
         # Validate notification settings
         if 'notifications' in incoming_settings:
@@ -1598,9 +1733,10 @@ def update_settings():
         changed_paths = get_setting_differences(current_settings, new_settings)
         change_plan = classify_setting_changes(changed_paths, current_settings, new_settings)
 
-        # Save settings to JSON file and clear cache
+        # Save settings to JSON file and clear caches
         save_user_settings(new_settings)
         invalidate_runtime_settings_cache()
+        clear_bird_name_caches()
 
         logger.info("Settings updated", extra={
             'changed_sections': list(incoming_settings.keys()),
@@ -1609,13 +1745,11 @@ def update_settings():
         })
 
         if not changed_paths:
-            message = 'No settings changes detected.'
+            message = 'No changes detected.'
         elif change_plan['full_restart_required']:
-            message = 'Settings saved. Some changes require a full service restart to take effect.'
-        elif change_plan['component_restarts']:
-            message = 'Settings successfully updated.'
+            message = 'Settings applied. Restarting...'
         else:
-            message = 'Settings saved. Changes applied immediately.'
+            message = 'Settings applied.'
 
         return jsonify({
             'status': 'updated',
@@ -1658,6 +1792,28 @@ def test_notification():
 
     except Exception as e:
         logger.error("Test notification error", extra={'error': str(e)})
+        return jsonify({'error': str(e)}), 500
+
+
+@api.route('/api/stream/test', methods=['POST'])
+@log_api_request
+@require_auth
+def test_stream():
+    """Test a stream URL to verify it's accessible."""
+    try:
+        data = request.json or {}
+        url = data.get('url', '').strip()
+
+        if not url:
+            return jsonify({'error': 'No URL provided'}), 400
+
+        from core.audio_manager import test_stream_url
+        success, message = test_stream_url(url)
+
+        return jsonify({'success': success, 'message': message}), 200
+
+    except Exception as e:
+        logger.error("Stream test error", extra={'error': str(e)})
         return jsonify({'error': str(e)}), 500
 
 
@@ -1995,16 +2151,40 @@ def trigger_service_restart():
 
 
 # =============================================================================
+# Log Viewer Endpoint
+# =============================================================================
+
+@api.route('/api/system/logs', methods=['GET'])
+@require_auth
+@handle_api_errors
+def get_system_logs():
+    """Return merged, filtered log entries from all services."""
+    from core.log_reader import get_logs
+
+    service = request.args.get('service')
+    search = request.args.get('search')
+    limit = request.args.get('limit', type=int)
+
+    result = get_logs(service=service, search=search, limit=limit)
+    return jsonify(result)
+
+
+# =============================================================================
 # Authentication Endpoints
 # =============================================================================
 
 @api.route('/api/auth/status', methods=['GET'])
 def get_auth_status():
     """Get authentication status for frontend."""
+    auth_enabled = is_auth_enabled()
+    public_features = sorted(get_public_features()) if auth_enabled else []
+    settings = get_runtime_settings()
     return jsonify({
-        'auth_enabled': is_auth_enabled(),
+        'auth_enabled': auth_enabled,
         'setup_complete': is_setup_complete(),
-        'authenticated': is_authenticated()
+        'authenticated': is_authenticated(),
+        'public_features': public_features,
+        'station_name': settings.get('display', {}).get('station_name', '')
     }), 200
 
 
@@ -2075,6 +2255,9 @@ def auth_verify():
     """Internal endpoint for nginx auth_request. Returns 200 or 401."""
     if is_authenticated():
         return '', 200
+    original_uri = request.headers.get('X-Original-URI', '')
+    if original_uri.startswith('/stream/') and is_feature_public('live_feed'):
+        return '', 200
     return '', 401
 
 
@@ -2105,6 +2288,40 @@ def auth_toggle():
     except Exception as e:
         logger.error("Toggle auth error", extra={'error': str(e)})
         return jsonify({'error': 'Failed to toggle authentication'}), 500
+
+
+@api.route('/api/settings/access', methods=['PUT'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def save_access_settings():
+    """Save per-feature access settings with merge semantics.
+
+    Accepts partial payloads — only provided keys are updated.
+    Valid keys: charts_public, table_public, live_feed_public (all booleans).
+    """
+    data = request.json
+    if not data:
+        return jsonify({'error': 'Request body required'}), 400
+
+    valid_keys = {'charts_public', 'table_public', 'live_feed_public'}
+    for key, value in data.items():
+        if key not in valid_keys:
+            return jsonify({'error': f'Unknown key: {key}'}), 400
+        if not isinstance(value, bool):
+            return jsonify({'error': f'{key} must be a boolean'}), 400
+
+    current_settings = load_user_settings()
+    if 'access' not in current_settings:
+        current_settings['access'] = get_default_settings()['access']
+    current_settings['access'].update(data)
+    save_user_settings(current_settings)
+    invalidate_runtime_settings_cache()
+
+    return jsonify({
+        'success': True,
+        'access': current_settings['access']
+    }), 200
 
 
 @api.route('/api/auth/change-password', methods=['POST'])
@@ -2769,6 +2986,9 @@ def migration_spectrogram_skip():
 # Global SocketIO instance to be used by other modules
 socketio = None
 
+# Latest recorder health status (populated by main container broadcasts)
+_recorder_status = {}
+
 def create_app():
     global socketio
     app = Flask(__name__)
@@ -2795,8 +3015,12 @@ def create_app():
     # WebSocket event handlers
     @socketio.on('connect')
     def handle_connect():
+        if not is_feature_public('live_feed') and not session.get('authenticated', False):
+            return False  # Reject connection
         logger.info('WebSocket client connected')
         emit('status', {'message': 'Connected to live detection feed'})
+        if _recorder_status:
+            emit('recorder_status', _recorder_status)
 
     @socketio.on('disconnect')
     def handle_disconnect():
@@ -2808,17 +3032,18 @@ def broadcast_detection(detection_data):
     """Function to broadcast detection to all connected clients"""
     global socketio
     if socketio:
-        socketio.emit('bird_detected', detection_data)
+        detection_payload = _localize_detection(detection_data)
+        socketio.emit('bird_detected', detection_payload)
         logger.debug("Detection broadcasted to WebSocket clients", extra={
-            'species': detection_data.get('common_name', 'Unknown'),
-            'confidence': detection_data.get('confidence')
+            'species': detection_payload.get('common_name', 'Unknown'),
+            'confidence': detection_payload.get('confidence')
         })
 
 if __name__ == '__main__':
     logger.info("🌐 API server starting", extra={
         'port': API_PORT,
         'websocket': 'enabled',
-        'timezone': os.environ.get('TZ', 'UTC')
+        'timezone': get_timezone_str()
     })
     app, socketio = create_app()
     socketio.run(app, host='0.0.0.0', port=API_PORT, debug=False, allow_unsafe_werkzeug=True)

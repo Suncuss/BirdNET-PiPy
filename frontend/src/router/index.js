@@ -16,7 +16,7 @@ const routes = [
     path: '/live',
     name: 'LiveFeed',
     component: () => import('../views/LiveFeed.vue'),
-    meta: { requiresAuth: true }
+    meta: { requiresAuth: true, feature: 'live_feed' }
   },
   {
     path: '/settings',
@@ -27,13 +27,14 @@ const routes = [
   {
     path: '/charts',
     name: 'Charts',
-    component: () => import('../views/Charts.vue')
+    component: () => import('../views/Charts.vue'),
+    meta: { requiresAuth: true, feature: 'charts' }
   },
   {
     path: '/table',
     name: 'Table',
     component: () => import('../views/Table.vue'),
-    meta: { requiresAuth: true }
+    meta: { requiresAuth: true, feature: 'table' }
   },
   {
     path: '/bird/:name',
@@ -60,6 +61,7 @@ async function checkAuthStatus() {
         authEnabled: data.auth_enabled,
         setupComplete: data.setup_complete,
         authenticated: data.authenticated,
+        publicFeatures: data.public_features || [],
         checkFailed: false
       }
     }
@@ -68,7 +70,7 @@ async function checkAuthStatus() {
   }
   // Fail-closed: assume auth is required and user is not authenticated
   // This prevents unauthorized access when API is unreachable
-  return { authEnabled: true, authenticated: false, setupComplete: true, checkFailed: true }
+  return { authEnabled: true, authenticated: false, setupComplete: true, publicFeatures: [], checkFailed: true }
 }
 
 // Navigation guard for protected routes
@@ -80,10 +82,14 @@ router.beforeEach(async (to, from, next) => {
     if (!status.authEnabled) {
       // Auth disabled, allow access
       next()
+    } else if (to.meta.feature && status.publicFeatures.includes(to.meta.feature)) {
+      // Feature is configured as publicly accessible
+      next()
     } else if (!status.authenticated) {
-      // Need to login - store intended destination and redirect
+      // Need to login - stay on current page and show login modal
       sessionStorage.setItem('authRedirect', to.fullPath)
-      next({ name: 'Dashboard', query: { auth: 'required' } })
+      next(false)
+      window.dispatchEvent(new Event('auth:required'))
     } else {
       // Authenticated, allow access
       next()

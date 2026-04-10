@@ -24,6 +24,7 @@ def _create_service(notif_overrides=None, db_manager=None):
     if db_manager is None:
         db_manager = Mock()
         db_manager.get_today_detection_count.return_value = 0
+        db_manager.get_species_total_count.return_value = 0
         db_manager.get_recent_detection_count.return_value = 0
 
     mock_settings = make_mock_settings(notif_overrides)
@@ -96,6 +97,42 @@ class TestNotificationService:
         db.get_recent_detection_count.return_value = 100
         service, patcher = _create_service(
             notif_overrides={'first_of_day': True},
+            db_manager=db)
+
+        try:
+            with patch.object(service, '_send') as mock_send:
+                service._process_detection(make_detection())
+                mock_send.assert_not_called()
+        finally:
+            patcher.stop()
+
+    def test_new_species_trigger_fires_when_total_is_one(self):
+        """New species trigger fires when species total count is exactly 1."""
+        db = Mock()
+        db.get_today_detection_count.return_value = 1
+        db.get_species_total_count.return_value = 1
+        db.get_recent_detection_count.return_value = 100
+        service, patcher = _create_service(
+            notif_overrides={'new_species': True},
+            db_manager=db)
+
+        try:
+            with patch.object(service, '_send') as mock_send:
+                service._process_detection(make_detection())
+                mock_send.assert_called_once()
+                title = mock_send.call_args[0][0]
+                assert 'New species' in title
+        finally:
+            patcher.stop()
+
+    def test_new_species_trigger_does_not_fire_when_seen_before(self):
+        """New species trigger does not fire when species has been seen before."""
+        db = Mock()
+        db.get_today_detection_count.return_value = 5
+        db.get_species_total_count.return_value = 10
+        db.get_recent_detection_count.return_value = 100
+        service, patcher = _create_service(
+            notif_overrides={'new_species': True},
             db_manager=db)
 
         try:
@@ -252,6 +289,14 @@ class TestNotificationService:
                     title="Test Title", body="Test Body")
         finally:
             patcher.stop()
+
+    def test_build_title_new_species(self, notification_service):
+        """Title shows 'New species' for new_species trigger (highest priority)."""
+        service, _ = notification_service
+        detection = make_detection(common_name='Snowy Owl')
+        title = service._build_title(detection, ['new_species', 'first_of_day'])
+        assert 'New species' in title
+        assert 'Snowy Owl' in title
 
     def test_build_title_first_of_day(self, notification_service):
         """Title shows 'First sighting today' for first_of_day trigger."""

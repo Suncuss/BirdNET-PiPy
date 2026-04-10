@@ -2,10 +2,19 @@
 Unit tests for core/utils.py
 """
 from datetime import datetime
+from unittest.mock import patch
 
+import numpy as np
 import pytest
+from PIL import Image
+from scipy.io import wavfile
 
-from core.utils import build_detection_filenames, get_legacy_filename
+from core.utils import (
+    build_detection_filenames,
+    generate_spectrogram,
+    get_legacy_filename,
+    sanitize_source_label,
+)
 
 
 class TestBuildDetectionFilenames:
@@ -460,3 +469,121 @@ class TestSanitizeUrl:
 
         result = sanitize_url("rtsps://admin:secret@secure.camera.com:443/live")
         assert result == "rtsps://admin:***@secure.camera.com:443/live"
+
+
+class TestSanitizeSourceLabel:
+    """Tests for sanitize_source_label() function"""
+
+    def test_none_returns_empty(self):
+        assert sanitize_source_label(None) == ""
+
+    def test_empty_string_returns_empty(self):
+        assert sanitize_source_label("") == ""
+
+    def test_whitespace_only_returns_empty(self):
+        assert sanitize_source_label("   ") == ""
+
+    def test_simple_label(self):
+        assert sanitize_source_label("Backyard") == "Backyard"
+
+    def test_spaces_become_underscores(self):
+        assert sanitize_source_label("Local Mic") == "Local_Mic"
+
+    def test_hyphens_preserved(self):
+        assert sanitize_source_label("Front-Yard") == "Front-Yard"
+
+    def test_underscores_preserved(self):
+        assert sanitize_source_label("my_mic") == "my_mic"
+
+    def test_special_chars_stripped(self):
+        assert sanitize_source_label("Mic #2!") == "Mic_2"
+
+    def test_unicode_stripped(self):
+        assert sanitize_source_label("Backyard\u00e9") == "Backyard"
+
+    def test_max_length_truncated(self):
+        long_label = "A" * 50
+        result = sanitize_source_label(long_label)
+        assert len(result) == 30
+
+    def test_leading_trailing_whitespace_stripped(self):
+        assert sanitize_source_label("  Backyard Mic  ") == "Backyard_Mic"
+
+    def test_multiple_spaces_become_multiple_underscores(self):
+        assert sanitize_source_label("Front  Yard") == "Front__Yard"
+
+    def test_digits_preserved(self):
+        assert sanitize_source_label("Camera 1") == "Camera_1"
+
+
+class TestBuildDetectionFilenamesWithSourceLabel:
+    """Tests for build_detection_filenames() with source label suffix"""
+
+    def test_label_suffix_in_audio_filename(self):
+        result = build_detection_filenames(
+            'American Robin', 0.85, '2025-11-24T10:30:45',
+            audio_source='Backyard_Mic'
+        )
+        assert result['audio_filename'] == 'American_Robin_85_2025-11-24-birdnet-10-30-45_Backyard_Mic.mp3'
+
+    def test_label_suffix_in_spectrogram_filename(self):
+        result = build_detection_filenames(
+            'American Robin', 0.85, '2025-11-24T10:30:45',
+            audio_source='Backyard_Mic'
+        )
+        assert result['spectrogram_filename'] == 'American_Robin_85_2025-11-24-birdnet-10-30-45_Backyard_Mic.webp'
+
+    def test_none_source_no_suffix(self):
+        result = build_detection_filenames(
+            'American Robin', 0.85, '2025-11-24T10:30:45',
+            audio_source=None
+        )
+        assert result['audio_filename'] == 'American_Robin_85_2025-11-24-birdnet-10-30-45.mp3'
+
+
+class TestGenerateSpectrogram:
+    """Tests for generate_spectrogram() — actually renders to verify output."""
+
+    @pytest.fixture
+    def wav_file(self, tmp_path):
+        """Create a synthetic 3-second WAV file with a 1kHz tone."""
+        rate = 48000
+        duration = 3
+        t = np.linspace(0, duration, rate * duration, endpoint=False)
+        samples = (np.sin(2 * np.pi * 1000 * t) * 32767).astype(np.int16)
+        path = tmp_path / "test.wav"
+        wavfile.write(str(path), rate, samples)
+        return str(path)
+
+    @pytest.fixture(autouse=True)
+    def mock_settings(self):
+        """Provide default spectrogram settings."""
+        settings = {'spectrogram': {}}
+        with patch('core.utils.get_runtime_settings', return_value=settings):
+            yield
+
+    def test_output_is_valid_webp(self, tmp_path, wav_file):
+        """Test that output file is a valid WebP image."""
+        output = str(tmp_path / "spectrogram.webp")
+        generate_spectrogram(wav_file, output, "Test Bird")
+
+        img = Image.open(output)
+        assert img.format == 'WEBP'
+
+    def test_output_dimensions_with_tight_bbox(self, tmp_path, wav_file):
+        """Test that bbox_inches='tight' produces expected dimensions.
+
+        Without tight bbox (raw canvas), the image is noticeably larger
+        (~1250x200 vs ~930x170). This catches regressions like switching
+        from savefig to canvas.draw() without tight cropping.
+        """
+        output = str(tmp_path / "spectrogram.webp")
+        generate_spectrogram(wav_file, output, "Test Bird")
+
+        img = Image.open(output)
+        # bbox_inches='tight' at 250 DPI with figsize=(5, 0.8) produces
+        # roughly 1066x255. Without tight bbox it jumps to ~1250x500+.
+        assert img.width < 1200, f"Width {img.width} too large — bbox_inches='tight' may be missing"
+        assert img.height < 350, f"Height {img.height} too large — bbox_inches='tight' may be missing"
+        assert img.width > 700, f"Width {img.width} unexpectedly small"
+        assert img.height > 100, f"Height {img.height} unexpectedly small"

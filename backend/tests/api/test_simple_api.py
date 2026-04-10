@@ -1,6 +1,5 @@
 """Simple API tests that demonstrate working patterns."""
 
-import csv
 import json
 import os
 import tempfile
@@ -167,6 +166,55 @@ class TestSimpleAPI:
         assert 'average_confidence' in data
         assert 'first_detected' in data or 'first_detection' in data
         assert 'last_detected' in data or 'last_detection' in data
+
+    def test_dashboard_returns_both_recent_modes(self, api_client, real_db_manager):
+        """Test /api/dashboard returns recentObservations with both 'all' and 'unique' lists."""
+        from datetime import timedelta
+        base_time = datetime(2024, 1, 15, 10, 0, 0)
+
+        # Insert 3 Robin detections and 2 Jay detections at different times
+        for i in range(3):
+            real_db_manager.insert_detection({
+                'timestamp': (base_time + timedelta(hours=i)).isoformat(),
+                'group_timestamp': (base_time + timedelta(hours=i)).isoformat(),
+                'common_name': 'American Robin',
+                'scientific_name': 'Turdus migratorius',
+                'confidence': 0.85,
+                'latitude': 40.7128, 'longitude': -74.0060,
+                'cutoff': 0.5, 'sensitivity': 0.75, 'overlap': 0.25
+            })
+        for i in range(2):
+            real_db_manager.insert_detection({
+                'timestamp': (base_time + timedelta(hours=i+3)).isoformat(),
+                'group_timestamp': (base_time + timedelta(hours=i+3)).isoformat(),
+                'common_name': 'Blue Jay',
+                'scientific_name': 'Cyanocitta cristata',
+                'confidence': 0.80,
+                'latitude': 40.7128, 'longitude': -74.0060,
+                'cutoff': 0.5, 'sensitivity': 0.75, 'overlap': 0.25
+            })
+
+        response = api_client.get('/api/dashboard')
+        assert response.status_code == 200
+        data = response.get_json()
+
+        # recentObservations should have both 'all' and 'unique' keys
+        recent = data['recentObservations']
+        assert 'all' in recent
+        assert 'unique' in recent
+
+        # 'all' mode: same species can appear multiple times
+        all_species = [r['common_name'] for r in recent['all']]
+        assert all_species.count('American Robin') == 3
+
+        # 'unique' mode: each species appears exactly once
+        unique_species = [r['common_name'] for r in recent['unique']]
+        assert len(unique_species) == len(set(unique_species))
+        assert 'American Robin' in unique_species
+        assert 'Blue Jay' in unique_species
+
+        # latestObservation is still the globally most recent
+        assert data['latestObservation'] is not None
 
     def test_file_serving_endpoints(self):
         """Test file serving with mocked paths."""
@@ -351,7 +399,7 @@ class TestSimpleAPI:
                                     data=json.dumps(new_settings),
                                     content_type='application/json')
                 assert response.status_code == 200
-                assert 'Settings successfully updated.' in response.get_json()['message']
+                assert 'Settings applied.' in response.get_json()['message']
                 mock_save.assert_called_once()
                 mock_flag.assert_not_called()
 
@@ -374,56 +422,35 @@ class TestSimpleAPI:
                 app, _ = create_app()
                 client = app.test_client()
 
-                # Test invalid HTTP stream URL (must start with http:// or https://)
-                invalid_stream = {
-                    'audio': {
-                        'recording_mode': 'http_stream',
-                        'stream_url': 'ftp://example.com/stream'
-                    }
-                }
-                response = client.put('/api/settings',
-                                    data=json.dumps(invalid_stream),
-                                    content_type='application/json')
-                assert response.status_code == 400
-                assert 'Invalid Stream URL' in response.get_json()['error']
-
-                # Test invalid RTSP URL (must start with rtsp:// or rtsps://)
+                # Test invalid RTSP URL in source (must start with rtsp:// or rtsps://)
                 invalid_rtsp = {
                     'audio': {
-                        'recording_mode': 'rtsp',
-                        'rtsp_url': 'http://example.com/stream'
+                        'sources': [
+                            {'id': 'source_0', 'type': 'rtsp', 'url': 'http://example.com/stream', 'label': 'Test', 'enabled': True}
+                        ],
+                        'next_source_id': 1
                     }
                 }
                 response = client.put('/api/settings',
                                     data=json.dumps(invalid_rtsp),
                                     content_type='application/json')
                 assert response.status_code == 400
-                assert 'Invalid RTSP URL' in response.get_json()['error']
+                assert 'rtsp://' in response.get_json()['error']
 
-                # Test missing URL when required
-                missing_stream_url = {
+                # Test invalid source type
+                invalid_type = {
                     'audio': {
-                        'recording_mode': 'http_stream',
-                        'stream_url': ''
+                        'sources': [
+                            {'id': 'source_0', 'type': 'invalid', 'label': 'Test', 'enabled': True}
+                        ],
+                        'next_source_id': 1
                     }
                 }
                 response = client.put('/api/settings',
-                                    data=json.dumps(missing_stream_url),
+                                    data=json.dumps(invalid_type),
                                     content_type='application/json')
                 assert response.status_code == 400
-                assert 'Stream URL required' in response.get_json()['error']
-
-                missing_rtsp_url = {
-                    'audio': {
-                        'recording_mode': 'rtsp',
-                        'rtsp_url': ''
-                    }
-                }
-                response = client.put('/api/settings',
-                                    data=json.dumps(missing_rtsp_url),
-                                    content_type='application/json')
-                assert response.status_code == 400
-                assert 'RTSP URL required' in response.get_json()['error']
+                assert 'Invalid source type' in response.get_json()['error']
 
     def test_update_channel_setting(self):
         """Test update channel setting endpoint (no restart)."""
@@ -654,8 +681,7 @@ class TestSimpleAPI:
                 response = client.get('/api/stream/config')
                 assert response.status_code == 200
                 data = response.get_json()
-                assert 'stream_url' in data
-                assert 'stream_type' in data
+                assert isinstance(data, dict)
 
     def test_detection_trends_endpoint(self, api_client, real_db_manager):
         """Test /api/detections/trends endpoint."""
@@ -718,19 +744,18 @@ class TestSimpleAPI:
     def test_available_species_v24(self):
         """Test /api/species/available returns V2.4 species when model type is 'birdnet'."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create a V2.4-style labels file
-            labels_file = os.path.join(tmpdir, 'labels.txt')
-            with open(labels_file, 'w') as f:
-                f.write('Turdus migratorius_American Robin\n')
-                f.write('Cyanocitta cristata_Blue Jay\n')
-                f.write('Cardinalis cardinalis_Northern Cardinal\n')
+            fake_species = [
+                {'scientific_name': 'Cyanocitta cristata', 'common_name': 'Blue Jay'},
+                {'scientific_name': 'Cardinalis cardinalis', 'common_name': 'Northern Cardinal'},
+                {'scientific_name': 'Turdus migratorius', 'common_name': 'American Robin'},
+            ]
 
             with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
                  patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
                  patch('core.db.DatabaseManager'), \
                  patch('core.api.load_user_settings', return_value={'model': {'type': 'birdnet'}}), \
-                 patch('core.api.LABELS_PATH', labels_file), \
+                 patch('core.api.get_species_list', return_value=fake_species), \
                  patch('core.api._available_species_cache', {}):
 
                 from core.api import create_app
@@ -745,25 +770,90 @@ class TestSimpleAPI:
                 assert 'American Robin' in species_names
                 assert 'Blue Jay' in species_names
 
+    def test_available_species_v24_localized_display_names(self):
+        """Test /api/species/available adds localized display names for V2.4."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Use real species table data: Turdus migratorius → Wanderdrossel,
+            # Cyanocitta cristata → Blauhäher
+            fake_species = [
+                {'scientific_name': 'Cyanocitta cristata', 'common_name': 'Blue Jay'},
+                {'scientific_name': 'Turdus migratorius', 'common_name': 'American Robin'},
+            ]
+
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+                 patch('core.db.DatabaseManager'), \
+                 patch('core.api.load_user_settings', return_value={
+                     'model': {'type': 'birdnet'},
+                     'display': {'bird_name_language': 'de'}
+                 }), \
+                 patch('core.api.get_species_list', return_value=fake_species), \
+                 patch('core.api._available_species_cache', {}):
+
+                from core.api import create_app
+                from core.bird_name_utils import clear_bird_name_caches
+                clear_bird_name_caches()
+                app, _ = create_app()
+                client = app.test_client()
+
+                response = client.get('/api/species/available')
+                assert response.status_code == 200
+                data = response.get_json()
+                assert data['total'] == 2
+                # Sorted by localized name: Blauhäher < Wanderdrossel
+                assert data['species'][0]['display_common_name'] == 'Blauhäher'
+                assert data['species'][1]['display_common_name'] == 'Wanderdrossel'
+
+    def test_activity_overview_localized_display_species(self):
+        """Test /api/activity/overview adds localized display labels for charting."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Uses real species table: American Robin → Wanderdrossel in German
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+                 patch('core.api.load_user_settings', return_value={
+                     'model': {'type': 'birdnet'},
+                     'display': {'bird_name_language': 'de'}
+                 }):
+
+                mock_db_instance = Mock()
+                mock_db_instance.get_activity_overview.return_value = [{
+                    'species': 'American Robin',
+                    'hourlyActivity': [1] * 24,
+                    'totalObservations': 24
+                }]
+
+                from core.api import create_app
+                from core.bird_name_utils import clear_bird_name_caches
+                clear_bird_name_caches()
+                app, _ = create_app()
+                client = app.test_client()
+
+                with patch('core.api.db_manager', mock_db_instance):
+                    response = client.get('/api/activity/overview?date=2025-11-24')
+
+                assert response.status_code == 200
+                data = response.get_json()
+                assert data[0]['species'] == 'American Robin'
+                assert data[0]['displaySpecies'] == 'Wanderdrossel'
+
     def test_available_species_v3(self):
         """Test /api/species/available returns V3.0 species when model type is 'birdnet_v3'."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create a V3.0-style labels CSV (semicolon-delimited with BOM)
-            labels_csv = os.path.join(tmpdir, 'labels_v3.csv')
-            with open(labels_csv, 'w', encoding='utf-8-sig', newline='') as f:
-                writer = csv.writer(f, delimiter=';')
-                writer.writerow(['idx', 'id', 'sci_name', 'com_name', 'class', 'order'])
-                writer.writerow(['0', 'turdmig1', 'Turdus migratorius', 'American Robin', 'Aves', 'Passeriformes'])
-                writer.writerow(['1', 'cyacri1', 'Cyanocitta cristata', 'Blue Jay', 'Aves', 'Passeriformes'])
-                writer.writerow(['2', 'carcar3', 'Cardinalis cardinalis', 'Northern Cardinal', 'Aves', 'Passeriformes'])
-                writer.writerow(['3', 'passer1', 'Passer domesticus', 'House Sparrow', 'Aves', 'Passeriformes'])
+            fake_species = [
+                {'scientific_name': 'Turdus migratorius', 'common_name': 'American Robin'},
+                {'scientific_name': 'Cyanocitta cristata', 'common_name': 'Blue Jay'},
+                {'scientific_name': 'Cardinalis cardinalis', 'common_name': 'Northern Cardinal'},
+                {'scientific_name': 'Passer domesticus', 'common_name': 'House Sparrow'},
+            ]
 
             with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
                  patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
                  patch('core.db.DatabaseManager'), \
                  patch('core.api.load_user_settings', return_value={'model': {'type': 'birdnet_v3'}}), \
-                 patch('core.api.LABELS_V3_PATH', labels_csv), \
+                 patch('core.api.get_species_list', return_value=fake_species), \
                  patch('core.api._available_species_cache', {}):
 
                 from core.api import create_app
@@ -828,8 +918,12 @@ class TestSimpleAPI:
         assert data['latestObservation'] is not None
         assert 'common_name' in data['latestObservation']
 
-        # Recent observations
-        assert len(data['recentObservations']) >= 2
+        # Recent observations now expose both list modes
+        recent = data['recentObservations']
+        assert 'all' in recent
+        assert 'unique' in recent
+        assert len(recent['all']) >= 2
+        assert len(recent['unique']) >= 2
 
         # Summary periods
         assert 'today' in data['summary']
@@ -861,7 +955,7 @@ class TestSimpleAPI:
         data = response.get_json()
 
         assert data['latestObservation'] is None
-        assert data['recentObservations'] == []
+        assert data['recentObservations'] == {'all': [], 'unique': []}
         assert 'today' in data['summary']
         assert len(data['hourlyActivity']) == 24
         assert data['activityOverview'] == {'most': [], 'least': []}

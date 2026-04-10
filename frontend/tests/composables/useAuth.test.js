@@ -47,13 +47,20 @@ describe('useAuth', () => {
       expect(auth).toHaveProperty('clearError')
     })
 
+    it('has saveAccessSettings method', () => {
+      const auth = useAuth()
+      expect(auth).toHaveProperty('saveAccessSettings')
+    })
+
     it('initializes with default auth status', () => {
       const auth = useAuth()
 
       expect(auth.authStatus.value).toEqual({
         authEnabled: false,
         setupComplete: false,
-        authenticated: false
+        authenticated: false,
+        publicFeatures: [],
+        stationName: ''
       })
     })
 
@@ -137,7 +144,8 @@ describe('useAuth', () => {
         json: () => Promise.resolve({
           auth_enabled: true,
           setup_complete: true,
-          authenticated: false
+          authenticated: false,
+          public_features: ['charts']
         })
       })
 
@@ -148,8 +156,26 @@ describe('useAuth', () => {
       expect(auth.authStatus.value).toEqual({
         authEnabled: true,
         setupComplete: true,
-        authenticated: false
+        authenticated: false,
+        publicFeatures: ['charts'],
+        stationName: ''
       })
+    })
+
+    it('defaults publicFeatures to empty array when not in response', async () => {
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          auth_enabled: false,
+          setup_complete: false,
+          authenticated: true
+        })
+      })
+
+      const auth = useAuth()
+      await auth.checkAuthStatus()
+
+      expect(auth.authStatus.value.publicFeatures).toEqual([])
     })
 
     it('handles fetch error gracefully', async () => {
@@ -400,6 +426,81 @@ describe('useAuth', () => {
 
       expect(result).toBe(false)
       expect(auth.error.value).toBe('Current password is incorrect')
+    })
+  })
+
+  describe('saveAccessSettings', () => {
+    it('sends correct PUT body', async () => {
+      // First call: PUT /api/settings/access
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, access: { charts_public: true } })
+      })
+      // Second call: checkAuthStatus refresh
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          auth_enabled: true,
+          setup_complete: true,
+          authenticated: true,
+          public_features: ['charts']
+        })
+      })
+
+      const auth = useAuth()
+      const result = await auth.saveAccessSettings({ charts_public: true })
+
+      expect(result).toBe(true)
+      expect(fetchMock).toHaveBeenCalledWith('/api/settings/access', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ charts_public: true })
+      })
+    })
+
+    it('refreshes auth status on success', async () => {
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true })
+      })
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          auth_enabled: true,
+          setup_complete: true,
+          authenticated: true,
+          public_features: ['charts', 'table']
+        })
+      })
+
+      const auth = useAuth()
+      await auth.saveAccessSettings({ charts_public: true })
+
+      expect(auth.authStatus.value.publicFeatures).toEqual(['charts', 'table'])
+    })
+
+    it('sets error on failure', async () => {
+      fetchMock.mockResolvedValueOnce({
+        ok: false,
+        json: () => Promise.resolve({ error: 'Not authorized' })
+      })
+
+      const auth = useAuth()
+      const result = await auth.saveAccessSettings({ charts_public: true })
+
+      expect(result).toBe(false)
+      expect(auth.error.value).toBe('Not authorized')
+    })
+  })
+
+  describe('resetState', () => {
+    it('clears publicFeatures', () => {
+      const auth = useAuth()
+      auth.authStatus.value.publicFeatures = ['charts', 'table']
+
+      auth.resetState()
+
+      expect(auth.authStatus.value.publicFeatures).toEqual([])
     })
   })
 

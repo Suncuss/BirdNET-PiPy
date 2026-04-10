@@ -273,6 +273,83 @@ class TestDatabaseQueryMethods:
         assert result['data'][1] == 0  # February (no detection)
         assert result['data'][2] == 1  # March
 
+    def test_get_latest_detections_unique_returns_one_per_species(self, test_db_manager):
+        """Test unique=True returns one row per species, most recent of each."""
+        base_detections = [
+            ('American Robin', '2024-01-15T10:00:00', '2024-01-15T10:00:00'),
+            ('American Robin', '2024-01-15T11:00:00', '2024-01-15T11:00:00'),
+            ('American Robin', '2024-01-15T12:00:00', '2024-01-15T12:00:00'),
+            ('Blue Jay', '2024-01-15T09:00:00', '2024-01-15T09:00:00'),
+            ('Blue Jay', '2024-01-15T13:00:00', '2024-01-15T13:00:00'),
+            ('Northern Cardinal', '2024-01-15T08:00:00', '2024-01-15T08:00:00'),
+            ('Northern Cardinal', '2024-01-15T14:00:00', '2024-01-15T14:00:00'),
+            ('Northern Cardinal', '2024-01-15T15:00:00', '2024-01-15T15:00:00'),
+            ('Hooded Warbler', '2024-01-15T07:00:00', '2024-01-15T07:00:00'),
+            ('Hooded Warbler', '2024-01-15T16:00:00', '2024-01-15T16:00:00'),
+        ]
+        for species, ts, gts in base_detections:
+            test_db_manager.insert_detection({
+                'timestamp': ts, 'group_timestamp': gts,
+                'scientific_name': f'{species}_scientific',
+                'common_name': species, 'confidence': 0.8,
+                'latitude': 40.7128, 'longitude': -74.0060,
+                'cutoff': 0.5, 'sensitivity': 0.75, 'overlap': 0.25
+            })
+
+        results = test_db_manager.get_latest_detections(limit=15, unique=True)
+
+        assert len(results) == 4
+        species_seen = [r['common_name'] for r in results]
+        assert len(set(species_seen)) == 4  # each species exactly once
+
+        # Ordered by timestamp DESC — Hooded Warbler 16:00 is most recent
+        assert results[0]['common_name'] == 'Hooded Warbler'
+        assert results[0]['timestamp'] == '2024-01-15T16:00:00'
+
+        # Each result should be the most recent detection of that species
+        expected_latest = {
+            'American Robin': '2024-01-15T12:00:00',
+            'Blue Jay': '2024-01-15T13:00:00',
+            'Northern Cardinal': '2024-01-15T15:00:00',
+            'Hooded Warbler': '2024-01-15T16:00:00',
+        }
+        for r in results:
+            assert r['timestamp'] == expected_latest[r['common_name']]
+
+    def test_get_latest_detections_unique_respects_limit(self, test_db_manager):
+        """Test unique=True with limit returns at most limit results."""
+        for i, species in enumerate(['Robin', 'Jay', 'Cardinal', 'Warbler', 'Sparrow']):
+            test_db_manager.insert_detection({
+                'timestamp': f'2024-01-15T{10+i:02d}:00:00',
+                'group_timestamp': f'2024-01-15T{10+i:02d}:00:00',
+                'scientific_name': f'{species}_sci',
+                'common_name': species, 'confidence': 0.8,
+                'latitude': 40.7128, 'longitude': -74.0060,
+                'cutoff': 0.5, 'sensitivity': 0.75, 'overlap': 0.25
+            })
+
+        results = test_db_manager.get_latest_detections(limit=3, unique=True)
+        assert len(results) == 3
+
+    def test_get_latest_detections_unique_vs_default(self, test_db_manager):
+        """Test unique=True collapses same species, default does not."""
+        for i in range(3):
+            test_db_manager.insert_detection({
+                'timestamp': f'2024-01-15T{10+i:02d}:00:00',
+                'group_timestamp': f'2024-01-15T{10+i:02d}:00:00',
+                'scientific_name': 'Turdus migratorius',
+                'common_name': 'American Robin', 'confidence': 0.8,
+                'latitude': 40.7128, 'longitude': -74.0060,
+                'cutoff': 0.5, 'sensitivity': 0.75, 'overlap': 0.25
+            })
+
+        default_results = test_db_manager.get_latest_detections(limit=10, unique=False)
+        unique_results = test_db_manager.get_latest_detections(limit=10, unique=True)
+
+        assert len(default_results) == 3
+        assert len(unique_results) == 1
+        assert unique_results[0]['common_name'] == 'American Robin'
+
     def test_empty_database_queries(self, test_db_manager):
         """Test various queries on empty database."""
         # Test methods that should handle empty database gracefully

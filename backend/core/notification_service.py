@@ -9,7 +9,7 @@ import threading
 from datetime import datetime
 
 from core.logging_config import get_logger
-from core.runtime_config import get_runtime_settings
+from core.runtime_config import get_runtime_settings, resolve_source_label
 
 logger = get_logger(__name__)
 
@@ -41,6 +41,7 @@ class NotificationService:
         self._every_detection = notif['every_detection']
         self._rate_limit_seconds = notif['rate_limit_seconds']
         self._first_of_day = notif['first_of_day']
+        self._new_species = notif['new_species']
         self._rare_species = notif['rare_species']
         self._rare_threshold = notif['rare_threshold']
         self._rare_window_days = notif['rare_window_days']
@@ -78,10 +79,20 @@ class NotificationService:
             if self._check_rate_limit(sci_name, detection_ts):
                 triggers.append('every_detection')
 
+        today_count = None
         if self._first_of_day:
-            count = self._db.get_today_detection_count(sci_name, before_timestamp=detection_ts)
-            if count == 1:
+            today_count = self._db.get_today_detection_count(sci_name, before_timestamp=detection_ts)
+            if today_count == 1:
                 triggers.append('first_of_day')
+
+        if self._new_species:
+            # If already seen multiple times today, definitely not a new species
+            if today_count is not None and today_count > 1:
+                pass
+            else:
+                total = self._db.get_species_total_count(sci_name, before_timestamp=detection_ts)
+                if total == 1:
+                    triggers.append('new_species')
 
         if self._rare_species:
             count = self._db.get_recent_detection_count(
@@ -117,11 +128,18 @@ class NotificationService:
     def _build_title(self, detection, triggers):
         """Build notification title based on most notable trigger."""
         common_name = detection.get('common_name', 'Unknown')
+        if 'new_species' in triggers:
+            return f"New species: {common_name}"
         if 'first_of_day' in triggers:
             return f"First sighting today: {common_name}"
         if 'rare_species' in triggers:
             return f"Rare species: {common_name}"
         return f"Bird detected: {common_name}"
+
+    @staticmethod
+    def _resolve_source_label(source_id):
+        """Look up human-readable label for a source ID from runtime settings."""
+        return resolve_source_label(source_id, fallback=source_id)
 
     def _build_message(self, detection, triggers):
         """Build notification message body."""
@@ -139,7 +157,15 @@ class NotificationService:
             f"Time: {time_str}",
         ]
 
+        # Include source label if available
+        audio_source = detection.get('audio_source')
+        if audio_source:
+            source_label = self._resolve_source_label(audio_source)
+            lines.append(f"Source: {source_label}")
+
         reasons = []
+        if 'new_species' in triggers:
+            reasons.append("Never seen before")
         if 'first_of_day' in triggers:
             reasons.append("First detection today")
         if 'rare_species' in triggers:

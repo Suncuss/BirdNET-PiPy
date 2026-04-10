@@ -2,6 +2,135 @@
 
 ## [Unreleased]
 
+- Fixed storage cleanup silently skipping multi-source detection files — cleanup query was missing the `extra` column needed to reconstruct filenames with source suffixes, so those files were never deleted
+- Fixed storage cleanup reporting "candidates exhausted" instead of "target reached" when the final deletion crossed the threshold
+- Optimized storage cleanup to fetch cleanup candidates once instead of twice
+- Redesigned audio source selection UX — pills now open the edit modal on click instead of toggling state, preventing accidental source deactivation; enable/disable toggle moved inside the modal; opacity distinguishes active vs inactive sources
+- Auto-test RTSP streams on save/add with inline progress spinner, skipping test when URL unchanged (label-only edits save instantly); same pattern applied to SetupWizard
+- Restored keyboard accessibility for source and notification pills
+- Reduced backend memory usage by lazy-loading spectrogram dependencies (matplotlib, scipy, Pillow) and shrinking location filter caches
+- Added retry logic (3 attempts with backoff) to GHCR image pull before falling back to local build
+- Fixed SetupWizard requiring a second click after "Finish anyway" when adding an RTSP source
+- Fixed orphaned background monitor surviving shutdown and restarting containers after stop
+- Fixed `set -e` dead branches swallowing container start/restart error messages
+- Fixed word-splitting regression in install script argument passing (`--branch`, `--no-reboot`)
+- Fixed GHCR pull silently succeeding with stale images when compose config returns empty — now falls back to local build
+- Fixed special characters in git metadata producing invalid version.json
+- Derived GHCR pull image list from compose config instead of hardcoded services
+- Changed GHCR image pulls to sequential to avoid network saturation on Raspberry Pi
+- Preserved Docker build cache for fallback local builds instead of pruning all layers
+- Added Docker space reclamation before update fetch to prevent disk-full failures
+- Fixed all shellcheck warnings across install scripts
+
+## [0.6.1] - 2026-04-05
+
+- Enabled multi-language bird name support for BirdNET V3.0 — filled English fallbacks for 5,235 new species in the unified species table and removed the disabled language selector restriction
+- Removed 26 unused per-language V2.4 label files — all localization now goes through the unified species table
+- Added auto-cleanup trigger percentage display in Settings storage card
+- Hot-apply location changes (latitude, longitude, timezone) without requiring a service restart
+- Decoupled timezone from TZ environment variable — reads config directly with thread-safe caching
+- Fixed settings save status message overlapping the page heading on mobile
+- Fixed restart progress timer showing inaccurate elapsed time — was ignoring initial delay and only updating every 20 seconds
+- Fixed swap setup in install.sh for low-memory systems using GHCR pulls
+- Fixed login modal appearing for unauthenticated guests on the dashboard when live feed public access was disabled — recorder health check was piggybacking on a live-feed-gated endpoint
+- Decoupled recorder health from live feed into a dedicated auth-protected endpoint (`/api/recorder/status`), preventing source labels and error details from leaking to anonymous users
+- Added recorder health check after login so the navbar indicator appears without a page reload
+
+## [0.6.0] - 2026-04-02
+
+- Added multi-source audio recording — record from multiple microphones and RTSP streams simultaneously (#22)
+- Added 2-step SetupWizard replacing LocationSetupModal — guides through location and audio source configuration on first use
+- Added pre-built Docker image support — install pulls ARM64 images from GHCR on release branches for faster setup, falls back to local build for non-ARM64 platforms, non-standard UIDs, or non-release branches
+- Added GitHub Actions CI workflow for building and pushing Docker images to GHCR
+- Added edit support for notification services with pill-based URL management
+- Added global recorder health warning pill — amber FAB appears on all pages (except Settings) when audio sources are degraded or stopped, with 24-hour dismiss and priority over the update indicator
+- Added auto-expanded error details on Settings page when audio sources have issues
+- Added 200 per-page option and scroll-to-top button in Table view
+- Added location filter probability logging for top detections
+- Added CLI script to regenerate buggy spectrograms
+- Changed detection filenames to use source label instead of source ID
+- Improved notification URL parsing: round-trip verification falls back to custom editor when parsers lose query params, and duplicate URLs are deduplicated on save
+- Improved location context: replaced mutable `last_probabilities` with immutable `LocationContext`, moved probability logging to caller
+- Centralized recorder state strings as shared constants
+- Refactored LiveFeed stream state derivation to use computed properties
+- Fixed spectrogram generation producing cropped images (restored `bbox_inches='tight'`)
+- Fixed several audio sources migration issues: missing default Local Mic on fresh installs, microphone not preserved during migration, migration skipped when defaults already set the sources key, and migrated RTSP sources getting generic labels
+- Fixed per-source audio error details lost in multi-stream setup
+- Fixed service restart triggered when only audio source label changes
+- Fixed filename collisions when different source labels sanitize to identical strings
+- Fixed recorder health broadcast failing on first attempt, causing 60s startup delay
+- Fixed health cache not refreshed after restart; kept Icecast alive with no active sources
+- Fixed NaN values in model logs and improved system logs modal UX
+- Fixed inconsistent percentage rounding in location probability logs
+- Improved chunk-level logging: raw model top-3 now includes location filter probabilities for easier debugging
+- Optimized model post-processing with NumPy partial sort and masking instead of full Python sort over all species
+- Fixed zero-confidence species leaking into candidates when cutoff is 0.0
+- Fixed security vulnerability in happy-dom (GHSA-6q6h-j7hj-3r64)
+- Fixed `set_env_var` creating duplicate keys when the target key is the only line in the env file
+- Fixed `.env` overwrite during GHCR pull — now preserves existing settings like `ICECAST_PASSWORD`
+- Fixed `BIRDNET_CHANNEL` not sanitized on non-release branches, breaking docker compose builds
+- Fixed GHCR pull check never matched due to JSON whitespace in image inspect
+- Fixed parallel build race caused by duplicate build directives
+
+## [0.5.8] - 2026-03-25
+
+- Added location-based species filtering (geomodel) for BirdNET V3.0 — bundled geomodel filters detections by geographic probability with thread-safe caching
+- Added "new species" notification trigger — alerts when a species is detected that has never been seen before
+- Added unified species lookup table merging V2.4 labels (27 languages), V3.0 taxonomy, and eBird codes — enables localized bird names for V3.0 (~6K overlapping species)
+- Added unique species toggle (All/Unique) to Dashboard recent observations — both lists fetched in a single API call for instant switching
+- Added recorder health status to Settings — real-time recording state surfaced via WebSocket
+- Added stream URL testing with card-style audio source selector and edit modal
+- Added configurable species filter threshold in Settings UI
+- Added system logs viewer with per-service file logging, accessible via modal in Settings
+- Added restart services button in Settings Management section
+- Added timezone display in Location settings section
+- Added pulsing red dot indicator on active audio source pill when recorder is running
+- Added immediate persist for RTSP stream add/edit/delete — modal "Test & Save" now saves to backend without requiring a second Save click
+- Redesigned audio source UI with card grid, labels, and test-and-add flow
+- Merged Location and Audio Source into a single Settings card
+- Combined detection sliders into responsive 3-column grid
+- Converted Management section to collapsible, repositioned above Data
+- Simplified filter_by_location to single filter-then-sort pass
+- Improved spectrogram generation performance — skip PNG encode/decode by passing raw NumPy arrays directly
+- Improved recorder health UX: cleaner errors, clipboard copy, restart state feedback
+- Improved log polling efficiency with AbortController and fixed formatter duplication
+- Fixed V3.0 geomodel default threshold (0.15) being silently overridden by the V2.4 default (0.03) on fresh or upgraded installs
+- Fixed subprocess pipe leaks and raised FD limit to prevent "too many open files" (#35)
+- Fixed location change not re-applying timezone until manual restart — now triggers full service restart
+- Fixed Icecast UTC timestamps not converted to local time, causing incorrect sorting
+- Fixed consistent row height in Bird Activity Overview when species limit exceeds 10
+- Fixed unique species query returning too few results when one species dominates recent detections — falls back to unbounded query when pre-fetch window is insufficient
+- Fixed user toggle selections (activity overview, recent observations) resetting during in-flight dashboard fetches
+- Fixed input validation and thread safety in model service: guard sensitivity ≤ 0, validate inference payloads, type-check settings before merge, add thread locks to shared caches
+- Fixed RTSP label-only edits not tracked as unsaved changes, causing silent data loss
+- Fixed recorder health status broadcasting stale pre-restart value after automatic recovery
+
+## [0.5.7] - 2026-03-07
+
+- Added localized bird name support — display common names in 26 languages using BirdNET model labels, configurable in Settings
+- Added granular per-feature access control — Charts, Table, and Live Feed can each be set public or private independently
+- Added configurable station name for multi-system identification
+- Added login button in header when authentication is enabled but user is not logged in
+- Fixed RTSP stream handling: skip video streams, regenerate audio timestamps, and discard corrupt packets to prevent non-monotonic DTS errors
+- Fixed Wikimedia image search returning non-bird images (eggs, skeletons) by excluding irrelevant terms
+- Fixed bird name language setting not taking effect until service restart (stale lru_cache)
+- Fixed language selector available for BirdNET v3 which has no localized labels — now disabled with explanation
+- Fixed LiveFeed auth error not showing login modal when 401 is discovered via stream probe
+- Fixed stale auth redirect causing navigation to wrong page after login
+- Fixed Docker build cache growing unbounded — now prunes cache older than 7 days after builds
+- Changed Settings page layout: reorganized into logical collapsible sections with extracted ToggleSwitch component
+- Changed auth settings UI: replaced blockquote-style border with subtle background panel, added inline disclosure for per-feature access toggles, moved Change Password outside panel
+- Changed login modal to stay on the current page instead of redirecting to Dashboard
+- Improved LiveFeed error messages with specific diagnostics (stream unavailable vs server down vs decode error) and consistent console logging
+
+## [0.5.6] - 2026-03-04
+
+- Added Home Assistant add-on lifecycle support with restart resilience
+- Added HA addon repository link on Settings page in HA mode
+- Added source commit display in HA mode, hidden manual update check
+- Fixed HA lifecycle provider detection fallback
+- Fixed HA ingress stream config and default bird placeholder URLs
+
 ## [0.5.5] - 2026-03-02
 
 - Added notification system via Apprise with guided service picker, built-in test, and immediate autosave

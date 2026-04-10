@@ -1,5 +1,6 @@
 services:
   model-server:
+    image: ghcr.io/suncuss/birdnet-pipy-backend:${BIRDNET_CHANNEL:-main}
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -21,12 +22,8 @@ services:
       - "127.0.0.1:5001:5001"
 
   api:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-      args:
-        UID: ${UID:-1000}
-        GID: ${GID:-1000}
+    image: ghcr.io/suncuss/birdnet-pipy-backend:${BIRDNET_CHANNEL:-main}
+    # No build: — shares image built by model-server service
     command: python -m core.api
     restart: unless-stopped
     volumes:
@@ -44,14 +41,14 @@ services:
       - "127.0.0.1:5002:5002"
 
   main:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-      args:
-        UID: ${UID:-1000}
-        GID: ${GID:-1000}
+    image: ghcr.io/suncuss/birdnet-pipy-backend:${BIRDNET_CHANNEL:-main}
+    # No build: — shares image built by model-server service
     command: python -m core.main
     restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 8192
+        hard: 16384
     volumes:
       - ./backend:/app
       - ./data:/app/data
@@ -71,6 +68,7 @@ services:
       - api
 
   icecast:
+    image: ghcr.io/suncuss/birdnet-pipy-icecast:${BIRDNET_CHANNEL:-main}
     build:
       context: ./deployment/audio
       dockerfile: Dockerfile
@@ -82,8 +80,8 @@ services:
       # PulseAudio socket for audio access
       # birdnet-service.sh ensures /run/pulse/native exists (system-wide or symlink to user socket)
       - /run/pulse:/run/pulse:ro
-      # User settings for RTSP URL configuration
-      - ./data:/app/data:ro
+      # User settings for RTSP URL configuration; needs write for data/logs/
+      - ./data:/app/data
     environment:
       - PULSE_SERVER=unix:/run/pulse/native
       - ICECAST_PASSWORD=${ICECAST_PASSWORD:-}
@@ -95,6 +93,7 @@ services:
       - "127.0.0.1:8888:8888"
 
   frontend:
+    image: ghcr.io/suncuss/birdnet-pipy-frontend:${BIRDNET_CHANNEL:-main}
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -105,4 +104,3 @@ services:
       - TZ=UTC
     depends_on:
       - api
-    

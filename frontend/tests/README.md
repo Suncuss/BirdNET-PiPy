@@ -6,33 +6,41 @@ This directory contains all tests for the BirdNET-PiPy Vue.js frontend, organize
 
 ```
 tests/
-├── App.test.js                    # Root App component tests
-├── components/                    # Reusable component tests (3 files)
-│   ├── LocationSetupModal.test.js # Location setup modal tests
-│   ├── LoginModal.test.js         # Authentication modal tests
-│   └── UpdateManager.test.js      # System update component tests
-├── composables/                   # Vue composition function tests (9 files)
-│   ├── useAuth.test.js            # Authentication composable tests
-│   ├── useBirdCharts.test.js      # Chart.js integration tests
-│   ├── useChartColors.test.js     # Color palette tests
-│   ├── useChartHelpers.test.js    # Chart utility function tests
-│   ├── useDateNavigation.test.js  # Date navigation composable tests
-│   ├── useFetchBirdData.test.js   # API data fetching tests
-│   ├── useLogger.test.js          # Logging utility tests
-│   ├── useServiceRestart.test.js  # Service restart polling tests
-│   └── useSystemUpdate.test.js    # System update composable tests
-├── router/                        # Vue Router tests (1 file)
-│   └── router.test.js             # Route configuration and resolution tests
-└── views/                         # View component tests (9 files)
-    ├── BirdDetails.test.js        # Bird details page tests
-    ├── BirdDetectionList.test.js  # Detection list component tests
-    ├── BirdGallery.test.js        # Bird gallery page tests
-    ├── Charts.test.js             # Charts page tests
-    ├── Dashboard.test.js          # Dashboard page tests
-    ├── Detections.test.js         # Detections page tests
-    ├── LiveFeed.test.js           # Live audio stream page tests
-    ├── Settings.test.js           # Settings page tests
-    └── Spectrogram.test.js        # Spectrogram component tests
+├── App.test.js                           # Root App component tests (2 tests)
+├── components/                           # Reusable component tests (7 files)
+│   ├── AddNotificationModal.test.js      # Notification modal (36 tests)
+│   ├── AlertBanner.test.js               # Alert banner component (11 tests)
+│   ├── DetectionInfoModal.test.js        # Detection info modal (25 tests)
+│   ├── LoginModal.test.js                # Authentication modal (22 tests)
+│   ├── SetupWizard.test.js               # Setup wizard flow (17 tests)
+│   ├── SpeciesFilterModal.test.js        # Species filter modal (3 tests)
+│   └── UpdateManager.test.js             # System update component (5 tests)
+├── composables/                          # Vue composition function tests (12 files)
+│   ├── useAudioPlayer.test.js            # Audio playback (23 tests)
+│   ├── useAuth.test.js                   # Authentication composable (35 tests)
+│   ├── useBirdCharts.test.js             # Chart.js integration (24 tests)
+│   ├── useChartColors.test.js            # Color palette (8 tests)
+│   ├── useChartHelpers.test.js           # Chart utility functions (23 tests)
+│   ├── useDateNavigation.test.js         # Date navigation (39 tests)
+│   ├── useFetchBirdData.test.js          # API data fetching (27 tests)
+│   ├── useLogger.test.js                 # Logging utility (18 tests)
+│   ├── useServiceRestart.test.js         # Service restart polling (7 tests)
+│   ├── useSmartCrop.test.js              # Smart image cropping (16 tests)
+│   ├── useSystemUpdate.test.js           # System update composable (19 tests)
+│   └── useTableData.test.js             # Table data management (31 tests)
+├── router/                               # Vue Router tests (1 file)
+│   └── router.test.js                    # Route configuration and resolution (24 tests)
+└── views/                                # View component tests (10 files)
+    ├── BirdDetails.test.js               # Bird details page (15 tests)
+    ├── BirdDetectionList.test.js         # Detection list component (3 tests)
+    ├── BirdGallery.test.js               # Bird gallery page (8 tests)
+    ├── Charts.test.js                    # Charts page (14 tests)
+    ├── Dashboard.test.js                 # Dashboard page (21 tests)
+    ├── Detections.test.js                # Detections page (1 test)
+    ├── LiveFeed.test.js                  # Live audio stream page (15 tests)
+    ├── Settings.test.js                  # Settings page (58 tests)
+    ├── Spectrogram.test.js               # Spectrogram component (2 tests)
+    └── Table.test.js                     # Detection table (17 tests)
 ```
 
 ## Running Tests
@@ -117,46 +125,54 @@ Tests for reusable Vue components.
 
 | File | Tests | Description |
 |------|-------|-------------|
-| `LoginModal.test.js` | ~15 | Login forms, setup flows, password validation, error handling |
-| `LocationSetupModal.test.js` | ~12 | Coordinate entry, address search, save/skip actions |
-| `UpdateManager.test.js` | ~5 | Version display, update detection, update application |
+| `AddNotificationModal.test.js` | 36 | Notification service picker, URL building, test and save |
+| `AlertBanner.test.js` | 11 | Alert display, dismiss, auto-hide |
+| `DetectionInfoModal.test.js` | 25 | Detection details display, audio playback, actions |
+| `LoginModal.test.js` | 22 | Login forms, setup flows, password validation, error handling |
+| `SetupWizard.test.js` | 17 | Location and audio source setup flow |
+| `SpeciesFilterModal.test.js` | 3 | Species filter selection |
+| `UpdateManager.test.js` | 5 | Version display, update detection, update application |
 
 ### Composable Tests (`composables/`)
 Tests for Vue composition functions (reusable logic).
 
 | File | Tests | Description |
 |------|-------|-------------|
-| `useAuth.test.js` | ~20 | Authentication state, login/logout/setup flows, error handling |
-| `useBirdCharts.test.js` | ~12 | Chart creation, data transformation, Chart.js integration |
-| `useChartColors.test.js` | ~6 | Color palette structure and values |
-| `useChartHelpers.test.js` | ~15 | Hour labels, row stats, matrix data, date formatting |
-| `useDateNavigation.test.js` | ~18 | View switching, date navigation, boundary checks |
-| `useFetchBirdData.test.js` | ~12 | API calls, error handling, reactive updates |
-| `useLogger.test.js` | ~10 | Log levels, API logging, performance timing |
-| `useServiceRestart.test.js` | ~7 | Polling behavior, auto-reload, state management |
-| `useSystemUpdate.test.js` | ~10 | Version loading, update checks, update triggers |
+| `useAudioPlayer.test.js` | 23 | Audio playback, controls, state management |
+| `useAuth.test.js` | 35 | Authentication state, login/logout/setup flows, error handling |
+| `useBirdCharts.test.js` | 24 | Chart creation, data transformation, Chart.js integration |
+| `useChartColors.test.js` | 8 | Color palette structure and values |
+| `useChartHelpers.test.js` | 23 | Hour labels, row stats, matrix data, date formatting |
+| `useDateNavigation.test.js` | 39 | View switching, date navigation, boundary checks |
+| `useFetchBirdData.test.js` | 27 | API calls, error handling, reactive updates |
+| `useLogger.test.js` | 18 | Log levels, API logging, performance timing |
+| `useServiceRestart.test.js` | 7 | Polling behavior, auto-reload, state management |
+| `useSmartCrop.test.js` | 16 | Smart image cropping logic |
+| `useSystemUpdate.test.js` | 19 | Version loading, update checks, update triggers |
+| `useTableData.test.js` | 31 | Table sorting, filtering, pagination |
 
 ### Router Tests (`router/`)
 Tests for Vue Router configuration.
 
 | File | Tests | Description |
 |------|-------|-------------|
-| `router.test.js` | ~15 | Route definitions, path resolution, parameters, lazy loading |
+| `router.test.js` | 24 | Route definitions, path resolution, parameters, lazy loading |
 
 ### View Tests (`views/`)
 Tests for page-level Vue components.
 
 | File | Tests | Description |
 |------|-------|-------------|
-| `BirdDetails.test.js` | ~10 | Bird info display, recordings, chart rendering |
-| `BirdDetectionList.test.js` | ~3 | Detection rendering, highlight styling, navigation |
-| `BirdGallery.test.js` | ~3 | Tab switching, image loading, empty states |
-| `Charts.test.js` | ~6 | Date selection, data fetching, navigation |
-| `Dashboard.test.js` | ~5 | Empty states, data formatting, error display |
-| `Detections.test.js` | ~1 | Placeholder content |
-| `LiveFeed.test.js` | ~4 | Stream config, audio controls, WebSocket listeners |
-| `Settings.test.js` | ~15 | Settings loading, input validation, saving |
-| `Spectrogram.test.js` | ~2 | Audio fetching, spectrogram generation |
+| `BirdDetails.test.js` | 15 | Bird info display, recordings, chart rendering |
+| `BirdDetectionList.test.js` | 3 | Detection rendering, highlight styling, navigation |
+| `BirdGallery.test.js` | 8 | Tab switching, image loading, empty states |
+| `Charts.test.js` | 14 | Date selection, data fetching, navigation |
+| `Dashboard.test.js` | 21 | Empty states, data formatting, error display |
+| `Detections.test.js` | 1 | Placeholder content |
+| `LiveFeed.test.js` | 15 | Stream config, audio controls, WebSocket listeners |
+| `Settings.test.js` | 58 | Settings loading, input validation, saving |
+| `Spectrogram.test.js` | 2 | Audio fetching, spectrogram generation |
+| `Table.test.js` | 17 | Detection table rendering, sorting, actions |
 
 ## Testing Patterns
 
@@ -207,7 +223,7 @@ const mountComponent = () => mount(MyComponent, {
 it('renders correctly', async () => {
   const wrapper = mountComponent()
   await flushPromises()  // Wait for async operations
-  
+
   expect(wrapper.text()).toContain('Expected text')
 })
 ```
@@ -221,7 +237,7 @@ import { useAuth } from '@/composables/useAuth'
 
 it('returns expected properties', () => {
   const auth = useAuth()
-  
+
   expect(auth).toHaveProperty('authStatus')
   expect(auth).toHaveProperty('login')
   expect(typeof auth.login).toBe('function')
@@ -232,10 +248,10 @@ it('handles login success', async () => {
     ok: true,
     json: () => Promise.resolve({ success: true })
   })
-  
+
   const auth = useAuth()
   const result = await auth.login('password')
-  
+
   expect(result).toBe(true)
 })
 ```
@@ -334,14 +350,14 @@ Coverage targets `src/**/*.{js,vue}` excluding `src/main.js`.
 
 ## Test Counts Summary
 
-| Category | Files | Approx. Tests |
-|----------|-------|---------------|
-| App | 1 | ~2 |
-| Components | 3 | ~32 |
-| Composables | 9 | ~110 |
-| Router | 1 | ~15 |
-| Views | 9 | ~49 |
-| **Total** | **23** | **~208** |
+| Category | Files | Tests |
+|----------|-------|-------|
+| App | 1 | 2 |
+| Components | 7 | 119 |
+| Composables | 12 | 270 |
+| Router | 1 | 24 |
+| Views | 10 | 154 |
+| **Total** | **31** | **569** |
 
 ## Common Issues
 

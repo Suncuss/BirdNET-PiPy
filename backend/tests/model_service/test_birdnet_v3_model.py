@@ -269,3 +269,12 @@ class TestBirdNetV3ModelFilterByLocation:
 
         result = model.filter_by_location(42.0, -76.0, 25)
         assert result is None
+
+    def test_filter_by_location_returns_none_with_threshold(self):
+        """V3.0 filter_by_location returns None even with explicit threshold."""
+        from model_service.birdnet_v3_model import BirdNetV3Model
+
+        model = BirdNetV3Model.__new__(BirdNetV3Model)
+
+        result = model.filter_by_location(42.0, -76.0, 25, threshold=0.05)
+        assert result is None

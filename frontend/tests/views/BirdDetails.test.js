@@ -56,6 +56,7 @@ vi.mock('@/composables/useSmartCrop', () => ({
 
 const mockBirdDetails = {
   common_name: 'American Robin',
+  display_common_name: 'Amsel',
   scientific_name: 'Turdus migratorius',
   total_visits: 50,
   first_detected: '2024-01-01T10:00:00',
@@ -147,6 +148,13 @@ describe('BirdDetails Recordings Section', () => {
       call[0].includes('/recordings')
     )
     expect(recordingsCall[1].params.limit).toBe(16)
+  })
+
+  it('displays localized common name when provided', async () => {
+    const wrapper = mountComponent()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Amsel')
   })
 
   it('displays 4 recordings per page', async () => {

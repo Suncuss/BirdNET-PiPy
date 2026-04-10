@@ -45,6 +45,7 @@ const baseState = () => ({
   hasLoadedOnce: ref(true),
   fetchDashboardData: vi.fn(),
   setActivityOrder: vi.fn(),
+  setRecentObsMode: vi.fn(),
   fetchChartsData: vi.fn()
 })
 
@@ -246,6 +247,55 @@ describe('Dashboard', () => {
 
     // Canvas should NOT be reinitialized
     expect(getContextSpy).toHaveBeenCalledTimes(1)
+  })
+
+  describe('unique species toggle', () => {
+    it('renders pill toggle with All and Unique options', async () => {
+      const wrapper = mountDashboard()
+      await flushPromises()
+
+      // Find the recent observations toggle container (pill group next to "Recent Observations" heading)
+      const pillGroups = wrapper.findAll('.bg-gray-100.rounded-full')
+      // There are multiple pill groups (summary periods, activity order, recent obs filter)
+      // Find the one containing a button with text "Unique" or "Uniq"
+      const recentObsGroup = pillGroups.find(g =>
+        g.findAll('button').some(b => b.text().includes('Uniq'))
+      )
+      expect(recentObsGroup).toBeTruthy()
+      expect(recentObsGroup.findAll('button').length).toBe(2)
+    })
+
+    it('All is selected by default', async () => {
+      const wrapper = mountDashboard()
+      await flushPromises()
+
+      // Find the pill toggle buttons for recent observations filter
+      const allButtons = wrapper.findAll('button')
+      const allBtn = allButtons.find(b => b.text().includes('All') && b.classes().some(c => c.includes('bg-white')))
+      expect(allBtn).toBeTruthy()
+    })
+
+    it('clicking Unique calls setRecentObsMode instantly', async () => {
+      const state = baseState()
+      useFetchBirdData.mockReturnValue(state)
+
+      const wrapper = mountDashboard()
+      await flushPromises()
+
+      // Find the Unique/Uniq button (not the one already active)
+      const buttons = wrapper.findAll('button')
+      const uniqueBtn = buttons.find(b => {
+        const text = b.text()
+        return (text.includes('Unique') || text.includes('Uniq')) && !b.classes().some(c => c.includes('bg-white'))
+      })
+      expect(uniqueBtn).toBeTruthy()
+
+      await uniqueBtn.trigger('click')
+      await flushPromises()
+
+      // setRecentObsMode should be called with 'unique' (no network fetch)
+      expect(state.setRecentObsMode).toHaveBeenCalledWith('unique')
+    })
   })
 
   describe('keep-alive behavior', () => {

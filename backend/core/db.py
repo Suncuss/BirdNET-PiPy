@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 from config.settings import DATABASE_PATH, DATABASE_SCHEMA
 from core.logging_config import get_logger
+from core.timezone_service import local_now
 from core.utils import build_detection_filenames
 
 
@@ -58,6 +59,10 @@ class DatabaseManager:
                 cursor.execute("UPDATE detections SET extra = '{}' WHERE extra IS NULL")
                 logger.info("Migrated database: added 'extra' column to detections table")
 
+            if 'audio_source' not in existing_columns:
+                cursor.execute("ALTER TABLE detections ADD COLUMN audio_source TEXT")
+                logger.info("Migrated database: added 'audio_source' column")
+
             conn.commit()
 
     def database_exists(self):
@@ -76,8 +81,8 @@ class DatabaseManager:
 
         query = """
         INSERT INTO detections (timestamp, group_timestamp, scientific_name, common_name, confidence,
-                                latitude, longitude, cutoff, sensitivity, overlap, extra)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                latitude, longitude, cutoff, sensitivity, overlap, extra, audio_source)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         with self.get_db_connection() as conn:
             cur = conn.cursor()
@@ -92,17 +97,53 @@ class DatabaseManager:
                 detection['cutoff'],
                 detection['sensitivity'],
                 detection['overlap'],
-                extra
+                extra,
+                detection.get('audio_source')
             ))
             conn.commit()
             return cur.lastrowid
 
-    def get_latest_detections(self, limit=15):
-        # Use window function to get highest confidence detection per (group_timestamp, common_name)
-        # Previous query used WHERE (id, confidence) IN (SELECT id, MAX(confidence) ... GROUP BY)
-        # which has undefined behavior in SQLite - the non-aggregated 'id' column can return
-        # an arbitrary id that doesn't match the row with MAX(confidence), causing empty results.
-        query = """
+    def get_latest_detections(self, limit=15, unique=False):
+        # Use window function to deduplicate detections.
+        # unique=False (default): highest confidence per (group_timestamp, common_name)
+        # unique=True: most recent detection per species (one row per common_name)
+        if unique:
+            partition = "PARTITION BY common_name"
+            rank_order = "ORDER BY timestamp DESC"
+        else:
+            partition = "PARTITION BY group_timestamp, common_name, audio_source"
+            rank_order = "ORDER BY confidence DESC"
+
+        # Pre-fetch recent rows so the window function scans ~hundreds
+        # instead of the full table (376K+ rows → 1000ms down to ~1ms).
+        pre_fetch = limit * 75 if unique else limit * 50
+
+        rows = self._fetch_deduplicated(partition, rank_order, pre_fetch, limit)
+
+        # Fallback: if unique query didn't find enough species in the
+        # pre-fetch window (e.g. one species dominates recent rows),
+        # retry without the row limit.
+        if unique and len(rows) < limit:
+            rows = self._fetch_deduplicated(partition, rank_order, None, limit)
+
+        detections = []
+        for row in rows:
+            detection = self._normalize_detection(row, include_filenames=True)
+            # Use legacy field names for backward compatibility with frontend
+            detection['bird_song_file_name'] = detection.pop('audio_filename')
+            detection['spectrogram_file_name'] = detection.pop('spectrogram_filename')
+            detections.append(detection)
+
+        return detections
+
+    def _fetch_deduplicated(self, partition, rank_order, pre_fetch, limit):
+        """Run the windowed dedup query, optionally bounded by pre_fetch."""
+        if pre_fetch is not None:
+            source = f"(SELECT * FROM detections ORDER BY timestamp DESC LIMIT {pre_fetch})"
+        else:
+            source = "detections"
+
+        query = f"""
         SELECT
             id,
             timestamp,
@@ -116,15 +157,16 @@ class DatabaseManager:
             sensitivity,
             overlap,
             week,
-            extra
+            extra,
+            audio_source
         FROM detections
         WHERE id IN (
             SELECT id FROM (
                 SELECT id, ROW_NUMBER() OVER (
-                    PARTITION BY group_timestamp, common_name
-                    ORDER BY confidence DESC
+                    {partition}
+                    {rank_order}
                 ) as rn
-                FROM detections
+                FROM {source}
             ) WHERE rn = 1
         )
         ORDER BY timestamp DESC
@@ -133,17 +175,7 @@ class DatabaseManager:
         with self.get_db_connection() as conn:
             cur = conn.cursor()
             cur.execute(query, (limit,))
-            rows = cur.fetchall()
-
-            detections = []
-            for row in rows:
-                detection = self._normalize_detection(row, include_filenames=True)
-                # Use legacy field names for backward compatibility with frontend
-                detection['bird_song_file_name'] = detection.pop('audio_filename')
-                detection['spectrogram_file_name'] = detection.pop('spectrogram_filename')
-                detections.append(detection)
-
-            return detections
+            return cur.fetchall()
 
     def get_detections_by_date_range(self, start_date, end_date, unique=False):
         start_time = time.time()
@@ -206,7 +238,7 @@ class DatabaseManager:
         if date:
             start_of_day = datetime.strptime(date, "%Y-%m-%d").replace(hour=0, minute=0, second=0, microsecond=0)
         else:
-            start_of_day = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            start_of_day = local_now().replace(hour=0, minute=0, second=0, microsecond=0)
 
         end_of_day = start_of_day + timedelta(days=1)
 
@@ -232,7 +264,7 @@ class DatabaseManager:
         if date:
             start_of_day = datetime.strptime(date, "%Y-%m-%d").replace(hour=0, minute=0, second=0, microsecond=0)
         else:
-            start_of_day = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            start_of_day = local_now().replace(hour=0, minute=0, second=0, microsecond=0)
 
         end_of_day = start_of_day + timedelta(days=1)
 
@@ -282,7 +314,7 @@ class DatabaseManager:
         if date:
             start_of_day = datetime.strptime(date, "%Y-%m-%d").replace(hour=0, minute=0, second=0, microsecond=0)
         else:
-            start_of_day = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            start_of_day = local_now().replace(hour=0, minute=0, second=0, microsecond=0)
 
         end_of_day = start_of_day + timedelta(days=1)
 
@@ -333,7 +365,7 @@ class DatabaseManager:
         else:
             start_date = start_date.isoformat()
 
-        end_date = datetime.now().isoformat()
+        end_date = local_now().isoformat()
 
         with self.get_db_connection() as conn:
             cur = conn.cursor()
@@ -515,7 +547,7 @@ class DatabaseManager:
         # LIMIT is parameterized using -1 for unlimited (SQLite treats negative LIMIT as no limit)
         if sort == 'best':
             query = """
-            SELECT id, timestamp, common_name, confidence, extra
+            SELECT id, timestamp, common_name, confidence, extra, audio_source
             FROM detections
             WHERE common_name = ?
             ORDER BY confidence DESC
@@ -523,7 +555,7 @@ class DatabaseManager:
             """
         else:  # default to 'recent'
             query = """
-            SELECT id, timestamp, common_name, confidence, extra
+            SELECT id, timestamp, common_name, confidence, extra, audio_source
             FROM detections
             WHERE common_name = ?
             ORDER BY timestamp DESC
@@ -822,7 +854,8 @@ class DatabaseManager:
             limit: Optional max number of records to return
 
         Returns:
-            List of dicts with: id, common_name, confidence, timestamp
+            List of dicts with: id, common_name, confidence, timestamp,
+                audio_source, extra (raw JSON string)
             Ordered by timestamp ASC (oldest first)
         """
         # Use window function to rank recordings within each species by confidence
@@ -835,13 +868,15 @@ class DatabaseManager:
                 common_name,
                 confidence,
                 timestamp,
+                audio_source,
+                extra,
                 ROW_NUMBER() OVER (
                     PARTITION BY common_name
                     ORDER BY confidence DESC
                 ) as confidence_rank
             FROM detections
         )
-        SELECT id, common_name, confidence, timestamp
+        SELECT id, common_name, confidence, timestamp, audio_source, extra
         FROM RankedDetections
         WHERE confidence_rank > ?
         ORDER BY timestamp ASC
@@ -921,7 +956,8 @@ class DatabaseManager:
             sensitivity,
             overlap,
             week,
-            extra
+            extra,
+            audio_source
         FROM detections
         WHERE {where_clause}
         ORDER BY {sort} {order}
@@ -955,6 +991,53 @@ class DatabaseManager:
         })
 
         return detections, total_count
+
+    def get_all_detections(self, start_date=None, end_date=None, species=None):
+        """Get all matching detections with normalized fields and filenames.
+
+        Used for in-memory localized sorting where database ordering no longer
+        matches the names rendered in the UI.
+        """
+        where_clause, params = self._build_detection_filters(start_date, end_date, species)
+
+        query = f"""
+        SELECT
+            id,
+            timestamp,
+            group_timestamp,
+            scientific_name,
+            common_name,
+            confidence,
+            latitude,
+            longitude,
+            cutoff,
+            sensitivity,
+            overlap,
+            week,
+            extra,
+            audio_source
+        FROM detections
+        WHERE {where_clause}
+        ORDER BY timestamp DESC, id DESC
+        """
+
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(query, params)
+            rows = cur.fetchall()
+
+        detections = [self._normalize_detection(row, include_filenames=True) for row in rows]
+
+        logger.debug("All detections retrieved", extra={
+            'count': len(detections),
+            'filters': {
+                'start_date': start_date,
+                'end_date': end_date,
+                'species': species
+            }
+        })
+
+        return detections
 
     def get_all_detections_for_export(self, start_date=None, end_date=None, species=None):
         """Get all detection records for CSV export.
@@ -991,7 +1074,8 @@ class DatabaseManager:
             sensitivity,
             overlap,
             week,
-            extra
+            extra,
+            audio_source
         FROM detections
         WHERE {where_clause}
         ORDER BY timestamp DESC, id DESC
@@ -1039,7 +1123,8 @@ class DatabaseManager:
             sensitivity,
             overlap,
             week,
-            extra
+            extra,
+            audio_source
         FROM detections
         WHERE id = ?
         """
@@ -1110,6 +1195,32 @@ class DatabaseManager:
             cur.execute(query, (scientific_name, day_start, before_timestamp))
             return cur.fetchone()['count']
 
+    def get_species_total_count(self, scientific_name, before_timestamp):
+        """Count detections of a species up to (and including) the given timestamp.
+
+        Returns at most 2 — the caller only needs to know if the count is
+        exactly 1 (new species) vs more, so we LIMIT 2 to avoid scanning
+        all historical detections for common species.
+
+        Args:
+            scientific_name: Species scientific name
+            before_timestamp: ISO timestamp string — upper bound for the query
+
+        Returns:
+            int: 0, 1, or 2
+        """
+        query = """
+        SELECT COUNT(*) as count FROM (
+            SELECT 1 FROM detections
+            WHERE scientific_name = ? AND timestamp <= ?
+            LIMIT 2
+        )
+        """
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(query, (scientific_name, before_timestamp))
+            return cur.fetchone()['count']
+
     def get_recent_detection_count(self, scientific_name, days=7, before_timestamp=None):
         """Count detections of a species within a recent window.
 
@@ -1122,7 +1233,7 @@ class DatabaseManager:
             int: Number of detections in the window for this species
         """
         if before_timestamp is None:
-            before_timestamp = datetime.now().isoformat()
+            before_timestamp = local_now().isoformat()
         cutoff = (datetime.fromisoformat(before_timestamp) - timedelta(days=days)).isoformat()
         query = """
         SELECT COUNT(*) as count FROM detections
@@ -1192,11 +1303,15 @@ class DatabaseManager:
         detection['extra'] = self._parse_extra(detection.get('extra'))
 
         if include_filenames:
+            # Label from extra is frozen at detection time, so filenames stay
+            # stable even if the source is renamed later
+            source_label = detection.get('extra', {}).get('source_label')
             filenames = build_detection_filenames(
                 detection['common_name'],
                 detection['confidence'],
                 detection['timestamp'],
-                audio_extension='mp3'
+                audio_extension='mp3',
+                audio_source=source_label or None
             )
             detection['audio_filename'] = filenames['audio_filename']
             detection['spectrogram_filename'] = filenames['spectrogram_filename']

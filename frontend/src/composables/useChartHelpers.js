@@ -1,4 +1,5 @@
 import Chart from 'chart.js/auto'
+import { getDisplaySpeciesName } from '@/utils/birdNames'
 
 /**
  * Utility functions for Chart.js chart management and data transformation.
@@ -72,7 +73,7 @@ export function useChartHelpers() {
   /**
    * Transform bird activity data into matrix chart format.
    * Creates a flat array of data points with x (hour), y (species), v (value), and rowStats.
-   * @param {Array<{species: string, hourlyActivity: number[]}>} data - Bird activity data
+   * @param {Array<{species: string, displaySpecies?: string, hourlyActivity: number[]}>} data - Bird activity data
    * @param {Array<{min: number, max: number}>} rowStats - Pre-calculated row statistics
    * @returns {Array<{x: string, y: string, v: number, rowStats: object}>} Matrix data points
    */
@@ -81,7 +82,7 @@ export function useChartHelpers() {
     return data.flatMap((d, index) =>
       d.hourlyActivity.map((value, hourIndex) => ({
         x: hours[hourIndex],
-        y: d.species,
+        y: getDisplaySpeciesName(d),
         v: value,
         rowStats: rowStats[index]
       }))

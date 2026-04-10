@@ -257,6 +257,54 @@ def set_auth_enabled(enabled):
     logger.info("Authentication enabled" if enabled else "Authentication disabled")
 
 
+_FEATURE_KEY_MAP = {
+    'charts_public': 'charts',
+    'table_public': 'table',
+    'live_feed_public': 'live_feed',
+}
+
+
+def get_public_features():
+    """Get set of feature names configured as publicly accessible.
+
+    Returns empty set if auth is disabled (everything is public anyway).
+    """
+    from core.runtime_config import get_runtime_settings
+    settings = get_runtime_settings()
+    access = settings.get('access', {})
+    return {feature for key, feature in _FEATURE_KEY_MAP.items() if access.get(key)}
+
+
+def is_feature_public(feature):
+    """Check if a feature is publicly accessible.
+
+    Returns True if auth is disabled (everything public) or the feature
+    is configured as public in access settings.
+    """
+    if not is_auth_enabled():
+        return True
+    return feature in get_public_features()
+
+
+def require_feature(feature_name):
+    """Decorator to protect routes by feature-level access control.
+
+    Allows access if:
+    1. The feature is configured as public, OR
+    2. The user is authenticated via session
+    """
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            if is_feature_public(feature_name):
+                return f(*args, **kwargs)
+            if session.get('authenticated'):
+                return f(*args, **kwargs)
+            return jsonify({'error': 'Authentication required'}), 401
+        return decorated_function
+    return decorator
+
+
 def setup_password(password):
     """Set up the initial password (first-time setup)."""
     if is_setup_complete():

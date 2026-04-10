@@ -65,6 +65,7 @@
           <!-- Back + title -->
           <div class="flex items-center gap-2 mb-4">
             <button
+              v-if="!isEditing"
               class="text-gray-400 hover:text-gray-600"
               @click="goBack"
             >
@@ -83,7 +84,7 @@
               </svg>
             </button>
             <h3 class="text-lg font-semibold text-gray-900">
-              {{ selectedService.label }}
+              {{ isEditing ? 'Edit' : '' }} {{ selectedService.label }}
             </h3>
           </div>
 
@@ -127,20 +128,29 @@
 
             <!-- Actions -->
             <div class="flex items-center justify-between pt-2">
-              <a
-                v-if="selectedService.helpUrl"
-                :href="selectedService.helpUrl"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="text-xs text-blue-500 hover:underline"
-              >Setup guide</a>
-              <span v-else />
+              <div>
+                <button
+                  v-if="isEditing"
+                  type="button"
+                  class="text-xs text-red-500 hover:text-red-700 transition-colors"
+                  @click="$emit('delete')"
+                >
+                  Remove service
+                </button>
+                <a
+                  v-else-if="selectedService.helpUrl"
+                  :href="selectedService.helpUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-xs text-blue-500 hover:underline"
+                >Setup guide</a>
+              </div>
               <button
                 type="submit"
                 :disabled="!canSubmit || testing"
                 class="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors disabled:bg-gray-400"
               >
-                {{ testing ? 'Testing...' : 'Test & Add' }}
+                {{ testing ? 'Testing...' : (isEditing ? 'Test & Save' : 'Test & Add') }}
               </button>
             </div>
           </form>
@@ -152,7 +162,7 @@
 
 <script>
 import { ref, computed } from 'vue'
-import { SERVICES } from '@/utils/notificationServices'
+import { SERVICES, parseAppriseUrl } from '@/utils/notificationServices'
 import api from '@/services/api'
 
 // SVG path data for each service icon (Heroicons outline)
@@ -167,7 +177,13 @@ const SERVICE_ICONS = {
 
 export default {
   name: 'AddNotificationModal',
-  emits: ['close', 'add'],
+  props: {
+    editUrl: {
+      type: String,
+      default: null
+    }
+  },
+  emits: ['close', 'add', 'save', 'delete'],
   setup(props, { emit }) {
     const services = SERVICES
     const selectedService = ref(null)
@@ -176,9 +192,16 @@ export default {
     const error = ref('')
     const testSuccess = ref('')
 
+    const isEditing = computed(() => !!props.editUrl)
+
+    if (props.editUrl) {
+      const parsed = parseAppriseUrl(props.editUrl)
+      selectedService.value = parsed.service
+      formValues.value = parsed.values || {}
+    }
+
     const selectService = (service) => {
       selectedService.value = service
-      // Initialize form values
       const values = {}
       for (const field of service.fields) {
         values[field.key] = ''
@@ -221,7 +244,7 @@ export default {
       try {
         const { data } = await api.post('/notifications/test', { apprise_url: url })
         testSuccess.value = data.message || 'Test notification sent!'
-        emit('add', url)
+        emit(isEditing.value ? 'save' : 'add', url)
       } catch (err) {
         error.value = err.response?.data?.error || 'Failed to send test notification.'
       } finally {
@@ -243,6 +266,7 @@ export default {
       testing,
       error,
       testSuccess,
+      isEditing,
       canSubmit,
       selectService,
       goBack,

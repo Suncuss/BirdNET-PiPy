@@ -495,6 +495,21 @@ describe('useTableData', () => {
       expect(mockApi.get).toHaveBeenCalled()
     })
 
+    it('setPerPage accepts 200', async () => {
+      mockApi.get.mockResolvedValue({
+        data: { detections: [], pagination: { total_items: 0 } }
+      })
+
+      const { setPerPage, perPage, currentPage } = useTableData()
+      currentPage.value = 2
+
+      await setPerPage(200)
+
+      expect(perPage.value).toBe(200)
+      expect(currentPage.value).toBe(1)
+      expect(mockApi.get).toHaveBeenCalled()
+    })
+
     it('setPerPage only accepts valid values', async () => {
       const { setPerPage, perPage } = useTableData()
 

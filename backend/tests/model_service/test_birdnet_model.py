@@ -1,6 +1,7 @@
 """Tests for BirdNetModel prediction and privacy filter."""
 
 import threading
+from collections import OrderedDict
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -37,7 +38,8 @@ class TestBirdNetModelPredict:
             "Cyanocitta cristata_Blue Jay"
         ]
         model._ebird_codes = {}
-        model._meta_model_cache = {}
+        model._meta_probs_cache = OrderedDict()
+        model._meta_probs_cache_max_size = 128
         model._inference_lock = threading.Lock()
 
         return model
@@ -195,7 +197,8 @@ class TestBirdNetModelFilterByLocation:
             "Cyanocitta cristata_Blue Jay"
         ]
         model._ebird_codes = {}
-        model._meta_model_cache = {}
+        model._meta_probs_cache = OrderedDict()
+        model._meta_probs_cache_max_size = 128
         model._inference_lock = threading.Lock()
 
         return model
@@ -208,13 +211,25 @@ class TestBirdNetModelFilterByLocation:
 
         result = mock_birdnet_model_with_meta.filter_by_location(42.0, -76.0, 25)
 
-        # Should include species above SPECIES_FILTER_THRESHOLD (0.03)
+        # Should include species above default threshold (0.03)
         assert "Turdus migratorius_American Robin" in result
         assert "Cardinalis cardinalis_Northern Cardinal" in result
         assert "Cyanocitta cristata_Blue Jay" not in result
 
-    def test_filter_by_location_caches_results(self, mock_birdnet_model_with_meta):
-        """Test filter_by_location caches results by (lat, lon, week)."""
+    def test_filter_by_location_custom_threshold(self, mock_birdnet_model_with_meta):
+        """Test filter_by_location respects custom threshold parameter."""
+        meta_output = np.array([0.5, 0.1, 0.01])
+        mock_birdnet_model_with_meta._meta_model.get_tensor.return_value = np.array([meta_output])
+
+        # High threshold should filter more aggressively
+        result = mock_birdnet_model_with_meta.filter_by_location(42.0, -76.0, 25, threshold=0.15)
+
+        assert "Turdus migratorius_American Robin" in result
+        assert "Cardinalis cardinalis_Northern Cardinal" not in result  # 0.1 < 0.15
+        assert "Cyanocitta cristata_Blue Jay" not in result
+
+    def test_filter_by_location_caches_raw_probabilities(self, mock_birdnet_model_with_meta):
+        """Test repeated calls reuse cached raw probabilities for one location/week."""
         meta_output = np.array([0.5, 0.1, 0.05])
         mock_birdnet_model_with_meta._meta_model.get_tensor.return_value = np.array([meta_output])
 
@@ -228,6 +243,38 @@ class TestBirdNetModelFilterByLocation:
         assert result1 == result2
 
         # Meta model invoke should only be called once due to caching
+        assert mock_birdnet_model_with_meta._meta_model.invoke.call_count == 1
+
+    def test_filter_by_location_reuses_cache_across_thresholds(self, mock_birdnet_model_with_meta):
+        """Test that different thresholds reuse the same raw probability cache entry."""
+        meta_output = np.array([0.5, 0.1, 0.05])
+        mock_birdnet_model_with_meta._meta_model.get_tensor.return_value = np.array([meta_output])
+
+        # Call with default threshold
+        result1 = mock_birdnet_model_with_meta.filter_by_location(42.0, -76.0, 25, threshold=0.03)
+
+        # Call with different threshold - should reuse raw probability cache
+        result2 = mock_birdnet_model_with_meta.filter_by_location(42.0, -76.0, 25, threshold=0.08)
+
+        # Meta model should be invoked only once
+        assert mock_birdnet_model_with_meta._meta_model.invoke.call_count == 1
+
+        # Results should differ: threshold=0.08 excludes Blue Jay (0.05)
+        assert "Cyanocitta cristata_Blue Jay" in result1
+        assert "Cyanocitta cristata_Blue Jay" not in result2
+
+    def test_get_location_probabilities_returns_cached_scores(self, mock_birdnet_model_with_meta):
+        """Test get_location_probabilities returns raw scores and caches them."""
+        meta_output = np.array([0.5, 0.1, 0.05])
+        mock_birdnet_model_with_meta._meta_model.get_tensor.return_value = np.array([meta_output])
+
+        result1 = mock_birdnet_model_with_meta.get_location_probabilities(42.0, -76.0, 25)
+        result2 = mock_birdnet_model_with_meta.get_location_probabilities(42.0, -76.0, 25)
+
+        assert result1 == result2
+        assert result1["Turdus migratorius_American Robin"] == 0.5
+        assert result1["Cardinalis cardinalis_Northern Cardinal"] == 0.1
+        assert result1["Cyanocitta cristata_Blue Jay"] == 0.05
         assert mock_birdnet_model_with_meta._meta_model.invoke.call_count == 1
 
     def test_filter_by_location_raises_if_not_loaded(self):

@@ -210,6 +210,19 @@ describe('useBirdCharts', () => {
       expect(firstDataPoint).toHaveProperty('rowStats')
     })
 
+    it('uses localized display species labels for both axis labels and matrix rows', async () => {
+      const canvasRef = ref(mockCanvas)
+      const localizedData = [
+        { species: 'American Robin', displaySpecies: 'Amsel', hourlyActivity: Array(24).fill(1) }
+      ]
+
+      await charts.createHourlyActivityHeatmap(canvasRef, localizedData)
+
+      const chartCall = Chart.mock.calls[0][1]
+      expect(chartCall.options.scales.y.labels).toEqual(['Amsel'])
+      expect(chartCall.data.datasets[0].data[0].y).toBe('Amsel')
+    })
+
     it('accepts animate option', async () => {
       const canvasRef = ref(mockCanvas)
       await charts.createHourlyActivityHeatmap(canvasRef, mockData, { animate: false })

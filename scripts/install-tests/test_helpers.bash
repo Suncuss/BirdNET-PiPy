@@ -180,6 +180,24 @@ run_install() {
     sudo -E "$PROJECT_DIR/install.sh" --no-reboot "$@"
 }
 
+# Source install.sh as a library in a subshell and invoke one of its functions.
+# Strips the top-level setup_logging call and final main invocation so tests can
+# exercise helpers like set_env_var without running the full installer.
+# Usage: run_install_function <project_root> <function_name> [args...]
+run_install_function() {
+    local project_root="$1"
+    shift
+
+    (
+        set -e
+        cd "$PROJECT_DIR"
+        # shellcheck disable=SC1091
+        source <(grep -v '^setup_logging$' install.sh | grep -v '^main "\$@"$')
+        PROJECT_ROOT="$project_root"
+        "$@"
+    )
+}
+
 # Check if Docker images with a specific prefix exist
 # Usage: assert_docker_images_exist <prefix>
 assert_docker_images_exist() {

@@ -1518,26 +1518,24 @@ class TestRecordingThread:
             'core.main.get_runtime_settings',
             return_value={
                 'audio': {
-                    'recording_mode': 'pulseaudio',
-                    'pulseaudio_source': 'test-source',
+                    'sources': [
+                        {'id': 'source_0', 'type': 'pulseaudio', 'device': 'test-source', 'label': 'Microphone', 'enabled': True}
+                    ],
+                    'next_source_id': 1,
                     'recording_length': 9,
-                    'stream_url': None,
-                    'rtsp_url': None,
                 }
             },
         ), \
              patch('core.main.RECORDING_DIR', '/tmp/test'), \
              patch('core.main.SAMPLE_RATE', 48000), \
              patch('core.main.FILE_SCAN_INTERVAL', 0.01), \
-             patch('core.audio_manager.PulseAudioRecorder') as mock_pulse_recorder_class, \
+             patch('core.main.create_recorder', return_value=mock_recorder) as mock_create_recorder, \
              patch('core.main.stop_flag') as mock_stop, \
+             patch('core.main.broadcast_recorder_status'), \
              patch('time.sleep'):
 
             # Mock stop_flag to exit immediately
             mock_stop.is_set.side_effect = controllable_stop_flag(iterations=0)
-
-            # Mock the recorder class to return our mock_recorder
-            mock_pulse_recorder_class.return_value = mock_recorder
 
             from core.main import continuous_audio_recording
 
@@ -1547,58 +1545,13 @@ class TestRecordingThread:
             # Execute
             continuous_audio_recording(mock_logger)
 
-            # Verify PulseAudioRecorder was instantiated with correct params
-            mock_pulse_recorder_class.assert_called_once_with(
+            # Verify create_recorder was called with correct params
+            mock_create_recorder.assert_called_once_with(
+                recording_mode='pulseaudio',
+                chunk_duration=9,
+                output_dir='/tmp/test/source_0',
+                target_sample_rate=48000,
                 source_name='test-source',
-                chunk_duration=9,
-                output_dir='/tmp/test',
-                target_sample_rate=48000
-            )
-
-    def test_creates_http_recorder_when_mode_is_http_stream(
-        self, mock_recorder, controllable_stop_flag
-    ):
-        """Test that HttpStreamRecorder is created when mode is http_stream."""
-
-        with patch(
-            'core.main.get_runtime_settings',
-            return_value={
-                'audio': {
-                    'recording_mode': 'http_stream',
-                    'pulseaudio_source': 'default',
-                    'recording_length': 9,
-                    'stream_url': 'http://test.com/stream',
-                    'rtsp_url': None,
-                }
-            },
-        ), \
-             patch('core.main.RECORDING_DIR', '/tmp/test'), \
-             patch('core.main.SAMPLE_RATE', 48000), \
-             patch('core.main.FILE_SCAN_INTERVAL', 0.01), \
-             patch('core.audio_manager.HttpStreamRecorder') as mock_http_recorder_class, \
-             patch('core.main.stop_flag') as mock_stop, \
-             patch('time.sleep'):
-
-            # Mock stop_flag to exit immediately
-            mock_stop.is_set.side_effect = controllable_stop_flag(iterations=0)
-
-            # Mock the recorder class to return our mock_recorder
-            mock_http_recorder_class.return_value = mock_recorder
-
-            from core.main import continuous_audio_recording
-
-            # Create mock logger
-            mock_logger = Mock()
-
-            # Execute
-            continuous_audio_recording(mock_logger)
-
-            # Verify HttpStreamRecorder was instantiated with correct params
-            mock_http_recorder_class.assert_called_once_with(
-                stream_url='http://test.com/stream',
-                chunk_duration=9,
-                output_dir='/tmp/test',
-                target_sample_rate=48000
             )
 
     def test_recorder_started_on_thread_start(
@@ -1610,17 +1563,18 @@ class TestRecordingThread:
             'core.main.get_runtime_settings',
             return_value={
                 'audio': {
-                    'recording_mode': 'pulseaudio',
-                    'pulseaudio_source': 'default',
+                    'sources': [
+                        {'id': 'source_0', 'type': 'pulseaudio', 'device': 'default', 'label': 'Microphone', 'enabled': True}
+                    ],
+                    'next_source_id': 1,
                     'recording_length': 9,
-                    'stream_url': None,
-                    'rtsp_url': None,
                 }
             },
         ), \
-             patch('core.audio_manager.PulseAudioRecorder', return_value=mock_recorder), \
+             patch('core.main.create_recorder', return_value=mock_recorder), \
              patch('core.main.FILE_SCAN_INTERVAL', 0.01), \
              patch('core.main.stop_flag') as mock_stop, \
+             patch('core.main.broadcast_recorder_status'), \
              patch('time.sleep'):
 
             # Mock stop_flag to exit immediately
@@ -1646,17 +1600,18 @@ class TestRecordingThread:
             'core.main.get_runtime_settings',
             return_value={
                 'audio': {
-                    'recording_mode': 'pulseaudio',
-                    'pulseaudio_source': 'default',
+                    'sources': [
+                        {'id': 'source_0', 'type': 'pulseaudio', 'device': 'default', 'label': 'Microphone', 'enabled': True}
+                    ],
+                    'next_source_id': 1,
                     'recording_length': 9,
-                    'stream_url': None,
-                    'rtsp_url': None,
                 }
             },
         ), \
-             patch('core.audio_manager.PulseAudioRecorder', return_value=mock_recorder), \
+             patch('core.main.create_recorder', return_value=mock_recorder), \
              patch('core.main.FILE_SCAN_INTERVAL', 0.01), \
              patch('core.main.stop_flag') as mock_stop, \
+             patch('core.main.broadcast_recorder_status'), \
              patch('time.sleep'):
 
             # Mock stop_flag to run 3 iterations
@@ -1682,21 +1637,23 @@ class TestRecordingThread:
             'core.main.get_runtime_settings',
             return_value={
                 'audio': {
-                    'recording_mode': 'pulseaudio',
-                    'pulseaudio_source': 'default',
+                    'sources': [
+                        {'id': 'source_0', 'type': 'pulseaudio', 'device': 'default', 'label': 'Microphone', 'enabled': True}
+                    ],
+                    'next_source_id': 1,
                     'recording_length': 9,
-                    'stream_url': None,
-                    'rtsp_url': None,
                 }
             },
         ), \
-             patch('core.audio_manager.PulseAudioRecorder', return_value=mock_recorder), \
+             patch('core.main.create_recorder', return_value=mock_recorder), \
              patch('core.main.FILE_SCAN_INTERVAL', 0.01), \
              patch('core.main.stop_flag') as mock_stop, \
+             patch('core.main.broadcast_recorder_status'), \
              patch('time.sleep'):
 
-            # Mock is_healthy() to return False on 2nd call
-            mock_recorder.is_healthy.side_effect = [True, False, True, True]
+            # is_healthy() called once per iteration, plus once more after
+            # restart to refresh the cache
+            mock_recorder.is_healthy.side_effect = [True, False, True, True, True]
 
             # Mock stop_flag to run 4 iterations
             mock_stop.is_set.side_effect = controllable_stop_flag(iterations=4)
@@ -1721,17 +1678,18 @@ class TestRecordingThread:
             'core.main.get_runtime_settings',
             return_value={
                 'audio': {
-                    'recording_mode': 'pulseaudio',
-                    'pulseaudio_source': 'default',
+                    'sources': [
+                        {'id': 'source_0', 'type': 'pulseaudio', 'device': 'default', 'label': 'Microphone', 'enabled': True}
+                    ],
+                    'next_source_id': 1,
                     'recording_length': 9,
-                    'stream_url': None,
-                    'rtsp_url': None,
                 }
             },
         ), \
-             patch('core.audio_manager.PulseAudioRecorder', return_value=mock_recorder), \
+             patch('core.main.create_recorder', return_value=mock_recorder), \
              patch('core.main.FILE_SCAN_INTERVAL', 0.01), \
              patch('core.main.stop_flag') as mock_stop, \
+             patch('core.main.broadcast_recorder_status'), \
              patch('time.sleep'):
 
             # Mock stop_flag to exit immediately
@@ -1761,17 +1719,18 @@ class TestThreadCoordination:
             'core.main.get_runtime_settings',
             return_value={
                 'audio': {
-                    'recording_mode': 'pulseaudio',
-                    'pulseaudio_source': 'default',
+                    'sources': [
+                        {'id': 'source_0', 'type': 'pulseaudio', 'device': 'default', 'label': 'Microphone', 'enabled': True}
+                    ],
+                    'next_source_id': 1,
                     'recording_length': 9,
-                    'stream_url': None,
-                    'rtsp_url': None,
                 }
             },
         ), \
-             patch('core.audio_manager.PulseAudioRecorder', return_value=mock_recorder), \
+             patch('core.main.create_recorder', return_value=mock_recorder), \
              patch('core.main.FILE_SCAN_INTERVAL', 0.01), \
              patch('core.main.stop_flag') as mock_stop, \
+             patch('core.main.broadcast_recorder_status'), \
              patch('time.sleep'):
 
             # Mock stop_flag to stop after 2 iterations

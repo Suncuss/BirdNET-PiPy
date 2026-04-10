@@ -2,6 +2,7 @@ import { nextTick } from 'vue'
 import Chart from 'chart.js/auto'
 import { useChartColors } from './useChartColors'
 import { useChartHelpers } from './useChartHelpers'
+import { getDisplaySpeciesName } from '@/utils/birdNames'
 
 /**
  * Composable for creating bird activity charts.
@@ -100,7 +101,7 @@ export function useBirdCharts() {
     // In-place update if a bar chart already exists on this canvas
     const existing = Chart.getChart(canvas)
     if (existing && existing.config.type === 'bar') {
-      existing.data.labels = data.map(d => d.species)
+      existing.data.labels = data.map(d => getDisplaySpeciesName(d))
       existing.data.datasets[0].data = data.map(d => d.hourlyActivity.reduce((sum, val) => sum + val, 0))
       existing.options.animation = animate
       existing.update()
@@ -113,7 +114,7 @@ export function useBirdCharts() {
     return new Chart(ctx, {
       type: 'bar',
       data: {
-        labels: data.map(d => d.species),
+        labels: data.map(d => getDisplaySpeciesName(d)),
         datasets: [{
           label: 'Total Detections',
           data: data.map(d => d.hourlyActivity.reduce((sum, val) => sum + val, 0)),
@@ -175,7 +176,7 @@ export function useBirdCharts() {
     destroyChart(canvasRef)
 
     const ctx = canvas.getContext('2d')
-    const species = data.map(d => d.species)
+    const species = data.map(d => getDisplaySpeciesName(d))
     const rowStats = calculateRowStats(data)
     const [r, g, b] = secondaryRGB
 

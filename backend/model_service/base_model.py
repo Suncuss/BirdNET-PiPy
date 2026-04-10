@@ -1,12 +1,22 @@
 """Abstract base class for bird detection models."""
 
-import json
-import logging
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 import numpy as np
 
-logger = logging.getLogger(__name__)
+from config.constants import DEFAULT_SPECIES_FILTER_THRESHOLD
+
+from .label_utils import get_ebird_code as _lookup_ebird_code
+
+
+@dataclass(frozen=True, slots=True)
+class ChunkPrediction:
+    """Structured prediction data for one audio chunk."""
+
+    raw_top3: tuple[tuple[str, float], ...]
+    candidates: tuple[tuple[str, float], ...]
+    human_detected: bool = False
 
 
 class BirdDetectionModel(ABC):
@@ -18,7 +28,6 @@ class BirdDetectionModel(ABC):
 
     def __init__(self, ebird_codes_path: str | None = None):
         self.ebird_codes_path = ebird_codes_path
-        self._ebird_codes = None
 
     @property
     @abstractmethod
@@ -44,7 +53,6 @@ class BirdDetectionModel(ABC):
     def load(self) -> None:
         """Load all model resources into memory. Must be called before predict()."""
 
-    @abstractmethod
     def predict(
         self,
         audio_chunk: np.ndarray,
@@ -52,7 +60,7 @@ class BirdDetectionModel(ABC):
         cutoff: float = 0.0,
         chunk_index: int | None = None
     ) -> list[tuple[str, float]]:
-        """Run inference on an audio chunk.
+        """Run inference on an audio chunk and return filtered candidates.
 
         Args:
             audio_chunk: Float32 array normalized to [-1, 1].
@@ -63,6 +71,17 @@ class BirdDetectionModel(ABC):
         Returns:
             List of (species_label, confidence) tuples, sorted by confidence descending.
         """
+        return list(self.predict_chunk(audio_chunk, sensitivity, cutoff, chunk_index).candidates)
+
+    @abstractmethod
+    def predict_chunk(
+        self,
+        audio_chunk: np.ndarray,
+        sensitivity: float = 1.0,
+        cutoff: float = 0.0,
+        chunk_index: int | None = None
+    ) -> ChunkPrediction:
+        """Run inference on an audio chunk and return structured chunk results."""
 
     @abstractmethod
     def get_labels(self) -> list[str]:
@@ -70,34 +89,7 @@ class BirdDetectionModel(ABC):
 
     def get_ebird_code(self, scientific_name: str) -> str | None:
         """Look up eBird species code for a scientific name."""
-        if self._ebird_codes is None:
-            self.load_ebird_codes()
-        return self._ebird_codes.get(scientific_name)
-
-    def load_ebird_codes(self):
-        """Load eBird species codes mapping from JSON file.
-
-        Returns empty dict if file is missing or invalid.
-        """
-        if self._ebird_codes is not None:
-            return self._ebird_codes
-
-        if not self.ebird_codes_path:
-            self._ebird_codes = {}
-            return self._ebird_codes
-
-        try:
-            with open(self.ebird_codes_path, encoding='utf-8') as f:
-                self._ebird_codes = json.load(f)
-            logger.info(f"Loaded {len(self._ebird_codes)} eBird species codes")
-        except FileNotFoundError:
-            logger.warning(f"eBird codes file not found: {self.ebird_codes_path}")
-            self._ebird_codes = {}
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in eBird codes file: {e}")
-            self._ebird_codes = {}
-
-        return self._ebird_codes
+        return _lookup_ebird_code(scientific_name)
 
     def _post_process(
         self,
@@ -105,37 +97,43 @@ class BirdDetectionModel(ABC):
         scores: np.ndarray,
         cutoff: float,
         chunk_index: int | None = None
-    ) -> list[tuple[str, float]]:
-        """Log top results, apply cutoff threshold, filter and sort.
+    ) -> ChunkPrediction:
+        """Build raw top-3 and filtered candidates for one chunk.
 
         Shared post-processing used by all model implementations after
         model-specific inference and score transformation.
         """
-        # Log top 3 raw confidence scores before cutoff filtering
-        if logger.isEnabledFor(logging.INFO):
-            raw_scores = list(zip(labels, scores, strict=False))
-            raw_scores_sorted = sorted(raw_scores, key=lambda x: x[1], reverse=True)[:3]
-            top3_info = [
-                (label.split('_', 1)[-1], round(float(score) * 100, 1))
-                for label, score in raw_scores_sorted
-            ]
-            chunk_str = f"Chunk {chunk_index}" if chunk_index is not None else "Chunk"
-            logger.info(f"{chunk_str} raw model output", extra={
-                'top3': top3_info,
-                'cutoff': round(cutoff * 100, 1)
-            })
+        # Verify labels and scores have matching lengths
+        if len(labels) != len(scores):
+            raise RuntimeError(
+                f"Label count mismatch: {len(labels)} labels but {len(scores)} scores. "
+                "Model and labels file may be out of sync."
+            )
 
-        # Apply cutoff threshold
-        scores = np.where(scores >= cutoff, scores, 0)
+        # Top-3: O(n) partial sort, then stable argsort on the 3 winners
+        # to preserve label order for tied scores (e.g. silent audio)
+        k = min(3, len(scores))
+        top3_idx = np.argpartition(scores, -k)[-k:]
+        top3_idx = top3_idx[np.argsort(scores[top3_idx], kind='stable')[::-1]]
+        raw_top3 = tuple((labels[i], float(scores[i])) for i in top3_idx)
 
-        # Build results dict, filter zeros, sort descending
-        results_dict = dict(zip(labels, scores, strict=False))
-        results_dict = {k: v for k, v in results_dict.items() if v != 0}
-        return sorted(results_dict.items(), key=lambda x: x[1], reverse=True)
+        # Apply cutoff threshold and build candidates from passing species only
+        # Use strict > 0 to exclude exact-zero scores (matches old dict-filter behavior)
+        mask = (scores >= cutoff) & (scores > 0)
+        passing_idx = np.nonzero(mask)[0]
+        passing_scores = scores[passing_idx]
+        order = np.argsort(passing_scores)[::-1]
+        candidates = tuple(
+            (labels[passing_idx[i]], float(passing_scores[i])) for i in order
+        )
+        return ChunkPrediction(raw_top3=raw_top3, candidates=candidates)
 
-    def filter_by_location(self, lat: float, lon: float, week: int) -> list[str] | None:
+    def filter_by_location(self, lat: float, lon: float, week: int, threshold: float = DEFAULT_SPECIES_FILTER_THRESHOLD) -> list[str] | None:
         """Get species likely at a location during a specific week.
 
         Returns None if location filtering is not supported by this model.
+
+        Deprecated: prefer the LocationFilter abstraction (location_filter.py)
+        for new code. This method is retained for V2.4's embedded meta model.
         """
         return None

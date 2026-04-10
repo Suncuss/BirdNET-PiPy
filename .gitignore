@@ -60,8 +60,9 @@ AGENTS.md
 venv/
 .venv/
 
-# Large model files
+# Large model files (V3.0 model is auto-downloaded, not committed)
 backend/model_service/models/**/*.onnx
+!backend/model_service/models/geomodel/*.onnx
 
 # Local/internal documentation not meant for the repo
 internal_docs/

@@ -16,6 +16,15 @@ vi.mock('@/services/api', () => ({
   createLongRequest: () => mockLongApi
 }))
 
+// Mock useAuth - default: auth disabled (isAuthenticated = true)
+const mockIsAuthenticated = vi.hoisted(() => ({ value: true }))
+
+vi.mock('@/composables/useAuth', () => ({
+  useAuth: () => ({
+    isAuthenticated: mockIsAuthenticated
+  })
+}))
+
 // Mock useServiceRestart since useSystemUpdate now delegates to it
 vi.mock('@/composables/useServiceRestart', () => ({
   useServiceRestart: () => ({
@@ -33,6 +42,9 @@ describe('useSystemUpdate', () => {
     global.window.confirm = vi.fn()
     global.window.location = { reload: vi.fn() }
     vi.useFakeTimers()
+
+    // Reset auth mock to default (auth disabled = isAuthenticated true)
+    mockIsAuthenticated.value = true
 
     // Reset singleton state between tests
     const { versionInfo, updateInfo, updateAvailable, checking, updating, statusMessage, statusType } = useSystemUpdate()
@@ -323,5 +335,45 @@ describe('useSystemUpdate', () => {
     await checkForUpdates({ force: true })
 
     expect(mockApi.get).toHaveBeenCalledWith('/system/update-check?force=true')
+  })
+
+  it('showUpdateIndicator is false when auth enabled and user not logged in', async () => {
+    localStorage.removeItem('birdnet_update_dismissed_until')
+    mockIsAuthenticated.value = false
+
+    mockApi.get.mockResolvedValueOnce({
+      data: {
+        update_available: true,
+        remote_commit: 'abc123',
+        channel: 'release',
+        commits_behind: 3
+      }
+    })
+
+    const { checkForUpdates, showUpdateIndicator } = useSystemUpdate()
+    await checkForUpdates()
+
+    expect(showUpdateIndicator.value).toBe(false)
+  })
+
+  it('showUpdateIndicator is true when auth enabled and user is logged in', async () => {
+    localStorage.removeItem('birdnet_update_dismissed_until')
+    mockIsAuthenticated.value = true
+    // Advance past any dismiss duration from previous tests (7 days + buffer)
+    vi.advanceTimersByTime(8 * 24 * 60 * 60 * 1000)
+
+    mockApi.get.mockResolvedValueOnce({
+      data: {
+        update_available: true,
+        remote_commit: 'abc123',
+        channel: 'release',
+        commits_behind: 3
+      }
+    })
+
+    const { checkForUpdates, showUpdateIndicator } = useSystemUpdate()
+    await checkForUpdates()
+
+    expect(showUpdateIndicator.value).toBe(true)
   })
 })

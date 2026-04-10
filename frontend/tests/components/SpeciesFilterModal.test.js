@@ -11,8 +11,8 @@ vi.mock('@/services/api', () => ({
 }))
 
 const mockSpecies = [
-  { common_name: 'American Robin', scientific_name: 'Turdus migratorius' },
-  { common_name: 'Blue Jay', scientific_name: 'Cyanocitta cristata' }
+  { common_name: 'American Robin', display_common_name: 'Amsel', scientific_name: 'Turdus migratorius' },
+  { common_name: 'Blue Jay', display_common_name: 'Blauhaeher', scientific_name: 'Cyanocitta cristata' }
 ]
 
 const mountModal = (props = {}) => mount(SpeciesFilterModal, {
@@ -72,5 +72,18 @@ describe('SpeciesFilterModal', () => {
     expect(wrapper.vm.saving).toBe(false)
     expect(wrapper.text()).toContain('Failed to save. Please try again.')
     expect(wrapper.emitted('close')).toBeFalsy()
+  })
+
+  it('renders and searches localized display names', async () => {
+    const wrapper = mountModal()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Amsel')
+
+    await wrapper.find('input[type="text"]').setValue('Blau')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.vm.filteredSpecies).toHaveLength(1)
+    expect(wrapper.vm.filteredSpecies[0].common_name).toBe('Blue Jay')
   })
 })

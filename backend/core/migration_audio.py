@@ -13,6 +13,7 @@ import tempfile
 import threading
 
 from config.settings import BASE_DIR, EXTRACTED_AUDIO_DIR, SPECTROGRAM_DIR
+from core.bird_name_utils import get_spectrogram_common_name_from_english
 from core.logging_config import get_logger
 from core.storage_manager import get_disk_usage
 from core.utils import build_detection_filenames, generate_spectrogram
@@ -610,11 +611,12 @@ def _build_spectrogram_title_from_audio_filename(audio_filename: str) -> str:
     )
     if match:
         species = match.group('species').replace('_', ' ')
+        display_species = get_spectrogram_common_name_from_english(species)
         confidence = int(match.group('confidence')) / 100.0
         # Normalize time to colons for human-readable title
         time_str = match.group('time').replace('-', ':')
         timestamp = f"{match.group('date')}T{time_str}"
-        return f"{species} ({confidence:.2f}) - {timestamp}"
+        return f"{display_species} ({confidence:.2f}) - {timestamp}"
 
     # Fallback: readable title if filename doesn't match expected format
     return base_name.replace('_', ' ')

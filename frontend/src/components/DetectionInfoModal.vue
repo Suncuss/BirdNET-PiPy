@@ -22,7 +22,7 @@
             v-if="detection"
             class="text-sm text-gray-500 mt-0.5"
           >
-            {{ detection.common_name }}
+            {{ detection.display_common_name || detection.common_name }}
           </p>
         </div>
 

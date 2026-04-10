@@ -11,6 +11,8 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from core.audio_manager import BaseRecorder
+
 
 @pytest.fixture
 def temp_recording_dir():
@@ -35,10 +37,7 @@ def mock_config_settings(temp_recording_dir):
         'BIRDNET_SERVER_ENDPOINT': 'http://birdnet:5001/api/analyze_audio_file',
         'ANALYSIS_CHUNK_LENGTH': 3,
         'API_PORT': 5002,
-        'SAMPLE_RATE': 48000,
-        'RECORDING_MODE': 'pulseaudio',
-        'PULSEAUDIO_SOURCE': 'default',
-        'STREAM_URL': 'http://localhost:8888/stream.mp3'
+        'SAMPLE_RATE': 48000
     }
     return settings
 
@@ -310,6 +309,13 @@ def mock_recorder():
     """Mock recorder for testing recording thread."""
     recorder = Mock()
     recorder.is_healthy.return_value = True
+    recorder.consecutive_failures = 0
+    recorder.last_error_message = ''
+    recorder.last_error_time = 0.0
+    recorder.last_success_time = 0.0
+    health = BaseRecorder.default_health_status()
+    health['is_healthy'] = True
+    recorder.get_health_status.return_value = health
     recorder.start.return_value = None
     recorder.stop.return_value = None
     recorder.restart.return_value = None

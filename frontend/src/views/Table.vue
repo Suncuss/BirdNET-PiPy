@@ -52,7 +52,7 @@
             <input
               v-model="speciesSearchQuery"
               type="text"
-              :placeholder="selectedSpecies || 'All species'"
+              :placeholder="selectedSpeciesLabel || 'All species'"
               class="w-full h-10 px-3 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent pr-8"
               @focus="showSpeciesDropdown = true"
             >
@@ -87,7 +87,7 @@
               class="w-full px-3 py-2 text-left text-sm hover:bg-gray-50 transition-colors"
               @mousedown.prevent="selectSpecies(species)"
             >
-              <span class="font-medium text-gray-800">{{ species.common_name }}</span>
+              <span class="font-medium text-gray-800">{{ getDisplayCommonName(species) }}</span>
               <span class="text-xs text-gray-500 italic ml-2">{{ species.scientific_name }}</span>
             </button>
           </div>
@@ -198,7 +198,7 @@
 
         <!-- Batch Action Bar -->
         <div
-          v-if="selectedCount > 0"
+          v-if="isAuthenticated && selectedCount > 0"
           class="flex items-center justify-between px-4 py-3 bg-blue-50 border-b border-blue-200"
         >
           <span class="text-sm font-medium text-blue-800">
@@ -259,6 +259,7 @@
           >
             <div class="flex items-start gap-3">
               <input
+                v-if="isAuthenticated"
                 type="checkbox"
                 :checked="isSelected(detection.id)"
                 class="mt-1 h-4 w-4 rounded border-gray-300 text-green-600 focus:ring-green-500"
@@ -270,7 +271,7 @@
                     :to="{ name: 'BirdDetails', params: { name: detection.common_name } }"
                     class="font-medium text-gray-900 hover:text-green-600 transition-colors"
                   >
-                    {{ detection.common_name }}
+                    {{ getDisplayCommonName(detection) }}
                   </router-link>
                   <p class="text-xs text-gray-500 italic">
                     {{ detection.scientific_name }}
@@ -289,6 +290,7 @@
                   <DetectionActions
                     :detection="detection"
                     :is-playing="currentPlayingId === detection.id"
+                    :hide-delete="!isAuthenticated"
                     @toggle-play="togglePlayAudio"
                     @spectrogram="showSpectrogram"
                     @show-info="showDetectionInfo"
@@ -305,7 +307,10 @@
           <table class="min-w-full">
             <thead class="bg-gray-50 border-b border-gray-200">
               <tr>
-                <th class="w-12 px-4 py-3">
+                <th
+                  v-if="isAuthenticated"
+                  class="w-12 px-4 py-3"
+                >
                   <input
                     type="checkbox"
                     :checked="allSelected"
@@ -334,7 +339,10 @@
                 class="hover:bg-gray-50 transition-colors"
                 :class="{ 'bg-blue-50': isSelected(detection.id) }"
               >
-                <td class="w-12 px-4 py-4">
+                <td
+                  v-if="isAuthenticated"
+                  class="w-12 px-4 py-4"
+                >
                   <input
                     type="checkbox"
                     :checked="isSelected(detection.id)"
@@ -356,7 +364,7 @@
                     class="group"
                   >
                     <div class="text-sm font-medium text-gray-900 group-hover:text-green-600 transition-colors">
-                      {{ detection.common_name }}
+                      {{ getDisplayCommonName(detection) }}
                     </div>
                     <div class="text-xs text-gray-500 italic">
                       {{ detection.scientific_name }}
@@ -375,6 +383,7 @@
                   <DetectionActions
                     :detection="detection"
                     :is-playing="currentPlayingId === detection.id"
+                    :hide-delete="!isAuthenticated"
                     container-class="justify-end w-full"
                     @toggle-play="togglePlayAudio"
                     @spectrogram="showSpectrogram"
@@ -391,7 +400,7 @@
         <div class="flex items-center justify-between px-4 py-3 bg-gray-50 border-t border-gray-200">
           <select
             v-model="perPageModel"
-            class="px-2 py-1 text-sm border border-gray-300 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-green-500"
+            class="h-9 px-2 py-1 text-sm border border-gray-300 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-green-500"
           >
             <option :value="25">
               25
@@ -401,6 +410,9 @@
             </option>
             <option :value="100">
               100
+            </option>
+            <option :value="200">
+              200
             </option>
           </select>
 
@@ -495,6 +507,28 @@
       </template>
     </div>
 
+    <!-- Scroll to Top FAB -->
+    <button
+      v-show="showScrollTop"
+      class="fixed bottom-4 right-4 w-10 h-10 bg-green-600 hover:bg-green-700 text-white rounded-full shadow-lg flex items-center justify-center z-50 transition-colors"
+      title="Scroll to top"
+      @click="scrollToTop"
+    >
+      <svg
+        class="w-5 h-5"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          d="M5 15l7-7 7 7"
+        />
+      </svg>
+    </button>
+
     <!-- Spectrogram Modal -->
     <SpectrogramModal
       :is-visible="isSpectrogramModalVisible"
@@ -529,7 +563,7 @@
               Delete <strong>{{ selectedCount }}</strong> selected detection{{ selectedCount === 1 ? '' : 's' }}? This cannot be undone.
             </template>
             <template v-else>
-              Delete this <strong>{{ detectionToDelete?.common_name }}</strong> detection from {{ formatDate(detectionToDelete?.timestamp) }}?
+              Delete this <strong>{{ getDisplayCommonName(detectionToDelete) }}</strong> detection from {{ formatDate(detectionToDelete?.timestamp) }}?
             </template>
           </p>
           <div class="flex justify-end gap-3">
@@ -564,6 +598,8 @@
 	import { getAudioUrl, getSpectrogramUrl } from '@/services/media'
 	import { useTableData } from '@/composables/useTableData'
 	import { useAudioPlayer } from '@/composables/useAudioPlayer'
+	import { useAuth } from '@/composables/useAuth'
+	import { getDisplayCommonName, matchesBirdQuery } from '@/utils/birdNames'
 	import DetectionActions from '@/components/DetectionActions.vue'
 	import SpectrogramModal from '@/components/SpectrogramModal.vue'
 import DetectionInfoModal from '@/components/DetectionInfoModal.vue'
@@ -620,6 +656,8 @@ const {
   togglePlay
 } = useAudioPlayer()
 
+const { isAuthenticated } = useAuth()
+
 // --- State ---
 
 // Filters
@@ -646,12 +684,22 @@ const {
 	  const query = speciesSearchQuery.value.trim().toLowerCase()
 	  if (!query) return speciesList.value
 
-	  return speciesList.value.filter((species) => {
-	    const commonName = (species?.common_name || '').toLowerCase()
-	    const scientificName = (species?.scientific_name || '').toLowerCase()
-	    return commonName.includes(query) || scientificName.includes(query)
-	  })
+	  return speciesList.value.filter(species => matchesBirdQuery(species, query))
 	})
+	const selectedSpeciesLabel = computed(() => {
+	  if (!selectedSpecies.value) return ''
+	  const species = speciesList.value.find(item => item.common_name === selectedSpecies.value)
+	  return getDisplayCommonName(species) || selectedSpecies.value
+	})
+
+// Scroll to top
+const showScrollTop = ref(false)
+const handleScroll = () => {
+  showScrollTop.value = window.scrollY > 300
+}
+const scrollToTop = () => {
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
 
 // Modals
 const isSpectrogramModalVisible = ref(false)
@@ -704,7 +752,7 @@ const getConfidenceColor = (confidence) => {
 	  try {
 	    const response = await api.get('/species/all')
 	    const list = Array.isArray(response.data) ? response.data : []
-	    list.sort((a, b) => (a?.common_name || '').localeCompare(b?.common_name || ''))
+	    list.sort((a, b) => getDisplayCommonName(a).localeCompare(getDisplayCommonName(b)))
 	    speciesList.value = list
 	  } catch (err) {
 	    console.error('Failed to fetch species list:', err)
@@ -824,10 +872,12 @@ const executeDelete = async () => {
 	  fetchDetections()
 	  fetchSpeciesList()
 	  document.addEventListener('click', handleClickOutside)
+	  window.addEventListener('scroll', handleScroll)
 	})
 
 	onUnmounted(() => {
 	  document.removeEventListener('click', handleClickOutside)
+	  window.removeEventListener('scroll', handleScroll)
 	  // Audio cleanup is handled automatically by useAudioPlayer composable
 	})
 	</script>

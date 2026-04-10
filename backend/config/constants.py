@@ -14,17 +14,22 @@ class ModelType(Enum):
     BIRDNET_V3 = "birdnet_v3"
 
 
+class RecorderState:
+    """Recorder health state constants for type-safe comparisons."""
+    RUNNING = 'running'
+    DEGRADED = 'degraded'
+    STOPPED = 'stopped'
+
+
 class RecordingMode:
     """Recording mode constants for type-safe comparisons."""
     PULSEAUDIO = 'pulseaudio'
-    HTTP_STREAM = 'http_stream'
     RTSP = 'rtsp'
 
 
 # Recording modes with UI labels
 RECORDING_MODES = {
     RecordingMode.PULSEAUDIO: 'Local Microphone',
-    RecordingMode.HTTP_STREAM: 'HTTP Stream',
     RecordingMode.RTSP: 'RTSP Stream',
 }
 
@@ -51,3 +56,13 @@ MODEL_SAMPLE_RATES = {
     ModelType.BIRDNET: 48000,
     ModelType.BIRDNET_V3: 32000,
 }
+
+# Species filter default thresholds
+DEFAULT_SPECIES_FILTER_THRESHOLD = 0.03      # V2.4 meta-model
+DEFAULT_GEOMODEL_FILTER_THRESHOLD = 0.15     # V3.0 geomodel
+
+# Log rotation
+LOG_MAX_BYTES = 5 * 1024 * 1024   # 5 MB per file
+LOG_BACKUP_COUNT = 2               # 2 rotated backups (15 MB max per service)
+LOG_DEFAULT_LINES = 500
+LOG_MAX_LINES = 2000

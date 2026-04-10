@@ -22,6 +22,24 @@
         ref="spectrogramCanvas"
         class="w-full h-48 mb-4 rounded-lg"
       />
+      <div
+        v-if="streams.length > 1"
+        class="flex flex-wrap gap-2 mb-4"
+      >
+        <button
+          v-for="s in streams"
+          :key="s.source_id"
+          type="button"
+          class="inline-flex items-center px-2.5 py-0.5 rounded-full border text-xs font-medium transition-colors"
+          :class="s.source_id === selectedSourceId
+            ? 'border-blue-200 bg-blue-50 text-gray-800'
+            : 'border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100'"
+          :disabled="isLoading"
+          @click="selectSourceById(s.source_id)"
+        >
+          {{ s.label }}
+        </button>
+      </div>
       <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-4">
         <button
           class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg shadow focus:outline-none focus:ring-2 focus:ring-blue-300 flex items-center justify-center min-w-[120px] flex-shrink-0 disabled:bg-gray-400 disabled:cursor-not-allowed"
@@ -42,15 +60,15 @@
             class="text-sm break-words"
             :class="hasError ? 'text-amber-600 animate-pulse-fast' : 'text-gray-500'"
           >Status: {{ statusMessage }}</span>
-          <div class="hidden sm:block text-xs text-gray-400 mt-1">
+          <div
+            v-if="streams.length <= 1"
+            class="hidden sm:block text-xs text-gray-400 mt-1"
+          >
             <template v-if="streamDescription">
               {{ streamDescription }}
             </template>
-            <template v-else-if="streamType === 'none'">
-              ⚠️ No stream available
-            </template>
             <template v-else>
-              ❓ Unknown
+              ⚠️ No stream available
             </template>
           </div>
         </div>
@@ -72,7 +90,7 @@
 </template>
 
 <script>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { io } from 'socket.io-client'
 import BirdDetectionList from './BirdDetectionList.vue'
 import api from '@/services/api'
@@ -90,9 +108,14 @@ export default {
     const hasError = ref(false)
     const statusMessage = ref('Click Start to begin')
     const birdDetections = ref([])
-    const streamUrl = ref('')
-    const streamType = ref('none')
-    const streamDescription = ref('')
+    const streams = ref([])
+    const selectedSourceId = ref('')
+
+    const currentSource = computed(() =>
+      streams.value.find(s => s.source_id === selectedSourceId.value)
+    )
+    const streamUrl = computed(() => currentSource.value?.url || '')
+    const streamDescription = computed(() => currentSource.value?.label || '')
 
     let audioContext, analyser, source, dataArray, animationId
     let canvasCtx, canvasWidth, canvasHeight
@@ -131,6 +154,24 @@ export default {
       }
     }
 
+    const probeStreamError = async () => {
+      try {
+        const response = await fetch(streamUrl.value, { method: 'HEAD' })
+        console.error(`[LiveFeed] Stream probe: HTTP ${response.status} from ${streamUrl.value}`)
+        if (response.status === 404 || response.status === 403) {
+          return 'Audio stream is not available'
+        } else if (response.status === 401) {
+          return 'Authentication required'
+        } else if (response.status >= 500) {
+          return 'Stream server error'
+        }
+        return 'Could not start audio playback'
+      } catch (fetchError) {
+        console.error(`[LiveFeed] Stream probe failed: ${fetchError.message}`)
+        return 'Could not reach stream server'
+      }
+    }
+
     const startAudio = async () => {
       try {
         isLoading.value = true
@@ -147,13 +188,18 @@ export default {
         statusMessage.value = 'Icecast stream connected'
         return true
       } catch (error) {
-        console.error('Error starting audio playback:', error)
+        console.error(`[LiveFeed] Playback failed: ${error.name}: ${error.message}`)
         // Check if it might be an auth error (nginx returns 401 for unauthenticated requests)
         if (error.name === 'NotAllowedError' || error.message?.includes('401')) {
-          showError('Authentication required - please log in')
-          window.location.href = '/?auth=required'
+          showError('Authentication required')
+          window.dispatchEvent(new Event('auth:required'))
         } else {
-          showError('Error starting audio playback')
+          // Probe the stream URL to diagnose why playback failed
+          const userMessage = await probeStreamError()
+          showError(userMessage)
+          if (userMessage === 'Authentication required') {
+            window.dispatchEvent(new Event('auth:required'))
+          }
         }
         return false
       } finally {
@@ -166,8 +212,8 @@ export default {
         await audioElement.value.pause()
         statusMessage.value = 'Audio stopped'
       } catch (error) {
-        console.error('Error stopping audio playback:', error)
-        statusMessage.value = 'Error stopping audio playback'
+        console.error(`[LiveFeed] Stop failed: ${error.message}`)
+        statusMessage.value = 'Error stopping audio'
       }
     }
 
@@ -178,22 +224,30 @@ export default {
       }
 
       const error = event.target.error
-      console.error('Audio element error:', error)
+      const errorCodes = {
+        [MediaError.MEDIA_ERR_ABORTED]: 'MEDIA_ERR_ABORTED',
+        [MediaError.MEDIA_ERR_NETWORK]: 'MEDIA_ERR_NETWORK',
+        [MediaError.MEDIA_ERR_DECODE]: 'MEDIA_ERR_DECODE',
+        [MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED]: 'MEDIA_ERR_SRC_NOT_SUPPORTED',
+      }
+      console.error(
+        `[LiveFeed] Audio error: code=${error?.code} (${errorCodes[error?.code] || 'unknown'}), message="${error?.message || 'none'}", src="${streamUrl.value}"`
+      )
 
-      let errorMessage = 'Stream error'
+      let errorMessage = 'Audio stream error'
       if (error) {
         switch (error.code) {
           case MediaError.MEDIA_ERR_ABORTED:
-            errorMessage = 'Stream aborted'
+            errorMessage = 'Audio stream was interrupted'
             break
           case MediaError.MEDIA_ERR_NETWORK:
-            errorMessage = 'Network error - stream unavailable'
+            errorMessage = 'Could not reach audio stream'
             break
           case MediaError.MEDIA_ERR_DECODE:
-            errorMessage = 'Stream decode error'
+            errorMessage = 'Audio stream interrupted'
             break
           case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
-            errorMessage = 'Stream format not supported'
+            errorMessage = 'Audio stream is not available'
             break
         }
       }
@@ -204,7 +258,7 @@ export default {
     }
 
     const handleAudioBuffering = () => {
-      console.warn('Audio stream buffering')
+      console.log('[LiveFeed] Audio stream buffering')
       if (isPlaying.value) {
         statusMessage.value = 'Stream buffering...'
       }
@@ -217,7 +271,7 @@ export default {
     }
 
     const handleAudioEnded = () => {
-      console.warn('Audio stream ended')
+      console.log('[LiveFeed] Audio stream ended')
       statusMessage.value = 'Stream ended - click Start to reconnect'
       stopPlayback()
     }
@@ -244,43 +298,64 @@ export default {
       }
     }
 
+    const startPlayback = async () => {
+      const success = await startAudio()
+      if (success) {
+        if (!isSafari) {
+          drawSpectrogram()
+        }
+        isPlaying.value = true
+      }
+    }
+
     const toggleAudio = async () => {
       if (isPlaying.value) {
         stopPlayback()
         await stopAudio()
       } else {
-        const success = await startAudio()
-        if (success) {
-          if (!isSafari) {
-            drawSpectrogram()
-          }
-          isPlaying.value = true
-        }
+        await startPlayback()
+      }
+    }
+
+    const selectSourceById = async (sourceId) => {
+      if (sourceId === selectedSourceId.value) return
+      if (!streams.value.some(s => s.source_id === sourceId)) return
+      const wasPlaying = isPlaying.value
+      if (wasPlaying) {
+        stopPlayback()
+        await stopAudio()
+      }
+      selectedSourceId.value = sourceId
+      if (wasPlaying) {
+        await startPlayback()
       }
     }
 
     const fetchStreamConfig = async () => {
       try {
         const { data: config } = await api.get('/stream/config')
-        streamUrl.value = config.stream_url || ''
-        streamType.value = config.stream_type || 'none'
-        streamDescription.value = config.description || ''
+        streams.value = config.streams || []
+        selectedSourceId.value = streams.value[0]?.source_id || ''
 
-        if (!streamUrl.value || streamType.value === 'none') {
+        if (!streamUrl.value) {
           statusMessage.value = 'No audio stream configured'
         }
       } catch (error) {
-        console.error('Error fetching stream config:', error)
-        showError('Error loading stream configuration')
+        console.error(`[LiveFeed] Stream config fetch failed: ${error.message}`)
+        showError('Could not load stream settings')
       }
     }
 
     const initWebSocket = () => {
       socket = io()
 
-      socket.on('connect', () => {})
+      socket.on('connect', () => {
+        console.log('[LiveFeed] WebSocket connected')
+      })
 
-      socket.on('disconnect', () => {})
+      socket.on('disconnect', (reason) => {
+        console.log(`[LiveFeed] WebSocket disconnected: ${reason}`)
+      })
 
       socket.on('bird_detected', (detection) => {
         
@@ -386,10 +461,12 @@ export default {
       statusMessage,
       toggleAudio,
       birdDetections,
+      streams,
+      selectedSourceId,
       streamUrl,
-      streamType,
       streamDescription,
       isSafari,
+      selectSourceById,
       handleAudioError,
       handleAudioBuffering,
       handleAudioPlaying,

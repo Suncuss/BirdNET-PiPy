@@ -4,7 +4,9 @@ set -e
 
 SETTINGS_FILE="/app/data/config/user_settings.json"
 
-# Read and validate timezone from settings
+# Set TZ env var for third-party libraries (werkzeug, etc.) that read it.
+# Application code reads timezone directly from the settings file via
+# core.timezone_service and does NOT depend on this env var.
 if [ -f "$SETTINGS_FILE" ]; then
     TZ=$(python3 -c "
 import json

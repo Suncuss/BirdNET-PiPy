@@ -6,6 +6,7 @@ import { ref } from 'vue'
  */
 const locationConfigured = ref(null) // null = checking, false = not configured, true = ready
 const isRestarting = ref(false)
+const stationName = ref('')
 
 export function useAppStatus() {
   const setLocationConfigured = (value) => {
@@ -19,11 +20,17 @@ export function useAppStatus() {
   // Convenience: true when app is ready for normal operation
   const isReady = () => locationConfigured.value === true && !isRestarting.value
 
+  const setStationName = (value) => {
+    stationName.value = value || ''
+  }
+
   return {
     locationConfigured,
     isRestarting,
+    stationName,
     setLocationConfigured,
     setRestarting,
+    setStationName,
     isReady
   }
 }

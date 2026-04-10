@@ -146,6 +146,38 @@ class TestGetCleanupCandidates:
         candidates = test_db_manager.get_cleanup_candidates(keep_per_species=60)
         assert len(candidates) == 0
 
+    def test_returns_extra_column(self, test_db_manager):
+        """Cleanup candidates should include extra column for filename reconstruction."""
+        import json
+
+        base_time = datetime(2024, 1, 15, 10, 0, 0)
+        for i in range(70):
+            detection = {
+                'timestamp': (base_time - timedelta(hours=i)).isoformat(),
+                'group_timestamp': (base_time - timedelta(hours=i)).isoformat(),
+                'scientific_name': 'Testus birdus',
+                'common_name': 'Test Bird',
+                'confidence': 0.75 + (i % 20) * 0.01,
+                'latitude': 40.7128,
+                'longitude': -74.0060,
+                'cutoff': 0.5,
+                'sensitivity': 0.75,
+                'overlap': 0.25,
+                'extra': {'source_label': 'Backyard_Mic'},
+                'audio_source': 'alsa_input.usb-test',
+            }
+            test_db_manager.insert_detection(detection)
+
+        candidates = test_db_manager.get_cleanup_candidates(keep_per_species=60)
+        assert len(candidates) == 10
+
+        for candidate in candidates:
+            assert 'extra' in candidate, "extra column must be present in cleanup candidates"
+            extra = candidate['extra']
+            if isinstance(extra, str):
+                extra = json.loads(extra)
+            assert extra.get('source_label') == 'Backyard_Mic'
+
 
 class TestGetDiskUsage:
     """Tests for storage_manager.get_disk_usage()"""
@@ -192,6 +224,24 @@ class TestGetDetectionFiles:
                 assert 'American_Robin' in paths['audio_path']
                 assert 'American_Robin' in paths['spectrogram_path']
                 assert '85' in paths['audio_path']  # Confidence as percentage
+
+    def test_constructs_paths_with_source_label(self):
+        """Should include source_label suffix in filenames when present in extra."""
+        with patch('config.settings.EXTRACTED_AUDIO_DIR', '/app/data/audio/extracted_songs'):
+            with patch('config.settings.SPECTROGRAM_DIR', '/app/data/spectrograms'):
+                from core.storage_manager import get_detection_files
+
+                detection = {
+                    'common_name': 'American Robin',
+                    'confidence': 0.85,
+                    'timestamp': '2024-01-15T10:30:00',
+                    'extra': '{"source_label": "Backyard_Mic"}',
+                }
+
+                paths = get_detection_files(detection)
+
+                assert paths['audio_path'].endswith('_Backyard_Mic.mp3')
+                assert paths['spectrogram_path'].endswith('_Backyard_Mic.webp')
 
     def test_fallback_to_legacy_colon_pattern(self):
         """Should fall back to legacy colon-pattern files if dash-pattern not found."""
@@ -461,3 +511,167 @@ class TestCleanupStorage:
                                     # Should flag that target is not achievable
                                     assert not result['target_achievable']
                                     assert not result['target_reached']
+
+    def test_cleanup_resolves_multi_source_filenames(self, test_db_manager):
+        """Cleanup should correctly resolve filenames for multi-source detections."""
+        base_time = datetime(2024, 1, 15, 10, 0, 0)
+
+        for i in range(70):
+            detection = {
+                'timestamp': (base_time - timedelta(hours=i)).isoformat(),
+                'group_timestamp': (base_time - timedelta(hours=i)).isoformat(),
+                'scientific_name': 'Testus birdus',
+                'common_name': 'Test Bird',
+                'confidence': 0.75 + (i % 20) * 0.01,
+                'latitude': 40.7128,
+                'longitude': -74.0060,
+                'cutoff': 0.5,
+                'sensitivity': 0.75,
+                'overlap': 0.25,
+                'extra': {'source_label': 'Backyard_Mic'},
+                'audio_source': 'alsa_input.usb-test',
+            }
+            test_db_manager.insert_detection(detection)
+
+        with patch('config.settings.BASE_DIR', '/tmp'):
+            with patch('config.settings.EXTRACTED_AUDIO_DIR', '/tmp/audio'):
+                with patch('config.settings.SPECTROGRAM_DIR', '/tmp/spectrograms'):
+                    with patch('config.settings.user_settings', {'storage': {}}):
+                        with patch('core.storage_manager.get_disk_usage') as mock_usage:
+                            mock_usage.return_value = {
+                                'total_bytes': 100 * 1024**3,
+                                'used_bytes': 90 * 1024**3,
+                                'free_bytes': 10 * 1024**3,
+                                'percent_used': 90.0
+                            }
+
+                            with patch('core.storage_manager.get_file_size') as mock_size:
+                                mock_size.return_value = 300 * 1024
+
+                                with patch('core.storage_manager.delete_detection_files') as mock_delete:
+                                    mock_delete.return_value = {
+                                        'deleted_audio': True,
+                                        'deleted_spectrogram': True,
+                                        'bytes_freed': 300 * 1024
+                                    }
+
+                                    from core.storage_manager import cleanup_storage
+
+                                    result = cleanup_storage(
+                                        test_db_manager,
+                                        target_percent=80,
+                                        keep_per_species=60
+                                    )
+
+                                    # Pre-fix: all would be skipped_missing because
+                                    # filenames lacked the _Backyard_Mic suffix
+                                    assert result['skipped_missing'] == 0
+                                    assert result['files_deleted'] > 0
+
+                                    # Verify delete received detection with extra
+                                    for call_args in mock_delete.call_args_list:
+                                        det = call_args[0][0]
+                                        assert 'extra' in det
+
+    def test_cleanup_fetches_candidates_once(self, test_db_manager):
+        """cleanup_storage should fetch candidates only once, not twice."""
+        base_time = datetime(2024, 1, 15, 10, 0, 0)
+        for i in range(70):
+            detection = {
+                'timestamp': (base_time - timedelta(hours=i)).isoformat(),
+                'group_timestamp': (base_time - timedelta(hours=i)).isoformat(),
+                'scientific_name': 'Testus birdus',
+                'common_name': 'Test Bird',
+                'confidence': 0.75 + (i % 20) * 0.01,
+                'latitude': 40.7128,
+                'longitude': -74.0060,
+                'cutoff': 0.5,
+                'sensitivity': 0.75,
+                'overlap': 0.25,
+            }
+            test_db_manager.insert_detection(detection)
+
+        with patch('config.settings.BASE_DIR', '/tmp'):
+            with patch('config.settings.user_settings', {'storage': {}}):
+                with patch('core.storage_manager.get_disk_usage') as mock_usage:
+                    mock_usage.return_value = {
+                        'total_bytes': 100 * 1024**3,
+                        'used_bytes': 90 * 1024**3,
+                        'free_bytes': 10 * 1024**3,
+                        'percent_used': 90.0
+                    }
+
+                    with patch('core.storage_manager.get_file_size', return_value=0):
+                        with patch.object(
+                            test_db_manager, 'get_cleanup_candidates',
+                            wraps=test_db_manager.get_cleanup_candidates
+                        ) as mock_gc:
+                            from core.storage_manager import cleanup_storage
+
+                            cleanup_storage(
+                                test_db_manager,
+                                target_percent=80,
+                                keep_per_species=60
+                            )
+
+                            assert mock_gc.call_count == 1, (
+                                f"get_cleanup_candidates called {mock_gc.call_count} times, expected 1"
+                            )
+
+    def test_target_reached_on_final_deletion(self, test_db_manager):
+        """target_reached should be True when final deletion crosses the threshold."""
+        base_time = datetime(2024, 1, 15, 10, 0, 0)
+        # Insert 62 detections so we get exactly 2 candidates with keep=60
+        for i in range(62):
+            detection = {
+                'timestamp': (base_time - timedelta(hours=i)).isoformat(),
+                'group_timestamp': (base_time - timedelta(hours=i)).isoformat(),
+                'scientific_name': 'Testus birdus',
+                'common_name': 'Test Bird',
+                'confidence': 0.75 + (i % 20) * 0.01,
+                'latitude': 40.7128,
+                'longitude': -74.0060,
+                'cutoff': 0.5,
+                'sensitivity': 0.75,
+                'overlap': 0.25,
+            }
+            test_db_manager.insert_detection(detection)
+
+        with patch('config.settings.BASE_DIR', '/tmp'):
+            with patch('config.settings.EXTRACTED_AUDIO_DIR', '/tmp/audio'):
+                with patch('config.settings.SPECTROGRAM_DIR', '/tmp/spectrograms'):
+                    with patch('config.settings.user_settings', {'storage': {}}):
+                        # Disk: 81% used on 100MB total → need to free 1MB to reach 80%
+                        with patch('core.storage_manager.get_disk_usage') as mock_usage:
+                            mock_usage.return_value = {
+                                'total_bytes': 100 * 1024**2,
+                                'used_bytes': 81 * 1024**2,
+                                'free_bytes': 19 * 1024**2,
+                                'percent_used': 81.0
+                            }
+
+                            with patch('core.storage_manager.get_file_size') as mock_size:
+                                mock_size.return_value = 600 * 1024  # 600KB per file
+
+                                with patch('core.storage_manager.delete_detection_files') as mock_delete:
+                                    mock_delete.return_value = {
+                                        'deleted_audio': True,
+                                        'deleted_spectrogram': True,
+                                        'bytes_freed': 600 * 1024
+                                    }
+
+                                    from core.storage_manager import cleanup_storage
+
+                                    result = cleanup_storage(
+                                        test_db_manager,
+                                        target_percent=80,
+                                        keep_per_species=60
+                                    )
+
+                                    # 2 candidates, each frees 600KB = 1.2MB
+                                    # bytes_to_free = 81MB - 80MB = 1MB
+                                    # First deletion: 600KB < 1MB, loop continues
+                                    # Second deletion: 1.2MB >= 1MB, but loop ends
+                                    # Post-loop check should catch this
+                                    assert result['target_reached'] is True
+                                    assert result['files_deleted'] == 2

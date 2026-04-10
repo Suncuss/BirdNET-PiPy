@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import copy
+import logging
 import os
 import threading
 from typing import Any
 
 from config.settings import USER_SETTINGS_PATH, load_user_settings
+
+logger = logging.getLogger(__name__)
 
 _settings_lock = threading.Lock()
 _cached_settings: dict[str, Any] | None = None
@@ -42,6 +45,18 @@ def get_runtime_settings(force_reload: bool = False) -> dict[str, Any]:
 
         # load_user_settings() always returns a dict, but keep this guard for safety
         return copy.deepcopy(_cached_settings or {})
+
+
+def resolve_source_label(source_id: str, fallback: str = '') -> str:
+    """Look up human-readable label for a source ID from runtime settings."""
+    try:
+        settings = get_runtime_settings()
+        for source in settings.get('audio', {}).get('sources', []):
+            if source.get('id') == source_id:
+                return source.get('label', fallback)
+    except Exception:
+        logger.debug("Failed to resolve source label", extra={'source_id': source_id})
+    return fallback
 
 
 def invalidate_runtime_settings_cache() -> None:
@@ -87,20 +102,35 @@ def get_setting_differences(old: dict[str, Any], new: dict[str, Any]) -> list[st
     return sorted(changed)
 
 
-def _get_nested(data: dict[str, Any] | None, *keys: str) -> Any:
-    """Safely get nested dict value."""
-    current: Any = data or {}
-    for key in keys:
-        if not isinstance(current, dict):
-            return None
-        current = current.get(key)
-    return current
+def _sources_only_labels_changed(
+    old_settings: dict[str, Any], new_settings: dict[str, Any]
+) -> bool:
+    """Check if audio sources differ only by their label fields."""
+    old_sources = old_settings.get("audio", {}).get("sources", [])
+    new_sources = new_settings.get("audio", {}).get("sources", [])
+
+    if len(old_sources) != len(new_sources):
+        return False
+
+    old_by_id = {s.get("id"): s for s in old_sources}
+    new_by_id = {s.get("id"): s for s in new_sources}
+
+    if set(old_by_id) != set(new_by_id):
+        return False
+
+    for sid in old_by_id:
+        old_no_label = {k: v for k, v in old_by_id[sid].items() if k != "label"}
+        new_no_label = {k: v for k, v in new_by_id[sid].items() if k != "label"}
+        if old_no_label != new_no_label:
+            return False
+
+    return True
 
 
 def classify_setting_changes(
     changed_paths: list[str],
     old_settings: dict[str, Any] | None = None,
-    new_settings: dict[str, Any] | None = None
+    new_settings: dict[str, Any] | None = None,
 ) -> dict[str, list[str] | bool]:
     """Classify changed setting paths by apply strategy.
 
@@ -108,28 +138,34 @@ def classify_setting_changes(
     - hot_applied: takes effect immediately
     - component_restarts: in-process component restart/rebind needed
     - full_restart_paths: requires full service restart
+
+    When old_settings and new_settings are provided, source label-only
+    changes are classified as hot_applied instead of requiring a restart.
     """
-    full_restart_exact = {"model.type", "location.timezone"}
+    full_restart_exact = {"model.type"}
+    full_restart_prefixes = ("audio.sources", "audio.next_source_id")
     component_prefixes = ("audio.",)
-    component_exact = {"birdweather.id", "location.latitude", "location.longitude", "location.configured"}
+    component_exact = {"birdweather.id", "location.configured"}
+
+    sources_label_only = (
+        old_settings is not None
+        and new_settings is not None
+        and _sources_only_labels_changed(old_settings, new_settings)
+    )
 
     full_restart_paths: list[str] = []
     component_restarts: list[str] = []
     hot_applied: list[str] = []
 
-    old_mode = _get_nested(old_settings, "audio", "recording_mode")
-    new_mode = _get_nested(new_settings, "audio", "recording_mode")
-
     for path in changed_paths:
-        # Icecast source mode/url is read on container startup; RTSP transitions need full restart.
-        if path == "audio.recording_mode" and (old_mode == "rtsp" or new_mode == "rtsp"):
-            full_restart_paths.append(path)
-            continue
-        if path == "audio.rtsp_url" and new_mode == "rtsp":
-            full_restart_paths.append(path)
-            continue
-
         if path in full_restart_exact:
+            full_restart_paths.append(path)
+            continue
+        if path.startswith(full_restart_prefixes):
+            # Source label-only edits are cosmetic — no restart needed
+            if sources_label_only and path.startswith("audio.sources"):
+                hot_applied.append(path)
+                continue
             full_restart_paths.append(path)
             continue
         if path in component_exact or path.startswith(component_prefixes):

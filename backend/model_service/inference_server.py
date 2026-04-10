@@ -10,6 +10,11 @@ import warnings
 import numpy as np
 
 from config import settings
+from config.constants import (
+    DEFAULT_GEOMODEL_FILTER_THRESHOLD,
+    DEFAULT_SPECIES_FILTER_THRESHOLD,
+    ModelType,
+)
 
 # Suppress NumPy floating point limit warnings
 warnings.filterwarnings('ignore', category=UserWarning, module='numpy.core.getlimits')
@@ -23,10 +28,20 @@ from scipy.io import wavfile
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.logging_config import get_logger, log_execution_time, setup_logging
 from core.runtime_config import get_runtime_settings
+from core.timezone_service import get_timezone_str
 from core.utils import build_detection_filenames
-
-from .base_model import BirdDetectionModel
-from .model_factory import create_model, get_model_type_from_settings
+from model_service.base_model import BirdDetectionModel
+from model_service.label_utils import get_common_name, get_scientific_name
+from model_service.location_filter import (
+    GeoModelFilter,
+    LocationFilter,
+    ModelBackedFilter,
+)
+from model_service.model_factory import (
+    create_location_filter,
+    create_model,
+    get_model_type_from_settings,
+)
 
 app = Flask(__name__)
 
@@ -40,7 +55,8 @@ logger.info("Loading bird detection model", extra={
 })
 
 try:
-    model = create_model(get_model_type_from_settings())
+    model_type = get_model_type_from_settings()
+    model = create_model(model_type)
     model.load()
     logger.info("Model loaded successfully", extra={
         'model_name': model.name,
@@ -51,24 +67,21 @@ except Exception:
     logger.error("Failed to load model", exc_info=True)
     raise
 
+# Create location filter (factory owns load + fallback)
+location_filter = create_location_filter(model_type, model=model)
 
-def get_scientific_name(label: str) -> str:
-    """Extract scientific name from full species label.
+# Log location filter configuration
+if isinstance(location_filter, GeoModelFilter):
+    _filter_desc = 'standalone geomodel (ONNX)'
+elif isinstance(location_filter, ModelBackedFilter):
+    _filter_desc = 'embedded meta model (TFLite)'
+else:
+    _filter_desc = 'disabled'
 
-    Args:
-        label: Full species label (e.g., "Turdus migratorius_American Robin")
-
-    Returns:
-        Scientific name (e.g., "Turdus migratorius")
-    """
-    parts = label.split('_', 1)
-    return parts[0] if len(parts) == 2 else label
-
-
-def get_common_name(label: str) -> str:
-    """Extract common name from full species label."""
-    parts = label.split('_', 1)
-    return parts[1] if len(parts) == 2 else label
+logger.info("Location filter initialized", extra={
+    'filter_type': _filter_desc,
+    'model_type': model_type.value,
+})
 
 
 def split_audio(path, chunk_length, sample_rate, total_duration, overlap=0.0, minlen=1.5):
@@ -249,43 +262,54 @@ def _is_input_shape_mismatch_error(error: Exception) -> bool:
 @log_execution_time
 def process_audio_file(
     model: BirdDetectionModel,
+    location_filter: LocationFilter,
     audio_file_path,
     lat,
     lon,
-    week,
     sensitivity,
     cutoff,
     overlap: float,
     recording_length: float,
     allowed_species: list[str] | None,
-    blocked_species: list[str] | None
+    blocked_species: list[str] | None,
+    species_filter_threshold: float = DEFAULT_SPECIES_FILTER_THRESHOLD
 ):
     """Process an audio file and return detected species.
 
     Args:
         model: The bird detection model instance
+        location_filter: Location-based species filter
         audio_file_path: Path to the audio file to analyze
         lat, lon: Location coordinates for species filtering
-        week: ISO week number for species filtering
         sensitivity: Confidence adjustment parameter
         cutoff: Minimum confidence threshold
 
     Returns:
         List of detection result dictionaries
     """
-    # Time meta model inference for location filtering
+    # Parse file timestamp from filename (used for location filtering and detection records)
+    source_file_name = os.path.basename(audio_file_path)
+    file_timestamp_str = source_file_name.split('.')[0]
+    file_timestamp = datetime.datetime.strptime(file_timestamp_str, "%Y%m%d_%H%M%S")
+
+    # Location-based species filtering (uses recording timestamp, not request time)
     meta_start = time.time()
-    local_species_list = model.filter_by_location(lat, lon, week)
+    location_context = location_filter.filter(
+        lat, lon, file_timestamp, threshold=species_filter_threshold
+    )
     meta_time = time.time() - meta_start
 
-    if local_species_list is not None:
+    if location_context.allowed_species is not None:
         logger.debug("Location filter applied", extra={
             'meta_time': round(meta_time, 3),
-            'local_species_count': len(local_species_list)
+            'local_species_count': len(location_context.allowed_species),
+            'location_source': location_context.source,
+            'filter_threshold': round(location_context.threshold * 100, 1),
         })
     else:
-        logger.debug("Location filtering not supported by model", extra={
-            'model': model.name
+        logger.debug("Location filtering not available", extra={
+            'model': model.name,
+            'location_source': location_context.source,
         })
 
     # Get overlap and chunk length from runtime settings/model
@@ -306,7 +330,7 @@ def process_audio_file(
     step_seconds = chunk_length - overlap
 
     logger.info("Starting audio analysis", extra={
-        'file': os.path.basename(audio_file_path),
+        'file': source_file_name,
         'chunks': len(audio_chunks),
         'model': model.name,
         'model_version': model.version,
@@ -314,28 +338,29 @@ def process_audio_file(
         'lon': lon,
         'overlap': overlap,
         'sensitivity': sensitivity,
-        'cutoff': cutoff
+        'cutoff': cutoff,
+        'species_filter_threshold': species_filter_threshold
     })
 
     results = []
     detections_count = 0
     chunks_with_detections = 0
 
-    # Parse file timestamp once before loop (constant value)
-    source_file_name = os.path.basename(audio_file_path)
-    file_timestamp_str = source_file_name.split('.')[0]
-    file_timestamp = datetime.datetime.strptime(file_timestamp_str, "%Y%m%d_%H%M%S")
-
     # Normalize optional filter lists
     allowed_species = allowed_species or []
     blocked_species = blocked_species or []
+
+    # Pre-compute loop-invariant values
+    loc_active = location_context.source != 'disabled'
+    cutoff_pct = round(cutoff * 100, 1)
+    threshold_pct = round(location_context.threshold * 100, 1) if loc_active else None
 
     # Time inference loop
     inference_start = time.time()
     for chunk_index, audio_chunk in enumerate(audio_chunks):
         # Run model inference (includes cutoff filtering and human detection)
         try:
-            species_in_audio_chunk = model.predict(
+            chunk_prediction = model.predict_chunk(
                 audio_chunk, sensitivity, cutoff, chunk_index=chunk_index)
         except Exception as error:
             if _is_input_shape_mismatch_error(error):
@@ -351,6 +376,31 @@ def process_audio_file(
                 return []
             raise
 
+        top3_info = []
+        for label, confidence in chunk_prediction.raw_top3:
+            entry = {
+                'species': get_common_name(label),
+                'confidence': round(confidence * 100, 1),
+            }
+            if loc_active:
+                loc_prob = location_context.probability_for(label)
+                entry['location_prob'] = (
+                    round(loc_prob * 100, 1) if loc_prob is not None else 'unmapped'
+                )
+            top3_info.append(entry)
+
+        chunk_log_extra = {
+            'top3': top3_info,
+            'cutoff': cutoff_pct,
+        }
+        if loc_active:
+            chunk_log_extra['location_source'] = location_context.source
+            chunk_log_extra['filter_threshold'] = threshold_pct
+        if chunk_prediction.human_detected:
+            chunk_log_extra['privacy_filtered'] = True
+        logger.info(f"Chunk {chunk_index} raw model output", extra=chunk_log_extra)
+
+        species_in_audio_chunk = chunk_prediction.candidates
         if species_in_audio_chunk:
             chunks_with_detections += 1
 
@@ -373,17 +423,17 @@ def process_audio_file(
                     logger.debug("Species not in allowed list", extra={'species': scientific_name})
                 continue
 
-            # Rule 3: Normal mode - use location-based meta-model filter
-            if local_species_list is None:
+            # Rule 3: Normal mode - use location-based filter
+            if location_context.allowed_species is None:
                 # Model doesn't support location filtering, accept all
                 filtered_species_list.append(species_detection)
-            elif species_label in local_species_list:
+            elif species_label in location_context.allowed_species:
                 filtered_species_list.append(species_detection)
             else:
                 logger.debug("Species not in local species list", extra={'species': scientific_name})
 
         if filtered_species_list:
-            species_info = [(get_common_name(s[0]), round(s[1]*100)) for s in filtered_species_list]
+            species_info = [(get_common_name(s[0]), round(s[1]*100, 1)) for s in filtered_species_list]
             logger.debug(f"Chunk {chunk_index}/{len(audio_chunks)-1} analyzed", extra={
                 'detections': len(filtered_species_list),
                 'species': species_info[0] if species_info else None
@@ -399,12 +449,17 @@ def process_audio_file(
             detections_count += 1
 
             # Log each confirmed detection
-            logger.info("Bird detected", extra={
+            detection_extra = {
                 'species': result['common_name'],
-                'confidence': round(result['confidence'] * 100),
+                'confidence': round(result['confidence'] * 100, 1),
                 'chunk': chunk_index,
                 'time': result['timestamp']
-            })
+            }
+            if loc_active:
+                loc_prob = location_context.probability_for(species[0])
+                detection_extra['location_source'] = location_context.source
+                detection_extra['location_prob'] = round(loc_prob * 100, 1) if loc_prob is not None else 'unmapped'
+            logger.info("Bird detected", extra=detection_extra)
 
     # Log inference loop timing
     inference_time = time.time() - inference_start
@@ -435,6 +490,10 @@ def analyze_audio_file():
     start_time = time.time()
     try:
         data = request.json
+        if not data or not isinstance(data, dict):
+            return jsonify({"error": "Invalid or missing JSON payload"}), 400
+        if 'audio_file_path' not in data:
+            return jsonify({"error": "Missing required field: audio_file_path"}), 400
         audio_file_path = data['audio_file_path']
 
         # Validate path is within allowed directory (prevent path traversal)
@@ -454,8 +513,6 @@ def analyze_audio_file():
             })
             return jsonify({"error": f"File not found: {audio_file_path}"}), 404
 
-        week = datetime.datetime.now().isocalendar()[1]
-
         # Get current analysis settings from runtime config
         runtime_settings = get_runtime_settings()
         location_settings = runtime_settings.get('location', {})
@@ -467,6 +524,11 @@ def analyze_audio_file():
         lon = location_settings.get('longitude')
         sensitivity = detection_settings.get('sensitivity', 0.75)
         cutoff = detection_settings.get('cutoff', 0.60)
+        default_threshold = (
+            DEFAULT_GEOMODEL_FILTER_THRESHOLD if model_type == ModelType.BIRDNET_V3
+            else DEFAULT_SPECIES_FILTER_THRESHOLD
+        )
+        species_filter_threshold = detection_settings.get('species_filter_threshold', default_threshold)
         overlap = audio_settings.get('overlap', 0.0)
         recording_length = audio_settings.get('recording_length', 9)
         allowed_species = species_filter_settings.get('allowed_species') or []
@@ -485,22 +547,24 @@ def analyze_audio_file():
             'lon': lon,
             'sensitivity': sensitivity,
             'cutoff': cutoff,
+            'species_filter_threshold': species_filter_threshold,
             'overlap': overlap
         })
 
-        # Process audio file (model handles thread safety internally)
+        # Process audio file (model and filter handle thread safety internally)
         results = process_audio_file(
             model,
+            location_filter,
             resolved_path,
             lat,
             lon,
-            week,
             sensitivity,
             cutoff,
             overlap,
             recording_length,
             allowed_species,
-            blocked_species
+            blocked_species,
+            species_filter_threshold
         )
 
         processing_time = time.time() - start_time
@@ -525,6 +589,8 @@ if __name__ == '__main__':
         'port': settings.BIRDNET_SERVICE_PORT,
         'model': model.name,
         'model_version': model.version,
-        'timezone': os.environ.get('TZ', 'UTC')
+        'num_species': len(model.get_labels()),
+        'location_filter': _filter_desc,
+        'timezone': get_timezone_str()
     })
     app.run(host='0.0.0.0', debug=False, port=settings.BIRDNET_SERVICE_PORT)

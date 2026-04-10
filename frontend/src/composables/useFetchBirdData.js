@@ -81,14 +81,35 @@ export function useFetchBirdData() {
   // Cached activity overview for both orders (instant toggle)
   let activityOverviewCache = { most: [], least: [] };
 
+  // Cached recent observations for both modes (instant toggle)
+  let recentObservationsCache = { all: [], unique: [] };
+  let currentActivityOrder = 'most';
+  let currentRecentObsMode = 'all';
+
+  const applyDashboardSelections = () => {
+    recentObservationsData.value = recentObservationsCache[currentRecentObsMode] || [];
+    detailedBirdActivityData.value = activityOverviewCache[currentActivityOrder] || [];
+  };
+
+  const setRecentObsMode = (mode) => {
+    currentRecentObsMode = mode;
+    applyDashboardSelections();
+  };
+
   const setActivityOrder = (order) => {
-    detailedBirdActivityData.value = activityOverviewCache[order] || [];
+    currentActivityOrder = order;
+    applyDashboardSelections();
   };
 
   // Fix 3: Fetch race guard — prevents stale responses from overwriting newer state
   let fetchVersion = 0;
 
-  const fetchDashboardData = async (order = 'most') => {
+  const fetchDashboardData = async (
+    order = currentActivityOrder,
+    { recentMode = currentRecentObsMode } = {}
+  ) => {
+    currentActivityOrder = order;
+    currentRecentObsMode = recentMode;
     const myVersion = ++fetchVersion;
     logger.info('Fetching dashboard data');
     try {
@@ -106,7 +127,7 @@ export function useFetchBirdData() {
       latestObservationData.value = data.latestObservation;
       latestObservationError.value = null;
 
-      recentObservationsData.value = data.recentObservations;
+      recentObservationsCache = data.recentObservations || { all: [], unique: [] };
       recentObservationsError.value = null;
 
       summaryData.value = data.summary;
@@ -115,8 +136,8 @@ export function useFetchBirdData() {
       hourlyBirdActivityData.value = data.hourlyActivity;
       hourlyBirdActivityError.value = null;
 
-      activityOverviewCache = data.activityOverview;
-      detailedBirdActivityData.value = activityOverviewCache[order] || [];
+      activityOverviewCache = data.activityOverview || { most: [], least: [] };
+      applyDashboardSelections();
       detailedBirdActivityError.value = null;
 
       // Fix 4: Retry wikimedia image when still on default (e.g. previous fetch failed)
@@ -163,6 +184,7 @@ export function useFetchBirdData() {
       const errMsg = 'Hmm, cannot reach the server';
       latestObservationData.value = null;
       latestObservationError.value = errMsg;
+      recentObservationsCache = { all: [], unique: [] };
       recentObservationsData.value = [];
       recentObservationsError.value = errMsg;
       summaryData.value = {};
@@ -219,6 +241,7 @@ export function useFetchBirdData() {
     hasLoadedOnce,
     fetchDashboardData,
     setActivityOrder,
+    setRecentObsMode,
     fetchChartsData,
     fetchTrendsData,
   };

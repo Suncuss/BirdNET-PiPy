@@ -20,7 +20,7 @@
         <div class="flex items-center justify-between">
           <div class="flex-grow">
             <div class="font-semibold text-gray-800">
-              {{ detection.common_name }}
+              {{ getDisplayCommonName(detection) }}
             </div>
             <div class="text-sm text-gray-600 italic">
               {{ detection.scientific_name }}
@@ -43,6 +43,7 @@
   <script>
   import { defineComponent } from 'vue'
   import { useRouter } from 'vue-router'
+  import { getDisplayCommonName } from '@/utils/birdNames'
   
   export default defineComponent({
     name: 'BirdDetectionList',
@@ -65,6 +66,7 @@
   
       return {
         formatTime,
+        getDisplayCommonName,
         navigateToBirdDetails
       }
     }

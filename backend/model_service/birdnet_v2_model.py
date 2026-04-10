@@ -2,6 +2,7 @@
 
 import logging
 import threading
+from collections import OrderedDict
 
 import numpy as np
 
@@ -10,16 +11,17 @@ try:
 except ImportError:
     from tensorflow import lite as tflite
 
-from .base_model import BirdDetectionModel
+from config import settings
+from config.constants import DEFAULT_SPECIES_FILTER_THRESHOLD
+
+from .base_model import BirdDetectionModel, ChunkPrediction
 
 logger = logging.getLogger(__name__)
 
-# Minimum probability threshold for local species filtering (meta model)
-SPECIES_FILTER_THRESHOLD = 0.03
-
-
 def custom_sigmoid(x: np.ndarray, sensitivity: float) -> np.ndarray:
     """Apply custom sigmoid with adjustable sensitivity."""
+    if sensitivity <= 0:
+        raise ValueError(f"Sensitivity must be positive, got {sensitivity}")
     return 1 / (1.0 + np.exp(-sensitivity * x))
 
 
@@ -56,8 +58,9 @@ class BirdNetModel(BirdDetectionModel):
         # Data (lazy-loaded)
         self._labels = None
 
-        # Cache for meta-model results (lat, lon, week -> species list)
-        self._meta_model_cache = {}
+        # Cache raw meta-model probabilities by (lat, lon, week).
+        self._meta_probs_cache: OrderedDict[tuple, dict[str, float]] = OrderedDict()
+        self._meta_probs_cache_max_size = settings.LOCATION_FILTER_CACHE_SIZE
 
         # Lock for thread-safe inference
         self._inference_lock = threading.Lock()
@@ -86,15 +89,14 @@ class BirdNetModel(BirdDetectionModel):
         self._load_model()
         self._load_meta_model()
         self._load_labels()
-        self.load_ebird_codes()
 
-    def predict(
+    def predict_chunk(
         self,
         audio_chunk: np.ndarray,
         sensitivity: float = 1.0,
         cutoff: float = 0.0,
         chunk_index: int | None = None
-    ) -> list[tuple[str, float]]:
+    ) -> ChunkPrediction:
         if self._model is None:
             raise RuntimeError("Model not loaded. Call load() first.")
         if self._labels is None:
@@ -113,65 +115,88 @@ class BirdNetModel(BirdDetectionModel):
         # Apply custom sigmoid with sensitivity
         model_output = custom_sigmoid(model_output, sensitivity)
 
-        # Shared post-processing: log, cutoff, filter, sort
-        results = self._post_process(self._labels, model_output, cutoff, chunk_index)
+        # Shared post-processing: collect raw top-3 and filtered candidates
+        prediction = self._post_process(self._labels, model_output, cutoff, chunk_index)
 
         # Privacy filter: check for human detection
-        human_detection = any('Human' in species_label for species_label, _ in results)
+        human_detection = any('Human' in species_label for species_label, _ in prediction.candidates)
         if human_detection:
             logger.warning("Human detected in audio - chunk discarded for privacy")
-            return []
+            return ChunkPrediction(
+                raw_top3=prediction.raw_top3,
+                candidates=(),
+                human_detected=True,
+            )
 
-        return results
+        return prediction
 
     def get_labels(self) -> list[str]:
         if self._labels is None:
             self._load_labels()
         return self._labels
 
-    def filter_by_location(self, lat: float, lon: float, week: int) -> list[str] | None:
+    def filter_by_location(self, lat: float, lon: float, week: int, threshold: float = DEFAULT_SPECIES_FILTER_THRESHOLD) -> list[str] | None:
         """Get species likely at a location using the meta-model.
 
-        Results are cached by (lat, lon, week).
+        Raw probabilities are cached by (lat, lon, week) and the threshold
+        is applied per call.
         """
+        probabilities = self.get_location_probabilities(lat, lon, week)
+        if probabilities is None:
+            return None
+
+        return [
+            label
+            for label, probability in sorted(
+                probabilities.items(),
+                key=lambda item: item[1],
+                reverse=True,
+            )
+            if probability >= threshold
+        ]
+
+    def get_location_probabilities(self, lat: float, lon: float, week: int) -> dict[str, float] | None:
+        """Return raw meta-model probabilities for one location/week."""
         if self._meta_model is None:
             raise RuntimeError("Meta model not loaded. Call load() first.")
+        if self._labels is None:
+            self._load_labels()
 
         cache_key = (lat, lon, week)
 
-        if cache_key in self._meta_model_cache:
-            logger.debug("Meta model cache hit", extra={
-                'lat': lat, 'lon': lon, 'week': week,
-                'cached_species_count': len(self._meta_model_cache[cache_key])
-            })
-            return self._meta_model_cache[cache_key]
-
-        logger.debug("Meta model cache miss - running inference", extra={
-            'lat': lat, 'lon': lon, 'week': week
-        })
-
-        local_species = []
-
-        meta_model_input = np.expand_dims(
-            np.array([lat, lon, week], dtype='float32'), 0)
-
         with self._inference_lock:
+            if cache_key in self._meta_probs_cache:
+                self._meta_probs_cache.move_to_end(cache_key)
+                logger.debug("Meta model cache hit", extra={
+                    'lat': lat,
+                    'lon': lon,
+                    'week': week,
+                    'cached_species_count': len(self._meta_probs_cache[cache_key]),
+                })
+                return self._meta_probs_cache[cache_key]
+
+            logger.debug("Meta model cache miss - running inference", extra={
+                'lat': lat,
+                'lon': lon,
+                'week': week,
+            })
+
+            meta_model_input = np.expand_dims(
+                np.array([lat, lon, week], dtype='float32'), 0)
             self._meta_model.set_tensor(self.meta_input_layer_index, meta_model_input)
             self._meta_model.invoke()
             meta_model_output = self._meta_model.get_tensor(
                 self.meta_output_layer_index)[0].copy()
 
-        meta_model_output = np.where(
-            meta_model_output >= SPECIES_FILTER_THRESHOLD, meta_model_output, 0)
-        species_with_probs = list(zip(meta_model_output, self._labels, strict=False))
-        species_with_probs = sorted(species_with_probs, key=lambda x: x[0], reverse=True)
+            probabilities = {
+                label: float(p)
+                for label, p in zip(self._labels, meta_model_output, strict=True)
+            }
+            self._meta_probs_cache[cache_key] = probabilities
+            if len(self._meta_probs_cache) > self._meta_probs_cache_max_size:
+                self._meta_probs_cache.popitem(last=False)
 
-        for prob, species_label in species_with_probs:
-            if prob >= SPECIES_FILTER_THRESHOLD:
-                local_species.append(species_label)
-
-        self._meta_model_cache[cache_key] = local_species
-        return local_species
+        return probabilities
 
     # =========================================================================
     # Internal loading

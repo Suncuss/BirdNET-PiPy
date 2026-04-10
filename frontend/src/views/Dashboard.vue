@@ -1,28 +1,5 @@
 <template>
   <div class="dashboard">
-    <!-- Update FAB -->
-    <router-link
-      v-if="systemUpdate.showUpdateIndicator.value"
-      to="/settings"
-      class="fixed bottom-4 right-4 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-full shadow-lg hidden md:flex items-center gap-2 z-50 transition-colors"
-      title="System update available"
-    >
-      <svg
-        class="w-5 h-5"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <path
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          stroke-width="2"
-          d="M5 10l7-7 7 7M12 3v18"
-        />
-      </svg>
-      <span class="text-sm font-medium">Update Available</span>
-    </router-link>
-
     <!-- Dashboard content (hidden during setup via locationConfigured check) -->
     <div
       v-if="locationConfigured !== false"
@@ -121,7 +98,7 @@
               <div class="relative">
                 <img
                   :src="latestObservationimageUrl"
-                  :alt="latestObservationData.common_name"
+                  :alt="getDisplayCommonName(latestObservationData)"
                   class="w-[68px] h-[68px] object-cover rounded-full group-hover:opacity-80 transition-opacity duration-300"
                 >
                 <div
@@ -140,8 +117,7 @@
                 class="group flex items-center hover:text-blue-600 transition-colors duration-300"
               >
                 <h3 class="text-[15px] font-medium group-hover:underline lg:truncate lg:max-w-[160px]">
-                  {{ latestObservationData.common_name
-                  }}
+                  {{ getDisplayCommonName(latestObservationData) }}
                 </h3>
                 <font-awesome-icon
                   icon="fas fa-external-link-alt"
@@ -236,22 +212,22 @@
             </nav>
           </div>
           <ul
-            v-if="currentPeriodSummary && Object.keys(currentPeriodSummary).length"
+            v-if="summaryEntries.length"
             class="space-y-1 text-sm"
           >
             <li
-              v-for="(value, key) in currentPeriodSummary"
-              :key="key"
+              v-for="entry in summaryEntries"
+              :key="entry.key"
             >
-              <span class="font-medium">{{ formatSummaryKey(key) }}: </span> 
+              <span class="font-medium">{{ formatSummaryKey(entry.key) }}: </span> 
               <router-link
-                v-if="(key === 'mostCommonBird' || key === 'rarestBird') && value !== 'N/A'"
-                :to="{ name: 'BirdDetails', params: { name: value } }"
+                v-if="(entry.key === 'mostCommonBird' || entry.key === 'rarestBird') && entry.value !== 'N/A'"
+                :to="{ name: 'BirdDetails', params: { name: entry.value } }"
                 class="font-medium hover:text-blue-600 hover:underline transition-colors duration-300"
               >
-                {{ value }}
+                {{ getSummaryBirdDisplay(currentPeriodSummary, entry.key) }}
               </router-link>
-              <span v-else>{{ formatSummaryValue(key, value) }}</span>
+              <span v-else>{{ formatSummaryValue(entry.key, entry.value) }}</span>
             </li>
           </ul>
           <p
@@ -272,9 +248,27 @@
 
       <!-- Recent Observations -->
       <div class="bg-white rounded-lg shadow p-4 lg:col-span-2">
-        <h2 class="text-lg font-semibold mb-2">
-          Recent Observations
-        </h2>
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="text-lg font-semibold">
+            Recent Observations
+          </h2>
+          <div class="flex items-center bg-gray-100 rounded-full p-0.5">
+            <button
+              v-for="opt in recentObsFilterOptions"
+              :key="opt.label"
+              :class="[
+                'px-3 py-1 text-xs font-medium rounded-full transition-all duration-200',
+                showUniqueSpecies === opt.value
+                  ? 'bg-white text-gray-900 shadow-sm'
+                  : 'text-gray-500 hover:text-gray-700'
+              ]"
+              @click="toggleRecentObsFilter(opt.value)"
+            >
+              <span class="sm:hidden">{{ opt.shortLabel }}</span>
+              <span class="hidden sm:inline">{{ opt.label }}</span>
+            </button>
+          </div>
+        </div>
         <CenteredMessage
           v-if="!hasLoadedOnce"
           variant="loading"
@@ -296,7 +290,7 @@
                 :to="{ name: 'BirdDetails', params: { name: observation.common_name } }"
                 class="font-medium hover:text-blue-600 hover:underline transition-colors duration-300"
               >
-                {{ observation.common_name }}
+                {{ getDisplayCommonName(observation) }}
               </router-link>
               <span class="text-xs text-gray-500 ml-2">{{ formatTimestamp(observation.timestamp) }}</span>
               <span class="text-xs text-gray-500 ml-2 hidden lg:inline">
@@ -393,10 +387,10 @@ import { faPlay, faPause, faCircleInfo, faExternalLinkAlt } from '@fortawesome/f
 	import { useBirdCharts } from '@/composables/useBirdCharts';
 	import { useAudioPlayer } from '@/composables/useAudioPlayer';
 	import { useAppStatus } from '@/composables/useAppStatus';
-	import { useSystemUpdate } from '@/composables/useSystemUpdate';
-	import SpectrogramModal from '@/components/SpectrogramModal.vue';
-	import CenteredMessage from '@/components/CenteredMessage.vue';
-	import { getAudioUrl, getSpectrogramUrl } from '@/services/media'
+import SpectrogramModal from '@/components/SpectrogramModal.vue';
+import CenteredMessage from '@/components/CenteredMessage.vue';
+import { getAudioUrl, getSpectrogramUrl } from '@/services/media'
+import { getDisplayCommonName } from '@/utils/birdNames'
 
 library.add(faPlay, faPause, faCircleInfo, faExternalLinkAlt);
 Chart.register(MatrixController, MatrixElement)
@@ -430,7 +424,8 @@ export default {
 
             // Methods
             fetchDashboardData,
-            setActivityOrder
+            setActivityOrder,
+            setRecentObsMode
         } = useFetchBirdData();
 
         // Audio state
@@ -453,6 +448,15 @@ export default {
         const currentSummaryPeriod = ref('today')
         const showLeastCommon = ref(false)
         const isActivityUpdating = ref(false)
+
+        // Recent observations filter: false = All, true = Unique (one per species)
+        const showUniqueSpecies = ref(
+            localStorage.getItem('birdnet_recent_unique') === 'true'
+        )
+        const recentObsFilterOptions = [
+            { label: 'All', shortLabel: 'All', value: false },
+            { label: 'Unique', shortLabel: 'Uniq', value: true }
+        ]
 
         const isSpectrogramModalVisible = ref(false)
         const currentSpectrogramUrl = ref('')
@@ -490,10 +494,15 @@ export default {
         // App status for coordinating with setup flow
         const { locationConfigured } = useAppStatus()
 
-        // System update composable for silent auto-check
-        const systemUpdate = useSystemUpdate()
-
         const currentOrder = () => showLeastCommon.value ? 'least' : 'most'
+        const recentMode = () => showUniqueSpecies.value ? 'unique' : 'all'
+
+        const toggleRecentObsFilter = (value) => {
+            if (showUniqueSpecies.value === value) return
+            showUniqueSpecies.value = value
+            localStorage.setItem('birdnet_recent_unique', String(value))
+            setRecentObsMode(recentMode())
+        }
 
         // Single-in-flight poll loop: waits for the current fetch to
         // finish before scheduling the next one, so slow responses never
@@ -501,7 +510,7 @@ export default {
         const startPolling = () => {
             if (pollInterval) return
             const poll = async () => {
-                await fetchDashboardData(currentOrder())
+                await fetchDashboardData(currentOrder(), { recentMode: recentMode() })
                 if (!isActive) return
                 redrawCharts()
                 pollInterval = setTimeout(poll, POLL_INTERVAL)
@@ -526,7 +535,7 @@ export default {
                     if (document.hidden) {
                         stopPolling()
                     } else {
-                        await fetchDashboardData(currentOrder())
+                        await fetchDashboardData(currentOrder(), { recentMode: recentMode() })
                         if (!isActive) return
                         redrawCharts()
                         startPolling()
@@ -535,12 +544,9 @@ export default {
                 document.addEventListener('visibilitychange', visibilityHandler)
             }
 
-            await fetchDashboardData(currentOrder());
+            await fetchDashboardData(currentOrder(), { recentMode: recentMode() });
             if (!isActive) return  // Deactivated while fetching — bail out
             startPolling()
-
-            // Silent auto-check for updates (no status messages, uses backend cache)
-            systemUpdate.checkForUpdates({ silent: true }).catch(() => {})
 
             // Wait for DOM to render canvas elements (they're behind v-if="!isDataEmpty")
             await nextTick()
@@ -649,7 +655,7 @@ export default {
                 await redrawCharts(true)
 
                 // Fetch new data in background, then silently update.
-                await fetchDashboardData(currentOrder())
+                await fetchDashboardData(currentOrder(), { recentMode: recentMode() })
                 if (!isActive || myActivation !== activationId) return
                 startPolling()
                 await nextTick()
@@ -663,6 +669,12 @@ export default {
                 ? summaryData.value[currentSummaryPeriod.value]
                 : {}
         })
+
+        const summaryEntries = computed(() => (
+            Object.entries(currentPeriodSummary.value || {})
+                .filter(([key]) => !key.endsWith('Display'))
+                .map(([key, value]) => ({ key, value }))
+        ))
 
         const isDataEmpty = computed(() =>
             detailedBirdActivityData.value.length === 0 ||
@@ -797,6 +809,10 @@ export default {
             return typeof value === 'number' ? value.toLocaleString() : value
         }
 
+        const getSummaryBirdDisplay = (summary, key) => {
+            return summary?.[`${key}Display`] || summary?.[key] || ''
+        }
+
 	        const showSpectrogram = (spectrogramFileName) => {
 	            currentSpectrogramUrl.value = getSpectrogramUrl(spectrogramFileName)
 	            isSpectrogramModalVisible.value = true
@@ -830,12 +846,15 @@ export default {
             currentSummaryPeriod,
             summaryPeriods,
             currentPeriodSummary,
+            summaryEntries,
             hourlyActivityChart,
             isSpectrogramModalVisible,
             currentSpectrogramUrl,
             formatTimestamp,
             formatSummaryKey,
             formatSummaryValue,
+            getDisplayCommonName,
+            getSummaryBirdDisplay,
             formatConfidence,
             showSpectrogram,
             hourlyBirdActivityData,
@@ -853,11 +872,13 @@ export default {
             togglePlayBirdCall,
             currentPlayingId,
             latestObservationimageUrl,
-            systemUpdate,
             showLeastCommon,
             toggleActivityOrder,
             isActivityUpdating,
-            hasLoadedOnce
+            hasLoadedOnce,
+            showUniqueSpecies,
+            recentObsFilterOptions,
+            toggleRecentObsFilter
         }
     }
 }

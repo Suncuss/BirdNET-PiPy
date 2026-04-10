@@ -17,7 +17,7 @@ import requests
 from config.settings import BIRDWEATHER_ID, LAT, LON
 from core.logging_config import get_logger
 from core.runtime_config import get_runtime_settings
-from core.timezone_service import get_timezone
+from core.timezone_service import get_timezone, local_now
 
 logger = get_logger(__name__)
 
@@ -98,7 +98,7 @@ class BirdWeatherService:
             clip_duration: Duration of the extracted clip in seconds
         """
         # Extract timestamp from detection and ensure it has timezone info
-        raw_timestamp = detection.get('timestamp', datetime.now().isoformat())
+        raw_timestamp = detection.get('timestamp', local_now().isoformat())
         timestamp_str = _to_iso8601_with_tz(raw_timestamp)
 
         try:

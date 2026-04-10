@@ -14,6 +14,7 @@ DEFAULT_NOTIF_CONFIG = {
     'every_detection': False,
     'rate_limit_seconds': 300,
     'first_of_day': False,
+    'new_species': False,
     'rare_species': False,
     'rare_threshold': 3,
     'rare_window_days': 7,
@@ -37,6 +38,7 @@ def notification_service():
     """
     db = Mock()
     db.get_today_detection_count.return_value = 0
+    db.get_species_total_count.return_value = 0
     db.get_recent_detection_count.return_value = 0
 
     settings_holder = [make_mock_settings()]

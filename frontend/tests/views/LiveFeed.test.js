@@ -38,8 +38,9 @@ describe('LiveFeed', () => {
     vi.useFakeTimers()
     mockApi.get.mockResolvedValue({
       data: {
-        stream_url: 'http://example.com/stream',
-        stream_type: 'icecast'
+        streams: [
+          { source_id: 'source_0', label: 'Microphone', url: '/stream/source_0.mp3' }
+        ]
       }
     })
 
@@ -104,12 +105,11 @@ describe('LiveFeed', () => {
     await flushPromises()
 
     expect(mockApi.get).toHaveBeenCalledWith('/stream/config')
-    expect(wrapper.vm.streamUrl).toBe('http://example.com/stream')
-    expect(wrapper.vm.streamType).toBe('icecast')
+    expect(wrapper.vm.streamUrl).toBe('/stream/source_0.mp3')
   })
 
   it('handles missing stream by updating status message', async () => {
-    mockApi.get.mockResolvedValueOnce({ data: { stream_url: '', stream_type: 'none' } })
+    mockApi.get.mockResolvedValueOnce({ data: { streams: [] } })
     const wrapper = mountLiveFeed()
     await flushPromises()
 
@@ -137,6 +137,61 @@ describe('LiveFeed', () => {
     expect(onMock).toHaveBeenCalledWith('bird_detected', expect.any(Function))
   })
 
+  describe('multi-stream source selection', () => {
+    const multiStreamResponse = {
+      data: {
+        streams: [
+          { source_id: 'source_0', label: 'Microphone', url: '/stream/source_0.mp3' },
+          { source_id: 'source_1', label: 'RTSP Camera', url: '/stream/source_1.mp3' }
+        ]
+      }
+    }
+
+    it('populates streams and selects first source by default', async () => {
+      mockApi.get.mockResolvedValueOnce(multiStreamResponse)
+      const wrapper = mountLiveFeed()
+      await flushPromises()
+
+      expect(wrapper.vm.streams).toHaveLength(2)
+      expect(wrapper.vm.selectedSourceId).toBe('source_0')
+      expect(wrapper.vm.streamUrl).toBe('/stream/source_0.mp3')
+      expect(wrapper.vm.streamDescription).toBe('Microphone')
+    })
+
+    it('renders source pill buttons when multiple streams exist', async () => {
+      mockApi.get.mockResolvedValueOnce(multiStreamResponse)
+      const wrapper = mountLiveFeed()
+      await flushPromises()
+
+      const pills = wrapper.findAll('button.rounded-full')
+      expect(pills).toHaveLength(2)
+      expect(pills[0].text()).toBe('Microphone')
+      expect(pills[1].text()).toBe('RTSP Camera')
+      // First pill should have the active style
+      expect(pills[0].classes()).toContain('bg-blue-50')
+      expect(pills[1].classes()).not.toContain('bg-blue-50')
+    })
+
+    it('hides source pills when only one stream exists', async () => {
+      const wrapper = mountLiveFeed()
+      await flushPromises()
+
+      expect(wrapper.findAll('button.rounded-full')).toHaveLength(0)
+    })
+
+    it('switches stream URL when a different pill is clicked', async () => {
+      mockApi.get.mockResolvedValueOnce(multiStreamResponse)
+      const wrapper = mountLiveFeed()
+      await flushPromises()
+
+      await wrapper.vm.selectSourceById('source_1')
+
+      expect(wrapper.vm.selectedSourceId).toBe('source_1')
+      expect(wrapper.vm.streamUrl).toBe('/stream/source_1.mp3')
+      expect(wrapper.vm.streamDescription).toBe('RTSP Camera')
+    })
+  })
+
   describe('error handling', () => {
     it('handleAudioError ignores errors when not playing or loading', async () => {
       const wrapper = mountLiveFeed()
@@ -161,7 +216,7 @@ describe('LiveFeed', () => {
       wrapper.vm.handleAudioError({ target: { error: { code: 2 } } }) // MEDIA_ERR_NETWORK
 
       expect(wrapper.vm.hasError).toBe(true)
-      expect(wrapper.vm.statusMessage).toBe('Network error - stream unavailable')
+      expect(wrapper.vm.statusMessage).toBe('Could not reach audio stream')
       expect(wrapper.vm.isPlaying).toBe(false)
     })
 

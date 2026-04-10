@@ -3,16 +3,22 @@
 import os
 import tempfile
 import time
+from datetime import datetime
 from unittest.mock import MagicMock, mock_open, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 import requests
 
+import core.birdweather_service as bw_mod
+
 
 @pytest.fixture(autouse=True)
 def set_timezone():
-    """Ensure TZ is set for tests since tzlocal is removed."""
-    with patch.dict(os.environ, {'TZ': 'UTC'}):
+    """Pin timezone to UTC for deterministic tests."""
+    with patch.object(bw_mod, 'get_timezone', return_value=ZoneInfo('UTC')), \
+         patch.object(bw_mod, 'local_now',
+                      return_value=datetime(2026, 1, 1, 12, 0, 0)):
         yield
 
 

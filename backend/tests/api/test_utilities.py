@@ -154,7 +154,11 @@ class TestBroadcastDetection:
             broadcast_detection(test_data)
 
             # Should emit to 'bird_detected' event
-            mock_socketio.emit.assert_called_once_with('bird_detected', test_data)
+            mock_socketio.emit.assert_called_once_with('bird_detected', {
+                'common_name': 'Test Bird',
+                'confidence': 0.95,
+                'display_common_name': 'Test Bird'
+            })
 
     def test_broadcast_detection_no_socketio(self):
         """Test broadcasting when socketio is None."""
@@ -176,7 +180,7 @@ class TestSettingsMerge:
         # User only specifies some settings
         partial_settings = {
             'location': {'latitude': 50.0},  # Only latitude, not longitude
-            'audio': {'stream_url': 'http://custom.stream'}
+            'audio': {'recording_length': 12}
         }
 
         with patch('os.path.exists', return_value=True):
@@ -185,9 +189,8 @@ class TestSettingsMerge:
 
                 # User values should be there
                 assert settings['location']['latitude'] == 50.0
-                assert settings['audio']['stream_url'] == 'http://custom.stream'
+                assert settings['audio']['recording_length'] == 12
 
                 # Default values should still be there
                 assert settings['location']['longitude'] == -76.45  # default
-                assert settings['audio']['recording_length'] == 9  # default
                 assert settings['detection']['sensitivity'] == 0.75  # completely default section

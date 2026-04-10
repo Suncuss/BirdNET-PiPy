@@ -16,11 +16,11 @@ load 'test_helpers'
 # ============================================================================
 
 setup() {
-    # Ensure PROJECT_DIR is set
-    export PROJECT_DIR="${PROJECT_DIR:-/home/testuser/BirdNET-PiPy}"
+    # Auto-detect PROJECT_DIR from test file location (scripts/install-tests/*.bats)
+    export PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)}"
 
-    # Set SUDO_USER for install.sh
-    export SUDO_USER="testuser"
+    # Use real SUDO_USER from sudo(8), fall back to current user
+    export SUDO_USER="${SUDO_USER:-$(whoami)}"
 
     # Fix git safe.directory for root user (tests run as root via sudo)
     git config --global --add safe.directory "$PROJECT_DIR" 2>/dev/null || true
@@ -56,8 +56,8 @@ setup() {
 }
 
 @test "unit: detects non-root execution" {
-    # Run as testuser (not root)
-    run sudo -u testuser bash "$PROJECT_DIR/install.sh" 2>&1
+    # Run as the invoking (non-root) user
+    run sudo -u "$SUDO_USER" bash "$PROJECT_DIR/install.sh" 2>&1
     [ "$status" -eq 1 ]
     [[ "$output" == *"must be run as root"* ]]
 }
@@ -86,6 +86,66 @@ setup() {
     [[ "$output" == *"Unknown service in --services: not-a-service"* ]]
 }
 
+@test "unit: build.sh --services rejects api (shares model-server image)" {
+    run bash "$PROJECT_DIR/build.sh" --services "api"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Unknown service in --services: api"* ]]
+}
+
+@test "unit: build.sh --services rejects main (shares model-server image)" {
+    run bash "$PROJECT_DIR/build.sh" --services "main"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Unknown service in --services: main"* ]]
+}
+
+@test "unit: only model-server has build directive for backend image" {
+    # Regression test: api and main must NOT have build: directives.
+    # When multiple services share the same image tag and all define build:,
+    # Docker BuildKit races to tag the same image in parallel, causing
+    # "image already exists" failures. Only model-server should build it.
+    local compose="$PROJECT_DIR/docker-compose.yml"
+    assert_file_exists "$compose"
+
+    # model-server MUST have a build: directive
+    run bash -c "docker compose -f '$compose' config --format json | python3 -c \"
+import sys, json
+cfg = json.load(sys.stdin)
+ms = cfg['services'].get('model-server', {})
+assert 'build' in ms, 'model-server must have build: directive'
+print('model-server: build directive present')
+\""
+    echo "output: $output"
+    [ "$status" -eq 0 ]
+
+    # api and main must NOT have build: directives
+    for svc in api main; do
+        run bash -c "docker compose -f '$compose' config --format json | python3 -c \"
+import sys, json
+cfg = json.load(sys.stdin)
+svc_cfg = cfg['services'].get('$svc', {})
+assert 'build' not in svc_cfg, '$svc must not have build: directive'
+print('$svc: no build directive (correct)')
+\""
+        echo "$svc output: $output"
+        [ "$status" -eq 0 ]
+    done
+}
+
+@test "unit: backend services share the same image tag" {
+    # All three backend services must reference the same image
+    local compose="$PROJECT_DIR/docker-compose.yml"
+    run bash -c "docker compose -f '$compose' config --format json | python3 -c \"
+import sys, json
+cfg = json.load(sys.stdin)
+images = {s: cfg['services'][s]['image'] for s in ('model-server', 'api', 'main')}
+unique = set(images.values())
+assert len(unique) == 1, f'backend services have different images: {images}'
+print(f'all backend services use: {unique.pop()}')
+\""
+    echo "output: $output"
+    [ "$status" -eq 0 ]
+}
+
 @test "unit: build.sh --version-only generates version.json" {
     rm -f "$PROJECT_DIR/data/version.json"
     run bash -c "cd \"$PROJECT_DIR\" && ./build.sh --version-only"
@@ -102,6 +162,46 @@ setup() {
     run sudo bash "$temp_dir/install.sh" --update
     [ "$status" -eq 1 ]
     [[ "$output" == *"requires running from existing installation"* ]]
+
+    rm -rf "$temp_dir"
+}
+
+@test "unit: set_env_var replaces single-key .env value without duplicates" {
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    printf 'BIRDNET_CHANNEL=main\n' > "$temp_dir/.env"
+
+    run run_install_function "$temp_dir" set_env_var BIRDNET_CHANNEL staging
+    [ "$status" -eq 0 ]
+    assert_file_contains "$temp_dir/.env" "BIRDNET_CHANNEL=staging"
+    assert_file_not_contains "$temp_dir/.env" "BIRDNET_CHANNEL=main"
+
+    local count
+    count=$(grep -c '^BIRDNET_CHANNEL=' "$temp_dir/.env")
+    [ "$count" -eq 1 ]
+
+    rm -rf "$temp_dir"
+}
+
+@test "unit: set_env_var preserves unrelated .env settings while updating key" {
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    cat > "$temp_dir/.env" << 'EOF'
+ICECAST_PASSWORD=secret
+STREAM_BITRATE=192k
+BIRDNET_CHANNEL=main
+EOF
+
+    run run_install_function "$temp_dir" set_env_var BIRDNET_CHANNEL staging
+    [ "$status" -eq 0 ]
+    assert_file_contains "$temp_dir/.env" "ICECAST_PASSWORD=secret"
+    assert_file_contains "$temp_dir/.env" "STREAM_BITRATE=192k"
+    assert_file_contains "$temp_dir/.env" "BIRDNET_CHANNEL=staging"
+    assert_file_not_contains "$temp_dir/.env" "BIRDNET_CHANNEL=main"
+
+    local count
+    count=$(grep -c '^BIRDNET_CHANNEL=' "$temp_dir/.env")
+    [ "$count" -eq 1 ]
 
     rm -rf "$temp_dir"
 }
@@ -238,42 +338,12 @@ setup() {
     assert_file_contains "$PROJECT_DIR/data/test-preserve.txt" "test-data"
 }
 
-@test "integration: update with backend python-only change skips Docker rebuild" {
+@test "integration: update on non-release branch falls back to local build" {
     setup_fake_origin
     push_synthetic_commit "backend/core/test_update_marker.py" "TEST_MARKER = \"$(date +%s)\""
 
     run sudo SUDO_USER=testuser bash "$PROJECT_DIR/install.sh" --update --skip-build
     echo "Update output: $output"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"No Docker image rebuild needed"* ]]
-}
-
-@test "integration: update with frontend change selects frontend rebuild" {
-    setup_fake_origin
-    push_synthetic_commit "frontend/src/test-update-marker.ts" "export const testMarker = '$(date +%s)'"
-
-    run sudo SUDO_USER=testuser bash "$PROJECT_DIR/install.sh" --update --skip-build
-    echo "Update output: $output"
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Selective rebuild needed: frontend"* ]]
-}
-
-@test "integration: update with backend dependency change selects backend service group" {
-    setup_fake_origin
-    push_synthetic_commit "backend/requirements.txt" "# test-marker $(date +%s)"
-
-    run sudo SUDO_USER=testuser bash "$PROJECT_DIR/install.sh" --update --skip-build
-    echo "Update output: $output"
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Selective rebuild needed: model-server api main"* ]]
-}
-
-@test "integration: update with unknown root file triggers full rebuild fallback" {
-    setup_fake_origin
-    push_synthetic_commit "unknown-update-trigger.txt" "marker $(date +%s)"
-
-    run sudo SUDO_USER=testuser bash "$PROJECT_DIR/install.sh" --update --skip-build
-    echo "Update output: $output"
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Full Docker rebuild needed"* ]]
+    [[ "$output" == *"has no pre-built images, building locally"* ]]
 }

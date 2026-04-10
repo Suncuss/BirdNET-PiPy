@@ -45,7 +45,7 @@
         >
           <!-- Wrap the image and related content inside the router-link -->
           <router-link
-            :to="{ name: 'BirdDetails', params: { name: bird.name } }"
+            :to="{ name: 'BirdDetails', params: { name: bird.commonName } }"
             class="group"
           >
             <div class="relative aspect-square overflow-hidden bg-gray-200">
@@ -99,7 +99,7 @@
               {{ bird.lastDetected ? `Last detected: ${formatDate(bird.lastDetected)}` : 'Detection info available in details' }}
             </p>
             <AppButton
-              :to="{ name: 'BirdDetails', params: { name: bird.name } }"
+              :to="{ name: 'BirdDetails', params: { name: bird.commonName } }"
               class="mt-2"
             >
               Learn More
@@ -150,7 +150,8 @@ export default {
         })
         return data.map(bird => ({
           id: bird.id,
-          name: bird.common_name,
+          commonName: bird.common_name,
+          name: bird.display_common_name || bird.common_name,
           scientificName: bird.scientific_name,
           lastDetected: new Date(bird.timestamp),
           imageUrl: getDefaultBirdImageUrl(),
@@ -169,7 +170,8 @@ export default {
         })
         return data.map(bird => ({
           id: bird.common_name,
-          name: bird.common_name,
+          commonName: bird.common_name,
+          name: bird.display_common_name || bird.common_name,
           scientificName: bird.scientific_name,
           lastDetected: new Date(bird.timestamp),
           imageUrl: getDefaultBirdImageUrl(),
@@ -192,7 +194,8 @@ export default {
               const { data: details } = await api.get(`/bird/${species.common_name}`)
               return {
                 id: species.common_name,
-                name: species.common_name,
+                commonName: species.common_name,
+                name: species.display_common_name || species.common_name,
                 scientificName: species.scientific_name,
                 lastDetected: details.last_detected ? new Date(details.last_detected) : null,
                 imageUrl: getDefaultBirdImageUrl(),
@@ -202,7 +205,8 @@ export default {
               // If details fetch fails, still show the bird
               return {
                 id: species.common_name,
-                name: species.common_name,
+                commonName: species.common_name,
+                name: species.display_common_name || species.common_name,
                 scientificName: species.scientific_name,
                 lastDetected: null,
                 imageUrl: getDefaultBirdImageUrl(),
@@ -221,11 +225,11 @@ export default {
     const updateBirdImages = async (birds) => {
       for (const bird of birds) {
         // Keep showing placeholder while loading real image
-        const imageData = await fetchWikimediaImage(bird.name)
+        const imageData = await fetchWikimediaImage(bird.commonName)
         if (imageData) {
           if (imageData.hasCustomImage) {
             bird.focalPointReady = false
-            bird.imageUrl = getBirdImageUrl(bird.name)
+            bird.imageUrl = getBirdImageUrl(bird.commonName)
             bird.hasCustomImage = true
             bird.focalPoint = '50% 50%'
             await new Promise(r => requestAnimationFrame(r))

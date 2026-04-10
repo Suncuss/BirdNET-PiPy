@@ -2,6 +2,7 @@ import { ref, computed } from 'vue'
 import api, { createLongRequest } from '@/services/api'
 import { useLogger } from './useLogger'
 import { useServiceRestart } from './useServiceRestart'
+import { useAuth } from './useAuth'
 
 // Module-level state (shared across all components - singleton)
 const versionInfo = ref(null)
@@ -31,9 +32,12 @@ export function useSystemUpdate() {
   const logger = useLogger('useSystemUpdate')
   const serviceRestart = useServiceRestart()
 
-  // Computed: should show indicator (update available AND not dismissed)
+  const { isAuthenticated } = useAuth()
+
+  // Computed: should show indicator (update available AND not dismissed AND user can act on it)
   const showUpdateIndicator = computed(() => {
     if (!updateAvailable.value) return false
+    if (!isAuthenticated.value) return false
     return !dismissedUntil.value || Date.now() >= dismissedUntil.value
   })
 

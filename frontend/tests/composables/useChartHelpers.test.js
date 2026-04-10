@@ -200,6 +200,17 @@ describe('useChartHelpers', () => {
       expect(result[1].y).toBe('Sparrow')
     })
 
+    it('uses localized display species names when present', () => {
+      const data = [
+        { species: 'American Robin', displaySpecies: 'Amsel', hourlyActivity: [3] }
+      ]
+      const rowStats = [{ min: 3, max: 3 }]
+
+      const result = helpers.prepareDataForCategoryMatrix(data, rowStats)
+
+      expect(result[0].y).toBe('Amsel')
+    })
+
     it('creates 24 * species count data points for full day', () => {
       const data = [
         { species: 'Robin', hourlyActivity: Array(24).fill(0) },

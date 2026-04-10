@@ -19,7 +19,6 @@ class TestRecordingModes:
 
     def test_recording_mode_class_values_in_dict(self):
         assert RecordingMode.PULSEAUDIO in RECORDING_MODES
-        assert RecordingMode.HTTP_STREAM in RECORDING_MODES
         assert RecordingMode.RTSP in RECORDING_MODES
 
     def test_all_modes_have_labels(self):

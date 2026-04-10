@@ -317,7 +317,7 @@ export function useTableData() {
    * @param {number} count - Items per page (25, 50, or 100)
    */
   function setPerPage(count) {
-    if ([25, 50, 100].includes(count)) {
+    if ([25, 50, 100, 200].includes(count)) {
       perPage.value = count
       currentPage.value = 1
       fetchDetections()

@@ -80,7 +80,7 @@
             >
               <div>
                 <p class="text-sm font-medium text-gray-800">
-                  {{ species.common_name }}
+                  {{ getDisplayCommonName(species) }}
                 </p>
                 <p class="text-xs text-gray-500">
                   {{ species.scientific_name }}
@@ -212,6 +212,7 @@
 <script>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import api from '@/services/api'
+import { getDisplayCommonName, matchesBirdQuery } from '@/utils/birdNames'
 
 export default {
   name: 'SpeciesFilterModal',
@@ -273,11 +274,7 @@ export default {
       if (!searchQuery.value) {
         return allSpecies.value
       }
-      const query = searchQuery.value.toLowerCase()
-      return allSpecies.value.filter(s =>
-        s.common_name.toLowerCase().includes(query) ||
-        s.scientific_name.toLowerCase().includes(query)
-      )
+      return allSpecies.value.filter(species => matchesBirdQuery(species, searchQuery.value))
     })
 
     // Check if species is selected
@@ -363,6 +360,7 @@ export default {
       saveError,
       searchQuery,
       filteredSpecies,
+      getDisplayCommonName,
       totalSpecies,
       selectedSpecies,
       debouncedSearch,

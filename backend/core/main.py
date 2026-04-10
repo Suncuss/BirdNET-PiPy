@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 
-from config.constants import RecordingMode
+from config.constants import RecorderState, RecordingMode
 from config.settings import (
     ANALYSIS_CHUNK_LENGTH,
     API_HOST,
@@ -20,26 +20,26 @@ from config.settings import (
     LAT,
     LOCATION_CONFIGURED,
     LON,
-    PULSEAUDIO_SOURCE,
     RECORDING_DIR,
     RECORDING_LENGTH,
-    RECORDING_MODE,
-    RTSP_URL,
     SAMPLE_RATE,
     SPECTROGRAM_DIR,
-    STREAM_URL,
     TIMEZONE,
 )
 from core.audio_manager import BaseRecorder, create_recorder
+from core.bird_name_utils import get_localized_common_name, get_spectrogram_common_name
 from core.birdweather_service import get_birdweather_service
 from core.db import DatabaseManager
 from core.logging_config import get_logger, setup_logging
 from core.notification_service import get_notification_service
-from core.runtime_config import get_runtime_settings
+from core.runtime_config import get_runtime_settings, resolve_source_label
 from core.storage_manager import storage_monitor_loop
+from core.timezone_service import get_timezone_str
 from core.utils import (
+    build_detection_filenames,
     convert_wav_to_mp3,
     generate_spectrogram,
+    sanitize_source_label,
     sanitize_url,
     select_audio_chunks,
     trim_audio,
@@ -56,6 +56,8 @@ BIRDNET_MAX_RETRIES = 5       # Max retries for BirdNet connection errors
 BIRDNET_RETRY_BASE_DELAY = 2  # Base delay for exponential backoff (seconds)
 RECORDING_THREAD_SHUTDOWN_TIMEOUT = 10  # Max wait for recording thread (seconds)
 PROCESSING_THREAD_SHUTDOWN_TIMEOUT = 5  # Max wait for processing thread (seconds)
+DEGRADED_FAILURE_THRESHOLD = 3  # Consecutive failures before 'degraded' state
+STATUS_REFRESH_INTERVAL = 60   # Re-broadcast recorder status every N seconds
 
 # Setup logging
 setup_logging('main')
@@ -75,8 +77,15 @@ def _get_audio_settings() -> dict[str, Any]:
     return get_runtime_settings().get('audio', {})
 
 
-def _get_recording_mode(audio_settings: dict[str, Any]) -> str:
-    return audio_settings.get('recording_mode', RECORDING_MODE)
+def _get_enabled_sources(audio_settings: dict[str, Any]) -> list[dict]:
+    """Get list of enabled source entries from audio settings."""
+    return [s for s in audio_settings.get('sources', []) if s.get('enabled', True)]
+
+
+def _get_first_enabled_source(audio_settings: dict[str, Any]) -> dict | None:
+    """Get the first enabled source (used for single-recorder compat)."""
+    sources = _get_enabled_sources(audio_settings)
+    return sources[0] if sources else None
 
 
 def _get_recording_length(audio_settings: dict[str, Any]) -> float:
@@ -87,26 +96,14 @@ def _get_analysis_chunk_length() -> float:
     return get_runtime_settings().get('audio', {}).get('recording_chunk_length', ANALYSIS_CHUNK_LENGTH)
 
 
-def _get_stream_url(audio_settings: dict[str, Any]) -> str | None:
-    return audio_settings.get('stream_url', STREAM_URL)
-
-
-def _get_rtsp_url(audio_settings: dict[str, Any]) -> str | None:
-    return audio_settings.get('rtsp_url', RTSP_URL)
-
-
-def _get_pulseaudio_source(audio_settings: dict[str, Any]) -> str:
-    return audio_settings.get('pulseaudio_source') or PULSEAUDIO_SOURCE
-
-
 def _get_recorder_signature(audio_settings: dict[str, Any]) -> tuple:
-    return (
-        _get_recording_mode(audio_settings),
-        _get_stream_url(audio_settings),
-        _get_rtsp_url(audio_settings),
-        _get_pulseaudio_source(audio_settings),
-        _get_recording_length(audio_settings),
+    """Hash the enabled sources to detect config changes."""
+    enabled = _get_enabled_sources(audio_settings)
+    source_tuples = tuple(
+        (s.get('id'), s.get('type'), s.get('url', ''), s.get('device', ''))
+        for s in enabled
     )
+    return (source_tuples, _get_recording_length(audio_settings))
 
 
 def _is_valid_timezone(tz: str | None) -> bool:
@@ -126,73 +123,191 @@ def _is_location_ready(settings: dict[str, Any]) -> bool:
     return bool(configured) and _is_valid_timezone(timezone)
 
 
-def setup_recorder(audio_settings: dict[str, Any], thread_logger) -> BaseRecorder:
-    """Create and configure audio recorder based on recording mode.
+def setup_recorder(source: dict, recording_length: float, thread_logger) -> BaseRecorder:
+    """Create and configure audio recorder for a single source.
 
     Args:
-        audio_settings: audio settings dictionary
+        source: Source entry dict with type, device/url, label, etc.
+        recording_length: Recording chunk duration in seconds
         thread_logger: Logger instance for this thread
 
     Returns:
         Configured recorder instance
     """
-    recording_mode = _get_recording_mode(audio_settings)
-    recording_length = _get_recording_length(audio_settings)
-    pulseaudio_source = _get_pulseaudio_source(audio_settings)
-    stream_url = _get_stream_url(audio_settings)
-    rtsp_url = _get_rtsp_url(audio_settings)
+    source_type = source.get('type', 'pulseaudio')
+    source_id = source.get('id', 'unknown')
+    output_dir = os.path.join(RECORDING_DIR, source_id)
+    os.makedirs(output_dir, exist_ok=True)
 
-    # Log startup info based on mode
-    if recording_mode == RecordingMode.PULSEAUDIO:
-        thread_logger.info("Starting PulseAudio recording", extra={
-            'pulseaudio_source': pulseaudio_source,
+    if source_type == RecordingMode.PULSEAUDIO:
+        device = source.get('device', 'default')
+        thread_logger.info("🔴 Starting PulseAudio recording", extra={
+            'source_id': source_id,
+            'pulseaudio_source': device,
             'chunk_duration': recording_length,
-            'output_dir': RECORDING_DIR
+            'output_dir': output_dir
         })
-    elif recording_mode == RecordingMode.RTSP:
-        thread_logger.info("Starting RTSP stream recording", extra={
+        return create_recorder(
+            recording_mode=RecordingMode.PULSEAUDIO,
+            chunk_duration=recording_length,
+            output_dir=output_dir,
+            target_sample_rate=SAMPLE_RATE,
+            source_name=device,
+        )
+    elif source_type == RecordingMode.RTSP:
+        rtsp_url = source.get('url')
+        thread_logger.info("🔴 Starting RTSP stream recording", extra={
+            'source_id': source_id,
             'rtsp_url': sanitize_url(rtsp_url),
             'chunk_duration': recording_length,
-            'output_dir': RECORDING_DIR
+            'output_dir': output_dir
         })
-    else:  # http_stream
-        thread_logger.info("Starting HTTP stream recording", extra={
-            'stream_url': stream_url,
-            'chunk_duration': recording_length,
-            'output_dir': RECORDING_DIR
-        })
+        return create_recorder(
+            recording_mode=RecordingMode.RTSP,
+            chunk_duration=recording_length,
+            output_dir=output_dir,
+            target_sample_rate=SAMPLE_RATE,
+            rtsp_url=rtsp_url,
+        )
+    else:
+        raise ValueError(f"Unknown source type: {source_type}")
 
-    # Delegate to audio_manager factory
-    return create_recorder(
-        recording_mode=recording_mode,
-        chunk_duration=recording_length,
-        output_dir=RECORDING_DIR,
-        target_sample_rate=SAMPLE_RATE,
-        source_name=pulseaudio_source,
-        stream_url=stream_url,
-        rtsp_url=rtsp_url
-    )
+def _get_recorder_state(recorder: BaseRecorder | None, healthy: bool) -> str:
+    """Derive simple state string for change detection.
+
+    Args:
+        recorder: Recorder instance or None
+        healthy: Cached result of recorder.is_healthy()
+    """
+    if recorder is None or not healthy:
+        return RecorderState.STOPPED
+    if recorder.consecutive_failures >= DEGRADED_FAILURE_THRESHOLD:
+        return RecorderState.DEGRADED
+    return RecorderState.RUNNING
+
+
+def _get_aggregate_state(
+    recorders: dict[str, BaseRecorder],
+    health_cache: dict[str, bool] | None = None,
+) -> str:
+    """Derive aggregate state across all recorders.
+
+    Returns 'running' if all healthy, 'degraded' if any unhealthy,
+    'stopped' if none running.
+
+    Args:
+        recorders: source_id → recorder mapping
+        health_cache: pre-computed {source_id: is_healthy} to avoid redundant calls
+    """
+    if not recorders:
+        return RecorderState.STOPPED
+
+    any_running = False
+    any_degraded = False
+
+    for sid, recorder in recorders.items():
+        healthy = health_cache[sid] if health_cache else recorder.is_healthy()
+        if healthy:
+            any_running = True
+            if recorder.consecutive_failures >= DEGRADED_FAILURE_THRESHOLD:
+                any_degraded = True
+        else:
+            any_degraded = True
+
+    if not any_running:
+        return RecorderState.STOPPED
+    if any_degraded:
+        return RecorderState.DEGRADED
+    return RecorderState.RUNNING
+
+
+def broadcast_recorder_status(
+    state: str, recorders: dict[str, BaseRecorder],
+    sources: list[dict], thread_logger,
+    health_cache: dict[str, bool] | None = None,
+) -> bool:
+    """Send recorder health status to API for WebSocket broadcast.
+
+    Returns True if broadcast succeeded, False otherwise.
+    """
+    try:
+        per_source = {}
+        for source in sources:
+            sid = source.get('id', '')
+            recorder = recorders.get(sid)
+            if recorder:
+                healthy = health_cache[sid] if health_cache else recorder.is_healthy()
+                per_source[sid] = {
+                    'label': source.get('label', sid),
+                    'type': source.get('type', ''),
+                    'state': _get_recorder_state(recorder, healthy),
+                    **recorder.get_health_status(healthy=healthy),
+                }
+            else:
+                per_source[sid] = {
+                    'label': source.get('label', sid),
+                    'type': source.get('type', ''),
+                    'state': RecorderState.STOPPED,
+                    **BaseRecorder.default_health_status(),
+                }
+
+        status_data = {
+            'state': state,
+            'sources': per_source,
+        }
+        resp = requests.post(
+            f'http://{API_HOST}:{API_PORT}/api/broadcast/recorder-status',
+            json=status_data,
+            timeout=BROADCAST_TIMEOUT
+        )
+        resp.raise_for_status()
+        return True
+    except Exception as e:
+        thread_logger.debug("Failed to broadcast recorder status", extra={
+            'error': str(e)
+        })
+        return False
+
 
 def continuous_audio_recording(thread_logger):
-    """Continuous audio recording from PulseAudio or HTTP stream.
+    """Continuous audio recording from one or more audio sources.
 
-    This thread ONLY manages the recorder (FFmpeg). It does not scan for files
-    or queue them - that's the processing thread's job.
+    This thread manages recorders (FFmpeg processes) for all enabled sources.
+    It does not scan for files or queue them - that's the processing thread's job.
     """
-    recorder: BaseRecorder | None = None
+    recorders: dict[str, BaseRecorder] = {}  # source_id → recorder
     current_signature: tuple | None = None
+    last_broadcast_state: str | None = None
+    last_broadcast_time: float = 0.0
+
+    def _start_all(audio_settings, sig):
+        nonlocal current_signature
+        enabled = _get_enabled_sources(audio_settings)
+        recording_length = _get_recording_length(audio_settings)
+        for source in enabled:
+            sid = source.get('id', 'unknown')
+            try:
+                rec = setup_recorder(source, recording_length, thread_logger)
+                rec.start()
+                recorders[sid] = rec
+            except ValueError as e:
+                thread_logger.error("Recorder configuration invalid",
+                                    extra={'source_id': sid, 'error': str(e)})
+        current_signature = sig
+
+    def _stop_all():
+        for sid, rec in recorders.items():
+            try:
+                rec.stop()
+            except Exception as e:
+                thread_logger.debug(f"Error stopping recorder {sid}: {e}")
+        recorders.clear()
 
     try:
-        # Initialize recorder once before loop for startup validation and
-        # compatibility with existing lifecycle expectations.
+        # Initialize recorders on startup
         try:
             initial_audio_settings = _get_audio_settings()
-            recorder = setup_recorder(initial_audio_settings, thread_logger)
-            recorder.start()
-            current_signature = _get_recorder_signature(initial_audio_settings)
-        except ValueError as e:
-            thread_logger.error("Recorder configuration invalid", extra={'error': str(e)})
-            time.sleep(2)
+            _start_all(initial_audio_settings, _get_recorder_signature(initial_audio_settings))
         except Exception as e:
             thread_logger.error("Recording loop error", extra={'error': str(e)}, exc_info=True)
             time.sleep(1)
@@ -202,30 +317,41 @@ def continuous_audio_recording(thread_logger):
                 audio_settings = _get_audio_settings()
                 new_signature = _get_recorder_signature(audio_settings)
 
-                if recorder is None:
-                    recorder = setup_recorder(audio_settings, thread_logger)
-                    recorder.start()
-                    current_signature = new_signature
+                if not recorders:
+                    _start_all(audio_settings, new_signature)
                 elif new_signature != current_signature:
-                    thread_logger.info("Audio settings changed, reloading recorder", extra={
-                        'old_signature': current_signature,
-                        'new_signature': new_signature
-                    })
-                    recorder.stop()
-                    recorder = setup_recorder(audio_settings, thread_logger)
-                    recorder.start()
-                    current_signature = new_signature
+                    thread_logger.info("🔴 Audio settings changed, reloading recorders")
+                    _stop_all()
+                    _start_all(audio_settings, new_signature)
 
-                # Check recorder health and restart if needed
-                if not recorder.is_healthy():
-                    thread_logger.warning("Recorder unhealthy, restarting...")
-                    recorder.restart()
+                # Check recorder health (once per recorder) and restart unhealthy ones
+                health_cache = {
+                    sid: recorder.is_healthy()
+                    for sid, recorder in recorders.items()
+                }
+                for sid, healthy in health_cache.items():
+                    if not healthy:
+                        thread_logger.warning(f"Recorder {sid} unhealthy, restarting...")
+                        recorders[sid].restart()
+                        health_cache[sid] = recorders[sid].is_healthy()
 
-                # Brief sleep to prevent CPU thrashing
+                # Broadcast status on state change or periodic refresh
+                enabled_sources = _get_enabled_sources(audio_settings)
+                current_state = _get_aggregate_state(recorders, health_cache)
+                state_changed = current_state != last_broadcast_state
+                refresh_due = (time.time() - last_broadcast_time) >= STATUS_REFRESH_INTERVAL
+                if state_changed or refresh_due:
+                    ok = broadcast_recorder_status(
+                        current_state, recorders, enabled_sources, thread_logger,
+                        health_cache,
+                    )
+                    if ok:
+                        last_broadcast_state = current_state
+                        last_broadcast_time = time.time()
+
                 time.sleep(FILE_SCAN_INTERVAL)
 
             except ValueError as e:
-                # Invalid setting combination (e.g., missing URL for selected mode)
                 thread_logger.error("Recorder configuration invalid", extra={'error': str(e)})
                 time.sleep(2)
             except Exception as e:
@@ -235,10 +361,8 @@ def continuous_audio_recording(thread_logger):
                 time.sleep(1)
 
     finally:
-        # Always clean up on exit
-        thread_logger.info("Stopping audio recording")
-        if recorder:
-            recorder.stop()
+        thread_logger.info("🔴 Stopping audio recording")
+        _stop_all()
 
 def extract_detection_audio(detection: dict[str, Any], input_file_path: str) -> str:
     """Extract audio segment for detection and convert to MP3.
@@ -281,7 +405,11 @@ def create_detection_spectrogram(detection: dict[str, Any], input_file_path: str
     step_seconds = detection.get('step_seconds', analysis_chunk_length)
     spectrogram_path = os.path.join(SPECTROGRAM_DIR, detection['spectrogram_file_name'])
 
-    title = f"{detection['common_name']} ({detection['confidence']:.2f}) - {detection['timestamp']}"
+    display_name = get_spectrogram_common_name(
+        detection.get('scientific_name'),
+        detection.get('common_name'),
+    )
+    title = f"{display_name} ({detection['confidence']:.2f}) - {detection['timestamp']}"
     start_time = step_seconds * detection['chunk_index']
     end_time = start_time + analysis_chunk_length
 
@@ -307,7 +435,8 @@ def save_detection_to_db(detection: dict[str, Any]) -> None:
         'cutoff': detection['cutoff'],
         'sensitivity': detection['sensitivity'],
         'overlap': detection['overlap'],
-        'extra': detection.get('extra', {})
+        'extra': detection.get('extra', {}),
+        'audio_source': detection.get('audio_source')
     })
 
 
@@ -319,13 +448,19 @@ def broadcast_detection(detection: dict[str, Any], thread_logger) -> None:
         thread_logger: Logger instance for this thread
     """
     try:
+        display_name = get_localized_common_name(
+            detection.get('scientific_name'),
+            detection.get('common_name'),
+        )
         detection_data = {
             'timestamp': detection['timestamp'],
             'common_name': detection['common_name'],
+            'display_common_name': display_name,
             'scientific_name': detection['scientific_name'],
             'confidence': detection['confidence'],
             'bird_song_file_name': detection['bird_song_file_name'].replace('.wav', '.mp3'),
-            'spectrogram_file_name': detection['spectrogram_file_name']
+            'spectrogram_file_name': detection['spectrogram_file_name'],
+            'audio_source': detection.get('audio_source')
         }
         requests.post(
             f'http://{API_HOST}:{API_PORT}/api/broadcast/detection',
@@ -442,21 +577,46 @@ def is_valid_recording(file_path: str, thread_logger) -> bool:
         return False
 
 
+def _collect_wav_files() -> list[tuple[str, str | None]]:
+    """Collect WAV files from root recording dir and source subdirs.
+
+    Returns list of (file_path, source_id) tuples sorted by filename
+    (timestamp-based) for chronological processing across sources.
+    """
+    candidates: list[tuple[str, str | None]] = []
+
+    # Legacy: root-level files (no source, from before multi-source)
+    for f in glob.glob(os.path.join(RECORDING_DIR, "*.wav")):
+        candidates.append((f, None))
+
+    # Source subdirs: RECORDING_DIR/source_*/
+    for subdir in glob.glob(os.path.join(RECORDING_DIR, "source_*")):
+        if not os.path.isdir(subdir):
+            continue
+        source_id = os.path.basename(subdir)
+        for f in glob.glob(os.path.join(subdir, "*.wav")):
+            candidates.append((f, source_id))
+
+    # Sort by filename for chronological order across sources
+    candidates.sort(key=lambda x: os.path.basename(x[0]))
+    return candidates
+
+
 def process_audio_files():
     """Processing thread: scans directory for .wav files and processes them.
 
     The filesystem IS the queue - no in-memory queue needed.
     Files are deleted after successful processing.
+    Collects from root dir (legacy) and per-source subdirs.
     """
     thread_logger = get_logger(f"{__name__}.processing")
     thread_logger.info("Processing thread started")
 
     while not stop_flag.is_set():
         try:
-            # Scan directory for .wav files (sorted by name = chronological order)
-            files = sorted(glob.glob(os.path.join(RECORDING_DIR, "*.wav")))
+            candidates = _collect_wav_files()
 
-            for file_path in files:
+            for file_path, audio_source in candidates:
                 if stop_flag.is_set():
                     break
 
@@ -464,22 +624,44 @@ def process_audio_files():
 
                 # Validate file size/duration
                 if not is_valid_recording(file_path, thread_logger):
-                    # File too short - delete it
                     try:
                         os.remove(file_path)
                     except OSError:
-                        pass  # File might have been removed already
+                        pass
                     continue
 
-                # Log that we're processing this file
-                thread_logger.info("🔴 Processing recording", extra={
-                    'file': file_name
+                thread_logger.info("🔄 Processing recording", extra={
+                    'file': file_name,
+                    'audio_source': audio_source
                 })
 
                 # Process the audio file via BirdNet
                 detections = process_audio_file(file_path)
                 if detections:
+                    # Resolve and sanitize source label once per file
+                    source_label = ''
+                    if audio_source:
+                        raw_label = resolve_source_label(audio_source)
+                        source_label = sanitize_source_label(raw_label)
+
                     for detection in detections:
+                        detection['audio_source'] = audio_source
+                        # Store source label in extra for filename reconstruction
+                        if source_label:
+                            extra = detection.get('extra', {})
+                            extra['source_label'] = source_label
+                            detection['extra'] = extra
+                        # Recompute filenames with source label suffix
+                        if audio_source:
+                            fnames = build_detection_filenames(
+                                detection['common_name'],
+                                detection['confidence'],
+                                detection['timestamp'],
+                                audio_extension='wav',
+                                audio_source=source_label or None
+                            )
+                            detection['bird_song_file_name'] = fnames['audio_filename']
+                            detection['spectrogram_file_name'] = fnames['spectrogram_filename']
                         handle_detection(detection, file_path, thread_logger)
 
                 # Clean up processed file
@@ -496,7 +678,7 @@ def process_audio_files():
                     })
 
             # Sleep before next scan (only if no files were found)
-            if not files:
+            if not candidates:
                 time.sleep(FILE_SCAN_INTERVAL)
 
         except Exception as e:
@@ -624,7 +806,7 @@ if __name__ == "__main__":
         'recording_dir': RECORDING_DIR,
         'recording_length': startup_audio.get('recording_length', 9),
         'analysis_chunk_length': startup_audio.get('recording_chunk_length', 3),
-        'timezone': os.environ.get('TZ', 'UTC')
+        'timezone': get_timezone_str()
     })
 
     # Wait for location and timezone to be configured before starting detection.

@@ -5,6 +5,7 @@
  */
 
 const enc = encodeURIComponent
+const dec = decodeURIComponent
 
 /**
  * Derive Apprise scheme from a server URL input.
@@ -35,6 +36,11 @@ export const SERVICES = [
     buildUrl(values) {
       return `tgram://${enc(values.bot_token)}/${enc(values.chat_id)}`
     },
+    parseUrl(url) {
+      const rest = url.replace(/^tgram:\/\//, '')
+      const parts = rest.split('/')
+      return { bot_token: dec(parts[0] || ''), chat_id: dec(parts[1] || '') }
+    },
     helpUrl: 'https://appriseit.com/services/telegram/'
   },
   {
@@ -54,6 +60,16 @@ export const SERVICES = [
         defaultScheme: 'ntfys'
       })
       return `${scheme}://${host}/${topic}`
+    },
+    parseUrl(url) {
+      const match = url.match(/^(ntfys?):\/\/(.+)$/)
+      if (!match) return null
+      const [, scheme, rest] = match
+      const slashIdx = rest.indexOf('/')
+      if (slashIdx === -1) return { topic: dec(rest), server: '' }
+      const host = rest.slice(0, slashIdx)
+      const topic = rest.slice(slashIdx + 1)
+      return { topic: dec(topic), server: `${scheme === 'ntfys' ? 'https' : 'http'}://${host}` }
     },
     helpUrl: 'https://appriseit.com/services/ntfy/'
   },
@@ -76,6 +92,13 @@ export const SERVICES = [
       }
       return url
     },
+    parseUrl(url) {
+      const match = url.match(/^mailtos?:\/\/([^:]+):([^@]+)@([^?]+)(\?.*)?$/)
+      if (!match) return null
+      const [, user, password, domain, query] = match
+      const smtp = query ? new URLSearchParams(query.slice(1)).get('smtp') : ''
+      return { email: `${dec(user)}@${domain}`, password: dec(password), smtp: smtp ? dec(smtp) : '' }
+    },
     parseError: 'Invalid email address format.',
     helpUrl: 'https://appriseit.com/services/email/'
   },
@@ -92,6 +115,12 @@ export const SERVICES = [
         defaultScheme: 'hassio'
       })
       return `${scheme}://${host}/${enc(values.token)}`
+    },
+    parseUrl(url) {
+      const match = url.match(/^(hassios?):\/\/(.+)\/([^/]+)$/)
+      if (!match) return null
+      const [, scheme, host, token] = match
+      return { server: `${scheme === 'hassios' ? 'https' : 'http'}://${host}`, token: dec(token) }
     },
     helpUrl: 'https://appriseit.com/services/homeassistant/'
   },
@@ -117,6 +146,17 @@ export const SERVICES = [
       }
       return `${scheme}://${auth}${host}/${enc(values.topic)}`
     },
+    parseUrl(url) {
+      const match = url.match(/^(mqtts?):\/\/(?:([^:@]+)(?::([^@]+))?@)?(.+?)\/([^/]+)$/)
+      if (!match) return null
+      const [, scheme, user, password, host, topic] = match
+      return {
+        server: `${scheme}://${host}`,
+        topic: dec(topic),
+        user: user ? dec(user) : '',
+        password: password ? dec(password) : ''
+      }
+    },
     helpUrl: 'https://appriseit.com/services/mqtt/'
   },
   {
@@ -127,6 +167,9 @@ export const SERVICES = [
     ],
     buildUrl(values) {
       return values.url.trim()
+    },
+    parseUrl(url) {
+      return { url }
     },
     helpUrl: 'https://appriseit.com/'
   }
@@ -151,6 +194,36 @@ export const SCHEME_TO_SERVICE_NAME = {
   signal: 'Signal', rockets: 'Rocket.Chat', rocket: 'Rocket.Chat',
   teams: 'Teams', dingtalk: 'DingTalk', bark: 'Bark',
   notica: 'Notica', simplepush: 'SimplePush', wp: 'WordPress',
+}
+
+const SCHEME_TO_ID = {
+  tgram: 'telegram',
+  ntfy: 'ntfy', ntfys: 'ntfy',
+  mailto: 'email', mailtos: 'email',
+  hassio: 'homeassistant', hassios: 'homeassistant',
+  mqtt: 'mqtt', mqtts: 'mqtt',
+}
+
+/**
+ * Given an Apprise URL, find the matching SERVICES entry and parse it.
+ * Returns { service, values } or falls back to 'custom'.
+ */
+export function parseAppriseUrl(url) {
+  const scheme = url.split('://')[0]?.toLowerCase() || ''
+  const serviceId = SCHEME_TO_ID[scheme] || 'custom'
+  const custom = SERVICES.find(s => s.id === 'custom')
+  if (serviceId !== 'custom') {
+    const service = SERVICES.find(s => s.id === serviceId)
+    try {
+      const values = service?.parseUrl(url)
+      // Verify round-trip: if buildUrl produces a different URL, the parser
+      // missed something (extra query params, scheme change) — use custom editor
+      if (values && service.buildUrl(values) === url) {
+        return { service, values }
+      }
+    } catch { /* fall through to custom */ }
+  }
+  return { service: custom, values: custom.parseUrl(url) }
 }
 
 // Exported for testing

@@ -1,23 +1,75 @@
-import matplotlib
-import numpy as np
-
-matplotlib.use('Agg')
+import os
+import re
 import subprocess
-from io import BytesIO
+import threading
 
-import matplotlib.pyplot as plt
-from matplotlib import font_manager
-from PIL import Image
-from scipy.io import wavfile
-from scipy.signal import spectrogram
-
-from config.settings import SPECTROGRAM_FONT_PATH
 from core.runtime_config import get_runtime_settings
 
 BUFFER_SIZE = 1000
 
+_spectrogram_runtime = None
+_spectrogram_runtime_lock = threading.Lock()
 
-def build_detection_filenames(common_name, confidence, timestamp, audio_extension='mp3'):
+
+def _get_spectrogram_runtime():
+    """Lazy-load heavy spectrogram dependencies on first use."""
+    global _spectrogram_runtime
+    if _spectrogram_runtime is not None:
+        return _spectrogram_runtime
+
+    with _spectrogram_runtime_lock:
+        if _spectrogram_runtime is not None:
+            return _spectrogram_runtime
+
+        from io import BytesIO
+
+        import matplotlib
+
+        matplotlib.use('Agg')
+
+        import matplotlib.pyplot as plt
+        import numpy as np
+        from matplotlib import font_manager
+        from PIL import Image
+        from scipy.io import wavfile
+        from scipy.signal import spectrogram
+
+        from config.settings import SPECTROGRAM_FONT_PATH
+
+        if os.path.exists(SPECTROGRAM_FONT_PATH):
+            font_manager.fontManager.addfont(SPECTROGRAM_FONT_PATH)
+
+        _spectrogram_runtime = {
+            'BytesIO': BytesIO,
+            'Image': Image,
+            'font_manager': font_manager,
+            'np': np,
+            'plt': plt,
+            'spectrogram': spectrogram,
+            'wavfile': wavfile,
+        }
+        return _spectrogram_runtime
+
+
+def sanitize_source_label(label):
+    """Sanitize a source label for use as a filename suffix.
+
+    Strips whitespace, replaces spaces with underscores, removes characters
+    not in [A-Za-z0-9_-], and truncates to 30 characters.
+
+    Returns empty string if label is empty/None or contains only whitespace.
+    """
+    if not label:
+        return ""
+    result = label.strip()
+    if not result:
+        return ""
+    result = result.replace(' ', '_')
+    result = re.sub(r'[^A-Za-z0-9_-]', '', result)
+    return result[:30]
+
+
+def build_detection_filenames(common_name, confidence, timestamp, audio_extension='mp3', audio_source=None):
     """
     Generate standardized filenames for bird detection audio and spectrogram files.
 
@@ -26,6 +78,8 @@ def build_detection_filenames(common_name, confidence, timestamp, audio_extensio
         confidence (float): Detection confidence score (0.0 to 1.0)
         timestamp (str or datetime): ISO timestamp string or datetime object
         audio_extension (str): File extension for audio file ('mp3' or 'wav'). Default: 'mp3'
+        audio_source (str or None): Filename suffix for the source (e.g., sanitized label "Backyard_Mic").
+            If provided, appended before extension.
 
     Returns:
         dict: Dictionary with 'audio_filename' and 'spectrogram_filename' keys
@@ -34,6 +88,9 @@ def build_detection_filenames(common_name, confidence, timestamp, audio_extensio
         >>> build_detection_filenames("American Robin", 0.85, "2025-11-24T10:30:45.123456")
         {'audio_filename': 'American_Robin_85_2025-11-24-birdnet-10-30-45.mp3',
          'spectrogram_filename': 'American_Robin_85_2025-11-24-birdnet-10-30-45.webp'}
+        >>> build_detection_filenames("American Robin", 0.85, "2025-11-24T10:30:45.123456", audio_source="Backyard_Mic")
+        {'audio_filename': 'American_Robin_85_2025-11-24-birdnet-10-30-45_Backyard_Mic.mp3',
+         'spectrogram_filename': 'American_Robin_85_2025-11-24-birdnet-10-30-45_Backyard_Mic.webp'}
     """
 
     # Normalize common name to use underscores
@@ -61,8 +118,10 @@ def build_detection_filenames(common_name, confidence, timestamp, audio_extensio
     time_part_safe = time_part.replace(':', '-')
 
     # Build filenames using consistent format
-    audio_filename = f"{common_name_underscored}_{confidence_rounded}_{date_part}-birdnet-{time_part_safe}.{audio_extension}"
-    spectrogram_filename = f"{common_name_underscored}_{confidence_rounded}_{date_part}-birdnet-{time_part_safe}.webp"
+    base = f"{common_name_underscored}_{confidence_rounded}_{date_part}-birdnet-{time_part_safe}"
+    suffix = f"_{audio_source}" if audio_source else ""
+    audio_filename = f"{base}{suffix}.{audio_extension}"
+    spectrogram_filename = f"{base}{suffix}.webp"
 
     return {
         'audio_filename': audio_filename,
@@ -99,6 +158,14 @@ def trim_audio(source_file_path, output_audio_path, start, end, timeout=30):
 
 
 def generate_spectrogram(input_file_path, output_file_path, graph_title, start_time=0, end_time=None):
+    runtime = _get_spectrogram_runtime()
+    BytesIO = runtime['BytesIO']
+    Image = runtime['Image']
+    np = runtime['np']
+    plt = runtime['plt']
+    spectrogram = runtime['spectrogram']
+    wavfile = runtime['wavfile']
+
     spec_cfg = get_runtime_settings().get('spectrogram', {})
     max_dbfs = spec_cfg.get('max_dbfs', 0)
     min_dbfs = spec_cfg.get('min_dbfs', -120)
@@ -107,9 +174,6 @@ def generate_spectrogram(input_file_path, output_file_path, graph_title, start_t
 
     figsize = (5, 0.8)
 
-    # Set up Inter font
-    font_path = SPECTROGRAM_FONT_PATH  # Update this path if necessary
-    font_manager.fontManager.addfont(font_path)
     plt.rcParams['font.family'] = 'Inter'
 
     # Calculate scaling factor based on figure width
@@ -147,35 +211,36 @@ def generate_spectrogram(input_file_path, output_file_path, graph_title, start_t
     # Use 150 DPI for web/general use, 200 for high-quality while keeping file size reasonable
     dpi = 250
 
-    # Plot spectrogram
-    plt.figure(figsize=figsize, facecolor='white', dpi=dpi)
-    plt.imshow(Sxx_dbfs, aspect='auto', cmap="Greens_r", origin='lower',
-               extent=[times.min(), times.max(), frequencies.min(), frequencies.max()],
-               vmin=min_dbfs, vmax=max_dbfs,
-               interpolation='bilinear')  # Smoother rendering
+    # Plot spectrogram — use try/finally to guarantee figure cleanup
+    fig = plt.figure(figsize=figsize, facecolor='white', dpi=dpi)
+    try:
+        plt.imshow(Sxx_dbfs, aspect='auto', cmap="Greens_r", origin='lower',
+                   extent=[times.min(), times.max(), frequencies.min(), frequencies.max()],
+                   vmin=min_dbfs, vmax=max_dbfs,
+                   interpolation='bilinear')  # Smoother rendering
 
-    plt.title(graph_title, fontsize=14*scale, fontweight='bold', pad=10*scale)
-    plt.ylabel('Frequency [kHz]', fontsize=12*scale, labelpad=3*scale)
+        plt.title(graph_title, fontsize=14*scale, fontweight='bold', pad=10*scale)
+        plt.ylabel('Frequency [kHz]', fontsize=12*scale, labelpad=3*scale)
 
-    cbar = plt.colorbar(pad=0.01)
-    cbar.set_label('Intensity [dBFS]', fontsize=12*scale, labelpad=3*scale)
-    cbar.ax.tick_params(labelsize=10*scale)
+        cbar = plt.colorbar(pad=0.01)
+        cbar.set_label('Intensity [dBFS]', fontsize=12*scale, labelpad=3*scale)
+        cbar.ax.tick_params(labelsize=10*scale)
 
-    plt.xticks([])
-    plt.yticks([0,6,12])
-    plt.yticks(fontsize=10*scale)
-    plt.ylim(min_freq_khz, max_freq_khz)
+        plt.xticks([])
+        plt.yticks([0,6,12])
+        plt.yticks(fontsize=10*scale)
+        plt.ylim(min_freq_khz, max_freq_khz)
 
-    # Adjust margins manually
-    plt.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.1)
+        # Adjust margins manually
+        plt.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.1)
 
-    # Save as WebP for better compression (~87% smaller than PNG)
-    # First save to buffer as PNG, then convert to WebP with PIL
-    buf = BytesIO()
-    plt.savefig(buf, dpi=dpi, bbox_inches='tight', format='png')
-    plt.close()
+        # Save to buffer with bbox_inches='tight' so labels/title aren't clipped
+        buf = BytesIO()
+        fig.savefig(buf, dpi=dpi, bbox_inches='tight', format='png')
+    finally:
+        plt.close(fig)
 
-    # Convert to WebP using PIL
+    # Convert PNG to WebP
     buf.seek(0)
     img = Image.open(buf)
     img.save(output_file_path, 'WEBP', quality=85)

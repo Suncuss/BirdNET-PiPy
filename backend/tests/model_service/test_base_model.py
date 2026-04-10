@@ -25,6 +25,7 @@ class TestBaseModelInterface:
         assert hasattr(BirdDetectionModel, 'chunk_length_seconds')
         assert hasattr(BirdDetectionModel, 'load')
         assert hasattr(BirdDetectionModel, 'predict')
+        assert hasattr(BirdDetectionModel, 'predict_chunk')
         assert hasattr(BirdDetectionModel, 'get_labels')
 
     def test_base_model_has_optional_methods(self):
@@ -63,6 +64,7 @@ class TestBirdNetModelImplementation:
         # Check method implementations exist
         assert callable(getattr(BirdNetModel, 'load', None))
         assert callable(getattr(BirdNetModel, 'predict', None))
+        assert callable(getattr(BirdNetModel, 'predict_chunk', None))
         assert callable(getattr(BirdNetModel, 'get_labels', None))
         assert callable(getattr(BirdNetModel, 'get_ebird_code', None))
         assert callable(getattr(BirdNetModel, 'filter_by_location', None))

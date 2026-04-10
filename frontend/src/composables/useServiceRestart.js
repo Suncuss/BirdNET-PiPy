@@ -71,13 +71,21 @@ export function useServiceRestart() {
     restartMessage.value = `${message}...`
     restartError.value = ''
 
-    const maxAttempts = Math.floor(maxWaitSeconds / (pollInterval / 1000))
+    const startTime = Date.now()
 
     return new Promise((resolve, reject) => {
-      let attempts = 0
-
       const checkConnection = async () => {
-        attempts++
+        const elapsedMs = Date.now() - startTime
+        const elapsedSec = Math.floor(elapsedMs / 1000)
+
+        if (elapsedMs >= maxWaitSeconds * 1000) {
+          logger.warn('Service restart taking longer than expected')
+          restartMessage.value = ''
+          restartError.value = 'Update taking longer than expected. Try refreshing later.'
+          isRestarting.value = false
+          reject(new Error('RESTART_TIMEOUT'))
+          return
+        }
 
         try {
           // Axios doesn't use browser cache by default
@@ -103,20 +111,8 @@ export function useServiceRestart() {
             resolve(true)
           }, postConnectDelay)
         } catch (_error) {
-          if (attempts >= maxAttempts) {
-            logger.warn('Service restart taking longer than expected')
-            restartMessage.value = ''
-            restartError.value = 'Update taking longer than expected. Try refreshing later.'
-            isRestarting.value = false
-            reject(new Error('RESTART_TIMEOUT'))
-          } else {
-            // Update message periodically
-            const elapsed = Math.floor((attempts * pollInterval) / 1000)
-            if (attempts % 4 === 0) {
-              restartMessage.value = `${message}... (${elapsed}s)`
-            }
-            setTimeout(checkConnection, pollInterval)
-          }
+          restartMessage.value = `${message}... (${elapsedSec}s)`
+          setTimeout(checkConnection, pollInterval)
         }
       }
 

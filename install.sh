@@ -260,8 +260,8 @@ clone_repository() {
             if [ "$CURRENT_REPO" = "$REPO_URL" ]; then
                 print_status "Existing BirdNET-PiPy repository found, pulling latest changes..."
                 cd "$INSTALL_DIR"
-                git checkout $branch
-                git pull origin $branch || {
+                git checkout "$branch"
+                git pull origin "$branch" || {
                     print_error "Failed to update repository"
                     exit 1
                 }
@@ -280,7 +280,7 @@ clone_repository() {
         fi
     else
         # Clone fresh (shallow clone for speed - full history not needed)
-        git clone --depth 1 -b $branch "$REPO_URL" "$INSTALL_DIR" || {
+        git clone --depth 1 -b "$branch" "$REPO_URL" "$INSTALL_DIR" || {
             print_error "Failed to clone repository"
             exit 1
         }
@@ -336,7 +336,7 @@ install_docker() {
 
     # Add Docker's official GPG key
     install -m 0755 -d /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/$OS_ID/gpg | \
+    curl -fsSL "https://download.docker.com/linux/$OS_ID/gpg" | \
         gpg --dearmor -o /etc/apt/keyrings/docker.gpg
     chmod a+r /etc/apt/keyrings/docker.gpg
 
@@ -360,8 +360,8 @@ install_docker() {
 
 # Add user to docker group
 setup_docker_user() {
-    if ! groups $ACTUAL_USER | grep -q docker; then
-        usermod -aG docker $ACTUAL_USER
+    if ! groups "$ACTUAL_USER" | grep -q docker; then
+        usermod -aG docker "$ACTUAL_USER"
         print_status "Added $ACTUAL_USER to docker group"
         print_warning "IMPORTANT: Log out and back in for docker group to take effect"
         print_warning "Or run: newgrp docker"
@@ -395,7 +395,7 @@ configure_pulseaudio() {
         if ! getent group pulse-access > /dev/null; then
             groupadd --system pulse-access
         fi
-        usermod -a -G pulse-access,audio $ACTUAL_USER
+        usermod -a -G pulse-access,audio "$ACTUAL_USER"
 
         print_status "PulseAudio setup complete (using existing user-mode audio)"
         return 0
@@ -439,14 +439,184 @@ configure_pulseaudio() {
     fi
 
     # Add actual user to pulse-access group
-    usermod -a -G pulse-access,audio $ACTUAL_USER
+    usermod -a -G pulse-access,audio "$ACTUAL_USER"
 
     print_status "PulseAudio setup complete (system-wide mode)"
     print_info "PulseAudio will be started by birdnet-service.sh"
 }
 
+# Ensure adequate swap on low-memory systems (e.g. Pi Zero 2W with 512MB RAM).
+# Swap is needed both for building and running (model inference + Docker containers).
+# Idempotent: skips if sufficient swap is already available.
+setup_swap() {
+    local threshold_kb=1048576  # 1GB
+    local needed_mb=2048        # 2GB swap
+    local swap_file="/swapfile-birdnet-pipy"
+
+    local ram_kb
+    ram_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+
+    # Only set up swap on low-memory systems
+    if [ "$ram_kb" -ge "$threshold_kb" ]; then
+        return 0
+    fi
+
+    local current_mb
+    current_mb=$(free -m | awk '/Swap:/ {print $2}')
+
+    if [ "$current_mb" -ge "$needed_mb" ]; then
+        print_status "Sufficient swap already available (${current_mb}MB)"
+        return 0
+    fi
+
+    print_status "Low memory detected ($(( ram_kb / 1024 ))MB RAM). Setting up ${needed_mb}MB swap..."
+
+    # Disable existing swap file if present
+    if [ -f "$swap_file" ]; then
+        swapoff "$swap_file" 2>/dev/null || true
+        rm -f "$swap_file"
+    fi
+
+    # Create swap file (fallocate is fast, dd is slow fallback)
+    if fallocate -l "${needed_mb}M" "$swap_file" 2>/dev/null; then
+        print_status "Swap file allocated with fallocate"
+    else
+        print_info "Using dd to create swap file (this may take a moment)..."
+        dd if=/dev/zero of="$swap_file" bs=1M count="$needed_mb" status=progress
+    fi
+
+    chmod 600 "$swap_file"
+    mkswap "$swap_file"
+    swapon "$swap_file"
+
+    print_status "Swap enabled (${needed_mb}MB)"
+}
+
+# Update a single key in .env without overwriting other settings.
+# Uses grep -v + append to avoid sed metacharacter issues.
+set_env_var() {
+    local key="$1" value="$2"
+    local env_file="$PROJECT_ROOT/.env"
+
+    if [ -f "$env_file" ]; then
+        grep -v "^${key}=" "$env_file" > "${env_file}.tmp" || true
+        mv "${env_file}.tmp" "$env_file"
+    fi
+    echo "${key}=${value}" >> "$env_file"
+}
+
+# Free disk space before an update fetch/build without removing runnable images.
+# This is update-only on purpose: installs can start clean, while updates need to
+# preserve existing images for failure recovery if the new pull/build does not finish.
+prune_docker_before_update() {
+    print_status "Cleaning up Docker artifacts before update..."
+
+    local image_reclaimed
+    image_reclaimed=$(docker image prune -f 2>/dev/null | grep "Total reclaimed space:" | awk '{print $NF}') || true
+    print_status "Cleanup: reclaimed ${image_reclaimed:-0B} from dangling images"
+
+    # Prune only dangling build cache (no -a) so reusable layers survive.
+    # If the pull fails and we fall back to a local build, intact cache speeds it up.
+    local cache_reclaimed
+    cache_reclaimed=$(docker builder prune -f 2>/dev/null | grep "Total reclaimed space:" | awk '{print $NF}') || true
+    print_status "Cleanup: reclaimed ${cache_reclaimed:-0B} from build cache"
+}
+
+# Try to pull pre-built images from GHCR, fall back to local build.
+# Skips pull for non-ARM64, non-release branches, and non-1000 UID systems.
+pull_or_build() {
+    if [ "$SKIP_BUILD" = true ]; then
+        build_application
+        return $?
+    fi
+
+    local commit
+    commit=$(git rev-parse HEAD)
+    local repo="Suncuss/BirdNET-PiPy"
+    local target_branch="${TARGET_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
+    local can_pull=true
+
+    case "$target_branch" in
+        main|staging) set_env_var "BIRDNET_CHANNEL" "$target_branch" ;;
+        *)
+            set_env_var "BIRDNET_CHANNEL" "main"
+            print_status "Branch '$target_branch' has no pre-built images, building locally..."
+            can_pull=false
+            ;;
+    esac
+
+    # Pre-built images are ARM64 only (Raspberry Pi target)
+    local arch
+    arch=$(uname -m)
+    if [ "$can_pull" = true ] && [ "$arch" != "aarch64" ]; then
+        print_status "Architecture $arch has no pre-built images, building locally..."
+        can_pull=false
+    fi
+
+    # Pre-built images are baked with UID/GID 1000 (default Pi user)
+    if [ "$can_pull" = true ] && [ "$ACTUAL_UID" != "1000" ]; then
+        print_status "Non-standard UID ($ACTUAL_UID), building locally for correct permissions..."
+        can_pull=false
+    fi
+
+    if [ "$can_pull" = false ]; then
+        build_application
+        return $?
+    fi
+
+    # Check if the image build workflow completed for this commit
+    local api_response
+    api_response=$(curl -s --connect-timeout 3 --max-time 5 \
+        "https://api.github.com/repos/$repo/actions/workflows/build-images.yml/runs?head_sha=$commit&status=completed&per_page=1" 2>/dev/null) || true
+
+    if [[ "$api_response" == *'"conclusion"'*'"success"'* ]]; then
+        print_status "Pre-built images available, pulling from registry..."
+        cd "$PROJECT_ROOT"
+        # Pull each unique image sequentially to avoid saturating the Pi's network.
+        # Derive the image list from docker-compose.yml so it stays in sync automatically.
+        local -a pull_images
+        mapfile -t pull_images < <(sudo -u "$ACTUAL_USER" docker compose config --images | sort -u)
+        if [ ${#pull_images[@]} -eq 0 ]; then
+            print_warning "Could not resolve image list from docker-compose.yml, falling back to local build..."
+            build_application
+            return $?
+        fi
+        local pull_ok=true
+        local max_retries=3
+        local attempt
+        for img in "${pull_images[@]}"; do
+            for attempt in $(seq 1 $max_retries); do
+                if sudo -u "$ACTUAL_USER" docker pull "$img"; then
+                    break
+                fi
+                if [ "$attempt" -lt "$max_retries" ]; then
+                    print_warning "Pull of $img failed (attempt $attempt/$max_retries), retrying in 10s..."
+                    sleep 10
+                else
+                    print_warning "Pull of $img failed after $max_retries attempts"
+                    pull_ok=false
+                fi
+            done
+            # Stop pulling remaining images if one failed
+            [ "$pull_ok" = true ] || break
+        done
+        if [ "$pull_ok" = true ]; then
+            refresh_version_info
+            docker image prune -f >/dev/null 2>&1 || true
+            print_status "Images pulled successfully"
+            return 0
+        fi
+        print_warning "Pull failed, falling back to local build..."
+    else
+        print_status "Pre-built images not ready, building locally..."
+    fi
+
+    build_application
+}
+
 # Build Docker images
 # Optional arg: $1 = space-separated list of services to build
+# shellcheck disable=SC2120  # $1 is intentionally optional (services list)
 build_application() {
     if [ "$SKIP_BUILD" = true ]; then
         print_status "Skipping Docker image build (--skip-build flag)"
@@ -612,108 +782,6 @@ restart_containers_on_failure() {
     docker compose up -d || true
 }
 
-# Determine which Docker services need rebuilding based on changed files
-# Sets REBUILD_SERVICES: space-separated service names, "all", or "" (no rebuild needed)
-# Args: $1 = old commit, $2 = new commit
-determine_rebuild_services() {
-    local old_commit="$1"
-    local new_commit="$2"
-
-    local need_full_rebuild=false
-    local need_backend=false
-    local need_frontend=false
-    local need_icecast=false
-
-    local changed_files
-    changed_files=$(git diff --name-only "$old_commit".."$new_commit")
-
-    if [ -z "$changed_files" ]; then
-        REBUILD_SERVICES=""
-        return
-    fi
-
-    while IFS= read -r file; do
-        # 1. Full-rebuild triggers
-        case "$file" in
-            docker-compose.yml|build.sh|backend/.dockerignore)
-                need_full_rebuild=true
-                continue
-                ;;
-        esac
-
-        # 2. Service-specific rebuild triggers
-        case "$file" in
-            backend/Dockerfile|backend/requirements.txt|backend/docker-entrypoint.sh)
-                need_backend=true
-                continue
-                ;;
-        esac
-
-        # Frontend rebuild
-        if [[ "$file" == frontend/* ]]; then
-            need_frontend=true
-            continue
-        fi
-
-        # Icecast rebuild
-        if [[ "$file" == deployment/audio/* ]]; then
-            need_icecast=true
-            continue
-        fi
-
-        # 3. Known-safe no-rebuild patterns
-        # Backend runtime code (bind-mounted)
-        if [[ "$file" == backend/*.py || "$file" == backend/*/*.py || "$file" == backend/*/*/*.py ]] || \
-           [[ "$file" == backend/assets/* || "$file" == backend/scripts/* ]]; then
-            continue
-        fi
-
-        # Backend dev/test-only files
-        case "$file" in
-            backend/tests/*|backend/requirements-test.txt|backend/docker-test.sh| \
-            backend/run-tests.sh|backend/pytest.ini|backend/ruff.toml)
-                continue
-                ;;
-        esac
-
-        # Documentation, scripts, and other non-build files
-        case "$file" in
-            docs/*|scripts/*|.github/*|.claude/*|data/*)
-                continue
-                ;;
-        esac
-
-        case "$file" in
-            *.md|install.sh|uninstall.sh|.gitignore)
-                continue
-                ;;
-        esac
-
-        # 4. Fallback: unrecognized file → full rebuild (conservative)
-        print_info "Unrecognized file triggers full rebuild: $file"
-        need_full_rebuild=true
-    done <<< "$changed_files"
-
-    # Build result
-    if [ "$need_full_rebuild" = true ]; then
-        REBUILD_SERVICES="all"
-        return
-    fi
-
-    local services=""
-    if [ "$need_frontend" = true ]; then
-        services="frontend"
-    fi
-    if [ "$need_backend" = true ]; then
-        services="${services:+$services }model-server api main"
-    fi
-    if [ "$need_icecast" = true ]; then
-        services="${services:+$services }icecast"
-    fi
-
-    REBUILD_SERVICES="$services"
-}
-
 # Perform system update (called when --update flag is used)
 # This handles: git sync, build, and system config updates
 # Uses TARGET_BRANCH if specified, otherwise current branch or main
@@ -732,21 +800,21 @@ perform_update() {
     fi
     print_status "Target branch: $target_branch"
 
-    # Step 1: Stop containers and fetch in parallel for speed
-    print_status "Stopping containers and fetching latest code..."
-    docker compose down &
-    local stop_pid=$!
+    # Step 1: Stop containers so Docker artifacts are unused and can be pruned safely
+    print_status "Stopping containers..."
+    docker compose down || true
 
-    # Step 2: Fetch target branch with explicit refspec
+    # Step 2: Reclaim Docker disk space before any git/pull/build work
+    prune_docker_before_update
+
+    # Step 3: Fetch target branch with explicit refspec
     # This ensures origin/$target_branch is created even in shallow/single-branch clones
+    print_status "Fetching latest code..."
     if ! git fetch origin "+refs/heads/$target_branch:refs/remotes/origin/$target_branch" 2>&1; then
-        wait $stop_pid 2>/dev/null || true
         print_error "Git fetch failed - branch '$target_branch' may not exist on remote"
         restart_containers_on_failure
         exit 1
     fi
-
-    wait $stop_pid 2>/dev/null || true
 
     LOCAL=$(git rev-parse HEAD)
     REMOTE=$(git rev-parse "origin/$target_branch")
@@ -756,12 +824,14 @@ perform_update() {
 
         # Check if version.json is stale (e.g., previous build failed mid-way)
         # If so, rebuild to fix the version mismatch
-        local current_commit_short=$(git rev-parse --short HEAD)
-        local version_commit=$(grep -o '"commit": *"[^"]*"' "$PROJECT_ROOT/data/version.json" 2>/dev/null | grep -o '"[^"]*"$' | tr -d '"' || true)
+        local current_commit_short
+        current_commit_short=$(git rev-parse --short HEAD)
+        local version_commit
+        version_commit=$(grep -o '"commit": *"[^"]*"' "$PROJECT_ROOT/data/version.json" 2>/dev/null | grep -o '"[^"]*"$' | tr -d '"' || true)
         if [ "$current_commit_short" != "$version_commit" ]; then
             print_warning "version.json is stale (shows $version_commit, expected $current_commit_short)"
             print_status "Rebuilding to fix version mismatch..."
-            if build_application; then
+            if pull_or_build; then
                 print_status "Rebuild successful, version.json updated"
             else
                 print_warning "Rebuild failed - version.json may still be stale"
@@ -782,14 +852,14 @@ perform_update() {
     COMMITS_BEHIND=$(git rev-list --count HEAD.."origin/$target_branch")
     print_status "Update available: $COMMITS_BEHIND commits behind origin/$target_branch"
 
-    # Step 3: Check for local modifications and warn
+    # Step 4: Check for local modifications and warn
     if ! git diff --quiet HEAD 2>/dev/null || ! git diff --cached --quiet HEAD 2>/dev/null; then
         print_warning "Local modifications detected - these will be discarded:"
         git status --short 2>/dev/null | head -10
         print_warning "Note: The install directory is not intended for local customizations"
     fi
 
-    # Step 4: Sync to target branch (checkout + reset)
+    # Step 5: Sync to target branch (checkout + reset)
     print_status "Syncing to origin/$target_branch..."
 
     # Check if local branch exists
@@ -819,39 +889,22 @@ perform_update() {
     find "$PROJECT_ROOT" -maxdepth 1 -mindepth 1 -not -name data \
         -exec chown -R "$ACTUAL_USER:$ACTUAL_USER" {} +
 
-    # Step 5: Determine what needs rebuilding and build
-    determine_rebuild_services "$LOCAL" "$REMOTE"
-
-    if [ -z "$REBUILD_SERVICES" ]; then
-        print_status "No Docker image rebuild needed (only runtime/non-build files changed)"
-        if ! refresh_version_info; then
-            update_warnings=true
-            print_warning "Continuing update with stale version info"
-        fi
-    elif [ "$REBUILD_SERVICES" = "all" ]; then
-        print_status "Full Docker rebuild needed"
-        if ! build_application; then
-            print_error "Build failed!"
-            restart_containers_on_failure
-            exit 1
-        fi
-    else
-        print_status "Selective rebuild needed: $REBUILD_SERVICES"
-        if ! build_application "$REBUILD_SERVICES"; then
-            print_error "Build failed!"
-            restart_containers_on_failure
-            exit 1
-        fi
+    # Step 6: Ensure swap on low-memory systems, then pull or build
+    setup_swap || print_warning "Swap setup failed (continuing without swap)"
+    if ! pull_or_build; then
+        print_error "Failed to pull or build images!"
+        restart_containers_on_failure
+        exit 1
     fi
 
-    # Step 6: Update system configurations (root operations)
+    # Step 7: Update system configurations (root operations)
     print_status "Updating system configurations..."
     configure_pulseaudio
     create_service_file
     install_service
     setup_sudoers
 
-    # Step 7: Success - exit for systemd restart
+    # Step 8: Success - exit for systemd restart
     print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     print_status "Update complete! Applied $COMMITS_BEHIND commits from origin/$target_branch"
     if [ "$update_warnings" = true ]; then
@@ -905,7 +958,8 @@ validate_installation() {
 
     # Check Docker images (skip if --skip-build was used)
     if [ "$SKIP_BUILD" != true ]; then
-        local image_count=$(docker images 2>/dev/null | grep -c "birdnet-pipy" || true)
+        local image_count
+        image_count=$(docker images 2>/dev/null | grep -c "birdnet-pipy" || true)
         if [ "$image_count" -eq 0 ]; then
             print_error "Docker images not built"
             checks_passed=false
@@ -923,22 +977,19 @@ validate_installation() {
 # Cleanup on error
 cleanup_on_error() {
     local exit_code=$?
-
-    if [ $exit_code -ne 0 ]; then
-        echo ""
-        print_error "Installation failed with exit code $exit_code"
-        print_info "Detailed log saved to: $LOG_FILE (persistent across reboots)"
-        echo ""
-        print_info "To view the log:"
-        echo "  tail -100 $LOG_FILE    # Last 100 lines"
-        echo "  less $LOG_FILE         # Full log"
-        echo ""
-        print_info "TIP: It's safe to re-run the installation command - it will"
-        print_info "     pick up where it left off and usually fixes the issue."
-        echo ""
-        print_info "For help, visit: https://github.com/Suncuss/BirdNET-PiPy/issues"
-        print_info "Include the log file when reporting issues"
-    fi
+    echo ""
+    print_error "Installation failed with exit code $exit_code"
+    print_info "Detailed log saved to: $LOG_FILE (persistent across reboots)"
+    echo ""
+    print_info "To view the log:"
+    echo "  tail -100 $LOG_FILE    # Last 100 lines"
+    echo "  less $LOG_FILE         # Full log"
+    echo ""
+    print_info "TIP: It's safe to re-run the installation command - it will"
+    print_info "     pick up where it left off and usually fixes the issue."
+    echo ""
+    print_info "For help, visit: https://github.com/Suncuss/BirdNET-PiPy/issues"
+    print_info "Include the log file when reporting issues"
 }
 
 trap cleanup_on_error ERR
@@ -954,8 +1005,10 @@ show_completion_message() {
     print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
     print_info "Access the Dashboard after reboot:"
-    local hostname=$(hostname)
-    local ip_addr=$(hostname -I | awk '{print $1}')
+    local hostname
+    hostname=$(hostname)
+    local ip_addr
+    ip_addr=$(hostname -I | awk '{print $1}')
     echo "  http://${hostname}.local"
     [ -n "$ip_addr" ] && echo "  http://${ip_addr}"
     echo ""
@@ -1040,12 +1093,12 @@ main() {
     if [ "$IS_LOCAL_INSTALL" = false ]; then
         print_status "Running in remote mode (clone required)"
         clone_repository
-        # Save arguments to pass through
-        ARGS=""
-        [ -n "$TARGET_BRANCH" ] && ARGS="$ARGS --branch $TARGET_BRANCH"
-        [ "$NO_REBOOT" = true ] && ARGS="$ARGS --no-reboot"
-        [ "$SKIP_BUILD" = true ] && ARGS="$ARGS --skip-build"
-        reexec_from_clone $ARGS
+        # Save arguments to pass through (array preserves quoting)
+        ARGS=()
+        [ -n "$TARGET_BRANCH" ] && ARGS+=(--branch "$TARGET_BRANCH")
+        [ "$NO_REBOOT" = true ] && ARGS+=(--no-reboot)
+        [ "$SKIP_BUILD" = true ] && ARGS+=(--skip-build)
+        reexec_from_clone "${ARGS[@]}"
         # Script exits here (exec replaces process)
     fi
 
@@ -1067,7 +1120,8 @@ main() {
 
     # Application setup
     fix_data_permissions
-    build_application
+    setup_swap || print_warning "Swap setup failed (continuing without swap)"
+    pull_or_build
     chmod +x "$PROJECT_ROOT/deployment/birdnet-service.sh"
 
     # Service setup

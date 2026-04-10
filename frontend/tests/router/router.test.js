@@ -148,6 +148,37 @@ describe('Router Configuration', () => {
     })
   })
 
+  describe('route auth metadata', () => {
+    it('Charts has meta.feature charts and requiresAuth', () => {
+      const route = router.getRoutes().find(r => r.name === 'Charts')
+      expect(route.meta.feature).toBe('charts')
+      expect(route.meta.requiresAuth).toBe(true)
+    })
+
+    it('Table has meta.feature table and requiresAuth', () => {
+      const route = router.getRoutes().find(r => r.name === 'Table')
+      expect(route.meta.feature).toBe('table')
+      expect(route.meta.requiresAuth).toBe(true)
+    })
+
+    it('LiveFeed has meta.feature live_feed and requiresAuth', () => {
+      const route = router.getRoutes().find(r => r.name === 'LiveFeed')
+      expect(route.meta.feature).toBe('live_feed')
+      expect(route.meta.requiresAuth).toBe(true)
+    })
+
+    it('Settings has requiresAuth but no feature', () => {
+      const route = router.getRoutes().find(r => r.name === 'Settings')
+      expect(route.meta.requiresAuth).toBe(true)
+      expect(route.meta.feature).toBeUndefined()
+    })
+
+    it('Dashboard has no requiresAuth', () => {
+      const route = router.getRoutes().find(r => r.name === 'Dashboard')
+      expect(route.meta.requiresAuth).toBeFalsy()
+    })
+  })
+
   describe('history mode', () => {
     it('uses web history mode', () => {
       // The router uses createWebHistory which provides clean URLs

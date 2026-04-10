@@ -11,9 +11,6 @@ RESTART_FLAG_FILE="$PROJECT_ROOT/data/flags/restart-backend"
 UPDATE_FLAG_FILE="$PROJECT_ROOT/data/flags/update-requested"
 CHECK_INTERVAL=5  # Check for restart and update flags every 5 seconds
 
-# PulseAudio configuration
-PULSEAUDIO_CONFIG="$SCRIPT_DIR/audio/pulseaudio"
-
 # Colors for output
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -41,6 +38,12 @@ log_debug() {
 # Cleanup function for graceful shutdown
 cleanup() {
     log_info "Shutting down BirdNET-PiPy services..."
+
+    # Kill the background flag monitor so it cannot race with shutdown
+    if [ -n "$MONITOR_PID" ]; then
+        kill "$MONITOR_PID" 2>/dev/null || true
+        wait "$MONITOR_PID" 2>/dev/null || true
+    fi
 
     # Stop Docker containers with timeout
     cd "$PROJECT_ROOT"
@@ -109,7 +112,8 @@ ensure_pulse_dir_permissions() {
 setup_audio_socket() {
     log_info "Setting up audio socket..."
 
-    local user_pulse_dir="/run/user/$(id -u)/pulse"
+    local user_pulse_dir
+    user_pulse_dir="/run/user/$(id -u)/pulse"
     local user_socket="$user_pulse_dir/native"
     local system_pulse_dir="/run/pulse"
     local system_socket="$system_pulse_dir/native"
@@ -234,9 +238,7 @@ start_containers() {
     # Clean up orphaned containers first
     cleanup_orphaned_containers
 
-    docker compose up -d
-
-    if [ $? -eq 0 ]; then
+    if docker compose up -d; then
         log_info "Docker containers started successfully"
     else
         log_error "Failed to start Docker containers"
@@ -250,9 +252,7 @@ restart_containers() {
 
     cd "$PROJECT_ROOT"
     # Use --force-recreate to ensure fresh network connections and avoid nginx DNS cache issues
-    docker compose up -d --force-recreate
-
-    if [ $? -eq 0 ]; then
+    if docker compose up -d --force-recreate; then
         log_info "Containers restarted successfully"
         # Remove the restart flag
         rm -f "$RESTART_FLAG_FILE"
@@ -275,7 +275,8 @@ perform_system_update() {
 
     # Read target branch from flag content BEFORE deleting flag
     # Flag content is the branch name (e.g., "main" or "staging")
-    local target_branch=$(cat "$UPDATE_FLAG_FILE" 2>/dev/null | tr -d '\n' | tr -d '\r')
+    local target_branch
+    target_branch=$(tr -d '\n\r' < "$UPDATE_FLAG_FILE" 2>/dev/null) || true
     rm -f "$UPDATE_FLAG_FILE"
 
     # Validate branch name against whitelist to prevent command injection
@@ -341,7 +342,8 @@ enable_swap_if_available() {
         log_info "Swap enabled: $swap_file"
 
         # Show swap status for debugging
-        local swap_size=$(free -h | grep Swap | awk '{print $2}')
+        local swap_size
+        swap_size=$(free -h | grep Swap | awk '{print $2}')
         log_debug "Total swap available: $swap_size"
     else
         log_warning "Failed to enable swap file: $swap_file (may require manual setup)"

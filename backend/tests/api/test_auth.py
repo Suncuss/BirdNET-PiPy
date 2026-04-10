@@ -3,7 +3,7 @@
 import json
 import os
 import tempfile
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -575,3 +575,266 @@ class TestRateLimiting:
                                   data=json.dumps({'password': 'wrongpassword'}),
                                   content_type='application/json')
             assert response.status_code == 401  # Not 429
+
+
+class TestFeatureAccess:
+    """Test per-feature access control."""
+
+    @pytest.fixture
+    def feature_client(self):
+        """Create a test client with auth enabled, writable settings, and mock DB."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings_file = os.path.join(tmpdir, 'user_settings.json')
+            # Write default settings with access block
+            default_settings = {
+                'audio': {'recording_mode': 'pulseaudio'},
+                'location': {'latitude': 40.0, 'longitude': -75.0},
+                'access': {
+                    'charts_public': False,
+                    'table_public': False,
+                    'live_feed_public': False
+                }
+            }
+            with open(settings_file, 'w') as f:
+                json.dump(default_settings, f)
+
+            def mock_load():
+                with open(settings_file) as f:
+                    return json.load(f)
+
+            def mock_save(data):
+                with open(settings_file, 'w') as f:
+                    json.dump(data, f)
+
+            mock_db = MagicMock()
+            mock_db.get_hourly_activity.return_value = []
+            mock_db.get_paginated_detections.return_value = ([], 0)
+
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+                 patch('core.api.db_manager', mock_db), \
+                 patch('core.api.socketio'), \
+                 patch('core.api.load_user_settings', side_effect=mock_load), \
+                 patch('core.api.save_user_settings', side_effect=mock_save), \
+                 patch('core.runtime_config.get_runtime_settings', side_effect=mock_load), \
+                 patch('core.api.invalidate_runtime_settings_cache'):
+
+                from core.api import create_app
+                app, _ = create_app()
+                app.config['TESTING'] = True
+
+                with app.test_client() as client:
+                    # Setup auth and enable it
+                    client.post('/api/auth/setup',
+                               data=json.dumps({'password': 'testpass123'}),
+                               content_type='application/json')
+                    # Logout to test unauthenticated access
+                    client.post('/api/auth/logout')
+
+                    yield client, settings_file
+
+    def _login(self, client):
+        """Helper to login."""
+        client.post('/api/auth/login',
+                   data=json.dumps({'password': 'testpass123'}),
+                   content_type='application/json')
+
+    def _set_access(self, settings_file, **kwargs):
+        """Helper to update access settings directly."""
+        with open(settings_file) as f:
+            data = json.load(f)
+        if 'access' not in data:
+            data['access'] = {'charts_public': False, 'table_public': False, 'live_feed_public': False}
+        data['access'].update(kwargs)
+        with open(settings_file, 'w') as f:
+            json.dump(data, f)
+
+    def test_public_features_default_empty(self, feature_client):
+        """auth/status returns empty public_features by default."""
+        client, _ = feature_client
+        response = client.get('/api/auth/status')
+        data = response.get_json()
+        assert data['public_features'] == []
+
+    def test_charts_protected_when_auth_enabled(self, feature_client):
+        """GET /api/activity/hourly returns 401 when not authenticated."""
+        client, _ = feature_client
+        response = client.get('/api/activity/hourly')
+        assert response.status_code == 401
+
+    def test_charts_accessible_when_public(self, feature_client):
+        """GET /api/activity/hourly returns 200 when charts_public is true."""
+        client, settings_file = feature_client
+        self._set_access(settings_file, charts_public=True)
+        response = client.get('/api/activity/hourly')
+        assert response.status_code == 200
+
+    def test_table_protected_when_auth_enabled(self, feature_client):
+        """GET /api/detections returns 401 when not authenticated."""
+        client, _ = feature_client
+        response = client.get('/api/detections')
+        assert response.status_code == 401
+
+    def test_table_accessible_when_public(self, feature_client):
+        """GET /api/detections returns 200 when table_public is true."""
+        client, settings_file = feature_client
+        self._set_access(settings_file, table_public=True)
+        response = client.get('/api/detections')
+        assert response.status_code == 200
+
+    def test_stream_config_protected(self, feature_client):
+        """GET /api/stream/config returns 401 when not authenticated."""
+        client, _ = feature_client
+        response = client.get('/api/stream/config')
+        assert response.status_code == 401
+
+    def test_stream_config_accessible_when_public(self, feature_client):
+        """GET /api/stream/config returns 200 when live_feed_public is true."""
+        client, settings_file = feature_client
+        self._set_access(settings_file, live_feed_public=True)
+        response = client.get('/api/stream/config')
+        assert response.status_code == 200
+
+    def test_auth_verify_allows_stream_when_public(self, feature_client):
+        """auth/verify returns 200 for /stream/ URIs when live_feed is public."""
+        client, settings_file = feature_client
+        self._set_access(settings_file, live_feed_public=True)
+        response = client.get('/api/auth/verify',
+                             headers={'X-Original-URI': '/stream/stream.mp3'})
+        assert response.status_code == 200
+
+    def test_auth_verify_blocks_stream_when_private(self, feature_client):
+        """auth/verify returns 401 for /stream/ URIs when live_feed is private."""
+        client, _ = feature_client
+        response = client.get('/api/auth/verify',
+                             headers={'X-Original-URI': '/stream/stream.mp3'})
+        assert response.status_code == 401
+
+    def test_export_always_requires_auth(self, feature_client):
+        """Export still requires auth even when table is public."""
+        client, settings_file = feature_client
+        self._set_access(settings_file, table_public=True)
+        response = client.get('/api/detections/export')
+        assert response.status_code == 401
+
+    def test_delete_always_requires_auth(self, feature_client):
+        """Delete still requires auth even when table is public."""
+        client, settings_file = feature_client
+        self._set_access(settings_file, table_public=True)
+        response = client.delete('/api/detections/1')
+        assert response.status_code == 401
+
+    def test_settings_always_requires_auth(self, feature_client):
+        """Settings endpoint requires auth regardless of feature toggles."""
+        client, settings_file = feature_client
+        self._set_access(settings_file, charts_public=True, table_public=True, live_feed_public=True)
+        response = client.get('/api/settings')
+        assert response.status_code == 401
+
+    def test_save_access_requires_auth(self, feature_client):
+        """PUT /api/settings/access requires authentication."""
+        client, _ = feature_client
+        response = client.put('/api/settings/access',
+                             data=json.dumps({'charts_public': True}),
+                             content_type='application/json')
+        assert response.status_code == 401
+
+    def test_save_access_validates_input(self, feature_client):
+        """PUT /api/settings/access rejects unknown keys and non-boolean values."""
+        client, _ = feature_client
+        self._login(client)
+
+        # Unknown key
+        response = client.put('/api/settings/access',
+                             data=json.dumps({'unknown_key': True}),
+                             content_type='application/json')
+        assert response.status_code == 400
+        assert 'Unknown key' in response.get_json()['error']
+
+        # Non-boolean value
+        response = client.put('/api/settings/access',
+                             data=json.dumps({'charts_public': 'yes'}),
+                             content_type='application/json')
+        assert response.status_code == 400
+        assert 'must be a boolean' in response.get_json()['error']
+
+    def test_save_access_merge_semantics(self, feature_client):
+        """PUT /api/settings/access uses merge semantics - partial updates preserve other flags."""
+        client, settings_file = feature_client
+        self._login(client)
+
+        # Set charts_public
+        response = client.put('/api/settings/access',
+                             data=json.dumps({'charts_public': True}),
+                             content_type='application/json')
+        assert response.status_code == 200
+        assert response.get_json()['access']['charts_public'] is True
+
+        # Set table_public - charts_public should still be True
+        response = client.put('/api/settings/access',
+                             data=json.dumps({'table_public': True}),
+                             content_type='application/json')
+        assert response.status_code == 200
+        access = response.get_json()['access']
+        assert access['charts_public'] is True
+        assert access['table_public'] is True
+        assert access['live_feed_public'] is False
+
+    def test_recorder_status_requires_auth(self, feature_client):
+        """GET /api/recorder/status returns 401 when not authenticated."""
+        client, _ = feature_client
+        response = client.get('/api/recorder/status')
+        assert response.status_code == 401
+
+    def test_recorder_status_accessible_when_authenticated(self, feature_client):
+        """GET /api/recorder/status returns 200 when authenticated."""
+        client, _ = feature_client
+        self._login(client)
+        response = client.get('/api/recorder/status')
+        assert response.status_code == 200
+
+    def test_recorder_status_returns_empty_when_no_status(self, feature_client):
+        """GET /api/recorder/status returns empty dict when no status has been reported."""
+        client, _ = feature_client
+        self._login(client)
+        response = client.get('/api/recorder/status')
+        assert response.status_code == 200
+        assert response.get_json() == {}
+
+    @pytest.fixture
+    def _with_recorder_status(self):
+        """Set recorder status for test and clean up afterwards."""
+        import core.api
+        core.api._recorder_status = {'state': 'degraded', 'message': 'Source failed'}
+        yield core.api._recorder_status
+        core.api._recorder_status = {}
+
+    def test_recorder_status_returns_data_after_broadcast(self, feature_client, _with_recorder_status):
+        """GET /api/recorder/status returns status after it's been broadcast."""
+        client, _ = feature_client
+        self._login(client)
+
+        response = client.get('/api/recorder/status')
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['state'] == 'degraded'
+        assert data['message'] == 'Source failed'
+
+    def test_recorder_status_not_gated_by_live_feed(self, feature_client):
+        """GET /api/recorder/status works when authenticated even with live_feed_public=false."""
+        client, settings_file = feature_client
+        self._set_access(settings_file, live_feed_public=False)
+        self._login(client)
+        response = client.get('/api/recorder/status')
+        assert response.status_code == 200
+
+    def test_stream_config_no_longer_includes_recorder_status(self, feature_client, _with_recorder_status):
+        """GET /api/stream/config should not include recorder_status field."""
+        client, settings_file = feature_client
+        self._set_access(settings_file, live_feed_public=True)
+
+        response = client.get('/api/stream/config')
+        assert response.status_code == 200
+        data = response.get_json()
+        assert 'recorder_status' not in data

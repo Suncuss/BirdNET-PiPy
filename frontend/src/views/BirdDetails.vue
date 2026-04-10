@@ -4,7 +4,7 @@
     class="bird-details p-4"
   >
     <h1 class="text-2xl font-semibold mb-4 text-gray-800">
-      {{ birdDetails.common_name }}
+      {{ birdDetails.display_common_name || birdDetails.common_name }}
     </h1>
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <!-- Bird Image, Quick Stats, and Attribution -->
@@ -13,7 +13,7 @@
           <template v-if="hasCustomImage">
             <img
               :src="customImageSrc"
-              :alt="birdDetails.common_name"
+              :alt="birdDetails.display_common_name || birdDetails.common_name"
               class="absolute inset-0 w-full h-full object-cover"
               style="object-position: 50% 50%"
             >
@@ -24,11 +24,11 @@
               target="_blank"
               rel="noopener noreferrer"
               class="block w-full h-full cursor-pointer"
-              :title="`View ${birdDetails.common_name} on Wikimedia Commons`"
+              :title="`View ${birdDetails.display_common_name || birdDetails.common_name} on Wikimedia Commons`"
             >
               <img
                 :src="birdImageData.imageUrl"
-                :alt="birdDetails.common_name"
+                :alt="birdDetails.display_common_name || birdDetails.common_name"
                 class="absolute inset-0 w-full h-full object-cover transition-[opacity,transform] duration-200 hover:scale-110"
                 :class="{ 'opacity-0': !imageReady, 'opacity-100': imageReady }"
                 :style="{ objectPosition: imageFocalPoint }"

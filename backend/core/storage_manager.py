@@ -12,6 +12,7 @@ Key features:
 - Preserves all database records
 """
 
+import json
 import os
 import shutil
 import time
@@ -26,6 +27,9 @@ from core.runtime_config import get_runtime_settings
 from core.utils import build_detection_filenames, get_legacy_filename
 
 logger = get_logger(__name__)
+
+# Average: ~270KB audio + ~30KB spectrogram = ~300KB per detection
+ESTIMATED_SIZE_PER_DETECTION = 300 * 1024  # 300 KB
 
 def _get_storage_config() -> dict:
     """Load current storage settings with defaults."""
@@ -96,10 +100,18 @@ def get_detection_files(detection):
     Returns:
         dict with audio_path and spectrogram_path
     """
+    extra = detection.get('extra', {})
+    if isinstance(extra, str):
+        try:
+            extra = json.loads(extra)
+        except (json.JSONDecodeError, TypeError):
+            extra = {}
+    source_label = extra.get('source_label')
     filenames = build_detection_filenames(
         detection['common_name'],
         detection['confidence'],
-        detection['timestamp']
+        detection['timestamp'],
+        audio_source=source_label or None
     )
 
     return {
@@ -193,10 +205,6 @@ def estimate_deletable_size(db_manager, keep_per_species=None):
     # Get candidates (without limit to count all)
     candidates = db_manager.get_cleanup_candidates(keep_per_species=keep_per_species)
 
-    # Estimate size (use average file size if we can't check all)
-    # Average: ~270KB audio + ~30KB spectrogram = ~300KB per detection
-    ESTIMATED_SIZE_PER_DETECTION = 300 * 1024  # 300 KB
-
     estimated_bytes = len(candidates) * ESTIMATED_SIZE_PER_DETECTION
     return estimated_bytes, len(candidates)
 
@@ -249,8 +257,12 @@ def cleanup_storage(db_manager, target_percent=None, keep_per_species=None):
     # Calculate how much we need to free
     bytes_to_free = usage['used_bytes'] - (usage['total_bytes'] * target_percent / 100)
 
+    # Fetch cleanup candidates once (oldest first, beyond top N per species)
+    candidates = db_manager.get_cleanup_candidates(keep_per_species=keep_per_species)
+    candidate_count = len(candidates)
+
     # SAFETY CHECK: Estimate if we can actually reach the target
-    estimated_deletable, candidate_count = estimate_deletable_size(db_manager, keep_per_species)
+    estimated_deletable = candidate_count * ESTIMATED_SIZE_PER_DETECTION
 
     if estimated_deletable < bytes_to_free:
         logger.warning("Target unachievable - BirdNET data insufficient", extra={
@@ -271,9 +283,6 @@ def cleanup_storage(db_manager, target_percent=None, keep_per_species=None):
         'candidate_count': candidate_count,
         'keep_per_species': keep_per_species
     })
-
-    # Get cleanup candidates (oldest first, beyond top N per species)
-    candidates = db_manager.get_cleanup_candidates(keep_per_species=keep_per_species)
 
     if not candidates:
         logger.info("No cleanup candidates found - all recordings within keep limit", extra={
@@ -301,6 +310,10 @@ def cleanup_storage(db_manager, target_percent=None, keep_per_species=None):
         if delete_result['deleted_audio'] or delete_result['deleted_spectrogram']:
             result['files_deleted'] += 1
             bytes_freed += delete_result['bytes_freed']
+
+    # Check if target was reached by final deletion
+    if not result['target_reached'] and bytes_freed >= bytes_to_free:
+        result['target_reached'] = True
 
     result['bytes_freed'] = bytes_freed
 

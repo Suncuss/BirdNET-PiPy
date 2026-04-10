@@ -26,6 +26,17 @@ vi.mock('@/composables/useAuth', () => ({
   })
 }))
 
+// Mock api service (App.vue uses axios, not fetch)
+const mockApi = vi.hoisted(() => ({
+  get: vi.fn(),
+  put: vi.fn(),
+  post: vi.fn()
+}))
+
+vi.mock('@/services/api', () => ({
+  default: mockApi
+}))
+
 // Mock vue-router
 vi.mock('vue-router', () => ({
   useRoute: () => ({
@@ -45,8 +56,8 @@ const mountApp = () => mount(App, {
       'router-view': {
         template: '<div class="router-view-stub" />'
       },
-      'LocationSetupModal': {
-        template: '<div class="location-setup-modal-stub" />'
+      'SetupWizard': {
+        template: '<div class="setup-wizard-stub" />'
       },
       'LoginModal': {
         template: '<div class="login-modal-stub" />'
@@ -62,11 +73,12 @@ describe('App', () => {
     errorSpy = vi.fn()
     useLoggerMock.mockReturnValue({ info: infoSpy, debug: debugSpy, error: errorSpy })
 
-    // Mock fetch for settings check
-    global.fetch = vi.fn(() => Promise.resolve({
-      ok: true,
-      json: () => Promise.resolve({ location: { configured: true } })
-    }))
+    mockApi.get.mockResolvedValue({
+      data: {
+        location: { configured: true, timezone: 'America/New_York' },
+        display: { use_metric_units: true }
+      }
+    })
   })
 
   it('renders navigation links', () => {

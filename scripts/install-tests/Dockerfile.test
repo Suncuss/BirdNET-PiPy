@@ -28,6 +28,8 @@ RUN apt-get update && apt-get install -y \
     pulseaudio \
     pulseaudio-utils \
     alsa-utils \
+    # Python for JSON parsing in compose-config tests
+    python3 \
     # BATS testing framework
     bats \
     bats-assert \

@@ -8,7 +8,7 @@ import threading
 import numpy as np
 import onnxruntime as ort
 
-from .base_model import BirdDetectionModel
+from .base_model import BirdDetectionModel, ChunkPrediction
 from .label_utils import parse_v3_labels
 
 logger = logging.getLogger(__name__)
@@ -77,15 +77,14 @@ class BirdNetV3Model(BirdDetectionModel):
             self._download_model()
         self._load_session()
         self._load_labels()
-        self.load_ebird_codes()
 
-    def predict(
+    def predict_chunk(
         self,
         audio_chunk: np.ndarray,
         sensitivity: float = 1.0,
         cutoff: float = 0.0,
         chunk_index: int | None = None
-    ) -> list[tuple[str, float]]:
+    ) -> ChunkPrediction:
         if self._session is None:
             raise RuntimeError("Model not loaded. Call load() first.")
         if self._labels is None:
@@ -101,10 +100,15 @@ class BirdNetV3Model(BirdDetectionModel):
         # V3.0 returns (embeddings, predictions) — predictions are already probabilities
         probs = outputs[1][0].astype(np.float32)
 
+        # V3 model returns NaN for all species on silent audio — treat as zero confidence
+        np.nan_to_num(probs, copy=False, nan=0.0)
+
         # Apply sensitivity scaling: probs^(1/sensitivity)
+        if sensitivity <= 0:
+            raise ValueError(f"Sensitivity must be positive, got {sensitivity}")
         probs = np.power(np.clip(probs, 1e-7, 1.0), 1.0 / sensitivity)
 
-        # Shared post-processing: log, cutoff, filter, sort
+        # Shared post-processing: collect raw top-3 and filtered candidates
         return self._post_process(self._labels, probs, cutoff, chunk_index)
 
     def get_labels(self) -> list[str]:

@@ -132,6 +132,29 @@ describe('Charts', () => {
     expect(wrapper.text()).toContain('Failed to load')
   })
 
+  it('searches and selects species by localized display name', async () => {
+    mockApi.get.mockResolvedValue({
+      data: [
+        {
+          common_name: 'American Robin',
+          display_common_name: 'Amsel',
+          scientific_name: 'Turdus migratorius'
+        }
+      ]
+    })
+
+    const wrapper = mountCharts()
+    await flushPromises()
+
+    wrapper.vm.searchQuery = 'Ams'
+    wrapper.vm.filterSpecies()
+
+    expect(wrapper.vm.filteredSpecies).toHaveLength(1)
+
+    wrapper.vm.selectSpecies(wrapper.vm.filteredSpecies[0])
+    expect(wrapper.vm.searchQuery).toBe('Amsel')
+  })
+
   describe('Detection Trends', () => {
     it('initializes trends with 30 day default', async () => {
       const wrapper = mountCharts()

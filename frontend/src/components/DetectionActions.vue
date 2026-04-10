@@ -40,6 +40,7 @@
       />
     </button>
     <button
+      v-if="!hideDelete"
       type="button"
       class="p-2 text-red-400 hover:text-red-600 disabled:opacity-50"
       title="Delete"
@@ -73,6 +74,10 @@ defineProps({
   containerClass: {
     type: String,
     default: ''
+  },
+  hideDelete: {
+    type: Boolean,
+    default: false
   }
 })
 

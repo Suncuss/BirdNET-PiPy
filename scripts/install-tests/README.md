@@ -82,7 +82,6 @@ Testing this requires a real Docker daemon and systemd, which can't be mocked. D
 ### Limitations
 
 - **No BuildKit cache**: Nested overlay filesystems don't support cache mounts
-- **No update mode tests**: Feature branch doesn't exist on public remote until merged
 - **Slower than mocks**: Full installation takes ~5-10 minutes
 
 ## Quick Start
@@ -126,33 +125,38 @@ Tests are named with prefixes:
 
 ## What Gets Tested
 
-### Unit Tests (8 tests)
+### Unit Tests (13 tests)
+- `install.sh` exists and is executable
 - `--help` flag works and exits with code 0
 - Unknown options are rejected
 - Non-root execution is detected
 - Required repository files exist (docker-compose.yml, build.sh, etc.)
-- build.sh is executable
+- `build.sh` is executable
+- `build.sh --services` requires a value
+- `build.sh --services` rejects unknown service
+- `build.sh --version-only` generates version.json
 - `--update` requires local install
+- `set_env_var` replaces single-key .env value without duplicates
+- `set_env_var` preserves unrelated .env settings while updating key
 
-### Integration Tests (15 tests, 3 skipped in DinD)
+### Integration Tests (19 tests, 1 skipped in DinD)
 - Full installation completes successfully
 - Git and Docker are installed
 - Docker Compose plugin is available
 - User is added to docker group
-- systemd service file is created
-- systemd service is enabled
+- systemd service file is created and enabled
 - Service file contains correct User and WorkingDirectory
 - sudoers configuration is valid (passes `visudo -c`)
 - sudoers file allows pulseaudio commands
 - PulseAudio config is installed
 - Data directories are created (data/, data/flags/)
 - Runtime script is executable
+- No-op update reapplies system configs
+- Update with new commits fast-forwards and preserves data
+- Update on non-release branch falls back to local build
 
 ### Skipped in DinD Environment
 - **Docker images are built** - BuildKit cache mounts don't work with nested overlay filesystems
-- **Update mode tests** - Requires the feature branch to exist on the public remote
-
-These features are tested manually or on real hardware after merging to main.
 
 ## Debugging Failed Tests
 

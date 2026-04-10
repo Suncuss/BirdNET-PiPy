@@ -47,7 +47,8 @@ get_total_ram_kb() {
 
 # Check if system is low memory (< 1GB)
 is_low_memory() {
-    local ram_kb=$(get_total_ram_kb)
+    local ram_kb
+    ram_kb=$(get_total_ram_kb)
     [ "$ram_kb" -lt "$LOW_MEMORY_THRESHOLD_KB" ]
 }
 
@@ -58,7 +59,8 @@ get_swap_size_mb() {
 
 # Create or extend swap for low-memory builds
 setup_build_swap() {
-    local current_swap=$(get_swap_size_mb)
+    local current_swap
+    current_swap=$(get_swap_size_mb)
     local needed_swap=$SWAP_SIZE_MB
 
     if [ "$current_swap" -ge "$needed_swap" ]; then
@@ -113,8 +115,7 @@ build_sequential() {
     # icecast is tiny, frontend is medium, backend is largest (pip install)
     local all_services=("icecast" "frontend" "model-server")
 
-    # Note: model-server, api, and main share the same image (backend/Dockerfile)
-    # Docker will use cached image for api and main after model-server is built
+    # Note: api and main share model-server's image (no build: directive)
 
     # Filter to requested services if specified
     local services=()
@@ -153,8 +154,14 @@ build_sequential() {
             exit 1
         fi
 
-        # Optional: prune dangling images (not build cache) to free disk space
-        docker image prune -f 2>/dev/null || true
+        # Prune dangling images to free disk space
+        local img_reclaimed
+        img_reclaimed=$(docker image prune -f 2>/dev/null | grep "Total reclaimed space:" | awk '{print $NF}')
+        print_status "Cleanup: reclaimed ${img_reclaimed:-0B} from dangling images"
+        # Prune build cache older than 7 days to prevent unbounded growth
+        local cache_reclaimed
+        cache_reclaimed=$(docker builder prune --filter "until=168h" -f 2>/dev/null | grep "Total reclaimed space:" | awk '{print $NF}')
+        print_status "Cleanup: reclaimed ${cache_reclaimed:-0B} from build cache"
     done
 
     print_status "All requested images built"
@@ -182,15 +189,17 @@ generate_version_info() {
         REMOTE_URL="${REMOTE_URL%.git}"
     fi
 
-    # Write version.json
+    # Write version.json — escape values so special chars in git metadata
+    # (e.g. double quotes in branch names) don't produce invalid JSON.
+    json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
     if ! cat > data/version.json << EOF
 {
-    "version": "$VERSION",
-    "commit": "$COMMIT_HASH",
-    "commit_date": "$COMMIT_DATE",
-    "branch": "$BRANCH",
-    "remote_url": "$REMOTE_URL",
-    "build_time": "$BUILD_TIME"
+    "version": "$(json_escape "$VERSION")",
+    "commit": "$(json_escape "$COMMIT_HASH")",
+    "commit_date": "$(json_escape "$COMMIT_DATE")",
+    "branch": "$(json_escape "$BRANCH")",
+    "remote_url": "$(json_escape "$REMOTE_URL")",
+    "build_time": "$(json_escape "$BUILD_TIME")"
 }
 EOF
     then
@@ -221,7 +230,7 @@ show_usage() {
     echo "For Pi Zero 2W, run with sudo to enable automatic swap creation:"
     echo "  sudo ./build.sh"
     echo ""
-    echo "Valid services for --services: model-server, api, main, icecast, frontend"
+    echo "Valid services for --services: model-server, icecast, frontend"
 }
 
 # Parse command line arguments
@@ -277,7 +286,7 @@ if [ -n "$BUILD_SERVICES" ]; then
     read -r -a SELECTED_SERVICES <<< "$BUILD_SERVICES"
     for svc in "${SELECTED_SERVICES[@]}"; do
         case "$svc" in
-            model-server|api|main|icecast|frontend)
+            model-server|icecast|frontend)
                 ;;
             *)
                 print_error "Unknown service in --services: $svc"
@@ -352,7 +361,11 @@ else
 
     # Prune dangling images left behind when 'latest' tag is reassigned
     # (low-memory path already does this between builds)
-    docker image prune -f 2>/dev/null || true
+    IMG_RECLAIMED=$(docker image prune -f 2>/dev/null | grep "Total reclaimed space:" | awk '{print $NF}')
+    print_status "Cleanup: reclaimed ${IMG_RECLAIMED:-0B} from dangling images"
+    # Prune build cache older than 7 days to prevent unbounded growth
+    CACHE_RECLAIMED=$(docker builder prune --filter "until=168h" -f 2>/dev/null | grep "Total reclaimed space:" | awk '{print $NF}')
+    print_status "Cleanup: reclaimed ${CACHE_RECLAIMED:-0B} from build cache"
 fi
 
 print_status "Docker images built successfully!"

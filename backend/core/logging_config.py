@@ -1,8 +1,20 @@
 import json
 import logging
+import logging.handlers
+import math
 import os
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
+
+from core.timezone_service import get_timezone
+
+# Standard LogRecord attributes to exclude when collecting extra fields
+_STANDARD_RECORD_KEYS = frozenset({
+    'name', 'msg', 'args', 'created', 'filename', 'funcName',
+    'levelname', 'levelno', 'lineno', 'module', 'msecs', 'pathname',
+    'process', 'processName', 'relativeCreated', 'thread', 'threadName',
+    'exc_info', 'exc_text', 'stack_info',
+})
 
 
 class HumanReadableFormatter(logging.Formatter):
@@ -25,7 +37,7 @@ class HumanReadableFormatter(logging.Formatter):
 
     def format(self, record):
         # Format timestamp
-        timestamp = datetime.fromtimestamp(record.created).strftime('%H:%M:%S')
+        timestamp = datetime.fromtimestamp(record.created, tz=UTC).astimezone(get_timezone()).strftime('%H:%M:%S')
 
         # Get color codes
         if self.use_color:
@@ -43,11 +55,7 @@ class HumanReadableFormatter(logging.Formatter):
         # Add extra fields if present
         extras = []
         for key, value in record.__dict__.items():
-            if key not in ['name', 'msg', 'args', 'created', 'filename',
-                          'funcName', 'levelname', 'levelno', 'lineno',
-                          'module', 'msecs', 'pathname', 'process',
-                          'processName', 'relativeCreated', 'thread',
-                          'threadName', 'exc_info', 'exc_text', 'stack_info']:
+            if key not in _STANDARD_RECORD_KEYS:
                 if isinstance(value, (dict, list)):
                     extras.append(f"{key}={json.dumps(value)}")
                 else:
@@ -62,6 +70,17 @@ class HumanReadableFormatter(logging.Formatter):
 
         return base_msg
 
+def make_json_safe(obj):
+    """Recursively replace NaN/Inf floats with None for valid JSON output."""
+    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+        return None
+    if isinstance(obj, dict):
+        return {k: make_json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [make_json_safe(v) for v in obj]
+    return obj
+
+
 class StructuredFormatter(logging.Formatter):
     """Custom formatter that outputs JSON-structured logs"""
 
@@ -71,7 +90,7 @@ class StructuredFormatter(logging.Formatter):
 
     def format(self, record):
         log_obj = {
-            'timestamp': datetime.utcnow().isoformat() + 'Z',
+            'timestamp': datetime.fromtimestamp(record.created, tz=UTC).astimezone(get_timezone()).strftime('%Y-%m-%dT%H:%M:%S'),
             'level': record.levelname,
             'service': self.service_name,
             'module': record.module,
@@ -86,14 +105,21 @@ class StructuredFormatter(logging.Formatter):
 
         # Add any extra fields
         for key, value in record.__dict__.items():
-            if key not in ['name', 'msg', 'args', 'created', 'filename',
-                          'funcName', 'levelname', 'levelno', 'lineno',
-                          'module', 'msecs', 'pathname', 'process',
-                          'processName', 'relativeCreated', 'thread',
-                          'threadName', 'exc_info', 'exc_text', 'stack_info']:
+            if key not in _STANDARD_RECORD_KEYS:
                 log_obj[key] = value
 
-        return json.dumps(log_obj)
+        try:
+            return json.dumps(log_obj, allow_nan=False)
+        except ValueError:
+            return json.dumps(make_json_safe(log_obj))
+
+# Map service names to log filenames
+_SERVICE_LOG_FILES = {
+    'main': 'main.log',
+    'api': 'api.log',
+    'birdnet': 'model.log',
+}
+
 
 def setup_logging(service_name, log_level=None, format_type=None):
     """
@@ -131,6 +157,25 @@ def setup_logging(service_name, log_level=None, format_type=None):
         handler.setFormatter(HumanReadableFormatter(service_name))
 
     logger.addHandler(handler)
+
+    # Add rotating file handler for known services (skip in tests)
+    if service_name in _SERVICE_LOG_FILES:
+        try:
+            from config.constants import LOG_BACKUP_COUNT, LOG_MAX_BYTES
+            from config.settings import LOGS_DIR
+
+            os.makedirs(LOGS_DIR, exist_ok=True)
+            log_path = os.path.join(LOGS_DIR, _SERVICE_LOG_FILES[service_name])
+            file_handler = logging.handlers.RotatingFileHandler(
+                log_path,
+                maxBytes=LOG_MAX_BYTES,
+                backupCount=LOG_BACKUP_COUNT,
+            )
+            file_handler.setFormatter(StructuredFormatter(service_name))
+            logger.addHandler(file_handler)
+        except (OSError, PermissionError) as e:
+            # Don't fail startup if log directory is not writable
+            print(f"Warning: could not set up file logging for {service_name}: {e}")
 
     # Mark as configured to prevent duplicate setup
     logger._birdnet_configured = True

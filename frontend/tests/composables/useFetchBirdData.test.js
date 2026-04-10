@@ -55,9 +55,11 @@ describe('useFetchBirdData', () => {
 
       expect(result).toHaveProperty('fetchDashboardData')
       expect(result).toHaveProperty('setActivityOrder')
+      expect(result).toHaveProperty('setRecentObsMode')
       expect(result).toHaveProperty('fetchChartsData')
       expect(typeof result.fetchDashboardData).toBe('function')
       expect(typeof result.setActivityOrder).toBe('function')
+      expect(typeof result.setRecentObsMode).toBe('function')
       expect(typeof result.fetchChartsData).toBe('function')
     })
 
@@ -165,7 +167,10 @@ describe('useFetchBirdData', () => {
   describe('fetchDashboardData', () => {
     const mockDashboardResponse = (overrides = {}) => ({
       latestObservation: { common_name: 'American Robin', confidence: 0.95 },
-      recentObservations: [{ common_name: 'Blue Jay' }, { common_name: 'Cardinal' }],
+      recentObservations: {
+        all: [{ common_name: 'Blue Jay' }, { common_name: 'Cardinal' }],
+        unique: [{ common_name: 'Blue Jay' }, { common_name: 'Cardinal' }]
+      },
       summary: { today: {}, week: {}, month: {}, allTime: {} },
       hourlyActivity: [{ hour: '00:00', count: 0 }],
       activityOverview: {
@@ -200,7 +205,7 @@ describe('useFetchBirdData', () => {
       await fetchDashboardData('most')
 
       expect(latestObservationData.value).toEqual(dashData.latestObservation)
-      expect(recentObservationsData.value).toEqual(dashData.recentObservations)
+      expect(recentObservationsData.value).toEqual(dashData.recentObservations.all)
       expect(summaryData.value).toEqual(dashData.summary)
       expect(hourlyBirdActivityData.value).toEqual(dashData.hourlyActivity)
       expect(detailedBirdActivityData.value).toEqual(dashData.activityOverview.most)
@@ -380,6 +385,124 @@ describe('useFetchBirdData', () => {
       expect(latestObservationError.value).toBeNull()
     })
 
+    it('selects correct recent mode from cached response', async () => {
+      const allObs = [{ common_name: 'Robin' }, { common_name: 'Robin' }]
+      const uniqueObs = [{ common_name: 'Robin' }, { common_name: 'Jay' }]
+      const dashData = mockDashboardResponse({
+        recentObservations: { all: allObs, unique: uniqueObs }
+      })
+
+      mockApi.get.mockImplementation((url) => {
+        if (url === '/dashboard') {
+          return Promise.resolve({ data: dashData })
+        }
+        if (url === '/wikimedia_image') {
+          return Promise.resolve({ data: { imageUrl: '/robin.jpg' } })
+        }
+        return Promise.reject(new Error(`Unknown URL: ${url}`))
+      })
+
+      const { fetchDashboardData, recentObservationsData, setRecentObsMode } = useFetchBirdData()
+
+      // Default recentMode='all'
+      await fetchDashboardData('most')
+      expect(recentObservationsData.value).toEqual(allObs)
+
+      // Instant switch to unique (no network call)
+      setRecentObsMode('unique')
+      expect(recentObservationsData.value).toEqual(uniqueObs)
+
+      // Switch back
+      setRecentObsMode('all')
+      expect(recentObservationsData.value).toEqual(allObs)
+    })
+
+    it('uses recentMode param to select initial mode', async () => {
+      const allObs = [{ common_name: 'Robin' }]
+      const uniqueObs = [{ common_name: 'Jay' }]
+      const dashData = mockDashboardResponse({
+        recentObservations: { all: allObs, unique: uniqueObs }
+      })
+
+      mockApi.get.mockImplementation((url) => {
+        if (url === '/dashboard') {
+          return Promise.resolve({ data: dashData })
+        }
+        if (url === '/wikimedia_image') {
+          return Promise.resolve({ data: { imageUrl: '/robin.jpg' } })
+        }
+        return Promise.reject(new Error(`Unknown URL: ${url}`))
+      })
+
+      const { fetchDashboardData, recentObservationsData } = useFetchBirdData()
+
+      await fetchDashboardData('most', { recentMode: 'unique' })
+      expect(recentObservationsData.value).toEqual(uniqueObs)
+    })
+
+    it('keeps the latest recent mode when a fetch resolves after a toggle', async () => {
+      let resolveDashboard
+      const allObs = [{ common_name: 'Robin' }, { common_name: 'Robin' }]
+      const uniqueObs = [{ common_name: 'Robin' }, { common_name: 'Jay' }]
+      const dashData = mockDashboardResponse({
+        recentObservations: { all: allObs, unique: uniqueObs }
+      })
+
+      mockApi.get.mockImplementation((url) => {
+        if (url === '/dashboard') {
+          return new Promise(resolve => {
+            resolveDashboard = () => resolve({ data: dashData })
+          })
+        }
+        if (url === '/wikimedia_image') {
+          return Promise.resolve({ data: { imageUrl: '/robin.jpg' } })
+        }
+        return Promise.reject(new Error(`Unknown URL: ${url}`))
+      })
+
+      const { fetchDashboardData, recentObservationsData, setRecentObsMode } = useFetchBirdData()
+
+      const pendingFetch = fetchDashboardData('most', { recentMode: 'all' })
+      setRecentObsMode('unique')
+
+      resolveDashboard()
+      await pendingFetch
+
+      expect(recentObservationsData.value).toEqual(uniqueObs)
+    })
+
+    it('keeps the latest activity order when a fetch resolves after a toggle', async () => {
+      let resolveDashboard
+      const dashData = mockDashboardResponse({
+        activityOverview: {
+          most: [{ species: 'Robin', count: 5 }],
+          least: [{ species: 'Jay', count: 1 }]
+        }
+      })
+
+      mockApi.get.mockImplementation((url) => {
+        if (url === '/dashboard') {
+          return new Promise(resolve => {
+            resolveDashboard = () => resolve({ data: dashData })
+          })
+        }
+        if (url === '/wikimedia_image') {
+          return Promise.resolve({ data: { imageUrl: '/robin.jpg' } })
+        }
+        return Promise.reject(new Error(`Unknown URL: ${url}`))
+      })
+
+      const { fetchDashboardData, detailedBirdActivityData, setActivityOrder } = useFetchBirdData()
+
+      const pendingFetch = fetchDashboardData('most')
+      setActivityOrder('least')
+
+      resolveDashboard()
+      await pendingFetch
+
+      expect(detailedBirdActivityData.value).toEqual(dashData.activityOverview.least)
+    })
+
     it('sets all error messages on dashboard API failure', async () => {
       mockApi.get.mockImplementation((url) => {
         if (url === '/dashboard') {
@@ -410,7 +533,7 @@ describe('useFetchBirdData', () => {
   describe('fetch race guard', () => {
     const mockDashboardResponse = (overrides = {}) => ({
       latestObservation: null,
-      recentObservations: [],
+      recentObservations: { all: [], unique: [] },
       summary: {},
       hourlyActivity: [],
       activityOverview: { most: [], least: [] },
@@ -420,10 +543,10 @@ describe('useFetchBirdData', () => {
     it('discards stale response when a newer fetch starts', async () => {
       let resolveStale
       const staleData = mockDashboardResponse({
-        recentObservations: [{ common_name: 'Stale Robin' }]
+        recentObservations: { all: [{ common_name: 'Stale Robin' }], unique: [] }
       })
       const freshData = mockDashboardResponse({
-        recentObservations: [{ common_name: 'Fresh Jay' }]
+        recentObservations: { all: [{ common_name: 'Fresh Jay' }], unique: [] }
       })
 
       mockApi.get
@@ -474,7 +597,7 @@ describe('useFetchBirdData', () => {
   describe('wikimedia retry on default image', () => {
     const mockDashboardResponse = (overrides = {}) => ({
       latestObservation: { common_name: 'American Robin', confidence: 0.95 },
-      recentObservations: [],
+      recentObservations: { all: [], unique: [] },
       summary: {},
       hourlyActivity: [],
       activityOverview: { most: [], least: [] },
