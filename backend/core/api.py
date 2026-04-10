@@ -1145,7 +1145,7 @@ def get_stream_config():
         sid = source.get('id', '')
         streams.append({
             'source_id': sid,
-            'label': source.get('label', sid),
+            'label': source.get('label') or sid,
             'url': f'/stream/{sid}.mp3',
         })
 

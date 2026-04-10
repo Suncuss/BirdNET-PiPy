@@ -37,7 +37,7 @@
           :disabled="isLoading"
           @click="selectSourceById(s.source_id)"
         >
-          {{ s.label }}
+          {{ s.label || s.source_id }}
         </button>
       </div>
       <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-4">
