@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-04-10
+
 - Fixed storage cleanup silently skipping multi-source detection files — cleanup query was missing the `extra` column needed to reconstruct filenames with source suffixes, so those files were never deleted
 - Fixed storage cleanup reporting "candidates exhausted" instead of "target reached" when the final deletion crossed the threshold
 - Optimized storage cleanup to fetch cleanup candidates once instead of twice
@@ -21,6 +23,9 @@
 - Preserved Docker build cache for fallback local builds instead of pruning all layers
 - Added Docker space reclamation before update fetch to prevent disk-full failures
 - Fixed all shellcheck warnings across install scripts
+- Fixed nginx proxy headers using `$host` instead of `$http_host`, dropping the port from upstream requests and breaking audio status indicator
+- Fixed Live Feed stream URL producing double-prefixed requests under HA ingress — made stream URLs relative so they resolve via `<base href>` instead of requiring a dedicated sub_filter rule
+- Fixed Live Feed showing empty pills for unlabeled RTSP streams — falls back to source ID when label is missing or empty
 
 ## [0.6.1] - 2026-04-05
 
