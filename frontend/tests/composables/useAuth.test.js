@@ -2,7 +2,18 @@
  * Tests for useAuth composable
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { useAuth } from '@/composables/useAuth'
+
+// Mock the api service (must come before useAuth import so the module sees the mock)
+const mockApi = vi.hoisted(() => ({
+  get: vi.fn(),
+  post: vi.fn(),
+  put: vi.fn()
+}))
+
+vi.mock('@/services/api', () => ({
+  default: mockApi,
+  api: mockApi
+}))
 
 // Mock useLogger
 vi.mock('@/composables/useLogger', () => ({
@@ -14,13 +25,15 @@ vi.mock('@/composables/useLogger', () => ({
   })
 }))
 
-describe('useAuth', () => {
-  let fetchMock
+import { useAuth } from '@/composables/useAuth'
 
+const axiosError = (status, data) => ({ response: { status, data } })
+
+describe('useAuth', () => {
   beforeEach(() => {
-    fetchMock = vi.fn()
-    global.fetch = fetchMock
-    // Reset singleton state before each test
+    mockApi.get.mockReset()
+    mockApi.post.mockReset()
+    mockApi.put.mockReset()
     const auth = useAuth()
     auth.resetState()
   })
@@ -139,20 +152,20 @@ describe('useAuth', () => {
 
   describe('checkAuthStatus', () => {
     it('fetches and updates auth status', async () => {
-      fetchMock.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({
+      mockApi.get.mockResolvedValueOnce({
+        status: 200,
+        data: {
           auth_enabled: true,
           setup_complete: true,
           authenticated: false,
           public_features: ['charts']
-        })
+        }
       })
 
       const auth = useAuth()
       await auth.checkAuthStatus()
 
-      expect(fetchMock).toHaveBeenCalledWith('/api/auth/status')
+      expect(mockApi.get).toHaveBeenCalledWith('/auth/status')
       expect(auth.authStatus.value).toEqual({
         authEnabled: true,
         setupComplete: true,
@@ -163,13 +176,13 @@ describe('useAuth', () => {
     })
 
     it('defaults publicFeatures to empty array when not in response', async () => {
-      fetchMock.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({
+      mockApi.get.mockResolvedValueOnce({
+        status: 200,
+        data: {
           auth_enabled: false,
           setup_complete: false,
           authenticated: true
-        })
+        }
       })
 
       const auth = useAuth()
@@ -178,8 +191,8 @@ describe('useAuth', () => {
       expect(auth.authStatus.value.publicFeatures).toEqual([])
     })
 
-    it('handles fetch error gracefully', async () => {
-      fetchMock.mockRejectedValueOnce(new Error('Network error'))
+    it('handles network error gracefully', async () => {
+      mockApi.get.mockRejectedValueOnce(new Error('Network error'))
 
       const auth = useAuth()
       await auth.checkAuthStatus()
@@ -191,9 +204,9 @@ describe('useAuth', () => {
 
   describe('login', () => {
     it('sets authenticated to true on successful login', async () => {
-      fetchMock.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ message: 'Login successful' })
+      mockApi.post.mockResolvedValueOnce({
+        status: 200,
+        data: { message: 'Login successful' }
       })
 
       const auth = useAuth()
@@ -205,26 +218,16 @@ describe('useAuth', () => {
     })
 
     it('sends password in request body', async () => {
-      fetchMock.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ message: 'Login successful' })
-      })
+      mockApi.post.mockResolvedValueOnce({ status: 200, data: {} })
 
       const auth = useAuth()
       await auth.login('mypassword123')
 
-      expect(fetchMock).toHaveBeenCalledWith('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: 'mypassword123' })
-      })
+      expect(mockApi.post).toHaveBeenCalledWith('/auth/login', { password: 'mypassword123' })
     })
 
-    it('sets error on failed login', async () => {
-      fetchMock.mockResolvedValueOnce({
-        ok: false,
-        json: () => Promise.resolve({ error: 'Invalid password' })
-      })
+    it('sets error from server response on failed login', async () => {
+      mockApi.post.mockRejectedValueOnce(axiosError(401, { error: 'Invalid password' }))
 
       const auth = useAuth()
       const result = await auth.login('wrongpassword')
@@ -234,9 +237,28 @@ describe('useAuth', () => {
       expect(auth.authStatus.value.authenticated).toBe(false)
     })
 
+    it('uses generic error message when server provides none', async () => {
+      mockApi.post.mockRejectedValueOnce(axiosError(500, {}))
+
+      const auth = useAuth()
+      await auth.login('password')
+
+      expect(auth.error.value).toBe('Login failed')
+    })
+
+    it('distinguishes network errors from server errors', async () => {
+      mockApi.post.mockRejectedValueOnce(new Error('Network error'))
+
+      const auth = useAuth()
+      const result = await auth.login('password')
+
+      expect(result).toBe(false)
+      expect(auth.error.value).toBe('Connection error')
+    })
+
     it('sets loading state during login', async () => {
       let resolvePromise
-      fetchMock.mockReturnValueOnce(new Promise(resolve => {
+      mockApi.post.mockReturnValueOnce(new Promise((resolve) => {
         resolvePromise = resolve
       }))
 
@@ -245,32 +267,16 @@ describe('useAuth', () => {
 
       expect(auth.loading.value).toBe(true)
 
-      resolvePromise({
-        ok: true,
-        json: () => Promise.resolve({ message: 'ok' })
-      })
+      resolvePromise({ status: 200, data: {} })
       await loginPromise
 
       expect(auth.loading.value).toBe(false)
-    })
-
-    it('handles network error', async () => {
-      fetchMock.mockRejectedValueOnce(new Error('Network error'))
-
-      const auth = useAuth()
-      const result = await auth.login('password')
-
-      expect(result).toBe(false)
-      expect(auth.error.value).toBe('Connection error')
     })
   })
 
   describe('logout', () => {
     it('clears authenticated status', async () => {
-      fetchMock.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({})
-      })
+      mockApi.post.mockResolvedValueOnce({ status: 200, data: {} })
 
       const auth = useAuth()
       auth.authStatus.value.authenticated = true
@@ -281,23 +287,20 @@ describe('useAuth', () => {
     })
 
     it('sends POST request to logout endpoint', async () => {
-      fetchMock.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({})
-      })
+      mockApi.post.mockResolvedValueOnce({ status: 200, data: {} })
 
       const auth = useAuth()
       await auth.logout()
 
-      expect(fetchMock).toHaveBeenCalledWith('/api/auth/logout', { method: 'POST' })
+      expect(mockApi.post).toHaveBeenCalledWith('/auth/logout')
     })
   })
 
   describe('setup', () => {
     it('sets setupComplete and authenticated on success', async () => {
-      fetchMock.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ message: 'Password set' })
+      mockApi.post.mockResolvedValueOnce({
+        status: 200,
+        data: { message: 'Password set' }
       })
 
       const auth = useAuth()
@@ -309,26 +312,16 @@ describe('useAuth', () => {
     })
 
     it('sends password to setup endpoint', async () => {
-      fetchMock.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ message: 'Password set' })
-      })
+      mockApi.post.mockResolvedValueOnce({ status: 200, data: {} })
 
       const auth = useAuth()
       await auth.setup('mynewpassword')
 
-      expect(fetchMock).toHaveBeenCalledWith('/api/auth/setup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: 'mynewpassword' })
-      })
+      expect(mockApi.post).toHaveBeenCalledWith('/auth/setup', { password: 'mynewpassword' })
     })
 
-    it('sets error on setup failure', async () => {
-      fetchMock.mockResolvedValueOnce({
-        ok: false,
-        json: () => Promise.resolve({ error: 'Password too short' })
-      })
+    it('sets error from server response on setup failure', async () => {
+      mockApi.post.mockRejectedValueOnce(axiosError(400, { error: 'Password too short' }))
 
       const auth = useAuth()
       const result = await auth.setup('abc')
@@ -340,9 +333,9 @@ describe('useAuth', () => {
 
   describe('toggleAuth', () => {
     it('updates authEnabled on success', async () => {
-      fetchMock.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ auth_enabled: true })
+      mockApi.post.mockResolvedValueOnce({
+        status: 200,
+        data: { auth_enabled: true }
       })
 
       const auth = useAuth()
@@ -353,26 +346,19 @@ describe('useAuth', () => {
     })
 
     it('sends enabled state in request', async () => {
-      fetchMock.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ auth_enabled: false })
+      mockApi.post.mockResolvedValueOnce({
+        status: 200,
+        data: { auth_enabled: false }
       })
 
       const auth = useAuth()
       await auth.toggleAuth(false)
 
-      expect(fetchMock).toHaveBeenCalledWith('/api/auth/toggle', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: false })
-      })
+      expect(mockApi.post).toHaveBeenCalledWith('/auth/toggle', { enabled: false })
     })
 
-    it('sets error on toggle failure', async () => {
-      fetchMock.mockResolvedValueOnce({
-        ok: false,
-        json: () => Promise.resolve({ error: 'Not authorized' })
-      })
+    it('sets error from server response on toggle failure', async () => {
+      mockApi.post.mockRejectedValueOnce(axiosError(401, { error: 'Not authorized' }))
 
       const auth = useAuth()
       const result = await auth.toggleAuth(true)
@@ -384,9 +370,9 @@ describe('useAuth', () => {
 
   describe('changePassword', () => {
     it('returns true on successful password change', async () => {
-      fetchMock.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ message: 'Password changed' })
+      mockApi.post.mockResolvedValueOnce({
+        status: 200,
+        data: { message: 'Password changed' }
       })
 
       const auth = useAuth()
@@ -397,29 +383,19 @@ describe('useAuth', () => {
     })
 
     it('sends current and new password in request', async () => {
-      fetchMock.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ message: 'Password changed' })
-      })
+      mockApi.post.mockResolvedValueOnce({ status: 200, data: {} })
 
       const auth = useAuth()
       await auth.changePassword('currentpwd', 'newpwd')
 
-      expect(fetchMock).toHaveBeenCalledWith('/api/auth/change-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          current_password: 'currentpwd',
-          new_password: 'newpwd'
-        })
+      expect(mockApi.post).toHaveBeenCalledWith('/auth/change-password', {
+        current_password: 'currentpwd',
+        new_password: 'newpwd'
       })
     })
 
-    it('sets error on change failure', async () => {
-      fetchMock.mockResolvedValueOnce({
-        ok: false,
-        json: () => Promise.resolve({ error: 'Current password is incorrect' })
-      })
+    it('sets error from server response on change failure', async () => {
+      mockApi.post.mockRejectedValueOnce(axiosError(403, { error: 'Current password is incorrect' }))
 
       const auth = useAuth()
       const result = await auth.changePassword('wrongpass', 'newpass')
@@ -431,46 +407,37 @@ describe('useAuth', () => {
 
   describe('saveAccessSettings', () => {
     it('sends correct PUT body', async () => {
-      // First call: PUT /api/settings/access
-      fetchMock.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ success: true, access: { charts_public: true } })
+      mockApi.put.mockResolvedValueOnce({
+        status: 200,
+        data: { success: true, access: { charts_public: true } }
       })
-      // Second call: checkAuthStatus refresh
-      fetchMock.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({
+      mockApi.get.mockResolvedValueOnce({
+        status: 200,
+        data: {
           auth_enabled: true,
           setup_complete: true,
           authenticated: true,
           public_features: ['charts']
-        })
+        }
       })
 
       const auth = useAuth()
       const result = await auth.saveAccessSettings({ charts_public: true })
 
       expect(result).toBe(true)
-      expect(fetchMock).toHaveBeenCalledWith('/api/settings/access', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ charts_public: true })
-      })
+      expect(mockApi.put).toHaveBeenCalledWith('/settings/access', { charts_public: true })
     })
 
     it('refreshes auth status on success', async () => {
-      fetchMock.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ success: true })
-      })
-      fetchMock.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({
+      mockApi.put.mockResolvedValueOnce({ status: 200, data: { success: true } })
+      mockApi.get.mockResolvedValueOnce({
+        status: 200,
+        data: {
           auth_enabled: true,
           setup_complete: true,
           authenticated: true,
           public_features: ['charts', 'table']
-        })
+        }
       })
 
       const auth = useAuth()
@@ -479,11 +446,8 @@ describe('useAuth', () => {
       expect(auth.authStatus.value.publicFeatures).toEqual(['charts', 'table'])
     })
 
-    it('sets error on failure', async () => {
-      fetchMock.mockResolvedValueOnce({
-        ok: false,
-        json: () => Promise.resolve({ error: 'Not authorized' })
-      })
+    it('sets error from server response on failure', async () => {
+      mockApi.put.mockRejectedValueOnce(axiosError(401, { error: 'Not authorized' }))
 
       const auth = useAuth()
       const result = await auth.saveAccessSettings({ charts_public: true })

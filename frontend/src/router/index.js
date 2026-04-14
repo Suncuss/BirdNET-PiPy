@@ -1,5 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import Dashboard from '../views/Dashboard.vue'
+import api from '@/services/api'
+import { BASE } from '@/services/baseUrl'
 
 const routes = [
   {
@@ -44,7 +46,7 @@ const routes = [
 ]
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHistory(BASE),
   routes
 })
 
@@ -54,16 +56,13 @@ const router = createRouter({
  */
 async function checkAuthStatus() {
   try {
-    const response = await fetch('/api/auth/status')
-    if (response.ok) {
-      const data = await response.json()
-      return {
-        authEnabled: data.auth_enabled,
-        setupComplete: data.setup_complete,
-        authenticated: data.authenticated,
-        publicFeatures: data.public_features || [],
-        checkFailed: false
-      }
+    const { data } = await api.get('/auth/status')
+    return {
+      authEnabled: data.auth_enabled,
+      setupComplete: data.setup_complete,
+      authenticated: data.authenticated,
+      publicFeatures: data.public_features || [],
+      checkFailed: false
     }
   } catch (error) {
     console.error('Failed to check auth status:', error)

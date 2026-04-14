@@ -5,12 +5,9 @@ const getApiBaseUrl = () => {
   return base.endsWith('/') ? base.slice(0, -1) : base
 }
 
-export const getDefaultBirdImageUrl = () => '/default_bird.webp'
+export const getDefaultBirdImageUrl = () => 'default_bird.webp'
 
-export const isDefaultBirdImageUrl = (url) => {
-  if (!url) return false
-  return url === '/default_bird.webp'
-}
+export const isDefaultBirdImageUrl = (url) => url === 'default_bird.webp'
 
 export const getAudioUrl = (filename) => {
   if (!filename) return ''

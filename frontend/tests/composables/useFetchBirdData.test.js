@@ -71,7 +71,7 @@ describe('useFetchBirdData', () => {
       expect(result.latestObservationData.value).toBeNull()
       expect(result.recentObservationsData.value).toEqual([])
       expect(result.summaryData.value).toEqual({})
-      expect(result.latestObservationimageUrl.value).toBe('/default_bird.webp')
+      expect(result.latestObservationimageUrl.value).toBe('default_bird.webp')
     })
 
     it('initializes errors as null', () => {
@@ -313,7 +313,7 @@ describe('useFetchBirdData', () => {
 
       await fetchDashboardData()
 
-      expect(latestObservationimageUrl.value).toBe('/default_bird.webp')
+      expect(latestObservationimageUrl.value).toBe('default_bird.webp')
       // Should not call wikimedia at all
       expect(mockApi.get).not.toHaveBeenCalledWith(
         '/wikimedia_image',
@@ -381,7 +381,7 @@ describe('useFetchBirdData', () => {
       await fetchDashboardData()
 
       // Image stays at default but dashboard data is still populated
-      expect(latestObservationimageUrl.value).toBe('/default_bird.webp')
+      expect(latestObservationimageUrl.value).toBe('default_bird.webp')
       expect(latestObservationError.value).toBeNull()
     })
 
@@ -628,7 +628,7 @@ describe('useFetchBirdData', () => {
       await vi.waitFor(() => {
         expect(wikimediaCallCount).toBe(1)
       })
-      expect(latestObservationimageUrl.value).toBe('/default_bird.webp')
+      expect(latestObservationimageUrl.value).toBe('default_bird.webp')
 
       // Second call — same species but image still default, should retry
       await fetchDashboardData()

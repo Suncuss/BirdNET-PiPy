@@ -2,12 +2,13 @@
  * Central API service for all internal API calls.
  *
  * Provides a pre-configured axios instance with:
- * - Base URL: /api
+ * - Base URL: <base href> + api
  * - Default timeout: 15 seconds
- * - Response interceptor for 401 handling
+ * - Response interceptor for 401 handling (skips /auth/ endpoints)
  * - Helper for long-running operations
  */
 import axios from 'axios'
+import { BASE } from '@/services/baseUrl'
 
 // Default timeout for most requests (15 seconds)
 const DEFAULT_TIMEOUT = 15000
@@ -20,16 +21,20 @@ const LONG_TIMEOUT = 300000
  * Use this for all /api/* endpoints.
  */
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: BASE + 'api',
   timeout: DEFAULT_TIMEOUT,
   headers: {
     'Content-Type': 'application/json'
   }
 })
 
+// Auth endpoints manage their own 401 semantics (bad password, setup-not-complete).
+// The session-expired flow should only fire for non-auth endpoints.
+const isAuthEndpoint = (url) => typeof url === 'string' && url.includes('/auth/')
+
 /**
  * Response interceptor for global error handling.
- * Emits 'auth:required' event on 401 responses.
+ * Emits 'auth:required' event on 401 responses from non-auth endpoints.
  */
 api.interceptors.response.use(
   // Success handler - pass through
@@ -37,8 +42,7 @@ api.interceptors.response.use(
 
   // Error handler
   (error) => {
-    // Handle 401 Unauthorized - emit event for App.vue to handle
-    if (error.response?.status === 401) {
+    if (error.response?.status === 401 && !isAuthEndpoint(error.config?.url)) {
       window.dispatchEvent(new CustomEvent('auth:required'))
     }
 
@@ -59,7 +63,7 @@ api.interceptors.response.use(
  */
 export function createLongRequest(timeout = LONG_TIMEOUT) {
   const instance = axios.create({
-    baseURL: '/api',
+    baseURL: BASE + 'api',
     timeout,
     headers: {
       'Content-Type': 'application/json'
@@ -70,7 +74,7 @@ export function createLongRequest(timeout = LONG_TIMEOUT) {
   instance.interceptors.response.use(
     (response) => response,
     (error) => {
-      if (error.response?.status === 401) {
+      if (error.response?.status === 401 && !isAuthEndpoint(error.config?.url)) {
         window.dispatchEvent(new CustomEvent('auth:required'))
       }
       return Promise.reject(error)

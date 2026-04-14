@@ -168,7 +168,7 @@
 </template>
 
 <script>
-import { ref, watchEffect, onMounted, onUnmounted } from 'vue'
+import { ref, nextTick, watchEffect, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useLogger } from '@/composables/useLogger'
 import { useAuth } from '@/composables/useAuth'
@@ -268,10 +268,9 @@ export default {
       }
     }
 
+    // Defer dismiss so router-link navigation completes before the v-if removes the element.
     const handleRecorderWarningClick = () => {
-      window.setTimeout(() => {
-        recorderHealth.dismissWarning()
-      }, 0)
+      nextTick(() => recorderHealth.dismissWarning())
     }
 
     // Check auth status on mount

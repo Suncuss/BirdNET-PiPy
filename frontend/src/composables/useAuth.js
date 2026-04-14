@@ -1,4 +1,5 @@
 import { ref, computed } from 'vue'
+import api from '@/services/api'
 import { useLogger } from './useLogger'
 
 /**
@@ -14,6 +15,10 @@ const authStatus = ref({
 })
 const loading = ref(false)
 const error = ref('')
+
+// Axios throws on 4xx/5xx. err.response exists => server responded with an error
+// body; otherwise it's a genuine network/timeout failure.
+const errorMessage = (err, fallback) => err.response?.data?.error || fallback
 
 /**
  * Composable for authentication state management.
@@ -37,26 +42,21 @@ export function useAuth() {
    */
   const checkAuthStatus = async () => {
     try {
-      const response = await fetch('/api/auth/status')
-      if (response.ok) {
-        const data = await response.json()
-        authStatus.value = {
-          authEnabled: data.auth_enabled,
-          setupComplete: data.setup_complete,
-          authenticated: data.authenticated,
-          publicFeatures: data.public_features || [],
-          stationName: data.station_name || ''
-        }
-        error.value = ''
-        logger.debug('Auth status checked', authStatus.value)
-        return true
-      } else {
-        error.value = 'Failed to check authentication status'
-        logger.error('Auth status check failed', { status: response.status })
-        return false
+      const { data } = await api.get('/auth/status')
+      authStatus.value = {
+        authEnabled: data.auth_enabled,
+        setupComplete: data.setup_complete,
+        authenticated: data.authenticated,
+        publicFeatures: data.public_features || [],
+        stationName: data.station_name || ''
       }
+      error.value = ''
+      logger.debug('Auth status checked', authStatus.value)
+      return true
     } catch (err) {
-      error.value = 'Connection error - could not check authentication'
+      error.value = err.response
+        ? 'Failed to check authentication status'
+        : 'Connection error - could not check authentication'
       logger.error('Failed to check auth status', err)
       return false
     }
@@ -72,26 +72,13 @@ export function useAuth() {
     error.value = ''
 
     try {
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password })
-      })
-
-      const data = await response.json()
-
-      if (response.ok) {
-        authStatus.value.authenticated = true
-        logger.info('Login successful')
-        return true
-      } else {
-        error.value = data.error || 'Login failed'
-        logger.warn('Login failed', { error: error.value })
-        return false
-      }
+      await api.post('/auth/login', { password })
+      authStatus.value.authenticated = true
+      logger.info('Login successful')
+      return true
     } catch (err) {
-      error.value = 'Connection error'
-      logger.error('Login error', err)
+      error.value = errorMessage(err, err.response ? 'Login failed' : 'Connection error')
+      logger.warn('Login failed', { error: error.value, status: err.response?.status })
       return false
     } finally {
       loading.value = false
@@ -103,7 +90,7 @@ export function useAuth() {
    */
   const logout = async () => {
     try {
-      await fetch('/api/auth/logout', { method: 'POST' })
+      await api.post('/auth/logout')
       authStatus.value.authenticated = false
       logger.info('Logged out')
     } catch (err) {
@@ -121,28 +108,15 @@ export function useAuth() {
     error.value = ''
 
     try {
-      const response = await fetch('/api/auth/setup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password })
-      })
-
-      const data = await response.json()
-
-      if (response.ok) {
-        authStatus.value.authEnabled = true
-        authStatus.value.setupComplete = true
-        authStatus.value.authenticated = true
-        logger.info('Password setup successful')
-        return true
-      } else {
-        error.value = data.error || 'Setup failed'
-        logger.warn('Setup failed', { error: error.value })
-        return false
-      }
+      await api.post('/auth/setup', { password })
+      authStatus.value.authEnabled = true
+      authStatus.value.setupComplete = true
+      authStatus.value.authenticated = true
+      logger.info('Password setup successful')
+      return true
     } catch (err) {
-      error.value = 'Connection error'
-      logger.error('Setup error', err)
+      error.value = errorMessage(err, err.response ? 'Setup failed' : 'Connection error')
+      logger.warn('Setup failed', { error: error.value, status: err.response?.status })
       return false
     } finally {
       loading.value = false
@@ -159,24 +133,12 @@ export function useAuth() {
     error.value = ''
 
     try {
-      const response = await fetch('/api/auth/toggle', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled })
-      })
-
-      const data = await response.json()
-
-      if (response.ok) {
-        authStatus.value.authEnabled = data.auth_enabled
-        logger.info('Auth toggled', { enabled: data.auth_enabled })
-        return true
-      } else {
-        error.value = data.error || 'Toggle failed'
-        return false
-      }
+      const { data } = await api.post('/auth/toggle', { enabled })
+      authStatus.value.authEnabled = data.auth_enabled
+      logger.info('Auth toggled', { enabled: data.auth_enabled })
+      return true
     } catch (err) {
-      error.value = 'Connection error'
+      error.value = errorMessage(err, err.response ? 'Toggle failed' : 'Connection error')
       logger.error('Toggle error', err)
       return false
     } finally {
@@ -195,26 +157,14 @@ export function useAuth() {
     error.value = ''
 
     try {
-      const response = await fetch('/api/auth/change-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          current_password: currentPassword,
-          new_password: newPassword
-        })
+      await api.post('/auth/change-password', {
+        current_password: currentPassword,
+        new_password: newPassword
       })
-
-      const data = await response.json()
-
-      if (response.ok) {
-        logger.info('Password changed successfully')
-        return true
-      } else {
-        error.value = data.error || 'Password change failed'
-        return false
-      }
+      logger.info('Password changed successfully')
+      return true
     } catch (err) {
-      error.value = 'Connection error'
+      error.value = errorMessage(err, err.response ? 'Password change failed' : 'Connection error')
       logger.error('Change password error', err)
       return false
     } finally {
@@ -229,25 +179,13 @@ export function useAuth() {
    */
   const saveAccessSettings = async (accessSettings) => {
     try {
-      const response = await fetch('/api/settings/access', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(accessSettings)
-      })
-
-      if (response.ok) {
-        await checkAuthStatus()
-        logger.info('Access settings saved', accessSettings)
-        return true
-      } else {
-        const data = await response.json()
-        error.value = data.error || 'Failed to save access settings'
-        logger.warn('Access settings save failed', { error: error.value })
-        return false
-      }
+      await api.put('/settings/access', accessSettings)
+      await checkAuthStatus()
+      logger.info('Access settings saved', accessSettings)
+      return true
     } catch (err) {
-      error.value = 'Connection error'
-      logger.error('Save access settings error', err)
+      error.value = errorMessage(err, err.response ? 'Failed to save access settings' : 'Connection error')
+      logger.warn('Access settings save failed', { error: error.value })
       return false
     }
   }

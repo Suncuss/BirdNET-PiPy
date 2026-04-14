@@ -15,13 +15,10 @@ vi.mock('@/services/api', () => ({
 const onMock = vi.fn()
 const emitMock = vi.fn()
 const disconnectMock = vi.fn()
+const ioMock = vi.hoisted(() => vi.fn())
 
 vi.mock('socket.io-client', () => ({
-  io: () => ({
-    on: onMock,
-    emit: emitMock,
-    disconnect: disconnectMock
-  })
+  io: ioMock
 }))
 
 // Mock BirdDetectionList component
@@ -39,10 +36,16 @@ describe('LiveFeed', () => {
     mockApi.get.mockResolvedValue({
       data: {
         streams: [
-          { source_id: 'source_0', label: 'Microphone', url: '/stream/source_0.mp3' }
+          { source_id: 'source_0', label: 'Microphone', url: 'stream/source_0.mp3' }
         ]
       }
     })
+    ioMock.mockReset()
+    ioMock.mockImplementation(() => ({
+      on: onMock,
+      emit: emitMock,
+      disconnect: disconnectMock
+    }))
 
     // Mock MediaError constants (not available in jsdom)
     vi.stubGlobal('MediaError', {
@@ -105,7 +108,7 @@ describe('LiveFeed', () => {
     await flushPromises()
 
     expect(mockApi.get).toHaveBeenCalledWith('/stream/config')
-    expect(wrapper.vm.streamUrl).toBe('/stream/source_0.mp3')
+    expect(wrapper.vm.streamUrl).toBe('stream/source_0.mp3')
   })
 
   it('handles missing stream by updating status message', async () => {
@@ -137,12 +140,19 @@ describe('LiveFeed', () => {
     expect(onMock).toHaveBeenCalledWith('bird_detected', expect.any(Function))
   })
 
+  it('initializes socket.io with the base-path-aware socket.io path', async () => {
+    mountLiveFeed()
+    await flushPromises()
+
+    expect(ioMock).toHaveBeenCalledWith({ path: '/socket.io' })
+  })
+
   describe('multi-stream source selection', () => {
     const multiStreamResponse = {
       data: {
         streams: [
-          { source_id: 'source_0', label: 'Microphone', url: '/stream/source_0.mp3' },
-          { source_id: 'source_1', label: 'RTSP Camera', url: '/stream/source_1.mp3' }
+          { source_id: 'source_0', label: 'Microphone', url: 'stream/source_0.mp3' },
+          { source_id: 'source_1', label: 'RTSP Camera', url: 'stream/source_1.mp3' }
         ]
       }
     }
@@ -154,7 +164,7 @@ describe('LiveFeed', () => {
 
       expect(wrapper.vm.streams).toHaveLength(2)
       expect(wrapper.vm.selectedSourceId).toBe('source_0')
-      expect(wrapper.vm.streamUrl).toBe('/stream/source_0.mp3')
+      expect(wrapper.vm.streamUrl).toBe('stream/source_0.mp3')
       expect(wrapper.vm.streamDescription).toBe('Microphone')
     })
 
@@ -187,7 +197,7 @@ describe('LiveFeed', () => {
       await wrapper.vm.selectSourceById('source_1')
 
       expect(wrapper.vm.selectedSourceId).toBe('source_1')
-      expect(wrapper.vm.streamUrl).toBe('/stream/source_1.mp3')
+      expect(wrapper.vm.streamUrl).toBe('stream/source_1.mp3')
       expect(wrapper.vm.streamDescription).toBe('RTSP Camera')
     })
   })

@@ -1146,7 +1146,7 @@ def get_stream_config():
         streams.append({
             'source_id': sid,
             'label': source.get('label') or sid,
-            'url': f'/stream/{sid}.mp3',
+            'url': f'stream/{sid}.mp3',
         })
 
     return jsonify({'streams': streams})

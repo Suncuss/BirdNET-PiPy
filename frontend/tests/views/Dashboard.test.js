@@ -41,7 +41,7 @@ const baseState = () => ({
   latestObservationError: ref(null),
   recentObservationsError: ref(null),
   summaryError: ref(null),
-  latestObservationimageUrl: ref('/default_bird.webp'),
+  latestObservationimageUrl: ref('default_bird.webp'),
   hasLoadedOnce: ref(true),
   fetchDashboardData: vi.fn(),
   setActivityOrder: vi.fn(),

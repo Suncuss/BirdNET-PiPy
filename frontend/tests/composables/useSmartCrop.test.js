@@ -261,7 +261,7 @@ describe('useSmartCrop', () => {
     it('sets isReady to true for default bird image', async () => {
       const { focalPoint, isReady, updateFocalPoint } = helpers.useFocalPoint()
 
-      await updateFocalPoint('/default_bird.webp')
+      await updateFocalPoint('default_bird.webp')
 
       expect(focalPoint.value).toBe('50% 35%')
       expect(isReady.value).toBe(true)
@@ -345,8 +345,8 @@ describe('useSmartCrop', () => {
   describe('processBirdImages', () => {
     it('sets focalPointReady flag on each bird', async () => {
       const birds = [
-        { name: 'Sparrow', imageUrl: '/default_bird.webp' },
-        { name: 'Robin', imageUrl: '/default_bird.webp' }
+        { name: 'Sparrow', imageUrl: 'default_bird.webp' },
+        { name: 'Robin', imageUrl: 'default_bird.webp' }
       ]
 
       await helpers.processBirdImages(birds)
@@ -357,7 +357,7 @@ describe('useSmartCrop', () => {
 
     it('sets default focal point for placeholder images', async () => {
       const birds = [
-        { name: 'Sparrow', imageUrl: '/default_bird.webp' }
+        { name: 'Sparrow', imageUrl: 'default_bird.webp' }
       ]
 
       await helpers.processBirdImages(birds)

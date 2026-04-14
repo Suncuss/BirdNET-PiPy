@@ -96,10 +96,13 @@
     >
       <div class="flex items-center justify-between">
         <p class="text-sm font-medium text-blue-800">
-          <a
-            href="#system-updates"
+          <button
+            type="button"
             class="underline hover:text-blue-900"
-          >System update</a> available
+            @click="scrollToSystemUpdates"
+          >
+            System update
+          </button> available
         </p>
         <button
           class="text-blue-400 hover:text-blue-600 p-1 -m-1"
@@ -1418,6 +1421,7 @@ import { useAppStatus } from '@/composables/useAppStatus'
 import { limitDecimals } from '@/utils/inputHelpers'
 import { RECORDER_STATES } from '@/utils/recorderStates'
 import api, { createLongRequest } from '@/services/api'
+import { BASE } from '@/services/baseUrl'
 import SpeciesFilterModal from '@/components/SpeciesFilterModal.vue'
 import AlertBanner from '@/components/AlertBanner.vue'
 import AppButton from '@/components/AppButton.vue'
@@ -1757,7 +1761,7 @@ export default {
     const loadRecorderStatus = async () => {
       try {
         const { data } = await api.get('/recorder/status')
-        if (data && typeof data === 'object' && 'state' in data) {
+        if (data && 'state' in data) {
           recorderStatus.value = data
         }
       } catch (error) {
@@ -1768,10 +1772,14 @@ export default {
     // Initialize WebSocket for live recorder status updates.
     // The REST fetch above provides an initial/fallback value if the socket
     // handshake is delayed or unavailable behind a proxy.
-    const initSettingsSocket = () => {
-      settingsSocket = io()
+    const scrollToSystemUpdates = () => {
+      document.getElementById('system-updates')?.scrollIntoView({ behavior: 'smooth' })
+    }
 
-      settingsSocket.on('connect_error', (error) => {
+    const initSettingsSocket = () => {
+      settingsSocket = io({ path: BASE + 'socket.io' })
+
+      settingsSocket.once('connect_error', (error) => {
         console.warn('Recorder status WebSocket connection failed:', error)
         loadRecorderStatus()
       })
@@ -2548,6 +2556,7 @@ export default {
     })
 
     return {
+      scrollToSystemUpdates,
       settings,
       loading,
       saveStatus,

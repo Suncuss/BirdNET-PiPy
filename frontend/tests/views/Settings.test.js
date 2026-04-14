@@ -20,11 +20,14 @@ vi.mock('@/services/api', () => ({
   default: mockApi
 }))
 
+const ioMock = vi.hoisted(() => vi.fn(() => ({
+  on: socketOnMock,
+  once: socketOnMock,
+  disconnect: socketDisconnectMock
+})))
+
 vi.mock('socket.io-client', () => ({
-  io: () => ({
-    on: socketOnMock,
-    disconnect: socketDisconnectMock
-  })
+  io: ioMock
 }))
 
 // Mock the useServiceRestart composable (expose waitForRestart for assertions)
@@ -162,6 +165,7 @@ describe('Settings', () => {
     Object.keys(socketHandlers).forEach((key) => delete socketHandlers[key])
     socketOnMock.mockClear()
     socketDisconnectMock.mockClear()
+    ioMock.mockClear()
     mockApi.get.mockReset()
     mockApi.put.mockReset()
     mockApi.post.mockReset()
@@ -263,6 +267,13 @@ describe('Settings', () => {
 
       expect(mockApi.get).toHaveBeenCalledWith('/recorder/status')
       expect(wrapper.vm.recorderStatus.state).toBe(RECORDER_STATES.RUNNING)
+    })
+
+    it('initializes socket.io with the base-path-aware socket.io path', async () => {
+      mountSettings()
+      await flushPromises()
+
+      expect(ioMock).toHaveBeenCalledWith({ path: '/socket.io' })
     })
 
     it('falls back to recorder status REST call when the socket connection fails', async () => {

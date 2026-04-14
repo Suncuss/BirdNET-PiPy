@@ -94,6 +94,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { io } from 'socket.io-client'
 import BirdDetectionList from './BirdDetectionList.vue'
 import api from '@/services/api'
+import { BASE } from '@/services/baseUrl'
 
 export default {
   name: 'LiveFeed',
@@ -114,11 +115,7 @@ export default {
     const currentSource = computed(() =>
       streams.value.find(s => s.source_id === selectedSourceId.value)
     )
-    // Strip leading '/' so the URL resolves relative to <base href>, which HA
-    // ingress mode injects to prefix routes with /api/hassio_ingress/TOKEN/.
-    // In direct IP:port mode there's no <base href>, so 'stream/...' resolves
-    // against the current page origin and still works.
-    const streamUrl = computed(() => (currentSource.value?.url || '').replace(/^\//, ''))
+    const streamUrl = computed(() => currentSource.value?.url || '')
     const streamDescription = computed(() => currentSource.value?.label || '')
 
     let audioContext, analyser, source, dataArray, animationId
@@ -351,7 +348,7 @@ export default {
     }
 
     const initWebSocket = () => {
-      socket = io()
+      socket = io({ path: BASE + 'socket.io' })
 
       socket.on('connect', () => {
         console.log('[LiveFeed] WebSocket connected')
