@@ -198,6 +198,7 @@ _update_check_cache = {
     'cache_key': None  # format: "channel:current_commit"
 }
 UPDATE_CHECK_CACHE_TTL = 3600  # 1 hour in seconds
+HA_ADDON_SLUG = os.environ.get('HA_ADDON_SLUG', 'birdnet-pipy')
 
 
 def _call_supervisor(method, path, timeout=10):
@@ -2116,19 +2117,28 @@ def trigger_system_update():
             token = os.environ.get('SUPERVISOR_TOKEN', '')
             try:
                 resp = requests.post(
-                    "http://supervisor/store/addons/self/update",
+                    f"http://supervisor/store/addons/{HA_ADDON_SLUG}/update",
                     headers={"Authorization": f"Bearer {token}"},
                     json={'background': False},
                 )
                 resp.raise_for_status()
             except requests.RequestException as e:
                 response = getattr(e, 'response', None)
+                supervisor_message = None
+                if response is not None:
+                    try:
+                        supervisor_message = response.json().get('message')
+                    except (ValueError, AttributeError):
+                        supervisor_message = None
                 logger.error("Failed to trigger HA addon update", extra={
                     'error': str(e),
                     'status_code': getattr(response, 'status_code', None),
                     'response_text': (getattr(response, 'text', None) or '')[:500],
                 })
-                return jsonify({'error': 'Failed to trigger Home Assistant addon update'}), 502
+                error_message = 'Failed to trigger Home Assistant addon update'
+                if supervisor_message:
+                    error_message = f'{error_message}: {supervisor_message}'
+                return jsonify({'error': error_message}), 502
 
             logger.info("HA addon update triggered via API")
             return jsonify({

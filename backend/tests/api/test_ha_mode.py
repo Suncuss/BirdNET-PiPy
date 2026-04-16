@@ -178,7 +178,7 @@ class TestHaTriggerUpdate:
                 data = response.get_json()
                 assert data['status'] == 'update_triggered'
                 mock_post.assert_called_once_with(
-                    'http://supervisor/store/addons/self/update',
+                    'http://supervisor/store/addons/birdnet-pipy/update',
                     headers={'Authorization': 'Bearer test-token'},
                     json={'background': False},
                 )
