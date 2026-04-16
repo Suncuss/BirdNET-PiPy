@@ -171,12 +171,17 @@ class TestHaTriggerUpdate:
         mock_resp.raise_for_status.return_value = None
 
         with patch('core.api.is_home_assistant_mode', return_value=True), \
-             patch('core.api.requests.post', return_value=mock_resp):
+             patch('core.api.requests.post', return_value=mock_resp) as mock_post:
             with patch.dict(os.environ, {'SUPERVISOR_TOKEN': 'test-token'}):
                 response = api_client.post('/api/system/update')
                 assert response.status_code == 200
                 data = response.get_json()
                 assert data['status'] == 'update_triggered'
+                mock_post.assert_called_once_with(
+                    'http://supervisor/store/addons/self/update',
+                    headers={'Authorization': 'Bearer test-token'},
+                    json={'background': False},
+                )
 
     def test_trigger_update_http_error_returns_502(self, api_client):
         mock_resp = MagicMock()

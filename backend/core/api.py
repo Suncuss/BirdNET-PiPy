@@ -2116,12 +2116,18 @@ def trigger_system_update():
             token = os.environ.get('SUPERVISOR_TOKEN', '')
             try:
                 resp = requests.post(
-                    "http://supervisor/addons/self/update",
+                    "http://supervisor/store/addons/self/update",
                     headers={"Authorization": f"Bearer {token}"},
+                    json={'background': False},
                 )
                 resp.raise_for_status()
             except requests.RequestException as e:
-                logger.error("Failed to trigger HA addon update", extra={'error': str(e)})
+                response = getattr(e, 'response', None)
+                logger.error("Failed to trigger HA addon update", extra={
+                    'error': str(e),
+                    'status_code': getattr(response, 'status_code', None),
+                    'response_text': (getattr(response, 'text', None) or '')[:500],
+                })
                 return jsonify({'error': 'Failed to trigger Home Assistant addon update'}), 502
 
             logger.info("HA addon update triggered via API")

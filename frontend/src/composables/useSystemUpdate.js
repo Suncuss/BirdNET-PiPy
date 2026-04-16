@@ -179,7 +179,8 @@ export function useSystemUpdate() {
         setStatus('info', 'Update taking longer than expected. Try refreshing later.')
       } else {
         logger.error('Failed to trigger update', error)
-        setStatus('error', `Update failed: ${error.message}`)
+        const backendError = error.response?.data?.error
+        setStatus('error', `Update failed: ${backendError || error.message}`)
         throw error
       }
     }

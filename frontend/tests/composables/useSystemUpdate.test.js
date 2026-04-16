@@ -424,7 +424,7 @@ describe('useSystemUpdate', () => {
   })
 
   it('triggerUpdate throws on backend 502 (JSON error body) in HA mode', async () => {
-    const { triggerUpdate, versionInfo, statusType } = useSystemUpdate()
+    const { triggerUpdate, versionInfo, statusType, statusMessage } = useSystemUpdate()
     versionInfo.value = { runtime_mode: 'ha' }
 
     const httpError = new Error('Request failed with status code 502')
@@ -433,6 +433,7 @@ describe('useSystemUpdate', () => {
 
     await expect(triggerUpdate(true)).rejects.toThrow()
     expect(statusType.value).toBe('error')
+    expect(statusMessage.value).toContain('Supervisor rejected')
   })
 
   it('triggerUpdate throws on client timeout (ECONNABORTED)', async () => {
