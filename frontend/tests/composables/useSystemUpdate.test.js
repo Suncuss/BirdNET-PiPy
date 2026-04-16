@@ -410,7 +410,20 @@ describe('useSystemUpdate', () => {
     expect(mockLongApi.post).toHaveBeenCalledWith('/system/update')
   })
 
-  it('triggerUpdate throws on HTTP error responses (502 with body)', async () => {
+  it('triggerUpdate tolerates proxy 502 (no error body) in HA mode', async () => {
+    const { triggerUpdate, versionInfo } = useSystemUpdate()
+    versionInfo.value = { runtime_mode: 'ha' }
+
+    const proxyError = new Error('Request failed with status code 502')
+    proxyError.response = { status: 502, data: '<html>Bad Gateway</html>' }
+    mockLongApi.post.mockRejectedValueOnce(proxyError)
+
+    await triggerUpdate(true)
+
+    expect(mockLongApi.post).toHaveBeenCalledWith('/system/update')
+  })
+
+  it('triggerUpdate throws on backend 502 (JSON error body) in HA mode', async () => {
     const { triggerUpdate, versionInfo, statusType } = useSystemUpdate()
     versionInfo.value = { runtime_mode: 'ha' }
 

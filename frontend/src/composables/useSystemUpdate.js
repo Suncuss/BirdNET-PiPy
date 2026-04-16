@@ -142,10 +142,15 @@ export function useSystemUpdate() {
         const response = await longApi.post('/system/update')
         data = response.data
       } catch (requestError) {
-        if (!requestError.response
-            && requestError.code !== 'ECONNABORTED'
-            && versionInfo.value?.runtime_mode === 'ha') {
-          logger.warn('Update request connection lost — treating as update in progress')
+        const isHa = versionInfo.value?.runtime_mode === 'ha'
+        const isConnectionLoss = !requestError.response && requestError.code !== 'ECONNABORTED'
+        // nginx returns 502 when Flask dies mid-request; our backend returns 502
+        // with a JSON error body. Distinguish by checking for our error field.
+        const isProxyDeath = requestError.response?.status === 502
+            && !requestError.response?.data?.error
+
+        if (isHa && (isConnectionLoss || isProxyDeath)) {
+          logger.warn('Update request lost — treating as update in progress')
           data = { status: 'update_triggered' }
         } else {
           throw requestError
