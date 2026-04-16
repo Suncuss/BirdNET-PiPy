@@ -16,9 +16,10 @@ const authStatus = ref({
 const loading = ref(false)
 const error = ref('')
 
-// Axios throws on 4xx/5xx. err.response exists => server responded with an error
-// body; otherwise it's a genuine network/timeout failure.
-const errorMessage = (err, fallback) => err.response?.data?.error || fallback
+// Server responses surface their own error message; network/timeout errors
+// (no err.response) always show "Connection error" regardless of fallback.
+const errorMessage = (err, serverFallback) =>
+  err.response?.data?.error || (err.response ? serverFallback : 'Connection error')
 
 /**
  * Composable for authentication state management.
@@ -54,9 +55,7 @@ export function useAuth() {
       logger.debug('Auth status checked', authStatus.value)
       return true
     } catch (err) {
-      error.value = err.response
-        ? 'Failed to check authentication status'
-        : 'Connection error - could not check authentication'
+      error.value = errorMessage(err, 'Failed to check authentication status')
       logger.error('Failed to check auth status', err)
       return false
     }
@@ -77,7 +76,7 @@ export function useAuth() {
       logger.info('Login successful')
       return true
     } catch (err) {
-      error.value = errorMessage(err, err.response ? 'Login failed' : 'Connection error')
+      error.value = errorMessage(err, 'Login failed')
       logger.warn('Login failed', { error: error.value, status: err.response?.status })
       return false
     } finally {
@@ -115,7 +114,7 @@ export function useAuth() {
       logger.info('Password setup successful')
       return true
     } catch (err) {
-      error.value = errorMessage(err, err.response ? 'Setup failed' : 'Connection error')
+      error.value = errorMessage(err, 'Setup failed')
       logger.warn('Setup failed', { error: error.value, status: err.response?.status })
       return false
     } finally {
@@ -138,7 +137,7 @@ export function useAuth() {
       logger.info('Auth toggled', { enabled: data.auth_enabled })
       return true
     } catch (err) {
-      error.value = errorMessage(err, err.response ? 'Toggle failed' : 'Connection error')
+      error.value = errorMessage(err, 'Toggle failed')
       logger.error('Toggle error', err)
       return false
     } finally {
@@ -164,7 +163,7 @@ export function useAuth() {
       logger.info('Password changed successfully')
       return true
     } catch (err) {
-      error.value = errorMessage(err, err.response ? 'Password change failed' : 'Connection error')
+      error.value = errorMessage(err, 'Password change failed')
       logger.error('Change password error', err)
       return false
     } finally {
@@ -184,7 +183,7 @@ export function useAuth() {
       logger.info('Access settings saved', accessSettings)
       return true
     } catch (err) {
-      error.value = errorMessage(err, err.response ? 'Failed to save access settings' : 'Connection error')
+      error.value = errorMessage(err, 'Failed to save access settings')
       logger.warn('Access settings save failed', { error: error.value })
       return false
     }

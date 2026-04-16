@@ -45,26 +45,26 @@ vi.mock('@/composables/useServiceRestart', () => ({
 }))
 
 // Mock the useSystemUpdate composable to avoid extra fetch calls
+const mockSystemUpdate = vi.hoisted(() => ({
+  versionInfo: { value: null },
+  updateInfo: { value: null },
+  updateAvailable: { value: false },
+  checking: { value: false },
+  updating: { value: false },
+  statusMessage: { value: null },
+  statusType: { value: null },
+  showUpdateIndicator: { value: false },
+  dismissUpdate: vi.fn(),
+  restartMessage: { value: '' },
+  restartError: { value: '' },
+  isRestarting: { value: false },
+  loadVersionInfo: vi.fn().mockResolvedValue({}),
+  checkForUpdates: vi.fn().mockResolvedValue({}),
+  triggerUpdate: vi.fn().mockResolvedValue({})
+}))
+
 vi.mock('@/composables/useSystemUpdate', () => ({
-  useSystemUpdate: () => ({
-    versionInfo: { value: null },
-    updateInfo: { value: null },
-    updateAvailable: { value: false },
-    checking: { value: false },
-    updating: { value: false },
-    statusMessage: { value: null },
-    statusType: { value: null },
-    // New dismissal state
-    showUpdateIndicator: { value: false },
-    dismissUpdate: vi.fn(),
-    // Exposed from internal useServiceRestart
-    restartMessage: { value: '' },
-    restartError: { value: '' },
-    isRestarting: { value: false },
-    loadVersionInfo: vi.fn().mockResolvedValue({}),
-    checkForUpdates: vi.fn().mockResolvedValue({}),
-    triggerUpdate: vi.fn().mockResolvedValue({})
-  })
+  useSystemUpdate: () => mockSystemUpdate
 }))
 
 // Mock the useAuth composable to avoid extra fetch calls
@@ -171,6 +171,15 @@ describe('Settings', () => {
     mockApi.post.mockReset()
     mockWaitForRestart.mockReset()
     mockWaitForRestart.mockResolvedValue(true)
+    // Reset systemUpdate mock state
+    mockSystemUpdate.versionInfo.value = null
+    mockSystemUpdate.updateInfo.value = null
+    mockSystemUpdate.updateAvailable.value = false
+    mockSystemUpdate.checking.value = false
+    mockSystemUpdate.updating.value = false
+    mockSystemUpdate.statusMessage.value = null
+    mockSystemUpdate.statusType.value = null
+    mockSystemUpdate.showUpdateIndicator.value = false
     mockApi.post.mockResolvedValue({ data: { status: 'restart_requested' } })
     mockApi.get.mockImplementation((url) => {
       if (url === '/settings' || url === '/settings/defaults') {
@@ -1255,6 +1264,36 @@ describe('Settings', () => {
       expect(wrapper.vm.recorderDotClass).toContain('bg-red-500')
     })
 
+  })
+
+  describe('HA Mode System Updates', () => {
+    const haVersionInfo = {
+      runtime_mode: 'ha',
+      version: '0.6.3',
+      current_commit: 'abc1234',
+      current_branch: 'home_assistant'
+    }
+
+    it('shows Check for Updates button in HA mode', async () => {
+      mockSystemUpdate.versionInfo.value = haVersionInfo
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      const buttons = wrapper.findAll('button')
+      const checkButton = buttons.find(b => b.text().includes('Check for Updates'))
+      expect(checkButton).toBeTruthy()
+    })
+
+    it('shows version transition subtitle in HA mode', async () => {
+      mockSystemUpdate.versionInfo.value = haVersionInfo
+      mockSystemUpdate.updateInfo.value = { current_version: '0.6.3', latest_version: '0.6.4' }
+      mockSystemUpdate.updateAvailable.value = true
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('v0.6.3')
+      expect(wrapper.text()).toContain('v0.6.4')
+    })
   })
 
 })

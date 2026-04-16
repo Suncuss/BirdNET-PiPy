@@ -200,6 +200,23 @@ _update_check_cache = {
 UPDATE_CHECK_CACHE_TTL = 3600  # 1 hour in seconds
 
 
+def _call_supervisor(method, path, timeout=10):
+    """Call Home Assistant Supervisor API. Returns (data, error_message)."""
+    token = os.environ.get('SUPERVISOR_TOKEN', '')
+    try:
+        resp = requests.request(
+            method,
+            f"http://supervisor{path}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        body = resp.json() if resp.content else {}
+        return body.get('data', {}), None
+    except requests.RequestException as e:
+        return None, str(e)
+
+
 def _build_update_check_result(update_available, current_commit, remote_commit,
                                 commits_behind, current_branch, target_branch,
                                 channel, preview_commits, fresh_sync, update_note):
@@ -1925,9 +1942,20 @@ def check_for_updates():
     """
     try:
         if is_home_assistant_mode():
+            force = request.args.get('force', 'false').lower() == 'true'
+            if force:
+                _call_supervisor('POST', '/store/reload', timeout=30)
+
+            info, error = _call_supervisor('GET', '/addons/self/info')
+            if error:
+                return jsonify({'error': f'Failed to check for updates: {error}'}), 502
+
             return jsonify({
-                'update_available': False,
-                'message': 'Updates are managed by Home Assistant'
+                'update_available': bool(info.get('update_available')),
+                'runtime_mode': 'ha',
+                'current_version': info.get('version', 'unknown'),
+                'latest_version': info.get('version_latest'),
+                'update_note': None,
             }), 200
 
         force = request.args.get('force', 'false').lower() == 'true'
@@ -2084,6 +2112,25 @@ def trigger_system_update():
     before this endpoint is called. No need to re-check here.
     """
     try:
+        if is_home_assistant_mode():
+            token = os.environ.get('SUPERVISOR_TOKEN', '')
+            try:
+                resp = requests.post(
+                    "http://supervisor/addons/self/update",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                resp.raise_for_status()
+            except requests.RequestException as e:
+                logger.error("Failed to trigger HA addon update", extra={'error': str(e)})
+                return jsonify({'error': 'Failed to trigger Home Assistant addon update'}), 502
+
+            logger.info("HA addon update triggered via API")
+            return jsonify({
+                'status': 'update_triggered',
+                'message': 'Home Assistant addon update initiated.',
+                'estimated_downtime': '2-5 minutes',
+            }), 200
+
         # Load current version info for logging
         version_info = load_version_info()
 
@@ -2123,16 +2170,9 @@ def trigger_system_update():
 def trigger_service_restart():
     """Trigger service restart for native mode or HA add-on mode."""
     if is_home_assistant_mode():
-        token = os.environ.get('SUPERVISOR_TOKEN', '')
-        try:
-            resp = requests.post(
-                "http://supervisor/addons/self/restart",
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=10,
-            )
-            resp.raise_for_status()
-        except requests.RequestException as e:
-            logger.error("Failed to restart HA add-on", extra={'error': str(e)})
+        _data, error = _call_supervisor('POST', '/addons/self/restart')
+        if error:
+            logger.error("Failed to restart HA add-on", extra={'error': error})
             return jsonify({'error': 'Failed to restart Home Assistant add-on'}), 502
         logger.info("Home Assistant add-on restart triggered via API")
         return jsonify({

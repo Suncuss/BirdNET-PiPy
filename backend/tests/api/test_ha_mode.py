@@ -80,13 +80,69 @@ class TestHaVersionEndpoint:
 class TestHaUpdateCheck:
     """Test GET /api/system/update-check in HA mode."""
 
-    def test_returns_no_update_in_ha_mode(self, api_client):
-        with patch('core.api.is_home_assistant_mode', return_value=True):
+    def test_update_check_returns_available(self, api_client):
+        supervisor_info = {
+            'update_available': True,
+            'version': '0.6.3',
+            'version_latest': '0.6.4',
+        }
+        with patch('core.api.is_home_assistant_mode', return_value=True), \
+             patch('core.api._call_supervisor', return_value=(supervisor_info, None)):
+            response = api_client.get('/api/system/update-check')
+            assert response.status_code == 200
+            data = response.get_json()
+            assert data['update_available'] is True
+            assert data['runtime_mode'] == 'ha'
+            assert data['current_version'] == '0.6.3'
+            assert data['latest_version'] == '0.6.4'
+
+    def test_update_check_returns_up_to_date(self, api_client):
+        supervisor_info = {
+            'update_available': False,
+            'version': '0.6.4',
+            'version_latest': '0.6.4',
+        }
+        with patch('core.api.is_home_assistant_mode', return_value=True), \
+             patch('core.api._call_supervisor', return_value=(supervisor_info, None)):
             response = api_client.get('/api/system/update-check')
             assert response.status_code == 200
             data = response.get_json()
             assert data['update_available'] is False
-            assert 'Home Assistant' in data['message']
+
+    def test_update_check_supervisor_error_returns_502(self, api_client):
+        with patch('core.api.is_home_assistant_mode', return_value=True), \
+             patch('core.api._call_supervisor', return_value=(None, 'Connection refused')):
+            response = api_client.get('/api/system/update-check')
+            assert response.status_code == 502
+            data = response.get_json()
+            assert 'Failed to check' in data['error']
+
+    def test_update_check_force_calls_store_reload(self, api_client):
+        supervisor_info = {
+            'update_available': False,
+            'version': '0.6.4',
+            'version_latest': '0.6.4',
+        }
+        with patch('core.api.is_home_assistant_mode', return_value=True), \
+             patch('core.api._call_supervisor', return_value=(supervisor_info, None)) as mock_call:
+            response = api_client.get('/api/system/update-check?force=true')
+            assert response.status_code == 200
+            calls = mock_call.call_args_list
+            assert len(calls) == 2
+            assert calls[0] == (('POST', '/store/reload'), {'timeout': 30})
+            assert calls[1] == (('GET', '/addons/self/info'),)
+
+    def test_update_check_no_force_skips_store_reload(self, api_client):
+        supervisor_info = {
+            'update_available': False,
+            'version': '0.6.4',
+            'version_latest': '0.6.4',
+        }
+        with patch('core.api.is_home_assistant_mode', return_value=True), \
+             patch('core.api._call_supervisor', return_value=(supervisor_info, None)) as mock_call:
+            response = api_client.get('/api/system/update-check')
+            assert response.status_code == 200
+            mock_call.assert_called_once_with('GET', '/addons/self/info')
 
 
 class TestHaUpdateChannel:
@@ -103,22 +159,90 @@ class TestHaUpdateChannel:
             assert 'not supported' in data['error'].lower()
 
 
+class TestHaTriggerUpdate:
+    """Test POST /api/system/update in HA mode.
+
+    In the real success case, Supervisor kills the Flask process — Python never
+    reaches the except block. Only genuine failures produce exceptions.
+    """
+
+    def test_trigger_update_success_on_2xx(self, api_client):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.return_value = None
+
+        with patch('core.api.is_home_assistant_mode', return_value=True), \
+             patch('core.api.requests.post', return_value=mock_resp):
+            with patch.dict(os.environ, {'SUPERVISOR_TOKEN': 'test-token'}):
+                response = api_client.post('/api/system/update')
+                assert response.status_code == 200
+                data = response.get_json()
+                assert data['status'] == 'update_triggered'
+
+    def test_trigger_update_http_error_returns_502(self, api_client):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 401
+        mock_resp.raise_for_status.side_effect = requests.HTTPError('401 Unauthorized')
+
+        with patch('core.api.is_home_assistant_mode', return_value=True), \
+             patch('core.api.requests.post', return_value=mock_resp):
+            with patch.dict(os.environ, {'SUPERVISOR_TOKEN': 'bad-token'}):
+                response = api_client.post('/api/system/update')
+                assert response.status_code == 502
+                data = response.get_json()
+                assert 'Failed to trigger' in data['error']
+
+    def test_trigger_update_connection_error_returns_502(self, api_client):
+        with patch('core.api.is_home_assistant_mode', return_value=True), \
+             patch('core.api.requests.post') as mock_post:
+            mock_post.side_effect = requests.ConnectionError('Connection refused')
+            with patch.dict(os.environ, {'SUPERVISOR_TOKEN': 'test-token'}):
+                response = api_client.post('/api/system/update')
+                assert response.status_code == 502
+                data = response.get_json()
+                assert 'Failed to trigger' in data['error']
+
+    def test_trigger_update_timeout_returns_502(self, api_client):
+        with patch('core.api.is_home_assistant_mode', return_value=True), \
+             patch('core.api.requests.post') as mock_post:
+            mock_post.side_effect = requests.Timeout('Request timed out')
+            with patch.dict(os.environ, {'SUPERVISOR_TOKEN': 'test-token'}):
+                response = api_client.post('/api/system/update')
+                assert response.status_code == 502
+                data = response.get_json()
+                assert 'Failed to trigger' in data['error']
+
+    def test_native_trigger_update_writes_flag(self, api_client):
+        with patch('core.api.is_home_assistant_mode', return_value=False), \
+             patch('core.api.load_version_info') as mock_load, \
+             patch('core.api.write_flag') as mock_flag:
+            mock_load.return_value = {
+                'version': '0.5.0',
+                'commit': '1a081f5',
+            }
+            response = api_client.post('/api/system/update')
+            assert response.status_code == 200
+            mock_flag.assert_called_once()
+
+
 class TestHaRestart:
     """Test POST /api/system/restart in HA mode."""
 
     def test_restart_calls_supervisor_api(self, api_client):
         mock_resp = MagicMock()
         mock_resp.raise_for_status.return_value = None
+        mock_resp.json.return_value = {'data': {}}
+        mock_resp.content = b'{}'
 
         with patch('core.api.is_home_assistant_mode', return_value=True), \
-             patch('core.api.requests.post', return_value=mock_resp) as mock_post:
+             patch('core.api.requests.request', return_value=mock_resp) as mock_req:
             with patch.dict(os.environ, {'SUPERVISOR_TOKEN': 'test-token'}):
                 response = api_client.post('/api/system/restart')
                 assert response.status_code == 200
                 data = response.get_json()
                 assert data['status'] == 'restart_requested'
 
-                mock_post.assert_called_once_with(
+                mock_req.assert_called_once_with(
+                    'POST',
                     'http://supervisor/addons/self/restart',
                     headers={'Authorization': 'Bearer test-token'},
                     timeout=10,
@@ -126,8 +250,8 @@ class TestHaRestart:
 
     def test_restart_returns_502_on_supervisor_error(self, api_client):
         with patch('core.api.is_home_assistant_mode', return_value=True), \
-             patch('core.api.requests.post') as mock_post:
-            mock_post.side_effect = requests.ConnectionError('Connection refused')
+             patch('core.api.requests.request') as mock_req:
+            mock_req.side_effect = requests.ConnectionError('Connection refused')
             with patch.dict(os.environ, {'SUPERVISOR_TOKEN': 'test-token'}):
                 response = api_client.post('/api/system/restart')
                 assert response.status_code == 502
@@ -139,7 +263,7 @@ class TestHaRestart:
         mock_resp.raise_for_status.side_effect = requests.HTTPError('401 Unauthorized')
 
         with patch('core.api.is_home_assistant_mode', return_value=True), \
-             patch('core.api.requests.post', return_value=mock_resp):
+             patch('core.api.requests.request', return_value=mock_resp):
             with patch.dict(os.environ, {'SUPERVISOR_TOKEN': 'bad-token'}):
                 response = api_client.post('/api/system/restart')
                 assert response.status_code == 502

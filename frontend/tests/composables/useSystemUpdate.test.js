@@ -376,4 +376,73 @@ describe('useSystemUpdate', () => {
 
     expect(showUpdateIndicator.value).toBe(true)
   })
+
+  it('checkForUpdates handles HA response shape', async () => {
+    mockApi.get.mockResolvedValueOnce({
+      data: {
+        update_available: true,
+        runtime_mode: 'ha',
+        current_version: '0.6.3',
+        latest_version: '0.6.4',
+        update_note: null
+      }
+    })
+
+    const { checkForUpdates, updateAvailable, updateInfo } = useSystemUpdate()
+    await checkForUpdates()
+
+    expect(updateAvailable.value).toBe(true)
+    expect(updateInfo.value.runtime_mode).toBe('ha')
+    expect(updateInfo.value.current_version).toBe('0.6.3')
+    expect(updateInfo.value.latest_version).toBe('0.6.4')
+  })
+
+  it('triggerUpdate tolerates connection loss in HA mode', async () => {
+    const { triggerUpdate, versionInfo } = useSystemUpdate()
+    versionInfo.value = { runtime_mode: 'ha' }
+
+    const networkError = new Error('Network Error')
+    networkError.code = 'ERR_NETWORK'
+    mockLongApi.post.mockRejectedValueOnce(networkError)
+
+    await triggerUpdate(true)
+
+    expect(mockLongApi.post).toHaveBeenCalledWith('/system/update')
+  })
+
+  it('triggerUpdate throws on HTTP error responses (502 with body)', async () => {
+    const { triggerUpdate, versionInfo, statusType } = useSystemUpdate()
+    versionInfo.value = { runtime_mode: 'ha' }
+
+    const httpError = new Error('Request failed with status code 502')
+    httpError.response = { status: 502, data: { error: 'Supervisor rejected' } }
+    mockLongApi.post.mockRejectedValueOnce(httpError)
+
+    await expect(triggerUpdate(true)).rejects.toThrow()
+    expect(statusType.value).toBe('error')
+  })
+
+  it('triggerUpdate throws on client timeout (ECONNABORTED)', async () => {
+    const { triggerUpdate, versionInfo, statusType } = useSystemUpdate()
+    versionInfo.value = { runtime_mode: 'ha' }
+
+    const timeoutError = new Error('timeout of 300000ms exceeded')
+    timeoutError.code = 'ECONNABORTED'
+    mockLongApi.post.mockRejectedValueOnce(timeoutError)
+
+    await expect(triggerUpdate(true)).rejects.toThrow()
+    expect(statusType.value).toBe('error')
+  })
+
+  it('triggerUpdate throws on connection loss in native mode', async () => {
+    const { triggerUpdate, versionInfo, statusType } = useSystemUpdate()
+    versionInfo.value = { runtime_mode: 'native' }
+
+    const networkError = new Error('Network Error')
+    networkError.code = 'ERR_NETWORK'
+    mockLongApi.post.mockRejectedValueOnce(networkError)
+
+    await expect(triggerUpdate(true)).rejects.toThrow()
+    expect(statusType.value).toBe('error')
+  })
 })

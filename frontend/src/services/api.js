@@ -8,82 +8,44 @@
  * - Helper for long-running operations
  */
 import axios from 'axios'
-import { BASE } from '@/services/baseUrl'
+import { API_BASE } from '@/services/baseUrl'
 
-// Default timeout for most requests (15 seconds)
 const DEFAULT_TIMEOUT = 15000
-
-// Long timeout for operations like system updates (5 minutes)
 const LONG_TIMEOUT = 300000
-
-/**
- * Pre-configured axios instance for internal API calls.
- * Use this for all /api/* endpoints.
- */
-const api = axios.create({
-  baseURL: BASE + 'api',
-  timeout: DEFAULT_TIMEOUT,
-  headers: {
-    'Content-Type': 'application/json'
-  }
-})
 
 // Auth endpoints manage their own 401 semantics (bad password, setup-not-complete).
 // The session-expired flow should only fire for non-auth endpoints.
 const isAuthEndpoint = (url) => typeof url === 'string' && url.includes('/auth/')
 
-/**
- * Response interceptor for global error handling.
- * Emits 'auth:required' event on 401 responses from non-auth endpoints.
- */
-api.interceptors.response.use(
-  // Success handler - pass through
-  (response) => response,
-
-  // Error handler
-  (error) => {
-    if (error.response?.status === 401 && !isAuthEndpoint(error.config?.url)) {
-      window.dispatchEvent(new CustomEvent('auth:required'))
-    }
-
-    // Re-throw the error for individual handlers
-    return Promise.reject(error)
+const authErrorHandler = (error) => {
+  if (error.response?.status === 401 && !isAuthEndpoint(error.config?.url)) {
+    window.dispatchEvent(new CustomEvent('auth:required'))
   }
-)
+  return Promise.reject(error)
+}
+
+function createApiInstance(timeout) {
+  const instance = axios.create({
+    baseURL: API_BASE,
+    timeout,
+    headers: { 'Content-Type': 'application/json' }
+  })
+  instance.interceptors.response.use((response) => response, authErrorHandler)
+  return instance
+}
+
+const api = createApiInstance(DEFAULT_TIMEOUT)
 
 /**
  * Create an axios instance with a longer timeout for long-running operations.
  * Use for system updates, large data exports, etc.
  *
- * Includes the same 401 interceptor as the default api instance for
- * consistent auth handling.
- *
  * @param {number} timeout - Timeout in milliseconds (default: 5 minutes)
  * @returns {import('axios').AxiosInstance}
  */
 export function createLongRequest(timeout = LONG_TIMEOUT) {
-  const instance = axios.create({
-    baseURL: BASE + 'api',
-    timeout,
-    headers: {
-      'Content-Type': 'application/json'
-    }
-  })
-
-  // Add same 401 interceptor for consistent auth handling
-  instance.interceptors.response.use(
-    (response) => response,
-    (error) => {
-      if (error.response?.status === 401 && !isAuthEndpoint(error.config?.url)) {
-        window.dispatchEvent(new CustomEvent('auth:required'))
-      }
-      return Promise.reject(error)
-    }
-  )
-
-  return instance
+  return createApiInstance(timeout)
 }
 
-// Export both default and named for flexibility
 export default api
 export { api }

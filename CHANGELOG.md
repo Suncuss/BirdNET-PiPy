@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-04-13
+
+- Fixed silent regression where the default bird placeholder image was broken on individual bird detail pages (`/bird/:name`) in standard (non-HA) deployments — path resolution dropped the route segment, producing 404s that nginx's `error_page` masked by returning `index.html` as image bytes
+- Fixed login error messages flashing and disappearing — the global 401 interceptor was racing with the auth endpoint's own error handling and clearing `error.value` before the user could read it
+- Fixed `<a href="#system-updates">` in Settings that would have navigated away from the page under the new `<base href>` — replaced with a button and imperative scroll
+- Unified deployment base-path handling via a single `<base href>` contract — the frontend declares `BASE` once from `index.html`, and axios/socket.io/router all derive from it; removes five parallel URL-shape mechanisms that had produced double-prefix bugs under HA ingress
+- Set Vite `base: './'` so built `<script>`/`<link>` tags resolve via `<base href>`, enabling the HA addon to use a single nginx rewrite (down from seven `sub_filter` rules)
+- Migrated internal auth calls from `fetch` to the central axios client — server error messages now surface properly instead of being mapped to generic "Connection error"
+- Backend `/api/stream/config` now returns relative stream URLs (no leading slash); the frontend no longer strips the slash client-side
+
 ## [0.6.2] - 2026-04-10
 
 - Fixed storage cleanup silently skipping multi-source detection files — cleanup query was missing the `extra` column needed to reconstruct filenames with source suffixes, so those files were never deleted

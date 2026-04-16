@@ -94,7 +94,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { io } from 'socket.io-client'
 import BirdDetectionList from './BirdDetectionList.vue'
 import api from '@/services/api'
-import { BASE } from '@/services/baseUrl'
+import { SOCKET_PATH } from '@/services/baseUrl'
 
 export default {
   name: 'LiveFeed',
@@ -348,7 +348,7 @@ export default {
     }
 
     const initWebSocket = () => {
-      socket = io({ path: BASE + 'socket.io' })
+      socket = io({ path: SOCKET_PATH })
 
       socket.on('connect', () => {
         console.log('[LiveFeed] WebSocket connected')

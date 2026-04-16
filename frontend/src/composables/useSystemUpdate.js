@@ -135,9 +135,22 @@ export function useSystemUpdate() {
 
     try {
       logger.info('Triggering system update...')
-      // Use long timeout for update operation (5 minutes)
       const longApi = createLongRequest()
-      const { data } = await longApi.post('/system/update')
+
+      let data
+      try {
+        const response = await longApi.post('/system/update')
+        data = response.data
+      } catch (requestError) {
+        if (!requestError.response
+            && requestError.code !== 'ECONNABORTED'
+            && versionInfo.value?.runtime_mode === 'ha') {
+          logger.warn('Update request connection lost — treating as update in progress')
+          data = { status: 'update_triggered' }
+        } else {
+          throw requestError
+        }
+      }
 
       if (data.status === 'no_update_needed') {
         setStatus('info', 'System is already up to date')
@@ -148,9 +161,8 @@ export function useSystemUpdate() {
       setStatus('info', 'Update started. Services restarting...')
       logger.info('Update triggered successfully', data)
 
-      // Use shared service restart monitoring
       await serviceRestart.waitForRestart({
-        maxWaitSeconds: 600, // 10 minutes for updates
+        maxWaitSeconds: 600,
         autoReload: true,
         message: 'System updating'
       })

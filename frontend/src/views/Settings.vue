@@ -1067,9 +1067,7 @@
                 Update available
               </p>
               <p class="text-xs text-blue-600">
-                {{ systemUpdate.updateInfo.value.fresh_sync ? 'Major version' :
-                  systemUpdate.updateInfo.value.commits_behind === 0 ? `Switch to ${systemUpdate.updateInfo.value.channel} channel` :
-                  `${systemUpdate.updateInfo.value.commits_behind} new commits` }}
+                {{ updateSubLabel }}
               </p>
             </div>
             <button
@@ -1103,7 +1101,6 @@
 
         <!-- Check for Updates Button -->
         <button
-          v-if="!isHomeAssistantMode"
           :disabled="systemUpdate.checking.value || systemUpdate.updating.value"
           class="w-full py-2 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-50 border border-gray-200 rounded-lg transition-colors disabled:text-gray-400 disabled:hover:bg-transparent"
           @click="systemUpdate.checkForUpdates({ force: true })"
@@ -1421,7 +1418,7 @@ import { useAppStatus } from '@/composables/useAppStatus'
 import { limitDecimals } from '@/utils/inputHelpers'
 import { RECORDER_STATES } from '@/utils/recorderStates'
 import api, { createLongRequest } from '@/services/api'
-import { BASE } from '@/services/baseUrl'
+import { SOCKET_PATH } from '@/services/baseUrl'
 import SpeciesFilterModal from '@/components/SpeciesFilterModal.vue'
 import AlertBanner from '@/components/AlertBanner.vue'
 import AppButton from '@/components/AppButton.vue'
@@ -1747,6 +1744,16 @@ export default {
       const branch = info.current_branch || 'main'
       return `${repositoryUrl.value}/blob/${branch}/CHANGELOG.md`
     })
+    const updateSubLabel = computed(() => {
+      const info = systemUpdate.updateInfo.value
+      if (!info) return ''
+      if (isHomeAssistantMode.value) {
+        return `v${info.current_version} → v${info.latest_version}`
+      }
+      if (info.fresh_sync) return 'Major version'
+      if (info.commits_behind === 0) return `Switch to ${info.channel} channel`
+      return `${info.commits_behind} new commits`
+    })
 
     // Load storage info
     const loadStorageInfo = async () => {
@@ -1777,7 +1784,7 @@ export default {
     }
 
     const initSettingsSocket = () => {
-      settingsSocket = io({ path: BASE + 'socket.io' })
+      settingsSocket = io({ path: SOCKET_PATH })
 
       settingsSocket.once('connect_error', (error) => {
         console.warn('Recorder status WebSocket connection failed:', error)
@@ -2571,6 +2578,7 @@ export default {
       isHomeAssistantMode,
       repositoryUrl,
       versionChangelogUrl,
+      updateSubLabel,
       toggleMetricUnits,
       showRecorderError,
       limitDecimals,
