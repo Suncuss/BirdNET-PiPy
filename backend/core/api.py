@@ -198,7 +198,6 @@ _update_check_cache = {
     'cache_key': None  # format: "channel:current_commit"
 }
 UPDATE_CHECK_CACHE_TTL = 3600  # 1 hour in seconds
-HA_ADDON_SLUG = os.environ.get('HA_ADDON_SLUG', 'birdnet-pipy')
 
 
 def _call_supervisor(method, path, timeout=10):
@@ -2114,10 +2113,20 @@ def trigger_system_update():
     """
     try:
         if is_home_assistant_mode():
+            addon_info, info_error = _call_supervisor('GET', '/addons/self/info')
+            if info_error:
+                return jsonify({
+                    'error': f'Failed to determine Home Assistant addon slug: {info_error}'
+                }), 502
+
+            addon_slug = addon_info.get('slug')
+            if not addon_slug:
+                return jsonify({'error': 'Failed to determine Home Assistant addon slug'}), 502
+
             token = os.environ.get('SUPERVISOR_TOKEN', '')
             try:
                 resp = requests.post(
-                    f"http://supervisor/store/addons/{HA_ADDON_SLUG}/update",
+                    f"http://supervisor/store/addons/{addon_slug}/update",
                     headers={"Authorization": f"Bearer {token}"},
                     json={'background': False},
                 )

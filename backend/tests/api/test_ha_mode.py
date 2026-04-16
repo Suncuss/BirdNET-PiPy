@@ -171,17 +171,35 @@ class TestHaTriggerUpdate:
         mock_resp.raise_for_status.return_value = None
 
         with patch('core.api.is_home_assistant_mode', return_value=True), \
+             patch('core.api._call_supervisor', return_value=({'slug': 'a0d7b954_birdnet-pipy'}, None)) as mock_supervisor, \
              patch('core.api.requests.post', return_value=mock_resp) as mock_post:
             with patch.dict(os.environ, {'SUPERVISOR_TOKEN': 'test-token'}):
                 response = api_client.post('/api/system/update')
                 assert response.status_code == 200
                 data = response.get_json()
                 assert data['status'] == 'update_triggered'
+                mock_supervisor.assert_called_once_with('GET', '/addons/self/info')
                 mock_post.assert_called_once_with(
-                    'http://supervisor/store/addons/birdnet-pipy/update',
+                    'http://supervisor/store/addons/a0d7b954_birdnet-pipy/update',
                     headers={'Authorization': 'Bearer test-token'},
                     json={'background': False},
                 )
+
+    def test_trigger_update_slug_lookup_error_returns_502(self, api_client):
+        with patch('core.api.is_home_assistant_mode', return_value=True), \
+             patch('core.api._call_supervisor', return_value=(None, 'Connection refused')):
+            response = api_client.post('/api/system/update')
+            assert response.status_code == 502
+            data = response.get_json()
+            assert 'determine Home Assistant addon slug' in data['error']
+
+    def test_trigger_update_missing_slug_returns_502(self, api_client):
+        with patch('core.api.is_home_assistant_mode', return_value=True), \
+             patch('core.api._call_supervisor', return_value=({}, None)):
+            response = api_client.post('/api/system/update')
+            assert response.status_code == 502
+            data = response.get_json()
+            assert 'determine Home Assistant addon slug' in data['error']
 
     def test_trigger_update_http_error_returns_502(self, api_client):
         mock_resp = MagicMock()
@@ -189,6 +207,7 @@ class TestHaTriggerUpdate:
         mock_resp.raise_for_status.side_effect = requests.HTTPError('401 Unauthorized')
 
         with patch('core.api.is_home_assistant_mode', return_value=True), \
+             patch('core.api._call_supervisor', return_value=({'slug': 'a0d7b954_birdnet-pipy'}, None)), \
              patch('core.api.requests.post', return_value=mock_resp):
             with patch.dict(os.environ, {'SUPERVISOR_TOKEN': 'bad-token'}):
                 response = api_client.post('/api/system/update')
@@ -198,6 +217,7 @@ class TestHaTriggerUpdate:
 
     def test_trigger_update_connection_error_returns_502(self, api_client):
         with patch('core.api.is_home_assistant_mode', return_value=True), \
+             patch('core.api._call_supervisor', return_value=({'slug': 'a0d7b954_birdnet-pipy'}, None)), \
              patch('core.api.requests.post') as mock_post:
             mock_post.side_effect = requests.ConnectionError('Connection refused')
             with patch.dict(os.environ, {'SUPERVISOR_TOKEN': 'test-token'}):
@@ -208,6 +228,7 @@ class TestHaTriggerUpdate:
 
     def test_trigger_update_timeout_returns_502(self, api_client):
         with patch('core.api.is_home_assistant_mode', return_value=True), \
+             patch('core.api._call_supervisor', return_value=({'slug': 'a0d7b954_birdnet-pipy'}, None)), \
              patch('core.api.requests.post') as mock_post:
             mock_post.side_effect = requests.Timeout('Request timed out')
             with patch.dict(os.environ, {'SUPERVISOR_TOKEN': 'test-token'}):
