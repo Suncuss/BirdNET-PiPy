@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Added in-app update support for the Home Assistant addon — the Settings update card now checks the addon repo for new versions and triggers Supervisor to install them, replacing the "go to the Add-on Store" instruction
+- Replaced the brittle "interpret dispatch errors" approach to detecting HA update completion with a fire-and-forget trigger plus 10-second polling of `/system/version`; the page auto-reloads once the new addon container reports its version, with a 10-minute fallback message
+- Cleaned up Settings in HA mode: dropped the redundant "HA mode" badge and addon-repo link, kept the source-repo and addon-repo links side-by-side
+
 ## [0.6.3] - 2026-04-13
 
 - Fixed silent regression where the default bird placeholder image was broken on individual bird detail pages (`/bird/:name`) in standard (non-HA) deployments — path resolution dropped the route segment, producing 404s that nginx's `error_page` masked by returning `index.html` as image bytes
