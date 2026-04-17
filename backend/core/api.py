@@ -2216,14 +2216,24 @@ def trigger_system_update():
                     'error': 'Home Assistant has not yet refreshed the addon update state. Try again in a moment.'
                 }), 502
 
+            # HA Core's REST service call blocks until update.install
+            # finishes, but installing OUR addon kills this process mid-flight
+            # — so a ReadTimeout or ConnectionError after dispatch is the
+            # expected outcome, not a failure. Only treat HTTP error responses
+            # (which arrive before Supervisor swaps us out) as real failures.
             try:
                 resp = requests.post(
                     "http://supervisor/core/api/services/update/install",
                     headers={"Authorization": f"Bearer {token}"},
                     json={"entity_id": entity_id},
-                    timeout=30,
+                    timeout=10,
                 )
                 resp.raise_for_status()
+            except (requests.ConnectionError, requests.Timeout) as e:
+                logger.info(
+                    "HA addon update dispatched; connection closed as expected during self-update",
+                    extra={'entity_id': entity_id, 'error': str(e)},
+                )
             except requests.RequestException as e:
                 response = getattr(e, 'response', None)
                 core_message = None

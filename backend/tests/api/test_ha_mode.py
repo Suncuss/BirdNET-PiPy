@@ -201,7 +201,7 @@ class TestHaTriggerUpdate:
                 assert install_call.args[0] == 'http://supervisor/core/api/services/update/install'
                 assert install_call.kwargs['headers'] == {'Authorization': 'Bearer test-token'}
                 assert install_call.kwargs['json'] == {'entity_id': 'update.birdnet_pipy_update'}
-                assert install_call.kwargs['timeout'] == 30
+                assert install_call.kwargs['timeout'] == 10
                 # Polled entity state at least once
                 mock_get.assert_called_with(
                     'http://supervisor/core/api/states/update.birdnet_pipy_update',
@@ -293,7 +293,9 @@ class TestHaTriggerUpdate:
                 data = response.get_json()
                 assert 'Failed to trigger' in data['error']
 
-    def test_trigger_update_connection_error_returns_502(self, api_client):
+    def test_trigger_update_connection_error_treated_as_success(self, api_client):
+        # Self-update kills our process mid-request, so a ConnectionError
+        # after dispatch is the expected outcome — not a failure.
         with patch('core.api.is_home_assistant_mode', return_value=True), \
              patch('core.api._call_supervisor', return_value=({'slug': 'a0d7b954_birdnet-pipy'}, None)), \
              patch('core.api._find_addon_update_entity',
@@ -303,11 +305,12 @@ class TestHaTriggerUpdate:
             mock_post.side_effect = requests.ConnectionError('Connection refused')
             with patch.dict(os.environ, {'SUPERVISOR_TOKEN': 'test-token'}):
                 response = api_client.post('/api/system/update')
-                assert response.status_code == 502
-                data = response.get_json()
-                assert 'Failed to trigger' in data['error']
+                assert response.status_code == 200
+                assert response.get_json()['status'] == 'update_triggered'
 
-    def test_trigger_update_timeout_returns_502(self, api_client):
+    def test_trigger_update_timeout_treated_as_success(self, api_client):
+        # HA Core's REST service call blocks until install finishes; a
+        # ReadTimeout after dispatch means the install is running, not failed.
         with patch('core.api.is_home_assistant_mode', return_value=True), \
              patch('core.api._call_supervisor', return_value=({'slug': 'a0d7b954_birdnet-pipy'}, None)), \
              patch('core.api._find_addon_update_entity',
@@ -317,9 +320,8 @@ class TestHaTriggerUpdate:
             mock_post.side_effect = requests.Timeout('Request timed out')
             with patch.dict(os.environ, {'SUPERVISOR_TOKEN': 'test-token'}):
                 response = api_client.post('/api/system/update')
-                assert response.status_code == 502
-                data = response.get_json()
-                assert 'Failed to trigger' in data['error']
+                assert response.status_code == 200
+                assert response.get_json()['status'] == 'update_triggered'
 
     def test_native_trigger_update_writes_flag(self, api_client):
         with patch('core.api.is_home_assistant_mode', return_value=False), \
