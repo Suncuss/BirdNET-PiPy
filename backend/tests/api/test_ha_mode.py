@@ -171,7 +171,9 @@ class TestHaTriggerUpdate:
         mock_resp.raise_for_status.return_value = None
 
         with patch('core.api.is_home_assistant_mode', return_value=True), \
-             patch('core.api._call_supervisor', return_value=({'slug': 'a0d7b954_birdnet-pipy', 'version_latest': '0.6.4-dev11'}, None)) as mock_supervisor, \
+             patch('core.api._call_supervisor',
+                   side_effect=[({'slug': 'a0d7b954_birdnet-pipy'}, None),
+                                ({}, None)]) as mock_supervisor, \
              patch('core.api._find_addon_update_entity',
                    return_value=('update.birdnet_pipy_update', None)) as mock_lookup, \
              patch('core.api.requests.post', return_value=mock_resp) as mock_post:
@@ -180,33 +182,40 @@ class TestHaTriggerUpdate:
                 assert response.status_code == 200
                 data = response.get_json()
                 assert data['status'] == 'update_triggered'
-                mock_supervisor.assert_called_once_with('GET', '/addons/self/info')
+                assert mock_supervisor.call_args_list == [
+                    (('GET', '/addons/self/info'), {}),
+                    (('POST', '/store/reload'), {'timeout': 30}),
+                ]
                 mock_lookup.assert_called_once_with('a0d7b954_birdnet-pipy', 'test-token')
-                mock_post.assert_called_once_with(
-                    'http://supervisor/core/api/services/update/install',
-                    headers={'Authorization': 'Bearer test-token'},
-                    json={'entity_id': 'update.birdnet_pipy_update', 'version': '0.6.4-dev11'},
-                    timeout=30,
-                )
+                assert len(mock_post.call_args_list) == 2
+                refresh_call, install_call = mock_post.call_args_list
+                assert refresh_call.args[0] == 'http://supervisor/core/api/services/homeassistant/update_entity'
+                assert refresh_call.kwargs['json'] == {'entity_id': 'update.birdnet_pipy_update'}
+                assert install_call.args[0] == 'http://supervisor/core/api/services/update/install'
+                assert install_call.kwargs['headers'] == {'Authorization': 'Bearer test-token'}
+                assert install_call.kwargs['json'] == {'entity_id': 'update.birdnet_pipy_update'}
+                assert install_call.kwargs['timeout'] == 30
 
-    def test_trigger_update_falls_back_when_no_version_latest(self, api_client):
-        mock_resp = MagicMock()
-        mock_resp.raise_for_status.return_value = None
+    def test_trigger_update_continues_when_entity_refresh_fails(self, api_client):
+        install_resp = MagicMock()
+        install_resp.raise_for_status.return_value = None
+
+        def post_side_effect(url, *args, **kwargs):
+            if 'update_entity' in url:
+                raise requests.ConnectionError('refresh failed')
+            return install_resp
 
         with patch('core.api.is_home_assistant_mode', return_value=True), \
-             patch('core.api._call_supervisor', return_value=({'slug': 'a0d7b954_birdnet-pipy'}, None)), \
+             patch('core.api._call_supervisor',
+                   side_effect=[({'slug': 'a0d7b954_birdnet-pipy'}, None),
+                                ({}, None)]), \
              patch('core.api._find_addon_update_entity',
                    return_value=('update.birdnet_pipy_update', None)), \
-             patch('core.api.requests.post', return_value=mock_resp) as mock_post:
+             patch('core.api.requests.post', side_effect=post_side_effect):
             with patch.dict(os.environ, {'SUPERVISOR_TOKEN': 'test-token'}):
                 response = api_client.post('/api/system/update')
                 assert response.status_code == 200
-                mock_post.assert_called_once_with(
-                    'http://supervisor/core/api/services/update/install',
-                    headers={'Authorization': 'Bearer test-token'},
-                    json={'entity_id': 'update.birdnet_pipy_update', 'version': 'latest'},
-                    timeout=30,
-                )
+                assert response.get_json()['status'] == 'update_triggered'
 
     def test_trigger_update_slug_lookup_error_returns_502(self, api_client):
         with patch('core.api.is_home_assistant_mode', return_value=True), \

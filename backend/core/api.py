@@ -2163,18 +2163,30 @@ def trigger_system_update():
             if lookup_error:
                 return jsonify({'error': lookup_error}), 502
 
-            # Pass `version` to bypass HA Core's stale "no update available"
-            # check (components/update/__init__.py raises HomeAssistantError
-            # when installed_version == latest_version and version is None).
-            # The addon entity's async_install ignores the version arg —
-            # update_addon() always installs whatever Supervisor sees as latest.
-            version_latest = addon_info.get('version_latest') or 'latest'
+            # Refresh Supervisor's store and the HA Core update entity so its
+            # latest_version is current. Without this, update.install fails:
+            #   - no `version` arg → "No update available" (installed == latest)
+            #   - with `version` arg → "Installing a specific version is not
+            #     supported" (hassio update entities lack SPECIFIC_VERSION)
+            _call_supervisor('POST', '/store/reload', timeout=30)
+            try:
+                requests.post(
+                    "http://supervisor/core/api/services/homeassistant/update_entity",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={"entity_id": entity_id},
+                    timeout=15,
+                )
+            except requests.RequestException as e:
+                logger.warning("Failed to refresh HA update entity (continuing)", extra={
+                    'entity_id': entity_id,
+                    'error': str(e),
+                })
 
             try:
                 resp = requests.post(
                     "http://supervisor/core/api/services/update/install",
                     headers={"Authorization": f"Bearer {token}"},
-                    json={"entity_id": entity_id, "version": version_latest},
+                    json={"entity_id": entity_id},
                     timeout=30,
                 )
                 resp.raise_for_status()
