@@ -200,6 +200,9 @@ _update_check_cache = {
 UPDATE_CHECK_CACHE_TTL = 3600  # 1 hour in seconds
 
 
+_HA_CORE_API_BASE = "http://supervisor/core/api"
+
+
 def _call_supervisor(method, path, timeout=10):
     """Call Home Assistant Supervisor API. Returns (data, error_message)."""
     token = os.environ.get('SUPERVISOR_TOKEN', '')
@@ -226,7 +229,7 @@ def _find_addon_update_entity(addon_slug, token):
     """
     try:
         resp = requests.get(
-            "http://supervisor/core/api/states",
+            f"{_HA_CORE_API_BASE}/states",
             headers={"Authorization": f"Bearer {token}"},
             timeout=10,
         )
@@ -2178,7 +2181,7 @@ def trigger_system_update():
             # addon-group jobs that race with update.install.)
             try:
                 requests.post(
-                    "http://supervisor/core/api/services/homeassistant/update_entity",
+                    f"{_HA_CORE_API_BASE}/services/homeassistant/update_entity",
                     headers={"Authorization": f"Bearer {token}"},
                     json={"entity_id": entity_id},
                     timeout=15,
@@ -2194,7 +2197,7 @@ def trigger_system_update():
             while True:
                 try:
                     state_resp = requests.get(
-                        f"http://supervisor/core/api/states/{entity_id}",
+                        f"{_HA_CORE_API_BASE}/states/{entity_id}",
                         headers={"Authorization": f"Bearer {token}"},
                         timeout=5,
                     )
@@ -2223,7 +2226,7 @@ def trigger_system_update():
             # (which arrive before Supervisor swaps us out) as real failures.
             try:
                 resp = requests.post(
-                    "http://supervisor/core/api/services/update/install",
+                    f"{_HA_CORE_API_BASE}/services/update/install",
                     headers={"Authorization": f"Bearer {token}"},
                     json={"entity_id": entity_id},
                     timeout=10,

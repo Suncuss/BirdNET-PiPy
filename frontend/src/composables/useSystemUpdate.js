@@ -144,10 +144,12 @@ export function useSystemUpdate() {
       } catch (requestError) {
         const isHa = versionInfo.value?.runtime_mode === 'ha'
         const isConnectionLoss = !requestError.response && requestError.code !== 'ECONNABORTED'
-        // nginx returns 502 when Flask dies mid-request; our backend returns 502
-        // with a JSON error body. Distinguish by checking for our error field.
-        const isProxyDeath = requestError.response?.status === 502
-            && !requestError.response?.data?.error
+        // nginx returns 502 (HTML body) when Flask dies mid-request; our backend
+        // returns 502 with a JSON {error: "..."} body. Only suppress when the
+        // body is clearly NOT ours — i.e. not a JSON object with an error field.
+        const body = requestError.response?.data
+        const isOurBackendError = body && typeof body === 'object' && body.error
+        const isProxyDeath = requestError.response?.status === 502 && !isOurBackendError
 
         if (isHa && (isConnectionLoss || isProxyDeath)) {
           logger.warn('Update request lost — treating as update in progress')
