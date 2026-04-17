@@ -2163,11 +2163,18 @@ def trigger_system_update():
             if lookup_error:
                 return jsonify({'error': lookup_error}), 502
 
+            # Pass `version` to bypass HA Core's stale "no update available"
+            # check (components/update/__init__.py raises HomeAssistantError
+            # when installed_version == latest_version and version is None).
+            # The addon entity's async_install ignores the version arg —
+            # update_addon() always installs whatever Supervisor sees as latest.
+            version_latest = addon_info.get('version_latest') or 'latest'
+
             try:
                 resp = requests.post(
                     "http://supervisor/core/api/services/update/install",
                     headers={"Authorization": f"Bearer {token}"},
-                    json={"entity_id": entity_id},
+                    json={"entity_id": entity_id, "version": version_latest},
                     timeout=30,
                 )
                 resp.raise_for_status()
