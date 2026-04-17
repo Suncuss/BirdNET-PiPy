@@ -1280,6 +1280,11 @@ GITHUB_API_BASE = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}"
 HA_SOURCE_COMMIT_ENV = "BIRDNET_PIPY_SOURCE_COMMIT"
 HA_SOURCE_COMMIT_FILE = os.path.join(BASE_DIR, "birdnet_pipy_source_commit.txt")
 
+# How long to wait for HA Core's update entity to refresh after triggering
+# homeassistant.update_entity (fire-and-forget) before giving up.
+_HA_ENTITY_POLL_TIMEOUT_SECONDS = 15
+_HA_ENTITY_POLL_INTERVAL_SECONDS = 0.5
+
 def load_version_info():
     """Load version information from version.json"""
     version_file = os.path.join(BASE_DIR, 'data', 'version.json')
@@ -2166,11 +2171,11 @@ def trigger_system_update():
             # Refresh HA Core's update entity so its latest_version is current.
             # Without this, update.install fails with "No update available" when
             # installed_version == latest_version (cached state right after a
-            # version bump). We avoid /store/reload here because it kicks off
-            # addon-group jobs that conflict with update.install ("Another job
-            # is running for job group addon_<slug>"). The frontend's
-            # update-check has already refreshed the store before the user
-            # could see the update was available.
+            # version bump). The update_entity service is fire-and-forget — it
+            # triggers a debounced coordinator refresh and returns immediately,
+            # so we then poll the entity state until the new latest_version
+            # propagates. (We avoid /store/reload because it kicks off
+            # addon-group jobs that race with update.install.)
             try:
                 requests.post(
                     "http://supervisor/core/api/services/homeassistant/update_entity",
@@ -2183,6 +2188,33 @@ def trigger_system_update():
                     'entity_id': entity_id,
                     'error': str(e),
                 })
+
+            deadline = time.monotonic() + _HA_ENTITY_POLL_TIMEOUT_SECONDS
+            entity_ready = False
+            while True:
+                try:
+                    state_resp = requests.get(
+                        f"http://supervisor/core/api/states/{entity_id}",
+                        headers={"Authorization": f"Bearer {token}"},
+                        timeout=5,
+                    )
+                    if state_resp.ok:
+                        attrs = state_resp.json().get('attributes', {})
+                        installed = attrs.get('installed_version')
+                        latest = attrs.get('latest_version')
+                        if installed and latest and installed != latest:
+                            entity_ready = True
+                            break
+                except requests.RequestException:
+                    pass
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(_HA_ENTITY_POLL_INTERVAL_SECONDS)
+
+            if not entity_ready:
+                return jsonify({
+                    'error': 'Home Assistant has not yet refreshed the addon update state. Try again in a moment.'
+                }), 502
 
             try:
                 resp = requests.post(
