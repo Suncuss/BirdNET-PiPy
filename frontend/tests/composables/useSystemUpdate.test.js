@@ -26,14 +26,25 @@ vi.mock('@/composables/useAuth', () => ({
 }))
 
 // Mock useServiceRestart since useSystemUpdate now delegates to it
-vi.mock('@/composables/useServiceRestart', () => ({
-  useServiceRestart: () => ({
-    isRestarting: { value: false },
-    restartMessage: { value: '' },
-    restartError: { value: '' },
+const mockServiceRestart = vi.hoisted(() => {
+  const isRestarting = { value: false }
+  const restartMessage = { value: '' }
+  const restartError = { value: '' }
+  return {
+    isRestarting,
+    restartMessage,
+    restartError,
     waitForRestart: vi.fn().mockResolvedValue(true),
-    reset: vi.fn()
-  })
+    reset: vi.fn(() => {
+      isRestarting.value = false
+      restartMessage.value = ''
+      restartError.value = ''
+    })
+  }
+})
+
+vi.mock('@/composables/useServiceRestart', () => ({
+  useServiceRestart: () => mockServiceRestart
 }))
 
 describe('useSystemUpdate', () => {

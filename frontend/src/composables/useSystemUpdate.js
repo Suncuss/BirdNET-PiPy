@@ -17,16 +17,14 @@ const statusType = ref(null) // 'success', 'error', 'info'
 const DISMISS_STORAGE_KEY = 'birdnet_update_dismissed_until'
 const DISMISS_DURATION_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
 
-// HA-mode update polling: dispatch is fire-and-forget; we poll /system/version
-// until the running addon's version differs from the baseline, then reload.
 const HA_POLL_INTERVAL_MS = 10_000
 const HA_POLL_TIMEOUT_MS = 10 * 60 * 1000
-let _haPollTimer = null
+let haPollTimer = null
 
-function _stopHaPoll() {
-  if (_haPollTimer) {
-    clearTimeout(_haPollTimer)
-    _haPollTimer = null
+function stopHaPoll() {
+  if (haPollTimer) {
+    clearTimeout(haPollTimer)
+    haPollTimer = null
   }
 }
 
@@ -185,12 +183,9 @@ export function useSystemUpdate() {
     }
   }
 
-  /**
-   * HA-mode update flow: Supervisor owns the install lifecycle and will kill
-   * our process mid-request. Fire the trigger and forget any error from it,
-   * then poll /system/version every 10s until the version changes (= new
-   * addon container is up), at which point reload the page.
-   */
+  // Supervisor kills our process mid-install, so we can't await the dispatch
+  // response. Fire and poll /system/version until the addon container reports
+  // the new version, then reload.
   function triggerHaUpdate() {
     const baselineVersion = versionInfo.value?.version
     const longApi = createLongRequest()
@@ -204,15 +199,14 @@ export function useSystemUpdate() {
       logger.warn('HA update dispatch error suppressed (poll detects completion)', err)
     })
 
-    _stopHaPoll()
+    stopHaPoll()
     const deadline = Date.now() + HA_POLL_TIMEOUT_MS
 
     const poll = async () => {
-      _haPollTimer = null
+      haPollTimer = null
       if (Date.now() >= deadline) {
         logger.warn('HA update poll timed out')
-        serviceRestart.isRestarting.value = false
-        serviceRestart.restartMessage.value = ''
+        serviceRestart.reset()
         updating.value = false
         setStatus('info', 'Update is taking longer than expected. Refresh the page manually if needed.')
         return
@@ -228,10 +222,10 @@ export function useSystemUpdate() {
       } catch (err) {
         logger.debug('HA version poll error (expected during swap)', err)
       }
-      _haPollTimer = setTimeout(poll, HA_POLL_INTERVAL_MS)
+      haPollTimer = setTimeout(poll, HA_POLL_INTERVAL_MS)
     }
 
-    _haPollTimer = setTimeout(poll, HA_POLL_INTERVAL_MS)
+    haPollTimer = setTimeout(poll, HA_POLL_INTERVAL_MS)
   }
 
   /**
