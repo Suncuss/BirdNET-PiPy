@@ -197,7 +197,7 @@ export function useSystemUpdate() {
 
     serviceRestart.isRestarting.value = true
     serviceRestart.restartMessage.value =
-      'Update in progress (handled by Home Assistant). The page will reload automatically when the new version is ready. Usually 2-5 minutes.'
+      'Updating via Home Assistant — page will reload when ready.'
 
     logger.info('Triggering HA addon update...', { baselineVersion })
     longApi.post('/system/update').catch(err => {
