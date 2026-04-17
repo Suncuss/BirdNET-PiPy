@@ -172,6 +172,8 @@ class TestHaTriggerUpdate:
 
         with patch('core.api.is_home_assistant_mode', return_value=True), \
              patch('core.api._call_supervisor', return_value=({'slug': 'a0d7b954_birdnet-pipy'}, None)) as mock_supervisor, \
+             patch('core.api._find_addon_update_entity',
+                   return_value=('update.birdnet_pipy_update', None)) as mock_lookup, \
              patch('core.api.requests.post', return_value=mock_resp) as mock_post:
             with patch.dict(os.environ, {'SUPERVISOR_TOKEN': 'test-token'}):
                 response = api_client.post('/api/system/update')
@@ -179,10 +181,12 @@ class TestHaTriggerUpdate:
                 data = response.get_json()
                 assert data['status'] == 'update_triggered'
                 mock_supervisor.assert_called_once_with('GET', '/addons/self/info')
+                mock_lookup.assert_called_once_with('a0d7b954_birdnet-pipy', 'test-token')
                 mock_post.assert_called_once_with(
-                    'http://supervisor/store/addons/a0d7b954_birdnet-pipy/update',
+                    'http://supervisor/core/api/services/update/install',
                     headers={'Authorization': 'Bearer test-token'},
-                    json={'background': False},
+                    json={'entity_id': 'update.birdnet_pipy_update'},
+                    timeout=30,
                 )
 
     def test_trigger_update_slug_lookup_error_returns_502(self, api_client):
@@ -201,6 +205,17 @@ class TestHaTriggerUpdate:
             data = response.get_json()
             assert 'determine Home Assistant addon slug' in data['error']
 
+    def test_trigger_update_entity_lookup_error_returns_502(self, api_client):
+        with patch('core.api.is_home_assistant_mode', return_value=True), \
+             patch('core.api._call_supervisor', return_value=({'slug': 'a0d7b954_birdnet-pipy'}, None)), \
+             patch('core.api._find_addon_update_entity',
+                   return_value=(None, 'Could not find update entity for addon a0d7b954_birdnet-pipy')):
+            with patch.dict(os.environ, {'SUPERVISOR_TOKEN': 'test-token'}):
+                response = api_client.post('/api/system/update')
+                assert response.status_code == 502
+                data = response.get_json()
+                assert 'Could not find update entity' in data['error']
+
     def test_trigger_update_http_error_returns_502(self, api_client):
         mock_resp = MagicMock()
         mock_resp.status_code = 401
@@ -208,6 +223,8 @@ class TestHaTriggerUpdate:
 
         with patch('core.api.is_home_assistant_mode', return_value=True), \
              patch('core.api._call_supervisor', return_value=({'slug': 'a0d7b954_birdnet-pipy'}, None)), \
+             patch('core.api._find_addon_update_entity',
+                   return_value=('update.birdnet_pipy_update', None)), \
              patch('core.api.requests.post', return_value=mock_resp):
             with patch.dict(os.environ, {'SUPERVISOR_TOKEN': 'bad-token'}):
                 response = api_client.post('/api/system/update')
@@ -218,6 +235,8 @@ class TestHaTriggerUpdate:
     def test_trigger_update_connection_error_returns_502(self, api_client):
         with patch('core.api.is_home_assistant_mode', return_value=True), \
              patch('core.api._call_supervisor', return_value=({'slug': 'a0d7b954_birdnet-pipy'}, None)), \
+             patch('core.api._find_addon_update_entity',
+                   return_value=('update.birdnet_pipy_update', None)), \
              patch('core.api.requests.post') as mock_post:
             mock_post.side_effect = requests.ConnectionError('Connection refused')
             with patch.dict(os.environ, {'SUPERVISOR_TOKEN': 'test-token'}):
@@ -229,6 +248,8 @@ class TestHaTriggerUpdate:
     def test_trigger_update_timeout_returns_502(self, api_client):
         with patch('core.api.is_home_assistant_mode', return_value=True), \
              patch('core.api._call_supervisor', return_value=({'slug': 'a0d7b954_birdnet-pipy'}, None)), \
+             patch('core.api._find_addon_update_entity',
+                   return_value=('update.birdnet_pipy_update', None)), \
              patch('core.api.requests.post') as mock_post:
             mock_post.side_effect = requests.Timeout('Request timed out')
             with patch.dict(os.environ, {'SUPERVISOR_TOKEN': 'test-token'}):
@@ -248,6 +269,60 @@ class TestHaTriggerUpdate:
             response = api_client.post('/api/system/update')
             assert response.status_code == 200
             mock_flag.assert_called_once()
+
+
+class TestFindAddonUpdateEntity:
+    """Test _find_addon_update_entity helper."""
+
+    def _states(self, *extra):
+        base = [
+            {
+                'entity_id': 'sensor.cpu',
+                'attributes': {'entity_picture': '/api/hassio/addons/a0d7b954_birdnet-pipy/icon'},
+            },
+            {
+                'entity_id': 'update.other_addon_update',
+                'attributes': {'entity_picture': '/api/hassio/addons/other_slug/icon'},
+            },
+        ]
+        return base + list(extra)
+
+    def test_returns_entity_id_on_match(self):
+        from core.api import _find_addon_update_entity
+        states = self._states({
+            'entity_id': 'update.birdnet_pipy_update',
+            'attributes': {'entity_picture': '/api/hassio/addons/a0d7b954_birdnet-pipy/icon'},
+        })
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.return_value = None
+        mock_resp.json.return_value = states
+        with patch('core.api.requests.get', return_value=mock_resp) as mock_get:
+            entity_id, err = _find_addon_update_entity('a0d7b954_birdnet-pipy', 'tok')
+            assert entity_id == 'update.birdnet_pipy_update'
+            assert err is None
+            mock_get.assert_called_once_with(
+                'http://supervisor/core/api/states',
+                headers={'Authorization': 'Bearer tok'},
+                timeout=10,
+            )
+
+    def test_returns_error_when_not_found(self):
+        from core.api import _find_addon_update_entity
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.return_value = None
+        mock_resp.json.return_value = self._states()
+        with patch('core.api.requests.get', return_value=mock_resp):
+            entity_id, err = _find_addon_update_entity('a0d7b954_birdnet-pipy', 'tok')
+            assert entity_id is None
+            assert 'Could not find update entity' in err
+
+    def test_returns_error_on_http_failure(self):
+        from core.api import _find_addon_update_entity
+        with patch('core.api.requests.get',
+                   side_effect=requests.ConnectionError('refused')):
+            entity_id, err = _find_addon_update_entity('a0d7b954_birdnet-pipy', 'tok')
+            assert entity_id is None
+            assert 'Failed to fetch HA Core states' in err
 
 
 class TestHaRestart:

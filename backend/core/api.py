@@ -217,6 +217,37 @@ def _call_supervisor(method, path, timeout=10):
         return None, str(e)
 
 
+def _find_addon_update_entity(addon_slug, token):
+    """Find this addon's update.* entity_id via HA Core states.
+
+    HA Core registers an UpdateEntity per addon with entity_picture set to
+    /api/hassio/addons/<full_slug>/icon — a unique key per addon. Returns
+    (entity_id, error_message).
+    """
+    try:
+        resp = requests.get(
+            "http://supervisor/core/api/states",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        states = resp.json()
+    except requests.RequestException as e:
+        return None, f'Failed to fetch HA Core states: {e}'
+    except ValueError as e:
+        return None, f'Invalid response from HA Core states: {e}'
+
+    icon_url = f"/api/hassio/addons/{addon_slug}/icon"
+    for state in states:
+        entity_id = state.get('entity_id', '')
+        if not entity_id.startswith('update.'):
+            continue
+        if state.get('attributes', {}).get('entity_picture') == icon_url:
+            return entity_id, None
+
+    return None, f'Could not find update entity for addon {addon_slug}'
+
+
 def _build_update_check_result(update_available, current_commit, remote_commit,
                                 commits_behind, current_branch, target_branch,
                                 channel, preview_commits, fresh_sync, update_note):
@@ -2113,6 +2144,10 @@ def trigger_system_update():
     """
     try:
         if is_home_assistant_mode():
+            # Supervisor forbids an addon from updating itself directly
+            # (supervisor/api/store.py: "App {slug} can't update itself!").
+            # Workaround: call HA Core's update.install service, which routes
+            # the request through Core so Supervisor sees Core as the caller.
             addon_info, info_error = _call_supervisor('GET', '/addons/self/info')
             if info_error:
                 return jsonify({
@@ -2124,32 +2159,39 @@ def trigger_system_update():
                 return jsonify({'error': 'Failed to determine Home Assistant addon slug'}), 502
 
             token = os.environ.get('SUPERVISOR_TOKEN', '')
+            entity_id, lookup_error = _find_addon_update_entity(addon_slug, token)
+            if lookup_error:
+                return jsonify({'error': lookup_error}), 502
+
             try:
                 resp = requests.post(
-                    f"http://supervisor/store/addons/{addon_slug}/update",
+                    "http://supervisor/core/api/services/update/install",
                     headers={"Authorization": f"Bearer {token}"},
-                    json={'background': False},
+                    json={"entity_id": entity_id},
+                    timeout=30,
                 )
                 resp.raise_for_status()
             except requests.RequestException as e:
                 response = getattr(e, 'response', None)
-                supervisor_message = None
+                core_message = None
                 if response is not None:
                     try:
-                        supervisor_message = response.json().get('message')
+                        core_message = response.json().get('message')
                     except (ValueError, AttributeError):
-                        supervisor_message = None
+                        core_message = None
                 logger.error("Failed to trigger HA addon update", extra={
                     'error': str(e),
                     'status_code': getattr(response, 'status_code', None),
                     'response_text': (getattr(response, 'text', None) or '')[:500],
                 })
                 error_message = 'Failed to trigger Home Assistant addon update'
-                if supervisor_message:
-                    error_message = f'{error_message}: {supervisor_message}'
+                if core_message:
+                    error_message = f'{error_message}: {core_message}'
                 return jsonify({'error': error_message}), 502
 
-            logger.info("HA addon update triggered via API")
+            logger.info("HA addon update triggered via Core service", extra={
+                'entity_id': entity_id,
+            })
             return jsonify({
                 'status': 'update_triggered',
                 'message': 'Home Assistant addon update initiated.',
