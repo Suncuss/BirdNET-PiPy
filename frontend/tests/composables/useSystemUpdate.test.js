@@ -397,55 +397,85 @@ describe('useSystemUpdate', () => {
     expect(updateInfo.value.latest_version).toBe('0.6.4')
   })
 
-  it('triggerUpdate tolerates connection loss in HA mode', async () => {
-    const { triggerUpdate, versionInfo } = useSystemUpdate()
-    versionInfo.value = { runtime_mode: 'ha' }
-
-    const networkError = new Error('Network Error')
-    networkError.code = 'ERR_NETWORK'
-    mockLongApi.post.mockRejectedValueOnce(networkError)
+  it('triggerUpdate (HA mode) sets banner and dispatches POST', async () => {
+    const { triggerUpdate, versionInfo, isRestarting, restartMessage } = useSystemUpdate()
+    versionInfo.value = { runtime_mode: 'ha', version: '0.6.4-dev21' }
+    mockLongApi.post.mockResolvedValueOnce({ data: { status: 'update_triggered' } })
 
     await triggerUpdate(true)
 
     expect(mockLongApi.post).toHaveBeenCalledWith('/system/update')
+    expect(isRestarting.value).toBe(true)
+    expect(restartMessage.value).toContain('Home Assistant')
   })
 
-  it('triggerUpdate tolerates proxy 502 (no error body) in HA mode', async () => {
-    const { triggerUpdate, versionInfo } = useSystemUpdate()
-    versionInfo.value = { runtime_mode: 'ha' }
+  it('triggerUpdate (HA mode) suppresses dispatch errors and keeps polling', async () => {
+    const { triggerUpdate, versionInfo, isRestarting, statusType } = useSystemUpdate()
+    versionInfo.value = { runtime_mode: 'ha', version: '0.6.4-dev21' }
+    mockLongApi.post.mockRejectedValueOnce(new Error('connection lost'))
+    mockApi.get.mockResolvedValue({ data: { version: '0.6.4-dev21' } })
 
-    const proxyError = new Error('Request failed with status code 502')
-    proxyError.response = { status: 502, data: '<html>Bad Gateway</html>' }
-    mockLongApi.post.mockRejectedValueOnce(proxyError)
+    await triggerUpdate(true)
+    // Flush the rejected POST's .catch microtask
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(isRestarting.value).toBe(true)
+    expect(statusType.value).toBeNull()
+  })
+
+  it('triggerUpdate (HA mode) reloads when version changes', async () => {
+    const { triggerUpdate, versionInfo } = useSystemUpdate()
+    versionInfo.value = { runtime_mode: 'ha', version: '0.6.4-dev21' }
+    mockLongApi.post.mockResolvedValueOnce({ data: {} })
+    mockApi.get
+      .mockResolvedValueOnce({ data: { version: '0.6.4-dev21' } })
+      .mockResolvedValueOnce({ data: { version: '0.6.4-dev22' } })
 
     await triggerUpdate(true)
 
-    expect(mockLongApi.post).toHaveBeenCalledWith('/system/update')
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(mockApi.get).toHaveBeenCalledWith('/system/version')
+    expect(window.location.reload).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(10_000)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(window.location.reload).toHaveBeenCalled()
   })
 
-  it('triggerUpdate throws on backend 502 (JSON error body) in HA mode', async () => {
-    const { triggerUpdate, versionInfo, statusType, statusMessage } = useSystemUpdate()
-    versionInfo.value = { runtime_mode: 'ha' }
+  it('triggerUpdate (HA mode) keeps polling through GET errors', async () => {
+    const { triggerUpdate, versionInfo } = useSystemUpdate()
+    versionInfo.value = { runtime_mode: 'ha', version: '0.6.4-dev21' }
+    mockLongApi.post.mockResolvedValueOnce({ data: {} })
+    mockApi.get
+      .mockRejectedValueOnce(new Error('proxy down'))
+      .mockResolvedValueOnce({ data: { version: '0.6.4-dev22' } })
 
-    const httpError = new Error('Request failed with status code 502')
-    httpError.response = { status: 502, data: { error: 'Supervisor rejected' } }
-    mockLongApi.post.mockRejectedValueOnce(httpError)
+    await triggerUpdate(true)
 
-    await expect(triggerUpdate(true)).rejects.toThrow()
-    expect(statusType.value).toBe('error')
-    expect(statusMessage.value).toContain('Supervisor rejected')
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(mockApi.get).toHaveBeenCalledTimes(1)
+    expect(window.location.reload).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(10_000)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(window.location.reload).toHaveBeenCalled()
   })
 
-  it('triggerUpdate throws on client timeout (ECONNABORTED)', async () => {
-    const { triggerUpdate, versionInfo, statusType } = useSystemUpdate()
-    versionInfo.value = { runtime_mode: 'ha' }
+  it('triggerUpdate (HA mode) shows fallback after timeout, no reload', async () => {
+    const { triggerUpdate, versionInfo, isRestarting, statusType, statusMessage, updating } = useSystemUpdate()
+    versionInfo.value = { runtime_mode: 'ha', version: '0.6.4-dev21' }
+    mockLongApi.post.mockResolvedValueOnce({ data: {} })
+    mockApi.get.mockResolvedValue({ data: { version: '0.6.4-dev21' } })
 
-    const timeoutError = new Error('timeout of 300000ms exceeded')
-    timeoutError.code = 'ECONNABORTED'
-    mockLongApi.post.mockRejectedValueOnce(timeoutError)
+    await triggerUpdate(true)
 
-    await expect(triggerUpdate(true)).rejects.toThrow()
-    expect(statusType.value).toBe('error')
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000 + 1000)
+
+    expect(window.location.reload).not.toHaveBeenCalled()
+    expect(isRestarting.value).toBe(false)
+    expect(updating.value).toBe(false)
+    expect(statusType.value).toBe('info')
+    expect(statusMessage.value).toContain('longer than expected')
   })
 
   it('triggerUpdate throws on connection loss in native mode', async () => {

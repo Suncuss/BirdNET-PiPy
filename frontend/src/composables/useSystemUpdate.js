@@ -17,6 +17,19 @@ const statusType = ref(null) // 'success', 'error', 'info'
 const DISMISS_STORAGE_KEY = 'birdnet_update_dismissed_until'
 const DISMISS_DURATION_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
 
+// HA-mode update polling: dispatch is fire-and-forget; we poll /system/version
+// until the running addon's version differs from the baseline, then reload.
+const HA_POLL_INTERVAL_MS = 10_000
+const HA_POLL_TIMEOUT_MS = 10 * 60 * 1000
+let _haPollTimer = null
+
+function _stopHaPoll() {
+  if (_haPollTimer) {
+    clearTimeout(_haPollTimer)
+    _haPollTimer = null
+  }
+}
+
 function loadDismissedUntil() {
   try {
     const stored = localStorage.getItem(DISMISS_STORAGE_KEY)
@@ -133,31 +146,15 @@ export function useSystemUpdate() {
     updating.value = true
     statusMessage.value = null
 
+    if (versionInfo.value?.runtime_mode === 'ha') {
+      triggerHaUpdate()
+      return
+    }
+
     try {
       logger.info('Triggering system update...')
       const longApi = createLongRequest()
-
-      let data
-      try {
-        const response = await longApi.post('/system/update')
-        data = response.data
-      } catch (requestError) {
-        const isHa = versionInfo.value?.runtime_mode === 'ha'
-        const isConnectionLoss = !requestError.response && requestError.code !== 'ECONNABORTED'
-        // nginx returns 502 (HTML body) when Flask dies mid-request; our backend
-        // returns 502 with a JSON {error: "..."} body. Only suppress when the
-        // body is clearly NOT ours — i.e. not a JSON object with an error field.
-        const body = requestError.response?.data
-        const isOurBackendError = body && typeof body === 'object' && body.error
-        const isProxyDeath = requestError.response?.status === 502 && !isOurBackendError
-
-        if (isHa && (isConnectionLoss || isProxyDeath)) {
-          logger.warn('Update request lost — treating as update in progress')
-          data = { status: 'update_triggered' }
-        } else {
-          throw requestError
-        }
-      }
+      const { data } = await longApi.post('/system/update')
 
       if (data.status === 'no_update_needed') {
         setStatus('info', 'System is already up to date')
@@ -186,6 +183,55 @@ export function useSystemUpdate() {
         throw error
       }
     }
+  }
+
+  /**
+   * HA-mode update flow: Supervisor owns the install lifecycle and will kill
+   * our process mid-request. Fire the trigger and forget any error from it,
+   * then poll /system/version every 10s until the version changes (= new
+   * addon container is up), at which point reload the page.
+   */
+  function triggerHaUpdate() {
+    const baselineVersion = versionInfo.value?.version
+    const longApi = createLongRequest()
+
+    serviceRestart.isRestarting.value = true
+    serviceRestart.restartMessage.value =
+      'Update in progress (handled by Home Assistant). The page will reload automatically when the new version is ready. Usually 2-5 minutes.'
+
+    logger.info('Triggering HA addon update...', { baselineVersion })
+    longApi.post('/system/update').catch(err => {
+      logger.warn('HA update dispatch error suppressed (poll detects completion)', err)
+    })
+
+    _stopHaPoll()
+    const deadline = Date.now() + HA_POLL_TIMEOUT_MS
+
+    const poll = async () => {
+      _haPollTimer = null
+      if (Date.now() >= deadline) {
+        logger.warn('HA update poll timed out')
+        serviceRestart.isRestarting.value = false
+        serviceRestart.restartMessage.value = ''
+        updating.value = false
+        setStatus('info', 'Update is taking longer than expected. Refresh the page manually if needed.')
+        return
+      }
+      try {
+        const { data } = await api.get('/system/version')
+        if (data?.version && baselineVersion && data.version !== baselineVersion) {
+          logger.info('HA update complete — new version detected', data)
+          serviceRestart.restartMessage.value = 'New version detected. Reloading...'
+          setTimeout(() => window.location.reload(), 1000)
+          return
+        }
+      } catch (err) {
+        logger.debug('HA version poll error (expected during swap)', err)
+      }
+      _haPollTimer = setTimeout(poll, HA_POLL_INTERVAL_MS)
+    }
+
+    _haPollTimer = setTimeout(poll, HA_POLL_INTERVAL_MS)
   }
 
   /**
