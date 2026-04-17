@@ -172,8 +172,7 @@ class TestHaTriggerUpdate:
 
         with patch('core.api.is_home_assistant_mode', return_value=True), \
              patch('core.api._call_supervisor',
-                   side_effect=[({'slug': 'a0d7b954_birdnet-pipy'}, None),
-                                ({}, None)]) as mock_supervisor, \
+                   return_value=({'slug': 'a0d7b954_birdnet-pipy'}, None)) as mock_supervisor, \
              patch('core.api._find_addon_update_entity',
                    return_value=('update.birdnet_pipy_update', None)) as mock_lookup, \
              patch('core.api.requests.post', return_value=mock_resp) as mock_post:
@@ -182,10 +181,7 @@ class TestHaTriggerUpdate:
                 assert response.status_code == 200
                 data = response.get_json()
                 assert data['status'] == 'update_triggered'
-                assert mock_supervisor.call_args_list == [
-                    (('GET', '/addons/self/info'), {}),
-                    (('POST', '/store/reload'), {'timeout': 30}),
-                ]
+                mock_supervisor.assert_called_once_with('GET', '/addons/self/info')
                 mock_lookup.assert_called_once_with('a0d7b954_birdnet-pipy', 'test-token')
                 assert len(mock_post.call_args_list) == 2
                 refresh_call, install_call = mock_post.call_args_list
@@ -207,8 +203,7 @@ class TestHaTriggerUpdate:
 
         with patch('core.api.is_home_assistant_mode', return_value=True), \
              patch('core.api._call_supervisor',
-                   side_effect=[({'slug': 'a0d7b954_birdnet-pipy'}, None),
-                                ({}, None)]), \
+                   return_value=({'slug': 'a0d7b954_birdnet-pipy'}, None)), \
              patch('core.api._find_addon_update_entity',
                    return_value=('update.birdnet_pipy_update', None)), \
              patch('core.api.requests.post', side_effect=post_side_effect):

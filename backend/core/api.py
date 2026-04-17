@@ -2163,12 +2163,14 @@ def trigger_system_update():
             if lookup_error:
                 return jsonify({'error': lookup_error}), 502
 
-            # Refresh Supervisor's store and the HA Core update entity so its
-            # latest_version is current. Without this, update.install fails:
-            #   - no `version` arg → "No update available" (installed == latest)
-            #   - with `version` arg → "Installing a specific version is not
-            #     supported" (hassio update entities lack SPECIFIC_VERSION)
-            _call_supervisor('POST', '/store/reload', timeout=30)
+            # Refresh HA Core's update entity so its latest_version is current.
+            # Without this, update.install fails with "No update available" when
+            # installed_version == latest_version (cached state right after a
+            # version bump). We avoid /store/reload here because it kicks off
+            # addon-group jobs that conflict with update.install ("Another job
+            # is running for job group addon_<slug>"). The frontend's
+            # update-check has already refreshed the store before the user
+            # could see the update was available.
             try:
                 requests.post(
                     "http://supervisor/core/api/services/homeassistant/update_entity",
