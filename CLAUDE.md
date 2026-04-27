@@ -49,39 +49,28 @@ cd frontend && npm run test                 # Frontend tests
 ./scripts/lint.sh --fix       # Auto-fix issues
 ```
 
-## File Organization
+## Repository Layout
 
-**Root Level:**
-- `build.sh` - Build and deploy script
-- `install.sh` / `uninstall.sh` - System installation scripts
-- `docker-compose.yml` - Multi-container Docker configuration
-- `CHANGELOG.md` - Version history and release notes
-- `AGENTS.md` - Symlink to CLAUDE.md
-- `internal_docs/` - Internal planning documents (git workflow, version bumping, reviews)
+```
+frontend/src/
+  views/         # Page components
+  components/    # Reusable UI (modals, toggles, alerts, etc.)
+  composables/   # Vue composition functions (use*)
+  services/      # API client (axios)
+  utils/         # Shared helpers and constants
+  router/        # Vue Router config
+backend/
+  core/          # App logic (API, DB, recording, notifications, HA mode)
+  model_service/ # Inference (V2.4 TFLite / V3.0 ONNX via factory pattern)
+  config/        # Settings and constants
+  tests/         # pytest suite
+deployment/      # Runtime service scripts, Icecast streaming
+scripts/         # lint.sh, install-tests/ (BATS)
+docs/            # ARCHITECTURE, INSTALLATION, PRIVACY
+internal_docs/   # Planning notes (workflow, reviews, design docs)
+```
 
-**Scripts (`scripts/`):**
-- `lint.sh` - Run linters (ESLint + Ruff) in Docker
-- `install-tests/` - BATS tests for install/uninstall scripts
-
-**Frontend (`frontend/`):**
-- `src/views/` - Page components (Dashboard, Settings, Charts, BirdDetails, LiveFeed, Detections, BirdGallery, BirdDetectionList, Spectrogram, Table)
-- `src/components/` - Reusable UI components (modals, toggles, buttons, alerts, etc.)
-- `src/composables/` - Vue composition functions (useAuth, useFetchBirdData, useMigration, useServiceRestart, useAppStatus, useAudioPlayer, useBirdCharts, useChartColors, useChartHelpers, useDateNavigation, useLogger, useSmartCrop, useSystemUpdate, useTableData, useUnitSettings)
-- `src/services/` - API client configuration
-- `src/router/` - Vue Router configuration
-
-**Backend (`backend/`):**
-- `core/` - Main application logic (api.py, api_utils.py, db.py, main.py, audio_manager.py, auth.py, bird_name_utils.py, ha_mode.py, logging_config.py, migration.py, migration_audio.py, notification_service.py, runtime_config.py, storage_manager.py, utils.py, birdweather_service.py, weather_service.py, timezone_service.py)
-- `model_service/` - BirdNET model inference with factory pattern (base_model.py, model_factory.py, birdnet_v2_model.py, birdnet_v3_model.py, label_utils.py, inference_server.py)
-- `config/` - Environment-aware configuration (settings.py, constants.py)
-- `tests/` - Test suite (api/, audio/, config/, database/, fixtures/, integration/, model_service/, notification_service/, scripts/)
-
-**Deployment (`deployment/`):**
-- `birdnet-service.sh` - Runtime service management
-- `audio/` - Icecast streaming infrastructure
-
-**Documentation (`docs/`):**
-- `ARCHITECTURE.md`, `INSTALLATION.md`, `PRIVACY.md`, etc.
+`AGENTS.md` is a symlink to this file.
 
 ## Development Notes
 

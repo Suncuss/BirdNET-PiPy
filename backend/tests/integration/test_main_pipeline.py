@@ -7,7 +7,7 @@ Tests the core functions:
 - process_audio_files() (directory scanning)
 """
 import os
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 import pytest
 import requests
@@ -2182,6 +2182,33 @@ class TestEdgeCasesAndResilience:
 
             # Verify BirdNet API was called (and timed out)
             assert mock_birdnet_api.call_count > 0
+
+    def test_detection_processing_error_removes_file_from_queue(
+        self,
+        pipeline_temp_dirs,
+        create_valid_wav_file,
+        mock_birdnet_single_detection
+    ):
+        """Post-analysis failures should not retry the same WAV forever."""
+        file_path = create_valid_wav_file('20260426_190149.wav', duration_seconds=9)
+
+        with patch('core.main.RECORDING_DIR', pipeline_temp_dirs['recording']), \
+             patch('core.main.process_audio_file', return_value=mock_birdnet_single_detection) as mock_process, \
+             patch('core.main.handle_detection', side_effect=OSError(24, 'Too many open files')) as mock_handle, \
+             patch('core.main.log_fd_exhaustion_if_needed') as mock_fd_diag, \
+             patch('core.main.stop_flag') as mock_stop, \
+             patch('time.sleep'):
+
+            mock_stop.is_set.side_effect = [False, False, True]
+
+            from core.main import process_audio_files
+
+            process_audio_files()
+
+            assert mock_process.call_count == 1
+            assert mock_handle.call_count == 1
+            mock_fd_diag.assert_called_once_with(ANY, ANY, 'detection_processing', extra=ANY)
+            assert not os.path.exists(file_path)
 
     def test_empty_recording_directory_doesnt_crash(
         self,

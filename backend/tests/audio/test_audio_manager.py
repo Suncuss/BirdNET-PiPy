@@ -9,6 +9,7 @@ Tests RtspRecorder and PulseAudioRecorder functionality including:
 - Error handling and cleanup
 - Shell injection prevention (argument lists, not shell strings)
 """
+import logging
 import os
 import subprocess
 from datetime import datetime
@@ -238,6 +239,24 @@ class TestPulseAudioRecorderRecordChunk:
 
             assert result is None
             mock_unlink.assert_called_once()
+
+    def test_record_chunk_logs_fd_diagnostics_on_emfile(self, temp_output_dir, caplog):
+        """Test that FD exhaustion during recording emits diagnostics."""
+        recorder = PulseAudioRecorder(
+            source_name='default',
+            chunk_duration=3.0,
+            output_dir=temp_output_dir,
+            target_sample_rate=48000
+        )
+
+        caplog.set_level(logging.ERROR, logger='core.audio_manager')
+        with patch('subprocess.run', side_effect=OSError(24, 'Too many open files')), \
+             patch('os.path.exists', return_value=False):
+
+            result = recorder._record_chunk()
+
+            assert result is None
+            assert any(record.message == "FD exhaustion detected" for record in caplog.records)
 
 
 class TestPulseAudioRecorderLifecycle:

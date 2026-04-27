@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Fixed audio recordings getting stuck in an infinite reprocess loop when post-analysis steps (audio extraction, spectrogram generation, BirdWeather upload, etc.) raised — the same WAV would be re-collected on the next scan and retried forever, spamming logs with duplicate "Bird detected" lines and amplifying the FD pressure that caused the failure. The processing loop now isolates per-file and per-detection failures and always removes the WAV in a `finally` block (#46)
+- Added file descriptor exhaustion diagnostics — when an EMFILE/ENFILE error is detected anywhere in the recording or processing pipeline, the next log line dumps the FD limit, current FD count, a sample of open FDs with their `/proc/self/fd` targets, and active child PIDs (catches zombie ffmpeg/sox processes holding pipes via leaked refs). Rate-limited per stage. Errno detection walks `__cause__`/`__context__`/`args` plus urllib3-style `.reason`, so EMFILE buried inside a `requests.ConnectionError(MaxRetryError(...))` chain is caught
+
 ## [0.6.6] - 2026-04-19
 
 - Added a model picker step to the setup wizard and a one-time welcome animation after setup completes
