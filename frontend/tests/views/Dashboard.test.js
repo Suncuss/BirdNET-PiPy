@@ -1,4 +1,4 @@
-import { mount, flushPromises } from '@vue/test-utils'
+import { mount, flushPromises, RouterLinkStub } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ref, defineComponent, nextTick } from 'vue'
 import Dashboard from '@/views/Dashboard.vue'
@@ -59,6 +59,7 @@ const mockCanvasContext = {
   moveTo: vi.fn(),
   lineTo: vi.fn(),
   clearRect: vi.fn(),
+  createLinearGradient: vi.fn(() => ({ addColorStop: vi.fn() })),
   save: vi.fn(),
   restore: vi.fn(),
   fillText: vi.fn()
@@ -74,12 +75,27 @@ const mountDashboard = () => mount(Dashboard, {
   }
 })
 
+const mountDashboardWithRouterLinks = () => mount(Dashboard, {
+  global: {
+    stubs: {
+      'font-awesome-icon': true,
+      'router-link': RouterLinkStub,
+      'CenteredMessage': false
+    }
+  }
+})
+
 describe('Dashboard', () => {
   let getContextSpy
   let mockStopAudio
 
   beforeEach(() => {
     vi.useFakeTimers()
+    Object.values(mockCanvasContext).forEach((mock) => {
+      if (vi.isMockFunction(mock)) mock.mockClear()
+    })
+    mockCanvasContext.getImageData.mockReturnValue({ data: [] })
+    mockCanvasContext.createLinearGradient.mockImplementation(() => ({ addColorStop: vi.fn() }))
     mockStopAudio = vi.fn()
     useFetchBirdData.mockReturnValue(baseState())
     useAppStatus.mockReturnValue({
@@ -115,6 +131,7 @@ describe('Dashboard', () => {
     vi.clearAllTimers()
     vi.useRealTimers()
     vi.restoreAllMocks()
+    vi.unstubAllGlobals()
   })
 
   it('shows loading state before first fetch completes', async () => {
@@ -247,6 +264,117 @@ describe('Dashboard', () => {
 
     // Canvas should NOT be reinitialized
     expect(getContextSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('clamps live spectrogram rendering to available analyser bins', async () => {
+    const state = baseState()
+    state.latestObservationData.value = {
+      common_name: 'Robin',
+      scientific_name: 'Turdus migratorius',
+      timestamp: '2024-01-01T12:00:00Z',
+      confidence: 0.91,
+      bird_song_file_name: 'low-rate.mp3'
+    }
+    useFetchBirdData.mockReturnValue(state)
+
+    const addColorStop = vi.fn((_, color) => {
+      if (typeof color !== 'string') {
+        throw new Error(`Invalid spectrogram color: ${String(color)}`)
+      }
+    })
+    mockCanvasContext.createLinearGradient.mockReturnValue({ addColorStop })
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    vi.stubGlobal('Audio', vi.fn().mockImplementation(function MockAudio(src) {
+      this.src = src
+      this.crossOrigin = ''
+      this.pause = vi.fn()
+      this.play = vi.fn().mockResolvedValue()
+      this.addEventListener = vi.fn()
+    }))
+
+    const analyser = {
+      fftSize: 1024,
+      frequencyBinCount: 512,
+      connect: vi.fn(),
+      getByteFrequencyData: vi.fn((array) => {
+        for (let i = 0; i < array.length; i++) {
+          array[i] = i % 256
+        }
+      })
+    }
+    const sourceNode = { connect: vi.fn() }
+    vi.stubGlobal('AudioContext', vi.fn().mockImplementation(function MockAudioContext() {
+      this.sampleRate = 22050
+      this.state = 'running'
+      this.destination = {}
+      this.createAnalyser = vi.fn(() => analyser)
+      this.createMediaElementSource = vi.fn(() => sourceNode)
+      this.resume = vi.fn().mockResolvedValue()
+      this.close = vi.fn().mockResolvedValue()
+    }))
+
+    const wrapper = mountDashboard()
+    await flushPromises()
+
+    wrapper.vm.playLatestObservation()
+
+    expect(analyser.getByteFrequencyData).toHaveBeenCalled()
+    expect(mockCanvasContext.createLinearGradient).toHaveBeenCalledTimes(420)
+    expect(addColorStop).toHaveBeenCalledTimes(840)
+
+    wrapper.unmount()
+  })
+
+  describe('Latest Observation card', () => {
+    const populatedState = () => {
+      const state = baseState()
+      state.latestObservationData.value = {
+        common_name: 'Blue Jay',
+        scientific_name: 'Cyanocitta cristata',
+        timestamp: '2024-01-01T12:30:00Z',
+        confidence: 0.93,
+        bird_song_file_name: 'jay.mp3'
+      }
+      return state
+    }
+
+    it('scientific name links to BirdDetails with the common name as param', async () => {
+      useFetchBirdData.mockReturnValue(populatedState())
+
+      const wrapper = mountDashboardWithRouterLinks()
+      await flushPromises()
+
+      const sciLink = wrapper.findAllComponents(RouterLinkStub)
+        .find(l => l.text().includes('Cyanocitta cristata'))
+      expect(sciLink).toBeTruthy()
+      expect(sciLink.props('to')).toEqual({
+        name: 'BirdDetails',
+        params: { name: 'Blue Jay' }
+      })
+    })
+
+    it('time/confidence row links to the Table view', async () => {
+      useFetchBirdData.mockReturnValue(populatedState())
+
+      const wrapper = mountDashboardWithRouterLinks()
+      await flushPromises()
+
+      const tableLink = wrapper.findAllComponents(RouterLinkStub)
+        .find(l => l.text().includes('93%'))
+      expect(tableLink).toBeTruthy()
+      expect(tableLink.props('to')).toEqual({ name: 'Table' })
+    })
+  })
+
+  it('hides the Bird Activity reverse toggle when data is empty', async () => {
+    const wrapper = mountDashboard()
+    await flushPromises()
+
+    // Default state: hasLoadedOnce=true, no detailed activity data => isDataEmpty=true
+    expect(wrapper.vm.isDataEmpty).toBe(true)
+    const reverseButton = wrapper.findAll('button').find(b => b.text().includes('Reverse'))
+    expect(reverseButton).toBeFalsy()
   })
 
   describe('unique species toggle', () => {

@@ -843,14 +843,17 @@ class DatabaseManager:
 
         return {row['common_name']: row['count'] for row in results}
 
-    def get_cleanup_candidates(self, keep_per_species=60, limit=None):
+    def get_cleanup_candidates(self, keep_per_species=60, keep_recent_per_species=16, limit=None):
         """Get detections eligible for cleanup, oldest first.
 
-        For each species, keeps the top N recordings by confidence.
-        Only returns recordings beyond the top N for each species.
+        For each species, protects the union of two sets:
+        - Top N by confidence (keep_per_species)
+        - Most recent N by timestamp (keep_recent_per_species)
+        A recording is a candidate only if it falls outside both sets.
 
         Args:
-            keep_per_species: Number of top recordings to keep per species (by confidence)
+            keep_per_species: Top recordings to keep per species by confidence
+            keep_recent_per_species: Most recent recordings to keep per species
             limit: Optional max number of records to return
 
         Returns:
@@ -858,9 +861,6 @@ class DatabaseManager:
                 audio_source, extra (raw JSON string)
             Ordered by timestamp ASC (oldest first)
         """
-        # Use window function to rank recordings within each species by confidence
-        # Only return recordings ranked beyond keep_per_species
-        # LIMIT is parameterized using -1 for unlimited (SQLite treats negative LIMIT as no limit)
         query = """
         WITH RankedDetections AS (
             SELECT
@@ -873,12 +873,16 @@ class DatabaseManager:
                 ROW_NUMBER() OVER (
                     PARTITION BY common_name
                     ORDER BY confidence DESC
-                ) as confidence_rank
+                ) as confidence_rank,
+                ROW_NUMBER() OVER (
+                    PARTITION BY common_name
+                    ORDER BY timestamp DESC
+                ) as recency_rank
             FROM detections
         )
         SELECT id, common_name, confidence, timestamp, audio_source, extra
         FROM RankedDetections
-        WHERE confidence_rank > ?
+        WHERE confidence_rank > ? AND recency_rank > ?
         ORDER BY timestamp ASC
         LIMIT ?
         """
@@ -888,13 +892,14 @@ class DatabaseManager:
 
         with self.get_db_connection() as conn:
             cur = conn.cursor()
-            cur.execute(query, (keep_per_species, limit_param))
+            cur.execute(query, (keep_per_species, keep_recent_per_species, limit_param))
             results = cur.fetchall()
 
         candidates = [dict(row) for row in results]
 
         logger.debug("Cleanup candidates retrieved", extra={
             'keep_per_species': keep_per_species,
+            'keep_recent_per_species': keep_recent_per_species,
             'candidates_count': len(candidates)
         })
 

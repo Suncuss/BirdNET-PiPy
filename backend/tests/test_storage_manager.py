@@ -97,11 +97,13 @@ class TestGetCleanupCandidates:
 
     def test_keeps_top_n_per_species(self, populated_db_for_cleanup):
         """Should not return top N recordings by confidence for each species."""
-        # With keep_per_species=60:
+        # With keep_per_species=60, keep_recent_per_species=0:
         # - Common Bird (100 detections): 40 should be candidates
         # - Rare Bird (50 detections): 0 candidates (all within limit)
         # - Very Rare Bird (10 detections): 0 candidates (all within limit)
-        candidates = populated_db_for_cleanup.get_cleanup_candidates(keep_per_species=60)
+        candidates = populated_db_for_cleanup.get_cleanup_candidates(
+            keep_per_species=60, keep_recent_per_species=0
+        )
 
         species_in_candidates = set(c['common_name'] for c in candidates)
         assert 'Common Bird' in species_in_candidates
@@ -113,15 +115,68 @@ class TestGetCleanupCandidates:
 
     def test_returns_oldest_first(self, populated_db_for_cleanup):
         """Should order results by timestamp ascending (oldest first)."""
-        candidates = populated_db_for_cleanup.get_cleanup_candidates(keep_per_species=60)
+        candidates = populated_db_for_cleanup.get_cleanup_candidates(
+            keep_per_species=60, keep_recent_per_species=0
+        )
 
         timestamps = [c['timestamp'] for c in candidates]
         assert timestamps == sorted(timestamps)
 
     def test_respects_limit(self, populated_db_for_cleanup):
         """Should respect the limit parameter."""
-        candidates = populated_db_for_cleanup.get_cleanup_candidates(keep_per_species=60, limit=10)
+        candidates = populated_db_for_cleanup.get_cleanup_candidates(
+            keep_per_species=60, keep_recent_per_species=0, limit=10
+        )
         assert len(candidates) == 10
+
+    def test_protects_latest_recordings(self, populated_db_for_cleanup):
+        """Latest N timestamps per species should never appear as candidates."""
+        # populated_db_for_cleanup uses base_time - timedelta(hours=i), so i=0 is newest.
+        # With keep_recent_per_species=16, the 16 newest detections per species are protected.
+        candidates = populated_db_for_cleanup.get_cleanup_candidates(
+            keep_per_species=0, keep_recent_per_species=16
+        )
+
+        # Group candidate timestamps by species and check the newest ones aren't there
+        from collections import defaultdict
+        per_species = defaultdict(list)
+        for c in candidates:
+            per_species[c['common_name']].append(c['timestamp'])
+
+        # Common Bird: 100 - 16 = 84 candidates, none in the newest 16
+        assert len(per_species['Common Bird']) == 84
+        # Rare Bird: 50 - 16 = 34 candidates
+        assert len(per_species['Rare Bird']) == 34
+        # Very Rare Bird: only 10 detections, all protected by recency
+        assert 'Very Rare Bird' not in per_species
+
+    def test_union_of_confidence_and_recency_protection(self, populated_db_for_cleanup):
+        """A recording protected by EITHER rule must not appear as a candidate."""
+        # Common Bird has 100 detections; confidence cycles 0.75..0.94 (i % 20).
+        # With keep_per_species=60 the bottom 40 by confidence are exposed,
+        # but with keep_recent_per_species=16 the 16 newest are also protected.
+        # Of those 16 newest (i=0..15, conf 0.75..0.90), i=0..7 (conf 0.75..0.82)
+        # would otherwise be candidates under pure-confidence — they should not be.
+        candidates = populated_db_for_cleanup.get_cleanup_candidates(
+            keep_per_species=60, keep_recent_per_species=16
+        )
+
+        # Every candidate must be outside the latest 16 AND outside the top 60 by confidence
+        common_candidates = [c for c in candidates if c['common_name'] == 'Common Bird']
+
+        # Pull all Common Bird detections to compute the protected sets
+        with populated_db_for_cleanup.get_db_connection() as conn:
+            rows = conn.execute(
+                "SELECT id, timestamp, confidence FROM detections WHERE common_name = 'Common Bird'"
+            ).fetchall()
+        all_common = [dict(r) for r in rows]
+        latest_16_ids = {r['id'] for r in sorted(all_common, key=lambda r: r['timestamp'], reverse=True)[:16]}
+        top_60_ids = {r['id'] for r in sorted(all_common, key=lambda r: r['confidence'], reverse=True)[:60]}
+        protected = latest_16_ids | top_60_ids
+
+        candidate_ids = {c['id'] for c in common_candidates}
+        assert candidate_ids.isdisjoint(protected)
+        assert len(common_candidates) == 100 - len(protected)
 
     def test_no_candidates_when_all_within_limit(self, test_db_manager):
         """Should return empty when all species have fewer than keep_per_species."""
@@ -143,7 +198,9 @@ class TestGetCleanupCandidates:
             }
             test_db_manager.insert_detection(detection)
 
-        candidates = test_db_manager.get_cleanup_candidates(keep_per_species=60)
+        candidates = test_db_manager.get_cleanup_candidates(
+            keep_per_species=60, keep_recent_per_species=0
+        )
         assert len(candidates) == 0
 
     def test_returns_extra_column(self, test_db_manager):
@@ -168,7 +225,9 @@ class TestGetCleanupCandidates:
             }
             test_db_manager.insert_detection(detection)
 
-        candidates = test_db_manager.get_cleanup_candidates(keep_per_species=60)
+        candidates = test_db_manager.get_cleanup_candidates(
+            keep_per_species=60, keep_recent_per_species=0
+        )
         assert len(candidates) == 10
 
         for candidate in candidates:
@@ -321,7 +380,7 @@ class TestEstimateDeletableSize:
                 from core.storage_manager import estimate_deletable_size
 
                 estimated_bytes, count = estimate_deletable_size(
-                    populated_db_for_cleanup, keep_per_species=60
+                    populated_db_for_cleanup, keep_per_species=60, keep_recent_per_species=0
                 )
 
                 # Should have 40 candidates (100 - 60 from Common Bird)
@@ -336,7 +395,7 @@ class TestEstimateDeletableSize:
                 from core.storage_manager import estimate_deletable_size
 
                 estimated_bytes, count = estimate_deletable_size(
-                    test_db_manager, keep_per_species=60
+                    test_db_manager, keep_per_species=60, keep_recent_per_species=0
                 )
 
                 assert count == 0
@@ -467,7 +526,8 @@ class TestCleanupStorage:
                                     result = cleanup_storage(
                                         populated_db_for_cleanup,
                                         target_percent=80,
-                                        keep_per_species=60
+                                        keep_per_species=60,
+                                        keep_recent_per_species=0
                                     )
 
                                     # Should only delete from candidates (40 available)
@@ -505,7 +565,8 @@ class TestCleanupStorage:
                                     result = cleanup_storage(
                                         populated_db_for_cleanup,
                                         target_percent=80,
-                                        keep_per_species=60
+                                        keep_per_species=60,
+                                        keep_recent_per_species=0
                                     )
 
                                     # Should flag that target is not achievable
@@ -560,7 +621,8 @@ class TestCleanupStorage:
                                     result = cleanup_storage(
                                         test_db_manager,
                                         target_percent=80,
-                                        keep_per_species=60
+                                        keep_per_species=60,
+                                        keep_recent_per_species=0
                                     )
 
                                     # Pre-fix: all would be skipped_missing because
@@ -611,7 +673,8 @@ class TestCleanupStorage:
                             cleanup_storage(
                                 test_db_manager,
                                 target_percent=80,
-                                keep_per_species=60
+                                keep_per_species=60,
+                                keep_recent_per_species=0
                             )
 
                             assert mock_gc.call_count == 1, (
@@ -665,7 +728,8 @@ class TestCleanupStorage:
                                     result = cleanup_storage(
                                         test_db_manager,
                                         target_percent=80,
-                                        keep_per_species=60
+                                        keep_per_species=60,
+                                        keep_recent_per_species=0
                                     )
 
                                     # 2 candidates, each frees 600KB = 1.2MB

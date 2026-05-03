@@ -12,6 +12,7 @@
             Bird Activity Overview
           </h2>
           <button
+            v-if="hasLoadedOnce && !isDataEmpty && !detailedBirdActivityError"
             class="hidden sm:inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 transition-colors"
             :disabled="isActivityUpdating"
             @click="toggleActivityOrder"
@@ -85,21 +86,21 @@
         </CenteredMessage>
         <div
           v-else-if="latestObservationData && !latestObservationError"
-          class="flex flex-col lg:flex-row items-center lg:items-stretch lg:space-x-2 w-full h-full"
+          class="flex flex-col lg:flex-row items-center lg:items-stretch lg:space-x-6 w-full h-full"
         >
           <!-- Bird Profile -->
           <div
-            class="flex flex-col items-center lg:items-start justify-center lg:justify-start space-y-1.5 lg:w-[180px] lg:pl-3 lg:h-full"
+            class="flex flex-col items-center lg:flex-row lg:items-center space-y-1.5 lg:space-y-0 lg:space-x-3 lg:w-[250px] lg:pl-1 lg:pr-3 lg:h-full lg:relative lg:after:content-[''] lg:after:absolute lg:after:right-0 lg:after:top-4 lg:after:bottom-4 lg:after:w-px lg:after:bg-gray-200"
           >
             <router-link
               :to="{ name: 'BirdDetails', params: { name: latestObservationData.common_name } }"
-              class="group"
+              class="group flex-shrink-0"
             >
               <div class="relative">
                 <img
                   :src="latestObservationimageUrl"
                   :alt="getDisplayCommonName(latestObservationData)"
-                  class="w-[68px] h-[68px] object-cover rounded-full group-hover:opacity-80 transition-opacity duration-300"
+                  class="w-[85px] h-[85px] object-cover rounded-full group-hover:opacity-80 transition-opacity duration-300"
                 >
                 <div
                   class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300"
@@ -111,25 +112,29 @@
                 </div>
               </div>
             </router-link>
-            <div class="flex flex-col items-center lg:items-start text-center lg:text-left">
+            <div class="flex flex-col items-center lg:items-stretch lg:flex-1 lg:min-w-0 text-center lg:text-left">
               <router-link
                 :to="{ name: 'BirdDetails', params: { name: latestObservationData.common_name } }"
-                class="group flex items-center hover:text-blue-600 transition-colors duration-300"
+                class="group block hover:text-blue-600 transition-colors duration-300"
               >
-                <h3 class="text-[15px] font-medium group-hover:underline lg:truncate lg:max-w-[160px]">
+                <h3 class="text-[15px] font-medium group-hover:underline lg:line-clamp-2">
                   {{ getDisplayCommonName(latestObservationData) }}
                 </h3>
-                <font-awesome-icon
-                  icon="fas fa-external-link-alt"
-                  class="ml-1 text-xs opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex-shrink-0 hidden lg:inline-block"
-                />
               </router-link>
-              <p class="text-[13px] text-gray-600 lg:truncate lg:max-w-[160px]">
-                {{ latestObservationData.scientific_name }}
-              </p>
-              <p class="text-xs text-gray-600">
-                {{ formatTimestamp(latestObservationData.timestamp) }}
-              </p>
+              <router-link
+                :to="{ name: 'BirdDetails', params: { name: latestObservationData.common_name } }"
+                class="group block transition-colors duration-300"
+              >
+                <p class="text-[13px] italic text-gray-600 group-hover:text-blue-600 group-hover:underline lg:line-clamp-2">
+                  {{ latestObservationData.scientific_name }}
+                </p>
+              </router-link>
+              <router-link
+                :to="{ name: 'Table' }"
+                class="text-[13px] text-gray-600 hover:text-blue-600 hover:underline transition-colors duration-300"
+              >
+                {{ formatTimestamp(latestObservationData.timestamp) }} {{ formatConfidence(latestObservationData.confidence) }}
+              </router-link>
             </div>
           </div>
           <!-- Call Player -->
@@ -153,7 +158,7 @@
                 </button>
               </div>
               <div
-                class="bg-gray-200 h-12 lg:h-24 w-full rounded-lg overflow-hidden flex items-center justify-center"
+                class="bg-gray-200 h-12 lg:h-[110px] w-full rounded-lg overflow-hidden flex items-center justify-center"
               >
                 <canvas
                   ref="spectrogramCanvas"
@@ -381,7 +386,7 @@ import { MatrixController, MatrixElement } from 'chartjs-chart-matrix'
 
 import { library } from '@fortawesome/fontawesome-svg-core';
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome';
-import { faPlay, faPause, faCircleInfo, faExternalLinkAlt } from '@fortawesome/free-solid-svg-icons';
+import { faPlay, faPause, faCircleInfo } from '@fortawesome/free-solid-svg-icons';
 
 	import { useFetchBirdData } from '@/composables/useFetchBirdData';
 	import { useBirdCharts } from '@/composables/useBirdCharts';
@@ -392,7 +397,7 @@ import CenteredMessage from '@/components/CenteredMessage.vue';
 import { getAudioUrl, getSpectrogramUrl } from '@/services/media'
 import { getDisplayCommonName } from '@/utils/birdNames'
 
-library.add(faPlay, faPause, faCircleInfo, faExternalLinkAlt);
+library.add(faPlay, faPause, faCircleInfo);
 Chart.register(MatrixController, MatrixElement)
 
 export default {
@@ -429,8 +434,13 @@ export default {
         } = useFetchBirdData();
 
         // Audio state
-        let audioCtx, audioAnalyser, source, frequencyDataArray, animationId;
+        let audioCtx, audioAnalyser, source, frequencyDataArray, prevFrequencyDataArray, animationId;
         let spectrogramCanvasCtx, canvasWidth, canvasHeight;
+        const SPECTROGRAM_SUPERSAMPLE = 2; // Render at 2x internal resolution; browser downscales for smoother edges
+        const SPECTROGRAM_COLOR_LUT = Array.from({ length: 256 }, (_, v) => {
+            const r = v / 255
+            return `hsl(120, ${55 - 35 * r}%, ${32 + 58 * r}%)`
+        })
         let audioElement;
 
         // Polling state (Fix 1: single merged interval)
@@ -615,6 +625,7 @@ export default {
             source = null
             audioAnalyser = null
             frequencyDataArray = null
+            prevFrequencyDataArray = null
         })
 
         onDeactivated(() => {
@@ -683,50 +694,51 @@ export default {
 
         // Methods
         const drawSpectrogram = () => {
-            const sampleRate = audioCtx.sampleRate; // Get the sample rate of the audio context
-            const minFrequency = 2000; // 2kHz cutoff
-            const maxFrequency = 12000; // 12kHz cutoff
-            const fftSize = audioAnalyser.fftSize;
-            const frequencyResolution = sampleRate / fftSize; // Frequency resolution per bin
-            const minIndex = Math.floor(minFrequency / frequencyResolution); // Index corresponding to 2kHz
-            const maxIndex = Math.floor(maxFrequency / frequencyResolution); // Index corresponding to 12kHz
+            const frequencyResolution = audioCtx.sampleRate / audioAnalyser.fftSize;
+            const minIndex = Math.floor(2000 / frequencyResolution);
+            const maxIndex = Math.min(
+                Math.floor(12000 / frequencyResolution),
+                audioAnalyser.frequencyBinCount - 1
+            );
+            const binSpan = maxIndex - minIndex;
 
-            const useLogScale = false; // Use log scale on mobile, linear scale on desktop
+            const stepXCss = 2; // CSS pixels per frame: wider = faster scroll, larger features
+            const stepX = stepXCss * SPECTROGRAM_SUPERSAMPLE;
 
             animationId = requestAnimationFrame(drawSpectrogram);
 
             audioAnalyser.getByteFrequencyData(frequencyDataArray);
 
-            let imageData = spectrogramCanvasCtx.getImageData(1, 0, canvasWidth - 1, canvasHeight);
+            const imageData = spectrogramCanvasCtx.getImageData(stepX, 0, canvasWidth - stepX, canvasHeight);
             spectrogramCanvasCtx.putImageData(imageData, 0, 0);
 
-            const logScale = (value, max) => {
-                const maxLog = Math.log(max + 1);
-                return (Math.log(value + 1) / maxLog) * canvasHeight;
-            };
+            let index = 0;
+            for (let i = minIndex; i <= maxIndex; i++) {
+                const nextIndex = i < maxIndex
+                    ? Math.floor(((i + 1 - minIndex) / binSpan) * canvasHeight)
+                    : canvasHeight;
+                const binHeight = Math.max(1, nextIndex - index);
 
-            for (let i = minIndex; i <= maxIndex; i++) { // Only process frequencies between minIndex and maxIndex
-                let value = frequencyDataArray[i];
-                let ratio = value / 255;
-                let hue = Math.round((1 - ratio) * 120); // Green to blue hues
-                let sat = '60%';
-                let lit = 30 + (70 * ratio) + '%';
-                let index = useLogScale ? Math.floor(logScale(i, maxIndex)) : Math.floor(((i - minIndex) / (maxIndex - minIndex)) * canvasHeight);
+                // Horizontal gradient interpolates each row's color from the previous frame's
+                // intensity to the current — smooths the time axis without a post-process blur.
+                const grad = spectrogramCanvasCtx.createLinearGradient(canvasWidth - stepX, 0, canvasWidth, 0);
+                grad.addColorStop(0, SPECTROGRAM_COLOR_LUT[prevFrequencyDataArray[i]]);
+                grad.addColorStop(1, SPECTROGRAM_COLOR_LUT[frequencyDataArray[i]]);
+                spectrogramCanvasCtx.fillStyle = grad;
+                spectrogramCanvasCtx.fillRect(canvasWidth - stepX, canvasHeight - index - binHeight, stepX, binHeight);
 
-                spectrogramCanvasCtx.beginPath();
-                spectrogramCanvasCtx.strokeStyle = `hsl(${hue}, ${sat}, ${lit})`;
-                spectrogramCanvasCtx.moveTo(canvasWidth - 1, canvasHeight - index);
-                spectrogramCanvasCtx.lineTo(canvasWidth - 1, canvasHeight - index - 1);
-                spectrogramCanvasCtx.stroke();
+                index = nextIndex;
             }
+
+            prevFrequencyDataArray.set(frequencyDataArray);
         };
 
         const initializeCanvas = () => {
             const canvas = spectrogramCanvas.value;
             if (canvas) {
                 spectrogramCanvasCtx = canvas.getContext('2d', { willReadFrequently: true });
-                canvasWidth = canvas.width = canvas.offsetWidth;
-                canvasHeight = canvas.height = canvas.offsetHeight;
+                canvasWidth = canvas.width = canvas.offsetWidth * SPECTROGRAM_SUPERSAMPLE;
+                canvasHeight = canvas.height = canvas.offsetHeight * SPECTROGRAM_SUPERSAMPLE;
 
                 spectrogramCanvasCtx.fillStyle = '#E8F5E9';
                 spectrogramCanvasCtx.fillRect(0, 0, canvasWidth, canvasHeight);
@@ -761,8 +773,9 @@ export default {
             }
 
             audioAnalyser = audioCtx.createAnalyser();
-            audioAnalyser.fftSize = 2048;
+            audioAnalyser.fftSize = 1024;
             frequencyDataArray = new Uint8Array(audioAnalyser.frequencyBinCount);
+            prevFrequencyDataArray = new Uint8Array(audioAnalyser.frequencyBinCount);
 	            const latestAudioUrl = getAudioUrl(latestObservationData.value?.bird_song_file_name)
 	            if (!latestAudioUrl) return
 	            audioElement = new Audio(latestAudioUrl);

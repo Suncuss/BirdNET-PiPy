@@ -48,6 +48,7 @@ DEFAULT_SETTINGS = {
         "trigger_percent": 85,
         "target_percent": 80,
         "keep_per_species": 60,
+        "keep_recent_per_species": 16,
         "check_interval_minutes": 30
     },
     "updates": {

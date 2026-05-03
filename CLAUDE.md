@@ -67,7 +67,7 @@ backend/
 deployment/      # Runtime service scripts, Icecast streaming
 scripts/         # lint.sh, install-tests/ (BATS)
 docs/            # ARCHITECTURE, INSTALLATION, PRIVACY
-internal_docs/   # Planning notes (workflow, reviews, design docs)
+internal_docs/   # Planning notes (workflow, reviews, design docs) — gitignored, do not commit
 ```
 
 `AGENTS.md` is a symlink to this file.
@@ -97,3 +97,7 @@ Three test suites cover backend, frontend, and install scripts. Each has its own
 ## Branch Sync Rules
 
 Before syncing dev to staging or main, always run `./build.sh` first and confirm it passes.
+
+## Git Hygiene
+
+Never bypass `.gitignore` (no `git add -f`, no explicit-path force-staging) without explicit user approval. If a file genuinely needs to be in the repo, change the ignore rule instead of overriding it for one file — silently force-adding leaves a tracked file behind that the ignore pattern can't clean up later.

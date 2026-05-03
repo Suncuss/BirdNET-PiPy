@@ -38,6 +38,9 @@ AGENTS.md
 # Ignore claude code settings
 .claude/
 
+# Ignore codex settings
+.codex/
+
 # Ignore VS Code settings
 .vscode/
 

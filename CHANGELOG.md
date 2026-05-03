@@ -2,8 +2,15 @@
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-05-03
+
 - Fixed audio recordings getting stuck in an infinite reprocess loop when post-analysis steps (audio extraction, spectrogram generation, BirdWeather upload, etc.) raised — the same WAV would be re-collected on the next scan and retried forever, spamming logs with duplicate "Bird detected" lines and amplifying the FD pressure that caused the failure. The processing loop now isolates per-file and per-detection failures and always removes the WAV in a `finally` block (#46)
 - Added file descriptor exhaustion diagnostics — when an EMFILE/ENFILE error is detected anywhere in the recording or processing pipeline, the next log line dumps the FD limit, current FD count, a sample of open FDs with their `/proc/self/fd` targets, and active child PIDs (catches zombie ffmpeg/sox processes holding pipes via leaked refs). Rate-limited per stage. Errno detection walks `__cause__`/`__context__`/`args` plus urllib3-style `.reason`, so EMFILE buried inside a `requests.ConnectionError(MaxRetryError(...))` chain is caught
+- Added recency-based recording protection — the latest N recordings per species are now retained alongside the existing top-N-by-confidence rule via union, so frequent recent activity isn't lost when its confidences fall below the top-N cut
+- Hid the Bird Activity Overview reverse toggle on days with no detections, since reversing an empty list is a no-op
+- Replaced the camera icon on bird detail pages with an upload arrow that animates open on hover to reveal "Upload custom image"
+- Redesigned the dashboard's Latest Observation card — bird image and text stack now sit side-by-side instead of vertically; the scientific name is shown again as a link to the bird's detail page, and the timestamp and confidence link to the Table view; long species names wrap to a second line instead of being clipped mid-word; a thin vertical divider separates the bird identity area from the spectrogram, which sits visually centered between the divider and the card edge
+- Polished the Latest Observation live spectrogram rendering — palette now matches the static spectrogram's `Greens_r` style (light background, dark green peaks), the canvas renders at 2× internal resolution for sharper downsampled output, and each new column is drawn as a horizontal gradient from the previous frame's intensities so time-axis transitions are continuous rather than stepped
 
 ## [0.6.6] - 2026-04-19
 

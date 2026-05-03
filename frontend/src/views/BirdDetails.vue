@@ -36,27 +36,29 @@
             </a>
           </template>
           <button
-            class="absolute bottom-2 right-2 bg-black/50 hover:bg-black/70 text-white rounded-full w-9 h-9 flex items-center justify-center transition-colors"
+            class="group absolute bottom-2 right-2 bg-black/50 hover:bg-black/70 text-white rounded-full h-9 px-2 flex items-center justify-end overflow-hidden transition-colors"
             title="Upload custom image"
             :disabled="isUploading"
             @click="triggerFileUpload"
           >
+            <span
+              class="max-w-0 group-hover:max-w-[12rem] group-hover:mr-2 overflow-hidden whitespace-nowrap text-sm transition-[max-width,margin] duration-300 ease-out"
+            >
+              Upload custom image
+            </span>
             <svg
               v-if="!isUploading"
               xmlns="http://www.w3.org/2000/svg"
-              class="w-5 h-5"
+              class="w-5 h-5 shrink-0"
               viewBox="0 0 20 20"
               fill="currentColor"
             >
-              <path
-                fill-rule="evenodd"
-                d="M4 5a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2V7a2 2 0 00-2-2h-1.586a1 1 0 01-.707-.293l-1.121-1.121A2 2 0 0011.172 3H8.828a2 2 0 00-1.414.586L6.293 4.707A1 1 0 015.586 5H4zm6 9a3 3 0 100-6 3 3 0 000 6z"
-                clip-rule="evenodd"
-              />
+              <path d="M9.25 13.25a.75.75 0 0 0 1.5 0V4.636l2.955 3.129a.75.75 0 0 0 1.09-1.03l-4.25-4.5a.75.75 0 0 0-1.09 0l-4.25 4.5a.75.75 0 1 0 1.09 1.03L9.25 4.636v8.614Z" />
+              <path d="M3.5 12.75a.75.75 0 0 0-1.5 0v2.5A2.75 2.75 0 0 0 4.75 18h10.5A2.75 2.75 0 0 0 18 15.25v-2.5a.75.75 0 0 0-1.5 0v2.5c0 .69-.56 1.25-1.25 1.25H4.75c-.69 0-1.25-.56-1.25-1.25v-2.5Z" />
             </svg>
             <Spinner
               v-else
-              class="w-5 h-5"
+              class="w-5 h-5 shrink-0"
             />
           </button>
           <input
