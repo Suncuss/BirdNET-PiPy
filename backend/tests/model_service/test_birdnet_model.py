@@ -20,7 +20,6 @@ class TestBirdNetModelPredict:
         model.model_path = "/fake/model.tflite"
         model.meta_model_path = "/fake/meta_model.tflite"
         model.labels_path = "/fake/labels.txt"
-        model.ebird_codes_path = None
 
         # Create mock TFLite interpreter
         model._model = MagicMock()
@@ -182,7 +181,6 @@ class TestBirdNetModelFilterByLocation:
         model.model_path = "/fake/model.tflite"
         model.meta_model_path = "/fake/meta_model.tflite"
         model.labels_path = "/fake/labels.txt"
-        model.ebird_codes_path = None
 
         model._model = None
         model._meta_model = MagicMock()

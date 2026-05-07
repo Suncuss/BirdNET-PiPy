@@ -35,9 +35,8 @@ class BirdNetV3Model(BirdDetectionModel):
         self,
         model_path: str,
         labels_path: str,
-        ebird_codes_path: str | None = None
     ):
-        super().__init__(ebird_codes_path=ebird_codes_path)
+        super().__init__()
         self.model_path = model_path
         self.labels_path = labels_path
 

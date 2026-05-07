@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from core.runtime_config import get_runtime_settings
+from model_service.ebird_codes_lookup import clear_ebird_codes_cache
 from model_service.label_utils import (
     clear_species_cache,
     get_localized_name,
@@ -74,6 +75,7 @@ def _resolve_language(language: str | None, settings: dict | None) -> str:
 def clear_bird_name_caches() -> None:
     """Clear cached label mappings."""
     clear_species_cache()
+    clear_ebird_codes_cache()
 
 
 def get_localized_common_name(

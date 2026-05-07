@@ -34,7 +34,6 @@ class TestBirdNetV3ModelPredict:
         model = BirdNetV3Model.__new__(BirdNetV3Model)
         model.model_path = "/fake/model.onnx"
         model.labels_path = "/fake/labels.csv"
-        model.ebird_codes_path = None
 
         # Create mock ONNX session
         model._session = MagicMock()

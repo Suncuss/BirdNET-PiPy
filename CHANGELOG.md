@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Reduced backend memory usage by ~100 MB across the three Python processes (model-server, api, main) — the multi-language species table is now stored as columnar arrays and each language column is loaded lazily on first request (per-process active footprint drops from ~21 MB to ~4 MB, plus ~1 MB per additional language used), shared strings are interned to deduplicate untranslated English fallbacks, and eBird code lookup is carved out into a small dedicated loader so the inference server no longer reads the multi-language CSV at all
+- Fixed Live Feed breaking behind HTTPS-terminating reverse proxies and Cloudflare tunnels — the inner nginx was overwriting `X-Forwarded-Proto` with its own (always-http) scheme, so Engine.IO's strict same-origin check rejected the browser's `https://` origin with "Not an accepted origin." on `/socket.io/` POSTs. The header is now passed through verbatim, including chained values like `https, http` from stacked proxies that the previous regex fallback silently dropped
+
 ## [0.6.7] - 2026-05-03
 
 - Fixed audio recordings getting stuck in an infinite reprocess loop when post-analysis steps (audio extraction, spectrogram generation, BirdWeather upload, etc.) raised — the same WAV would be re-collected on the next scan and retried forever, spamming logs with duplicate "Bird detected" lines and amplifying the FD pressure that caused the failure. The processing loop now isolates per-file and per-detection failures and always removes the WAV in a `finally` block (#46)

@@ -18,7 +18,6 @@ class TestBirdNetModelEbirdCodes:
         loader.model_path = "/fake/model.tflite"
         loader.meta_model_path = "/fake/meta_model.tflite"
         loader.labels_path = "/fake/labels.txt"
-        loader.ebird_codes_path = None
         loader._model = None
         loader._meta_model = None
         loader.input_layer_index = None

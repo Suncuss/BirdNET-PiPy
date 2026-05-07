@@ -38,7 +38,6 @@ def create_model(model_type: ModelType = ModelType.BIRDNET) -> "BirdDetectionMod
             model_path=settings.MODEL_PATH,
             meta_model_path=settings.META_MODEL_PATH,
             labels_path=settings.LABELS_PATH,
-            ebird_codes_path=settings.EBIRD_CODES_PATH
         )
 
     if model_type == ModelType.BIRDNET_V3:
@@ -48,7 +47,6 @@ def create_model(model_type: ModelType = ModelType.BIRDNET) -> "BirdDetectionMod
         return BirdNetV3Model(
             model_path=settings.MODEL_V3_PATH,
             labels_path=settings.LABELS_V3_PATH,
-            ebird_codes_path=settings.EBIRD_CODES_PATH
         )
 
     raise ValueError(f"Unknown model type: {model_type}")
