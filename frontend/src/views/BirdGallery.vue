@@ -112,7 +112,7 @@
 </template>
 
 <script>
-import { ref, computed, onMounted, onActivated, onDeactivated } from 'vue'
+import { ref, computed, onMounted, onActivated, onDeactivated, onUnmounted } from 'vue'
 import api from '@/services/api'
 import { getBirdImageUrl, getDefaultBirdImageUrl } from '@/services/media'
 import { useSmartCrop } from '@/composables/useSmartCrop'
@@ -272,12 +272,45 @@ export default {
       await updateBirdImages(birds.value)
     }
 
+    // Patch a single card in place when the customize-image modal applies a change.
+    // Mirrors updateBirdImages() per-bird logic without re-fetching the API.
+    const applyImageChange = async (detail) => {
+      if (!detail?.species || !detail.imageUrl) return
+      const bird = birds.value.find(b => b.commonName === detail.species)
+      if (!bird) return
+      bird.focalPointReady = false
+      if (detail.hasCustomImage) {
+        bird.imageUrl = detail.imageUrl
+        bird.hasCustomImage = true
+        bird.focalPoint = '50% 50%'
+      } else {
+        const fp = await calculateFocalPoint(detail.imageUrl)
+        bird.imageUrl = detail.imageUrl
+        bird.authorName = detail.authorName
+        bird.authorUrl = detail.authorUrl
+        bird.licenseType = detail.licenseType
+        bird.hasCustomImage = false
+        bird.focalPoint = fp
+      }
+      await new Promise(r => requestAnimationFrame(r))
+      bird.focalPointReady = true
+    }
+
+    const onBirdImageChanged = (event) => {
+      applyImageChange(event.detail)
+    }
+
     onMounted(async () => {
+      window.addEventListener('bird-image:changed', onBirdImageChanged)
       if (selectedTab.value === 'recent') {
         birds.value = await fetchUniqueBirds()
         lastFetchTime = Date.now()
         await updateBirdImages(birds.value)
       }
+    })
+
+    onUnmounted(() => {
+      window.removeEventListener('bird-image:changed', onBirdImageChanged)
     })
 
     onDeactivated(() => {

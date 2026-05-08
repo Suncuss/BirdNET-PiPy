@@ -1177,6 +1177,7 @@
 <script>
 import { ref, computed, onUnmounted } from 'vue'
 import { useMigration } from '@/composables/useMigration'
+import { formatBytes } from '@/utils/format'
 
 export default {
   name: 'MigrationModal',
@@ -1243,18 +1244,6 @@ export default {
     const formatConfidence = (confidence) => {
       if (confidence === undefined || confidence === null) return ''
       return `${Math.round(confidence * 100)}%`
-    }
-
-    const formatBytes = (bytes) => {
-      if (!bytes) return '0 B'
-      const units = ['B', 'KB', 'MB', 'GB']
-      let size = bytes
-      let unitIndex = 0
-      while (size >= 1024 && unitIndex < units.length - 1) {
-        size /= 1024
-        unitIndex++
-      }
-      return `${size.toFixed(1)} ${units[unitIndex]}`
     }
 
     // Stage 1 handlers

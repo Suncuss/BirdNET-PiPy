@@ -296,10 +296,14 @@ describe('Dashboard', () => {
     const analyser = {
       fftSize: 1024,
       frequencyBinCount: 512,
+      smoothingTimeConstant: 0.8,
+      minDecibels: -100,
+      maxDecibels: -30,
       connect: vi.fn(),
-      getByteFrequencyData: vi.fn((array) => {
+      getFloatFrequencyData: vi.fn((array) => {
         for (let i = 0; i < array.length; i++) {
-          array[i] = i % 256
+          // Synthetic dB values spanning the full window so dbToLutIndex hits both clamps.
+          array[i] = -120 + (i % 121)
         }
       })
     }
@@ -319,9 +323,10 @@ describe('Dashboard', () => {
 
     wrapper.vm.playLatestObservation()
 
-    expect(analyser.getByteFrequencyData).toHaveBeenCalled()
-    expect(mockCanvasContext.createLinearGradient).toHaveBeenCalledTimes(420)
-    expect(addColorStop).toHaveBeenCalledTimes(840)
+    expect(analyser.getFloatFrequencyData).toHaveBeenCalled()
+    // 12 kHz cap exceeds available bins at 22050 Hz / fftSize 1024, so loop clamps to 512 bins.
+    expect(mockCanvasContext.createLinearGradient).toHaveBeenCalledTimes(512)
+    expect(addColorStop).toHaveBeenCalledTimes(1024)
 
     wrapper.unmount()
   })

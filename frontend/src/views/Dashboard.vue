@@ -163,6 +163,8 @@
                 <canvas
                   ref="spectrogramCanvas"
                   class="w-full h-full rounded-lg"
+                  :class="{ 'cursor-pointer': latestObservationIsPlaying }"
+                  @click="pauseLatestObservation"
                 />
               </div>
             </div>
@@ -436,11 +438,44 @@ export default {
         // Audio state
         let audioCtx, audioAnalyser, source, frequencyDataArray, prevFrequencyDataArray, animationId;
         let spectrogramCanvasCtx, canvasWidth, canvasHeight;
+        let rollingMaxDb = -Infinity; // Per-playback peak; mirrors PNG's normalize-to-clip-max
         const SPECTROGRAM_SUPERSAMPLE = 2; // Render at 2x internal resolution; browser downscales for smoother edges
-        const SPECTROGRAM_COLOR_LUT = Array.from({ length: 256 }, (_, v) => {
-            const r = v / 255
-            return `hsl(120, ${55 - 35 * r}%, ${32 + 58 * r}%)`
-        })
+        // Match backend PNG window — see backend/core/utils.py min_dbfs/max_dbfs defaults.
+        const SPEC_DB_FLOOR = -120;
+        const SPEC_DB_RANGE = 120;
+        // Gamma <1 brightens midtones without shifting the dark floor or white peak — keeps
+        // the Greens_r identity but lifts the bulk of typical bin values up the ramp.
+        const SPEC_BRIGHTNESS_GAMMA = 0.8;
+        // matplotlib Greens_r: ColorBrewer 9-class Greens reversed (dark → light) and linearly
+        // interpolated to 256 entries — same construction matplotlib uses for the saved spectrogram.
+        const SPECTROGRAM_COLOR_LUT = (() => {
+            const stops = [
+                [0x00, 0x44, 0x1b], [0x00, 0x6d, 0x2c], [0x23, 0x8b, 0x45],
+                [0x41, 0xab, 0x5d], [0x74, 0xc4, 0x76], [0xa1, 0xd9, 0x9b],
+                [0xc7, 0xe9, 0xc0], [0xe5, 0xf5, 0xe0], [0xf7, 0xfc, 0xf5],
+            ];
+            const segs = stops.length - 1;
+            return Array.from({ length: 256 }, (_, i) => {
+                const x = (i / 255) * segs;
+                const idx = Math.min(segs - 1, Math.floor(x));
+                const f = x - idx;
+                const a = stops[idx], b = stops[idx + 1];
+                const r = Math.round(a[0] + (b[0] - a[0]) * f);
+                const g = Math.round(a[1] + (b[1] - a[1]) * f);
+                const bl = Math.round(a[2] + (b[2] - a[2]) * f);
+                return `rgb(${r},${g},${bl})`;
+            });
+        })();
+        // Idle background — pale green for an inviting "ready to play" look. Once playback
+        // starts, the canvas scrolls fresh dark-green silence in from the right.
+        const SPECTROGRAM_BG_COLOR = '#E8F5E9';
+        const dbToLutIndex = (db, ref) => {
+            if (!Number.isFinite(db) || !Number.isFinite(ref)) return 0;
+            const t = (db - ref - SPEC_DB_FLOOR) / SPEC_DB_RANGE;
+            if (t <= 0) return 0;
+            if (t >= 1) return 255;
+            return Math.round(Math.pow(t, SPEC_BRIGHTNESS_GAMMA) * 255);
+        };
         let audioElement;
 
         // Polling state (Fix 1: single merged interval)
@@ -600,21 +635,14 @@ export default {
                 visibilityHandler = null
             }
 
-            // Cancel animation frame
-            if (animationId) {
-                cancelAnimationFrame(animationId)
-                animationId = null
-            }
+            pauseLatestObservation()
 
-            // Clean up audio context and related resources
             if (audioCtx) {
                 audioCtx.close()
                 audioCtx = null
             }
 
-            // Pause and clean up audio elements (for playLatestObservation with AudioContext)
             if (audioElement) {
-                audioElement.pause()
                 audioElement.src = ''
                 audioElement = null
             }
@@ -626,6 +654,7 @@ export default {
             audioAnalyser = null
             frequencyDataArray = null
             prevFrequencyDataArray = null
+            rollingMaxDb = -Infinity
         })
 
         onDeactivated(() => {
@@ -633,13 +662,7 @@ export default {
             isActive = false
             stopPolling()
 
-            // Stop any playing audio (latest observation AudioContext player)
-            if (audioElement) {
-                audioElement.pause()
-                cancelAnimationFrame(animationId)
-                animationId = null
-                latestObservationIsPlaying.value = false
-            }
+            pauseLatestObservation()
 
             // Suspend AudioContext to free browser resources while cached
             if (audioCtx && audioCtx.state === 'running') {
@@ -695,7 +718,7 @@ export default {
         // Methods
         const drawSpectrogram = () => {
             const frequencyResolution = audioCtx.sampleRate / audioAnalyser.fftSize;
-            const minIndex = Math.floor(2000 / frequencyResolution);
+            const minIndex = 0;
             const maxIndex = Math.min(
                 Math.floor(12000 / frequencyResolution),
                 audioAnalyser.frequencyBinCount - 1
@@ -707,7 +730,14 @@ export default {
 
             animationId = requestAnimationFrame(drawSpectrogram);
 
-            audioAnalyser.getByteFrequencyData(frequencyDataArray);
+            audioAnalyser.getFloatFrequencyData(frequencyDataArray);
+
+            // Update running peak across the visible band so the colormap gets normalized to the
+            // loudest bin observed so far — matches the PNG's `Sxx / max_power` step.
+            for (let i = minIndex; i <= maxIndex; i++) {
+                const v = frequencyDataArray[i];
+                if (v > rollingMaxDb) rollingMaxDb = v;
+            }
 
             const imageData = spectrogramCanvasCtx.getImageData(stepX, 0, canvasWidth - stepX, canvasHeight);
             spectrogramCanvasCtx.putImageData(imageData, 0, 0);
@@ -722,8 +752,8 @@ export default {
                 // Horizontal gradient interpolates each row's color from the previous frame's
                 // intensity to the current — smooths the time axis without a post-process blur.
                 const grad = spectrogramCanvasCtx.createLinearGradient(canvasWidth - stepX, 0, canvasWidth, 0);
-                grad.addColorStop(0, SPECTROGRAM_COLOR_LUT[prevFrequencyDataArray[i]]);
-                grad.addColorStop(1, SPECTROGRAM_COLOR_LUT[frequencyDataArray[i]]);
+                grad.addColorStop(0, SPECTROGRAM_COLOR_LUT[dbToLutIndex(prevFrequencyDataArray[i], rollingMaxDb)]);
+                grad.addColorStop(1, SPECTROGRAM_COLOR_LUT[dbToLutIndex(frequencyDataArray[i], rollingMaxDb)]);
                 spectrogramCanvasCtx.fillStyle = grad;
                 spectrogramCanvasCtx.fillRect(canvasWidth - stepX, canvasHeight - index - binHeight, stepX, binHeight);
 
@@ -740,23 +770,35 @@ export default {
                 canvasWidth = canvas.width = canvas.offsetWidth * SPECTROGRAM_SUPERSAMPLE;
                 canvasHeight = canvas.height = canvas.offsetHeight * SPECTROGRAM_SUPERSAMPLE;
 
-                spectrogramCanvasCtx.fillStyle = '#E8F5E9';
+                spectrogramCanvasCtx.fillStyle = SPECTROGRAM_BG_COLOR;
                 spectrogramCanvasCtx.fillRect(0, 0, canvasWidth, canvasHeight);
             } else {
                 console.warn('Spectrogram canvas not found. Skipping canvas initialization.');
             }
         };
 
-        const playLatestObservation = () => {
-            // If already playing, stop and clean up
-            if (latestObservationIsPlaying.value && audioElement) {
-                audioElement.pause();
+        const pauseLatestObservation = () => {
+            if (!latestObservationIsPlaying.value || !audioElement) return;
+            audioElement.pause();
+            if (animationId) {
                 cancelAnimationFrame(animationId);
-                latestObservationIsPlaying.value = false;
+                animationId = null;
+            }
+            latestObservationIsPlaying.value = false;
+        };
+
+        const playLatestObservation = () => {
+            // Preserves position and rolling-max calibration vs. tearing down the audio element.
+            if (audioElement && audioElement.currentTime > 0 && !audioElement.ended) {
+                if (audioCtx?.state === 'suspended') audioCtx.resume();
+                audioElement.play().catch((err) => {
+                    console.warn('Failed to resume audio:', err);
+                });
+                drawSpectrogram();
+                latestObservationIsPlaying.value = true;
                 return;
             }
 
-            // Clean up previous audio element if exists
             if (audioElement) {
                 audioElement.pause();
                 audioElement.src = '';
@@ -774,8 +816,13 @@ export default {
 
             audioAnalyser = audioCtx.createAnalyser();
             audioAnalyser.fftSize = 1024;
-            frequencyDataArray = new Uint8Array(audioAnalyser.frequencyBinCount);
-            prevFrequencyDataArray = new Uint8Array(audioAnalyser.frequencyBinCount);
+            audioAnalyser.smoothingTimeConstant = 0.2; // Light temporal averaging — softens per-frame
+                                                       // grain while keeping transients responsive
+            frequencyDataArray = new Float32Array(audioAnalyser.frequencyBinCount);
+            prevFrequencyDataArray = new Float32Array(audioAnalyser.frequencyBinCount);
+            // Initialize prev far below the floor so the first frame's left edge starts dark.
+            prevFrequencyDataArray.fill(-200);
+            rollingMaxDb = -Infinity;
 	            const latestAudioUrl = getAudioUrl(latestObservationData.value?.bird_song_file_name)
 	            if (!latestAudioUrl) return
 	            audioElement = new Audio(latestAudioUrl);
@@ -784,10 +831,7 @@ export default {
             source.connect(audioAnalyser);
             audioAnalyser.connect(audioCtx.destination);
 
-            audioElement.addEventListener('ended', () => {
-                latestObservationIsPlaying.value = false;
-                cancelAnimationFrame(animationId);
-            });
+            audioElement.addEventListener('ended', pauseLatestObservation);
 
 	            audioElement.play().catch((err) => {
 	                console.warn('Failed to play audio:', err)
@@ -877,6 +921,7 @@ export default {
             latestObservationIsPlaying,
             spectrogramCanvas,
             playLatestObservation,
+            pauseLatestObservation,
             detailedBirdActivityError,
             latestObservationError,
             summaryError,

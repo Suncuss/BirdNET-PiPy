@@ -22,19 +22,13 @@ class TestBirdImageUpload:
     def image_client(self):
         """Create a test client with temporary bird images directory."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            images_dir = os.path.join(tmpdir, 'bird_images')
-            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
-                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
-                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
-                 patch('core.api.CUSTOM_BIRD_IMAGES_DIR', images_dir), \
-                 patch('core.api.db_manager'), \
-                 patch('core.api.socketio'):
-                from core.api import create_app
-                app, _ = create_app()
-                app.config['TESTING'] = True
-
+            app, images_dir, patches = _make_client(tmpdir)
+            try:
                 with app.test_client() as client:
                     yield client, images_dir
+            finally:
+                for p in patches:
+                    p.stop()
 
     def test_upload_valid_jpeg(self, image_client):
         """Upload a valid JPEG image."""
@@ -169,26 +163,15 @@ class TestBirdImageServe:
     def image_client_with_file(self):
         """Create a test client with a pre-existing bird image."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            images_dir = os.path.join(tmpdir, 'bird_images')
-            os.makedirs(images_dir)
-
-            # Create a test image file
-            test_file = os.path.join(images_dir, 'American_Robin.jpg')
-            with open(test_file, 'wb') as f:
-                f.write(JPEG_HEADER)
-
-            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
-                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
-                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
-                 patch('core.api.CUSTOM_BIRD_IMAGES_DIR', images_dir), \
-                 patch('core.api.db_manager'), \
-                 patch('core.api.socketio'):
-                from core.api import create_app
-                app, _ = create_app()
-                app.config['TESTING'] = True
-
+            app, images_dir, patches = _make_client(tmpdir)
+            try:
+                with open(os.path.join(images_dir, 'American_Robin.jpg'), 'wb') as f:
+                    f.write(JPEG_HEADER)
                 with app.test_client() as client:
                     yield client, images_dir
+            finally:
+                for p in patches:
+                    p.stop()
 
     def test_serve_existing_image(self, image_client_with_file):
         """Serving an existing custom image returns 200 with file content."""
@@ -211,25 +194,15 @@ class TestBirdImageDelete:
     def image_client_with_file(self):
         """Create a test client with a pre-existing bird image."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            images_dir = os.path.join(tmpdir, 'bird_images')
-            os.makedirs(images_dir)
-
-            test_file = os.path.join(images_dir, 'American_Robin.jpg')
-            with open(test_file, 'wb') as f:
-                f.write(JPEG_HEADER)
-
-            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
-                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
-                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
-                 patch('core.api.CUSTOM_BIRD_IMAGES_DIR', images_dir), \
-                 patch('core.api.db_manager'), \
-                 patch('core.api.socketio'):
-                from core.api import create_app
-                app, _ = create_app()
-                app.config['TESTING'] = True
-
+            app, images_dir, patches = _make_client(tmpdir)
+            try:
+                with open(os.path.join(images_dir, 'American_Robin.jpg'), 'wb') as f:
+                    f.write(JPEG_HEADER)
                 with app.test_client() as client:
                     yield client, images_dir
+            finally:
+                for p in patches:
+                    p.stop()
 
     def test_delete_existing_image(self, image_client_with_file):
         """Deleting an existing image returns 200 and removes the file."""
@@ -269,21 +242,13 @@ class TestWikimediaHasCustomImage:
     def image_client(self):
         """Create test client with custom images dir."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            images_dir = os.path.join(tmpdir, 'bird_images')
-            os.makedirs(images_dir)
-
-            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
-                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
-                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
-                 patch('core.api.CUSTOM_BIRD_IMAGES_DIR', images_dir), \
-                 patch('core.api.db_manager'), \
-                 patch('core.api.socketio'):
-                from core.api import create_app
-                app, _ = create_app()
-                app.config['TESTING'] = True
-
+            app, images_dir, patches = _make_client(tmpdir)
+            try:
                 with app.test_client() as client:
                     yield client, images_dir
+            finally:
+                for p in patches:
+                    p.stop()
 
     @patch('core.api.fetch_wikimedia_image')
     def test_wikimedia_returns_has_custom_image_false(self, mock_fetch, image_client):
@@ -363,3 +328,436 @@ class TestFilenameSanitization:
         from core.api import _sanitize_species_filename
         result = _sanitize_species_filename('Some   Bird   Name')
         assert '__' not in result
+
+
+def _imageinfo(url, *, thumburl=None, author='Unknown', license_name='CC0'):
+    """Build a single Wikimedia imageinfo entry for tests. Keeps test bodies focused on intent."""
+    entry = {
+        'url': url,
+        'extmetadata': {
+            'LicenseShortName': {'value': license_name},
+            'Artist': {'value': author},
+        },
+    }
+    if thumburl is not None:
+        entry['thumburl'] = thumburl
+    return entry
+
+
+def _fake_wikimedia_get(*, search_results, imageinfo_pages, capture=None):
+    """Build a fake `requests.get` for Wikimedia API calls.
+
+    `search_results` is the list assigned to `query.search`; `imageinfo_pages` is the
+    `query.pages` dict. Pass a dict for `capture` to record the imageinfo call's params.
+    """
+    class _R:
+        status_code = 200
+        def __init__(self, payload): self._p = payload
+        def raise_for_status(self): pass
+        def json(self): return self._p
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        if params.get('list') == 'search':
+            return _R({'query': {'search': search_results}})
+        if capture is not None:
+            capture['imageinfo_params'] = dict(params)
+        return _R({'query': {'pages': imageinfo_pages}})
+    return fake_get
+
+
+def _make_client(tmpdir):
+    """Build a test client wired to a tmp images dir; reused across the wikimedia-choice tests."""
+    images_dir = os.path.join(tmpdir, 'bird_images')
+    os.makedirs(images_dir, exist_ok=True)
+    patches = (
+        patch('core.auth.AUTH_CONFIG_DIR', tmpdir),
+        patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')),
+        patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')),
+        patch('core.api.CUSTOM_BIRD_IMAGES_DIR', images_dir),
+        patch('core.api.db_manager'),
+        patch('core.api.socketio'),
+    )
+    for p in patches:
+        p.start()
+    from core.api import create_app
+    app, _ = create_app()
+    app.config['TESTING'] = True
+    return app, images_dir, patches
+
+
+class TestWikimediaCandidates:
+    """Test GET /api/wikimedia_image/candidates."""
+
+    @pytest.fixture
+    def candidates_client(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app, images_dir, patches = _make_client(tmpdir)
+            try:
+                with app.test_client() as client:
+                    yield client, images_dir
+            finally:
+                for p in patches:
+                    p.stop()
+                # Clear the in-process Wikimedia cache between tests so cache-key
+                # assertions and mocked fetches are deterministic.
+                from core.api import image_cache
+                image_cache.clear()
+
+    @patch('core.api.fetch_wikimedia_candidates')
+    def test_candidates_returns_list(self, mock_fetch, candidates_client):
+        client, _ = candidates_client
+        mock_fetch.return_value = ([
+            {'fileTitle': 'File:A.jpg', 'imageUrl': 'https://upload.wikimedia.org/A.jpg',
+             'pageUrl': 'https://commons.wikimedia.org/wiki/File:A.jpg',
+             'authorName': 'Alice', 'authorUrl': 'https://example.com/a',
+             'licenseType': 'CC BY 2.0'},
+            {'fileTitle': 'File:B.jpg', 'imageUrl': 'https://upload.wikimedia.org/B.jpg',
+             'pageUrl': 'https://commons.wikimedia.org/wiki/File:B.jpg',
+             'authorName': 'Bob', 'authorUrl': None, 'licenseType': 'CC0'}
+        ], None)
+
+        response = client.get('/api/wikimedia_image/candidates',
+                              query_string={'species': 'American Robin', 'limit': 8})
+        assert response.status_code == 200
+        body = response.get_json()
+        assert body['species'] == 'American Robin'
+        assert len(body['candidates']) == 2
+        assert body['candidates'][0]['fileTitle'] == 'File:A.jpg'
+        assert body['selectedFileTitle'] is None
+        assert body['hasCustomImage'] is False
+        mock_fetch.assert_called_once_with('American Robin', limit=8)
+
+    @patch('core.api.fetch_wikimedia_candidates')
+    def test_candidates_clamps_limit(self, mock_fetch, candidates_client):
+        client, _ = candidates_client
+        mock_fetch.return_value = ([], None)
+        client.get('/api/wikimedia_image/candidates',
+                   query_string={'species': 'X', 'limit': '999'})
+        # Limit clamped to 20 (upper bound).
+        mock_fetch.assert_called_once_with('X', limit=20)
+
+    @patch('core.api.fetch_wikimedia_candidates')
+    def test_candidates_includes_selected_file_title_from_sidecar(self, mock_fetch, candidates_client):
+        client, images_dir = candidates_client
+        sidecar_path = os.path.join(images_dir, 'American_Robin.choice.json')
+        with open(sidecar_path, 'w') as f:
+            json.dump({
+                'imageUrl': 'https://upload.wikimedia.org/B.jpg',
+                'pageUrl': 'https://commons.wikimedia.org/wiki/File:B.jpg',
+                'licenseType': 'CC0',
+                'fileTitle': 'File:B.jpg',
+            }, f)
+        mock_fetch.return_value = ([], None)
+
+        response = client.get('/api/wikimedia_image/candidates',
+                              query_string={'species': 'American Robin'})
+        body = response.get_json()
+        assert body['selectedFileTitle'] == 'File:B.jpg'
+
+    def test_candidates_cache_key_is_per_limit(self, candidates_client):
+        # Hit the real cache helpers (not a mocked fetcher).
+        from core.api import get_cached_image, image_cache, set_cached_image
+        image_cache.clear()
+        set_cached_image('American Robin', [{'a': 1}], limit=1)
+        set_cached_image('American Robin', [{'a': 1}, {'b': 2}], limit=8)
+        assert len(get_cached_image('American Robin', limit=1)) == 1
+        assert len(get_cached_image('American Robin', limit=8)) == 2
+        # Different limits must not collide.
+        assert get_cached_image('American Robin', limit=4) is None
+
+    def test_candidates_filters_egg_skeleton_titles(self, candidates_client):
+        # End-to-end through fetch_wikimedia_candidates with a mocked requests.get.
+        from core import api as api_module
+        api_module.image_cache.clear()
+        fake = _fake_wikimedia_get(
+            search_results=[
+                {'title': 'File:Robin.jpg'},
+                {'title': 'File:Robin egg.jpg'},  # filtered by title regex
+                {'title': 'File:Robin skeleton.jpg'},  # filtered
+                {'title': 'File:Another robin.jpg'},
+            ],
+            imageinfo_pages={
+                '1': {'title': 'File:Robin.jpg', 'imageinfo': [_imageinfo(
+                    'https://upload.wikimedia.org/Robin.jpg', author='A')]},
+                '2': {'title': 'File:Another robin.jpg', 'imageinfo': [_imageinfo(
+                    'https://upload.wikimedia.org/Another.jpg', author='B')]},
+            },
+        )
+        with patch('core.api.requests.get', side_effect=fake):
+            cands, err = api_module.fetch_wikimedia_candidates('Robin', limit=8)
+        assert err is None
+        assert [c['fileTitle'] for c in cands] == ['File:Robin.jpg', 'File:Another robin.jpg']
+
+    def test_candidates_preserve_search_order_after_batched_imageinfo(self, candidates_client):
+        from core import api as api_module
+        api_module.image_cache.clear()
+        # imageinfo pages keyed by page-id, returned out of search order.
+        fake = _fake_wikimedia_get(
+            search_results=[{'title': 'File:First.jpg'}, {'title': 'File:Second.jpg'}],
+            imageinfo_pages={
+                '99': {'title': 'File:Second.jpg', 'imageinfo': [_imageinfo(
+                    'https://upload.wikimedia.org/2.jpg', author='B')]},
+                '1': {'title': 'File:First.jpg', 'imageinfo': [_imageinfo(
+                    'https://upload.wikimedia.org/1.jpg', author='A')]},
+            },
+        )
+        with patch('core.api.requests.get', side_effect=fake):
+            cands, err = api_module.fetch_wikimedia_candidates('Robin', limit=8)
+        assert err is None
+        assert [c['fileTitle'] for c in cands] == ['File:First.jpg', 'File:Second.jpg']
+
+    def test_candidates_request_thumbnail_url_and_expose_it(self, candidates_client):
+        """imageinfo call sets iiurlwidth and the returned thumburl flows into thumbUrl."""
+        from core import api as api_module
+        api_module.image_cache.clear()
+        captured = {}
+        fake = _fake_wikimedia_get(
+            search_results=[{'title': 'File:Robin.jpg'}],
+            imageinfo_pages={
+                '1': {'title': 'File:Robin.jpg', 'imageinfo': [_imageinfo(
+                    'https://upload.wikimedia.org/Robin_full.jpg',
+                    thumburl='https://upload.wikimedia.org/thumb/Robin_400.jpg',
+                    author='A')]},
+            },
+            capture=captured,
+        )
+        with patch('core.api.requests.get', side_effect=fake):
+            cands, err = api_module.fetch_wikimedia_candidates('Robin', limit=8)
+
+        assert err is None
+        assert captured['imageinfo_params'].get('iiurlwidth') == str(api_module.WIKIMEDIA_THUMB_WIDTH)
+        assert cands[0]['thumbUrl'] == 'https://upload.wikimedia.org/thumb/Robin_400.jpg'
+        assert cands[0]['imageUrl'] == 'https://upload.wikimedia.org/Robin_full.jpg'
+
+    def test_candidates_thumbUrl_falls_back_to_imageUrl_when_missing(self, candidates_client):
+        """Older or partial Wikimedia responses without `thumburl` should still be usable."""
+        from core import api as api_module
+        api_module.image_cache.clear()
+        fake = _fake_wikimedia_get(
+            search_results=[{'title': 'File:NoThumb.jpg'}],
+            imageinfo_pages={
+                '1': {'title': 'File:NoThumb.jpg', 'imageinfo': [_imageinfo(
+                    'https://upload.wikimedia.org/NoThumb.jpg', author='A')]},
+            },
+        )
+        with patch('core.api.requests.get', side_effect=fake):
+            cands, err = api_module.fetch_wikimedia_candidates('NoThumb', limit=8)
+
+        assert err is None
+        assert cands[0]['thumbUrl'] == cands[0]['imageUrl']
+
+
+class TestWikimediaChoiceSidecar:
+    """Test GET|PUT|DELETE /api/bird/<name>/wikimedia_choice."""
+
+    @pytest.fixture
+    def choice_client(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app, images_dir, patches = _make_client(tmpdir)
+            try:
+                with app.test_client() as client:
+                    yield client, images_dir
+            finally:
+                for p in patches:
+                    p.stop()
+
+    def test_get_returns_404_when_no_sidecar(self, choice_client):
+        client, _ = choice_client
+        response = client.get('/api/bird/American Robin/wikimedia_choice')
+        assert response.status_code == 404
+        assert response.get_json()['hasChoice'] is False
+
+    def test_put_creates_sidecar(self, choice_client):
+        client, images_dir = choice_client
+        payload = {
+            'fileTitle': 'File:Robin.jpg',
+            'imageUrl': 'https://upload.wikimedia.org/Robin.jpg',
+            'pageUrl': 'https://commons.wikimedia.org/wiki/File:Robin.jpg',
+            'authorName': 'Alice',
+            'authorUrl': 'https://example.com/a',
+            'licenseType': 'CC BY 2.0'
+        }
+        response = client.put(
+            '/api/bird/American Robin/wikimedia_choice',
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        assert response.status_code == 200
+        body = response.get_json()
+        assert body['fileTitle'] == 'File:Robin.jpg'
+        assert body['source'] == 'wikimedia'
+        assert body['schemaVersion'] == 1
+        assert 'savedAt' in body
+        assert os.path.exists(os.path.join(images_dir, 'American_Robin.choice.json'))
+
+    def test_put_rejects_non_wikimedia_url(self, choice_client):
+        client, _ = choice_client
+        payload = {
+            'fileTitle': 'File:Bad.jpg',
+            'imageUrl': 'https://evil.example.com/bad.jpg',
+            'pageUrl': 'https://commons.wikimedia.org/wiki/File:Bad.jpg',
+            'authorName': 'Hacker',
+            'authorUrl': None,
+            'licenseType': 'CC0'
+        }
+        response = client.put(
+            '/api/bird/American Robin/wikimedia_choice',
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        assert response.status_code == 400
+        assert 'wikimedia.org' in response.get_json()['error']
+
+    def test_put_rejects_missing_keys(self, choice_client):
+        client, _ = choice_client
+        response = client.put(
+            '/api/bird/American Robin/wikimedia_choice',
+            data=json.dumps({'fileTitle': 'File:Robin.jpg'}),
+            content_type='application/json',
+        )
+        assert response.status_code == 400
+        assert 'Missing keys' in response.get_json()['error']
+
+    def test_put_requires_auth_when_enabled(self, choice_client):
+        client, _ = choice_client
+        client.post('/api/auth/setup',
+                    data=json.dumps({'password': 'testpass123'}),
+                    content_type='application/json')
+        client.post('/api/auth/logout')
+
+        response = client.put(
+            '/api/bird/American Robin/wikimedia_choice',
+            data=json.dumps({
+                'fileTitle': 'File:Robin.jpg',
+                'imageUrl': 'https://upload.wikimedia.org/Robin.jpg',
+                'pageUrl': 'https://commons.wikimedia.org/wiki/File:Robin.jpg',
+                'authorName': 'A', 'authorUrl': None, 'licenseType': 'CC0'
+            }),
+            content_type='application/json',
+        )
+        assert response.status_code == 401
+
+    def test_delete_is_idempotent(self, choice_client):
+        client, images_dir = choice_client
+        # Create a sidecar
+        with open(os.path.join(images_dir, 'American_Robin.choice.json'), 'w') as f:
+            json.dump({
+                'imageUrl': 'https://upload.wikimedia.org/x.jpg',
+                'pageUrl': 'https://commons.wikimedia.org/wiki/File:X.jpg',
+                'licenseType': 'CC0'
+            }, f)
+        r1 = client.delete('/api/bird/American Robin/wikimedia_choice')
+        assert r1.status_code == 200
+        # Second call: file already gone, still 200.
+        r2 = client.delete('/api/bird/American Robin/wikimedia_choice')
+        assert r2.status_code == 200
+
+    def test_delete_requires_auth_when_enabled(self, choice_client):
+        client, _ = choice_client
+        client.post('/api/auth/setup',
+                    data=json.dumps({'password': 'testpass123'}),
+                    content_type='application/json')
+        client.post('/api/auth/logout')
+        response = client.delete('/api/bird/American Robin/wikimedia_choice')
+        assert response.status_code == 401
+
+
+class TestWikimediaImageHonorsSidecar:
+    """The single-result /api/wikimedia_image endpoint should return the sidecar when present."""
+
+    @pytest.fixture
+    def sidecar_client(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app, images_dir, patches = _make_client(tmpdir)
+            try:
+                with app.test_client() as client:
+                    yield client, images_dir
+            finally:
+                for p in patches:
+                    p.stop()
+
+    @patch('core.api.fetch_wikimedia_image')
+    def test_returns_sidecar_when_present(self, mock_fetch, sidecar_client):
+        client, images_dir = sidecar_client
+        with open(os.path.join(images_dir, 'American_Robin.choice.json'), 'w') as f:
+            json.dump({
+                'imageUrl': 'https://upload.wikimedia.org/saved.jpg',
+                'pageUrl': 'https://commons.wikimedia.org/wiki/File:Saved.jpg',
+                'licenseType': 'CC0',
+                'fileTitle': 'File:Saved.jpg',
+                'authorName': 'Saved',
+                'authorUrl': None,
+            }, f)
+
+        response = client.get('/api/wikimedia_image', query_string={'species': 'American Robin'})
+        assert response.status_code == 200
+        body = response.get_json()
+        assert body['imageUrl'] == 'https://upload.wikimedia.org/saved.jpg'
+        assert body['fileTitle'] == 'File:Saved.jpg'
+        assert body['source'] == 'sidecar'
+        # Crucially: do not call upstream when sidecar serves the request.
+        mock_fetch.assert_not_called()
+
+    @patch('core.api.fetch_wikimedia_image')
+    def test_falls_through_when_sidecar_corrupt(self, mock_fetch, sidecar_client):
+        client, images_dir = sidecar_client
+        with open(os.path.join(images_dir, 'American_Robin.choice.json'), 'w') as f:
+            f.write('{ not valid json')
+
+        mock_fetch.return_value = ({
+            'imageUrl': 'https://upload.wikimedia.org/Robin.jpg',
+            'pageUrl': 'https://commons.wikimedia.org/wiki/File:Robin.jpg',
+            'authorName': 'A', 'authorUrl': None, 'licenseType': 'CC0'
+        }, None)
+
+        response = client.get('/api/wikimedia_image', query_string={'species': 'American Robin'})
+        assert response.status_code == 200
+        body = response.get_json()
+        assert body['source'] == 'wikimedia-search'
+        mock_fetch.assert_called_once()
+
+
+class TestSidecarUntouchedByImageMutations:
+    """POST and DELETE on /image must leave a sidecar in place (precedence: custom > sidecar > default)."""
+
+    @pytest.fixture
+    def both_client(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app, images_dir, patches = _make_client(tmpdir)
+            try:
+                with app.test_client() as client:
+                    yield client, images_dir
+            finally:
+                for p in patches:
+                    p.stop()
+
+    def _write_sidecar(self, images_dir, name='American_Robin'):
+        path = os.path.join(images_dir, f'{name}.choice.json')
+        with open(path, 'w') as f:
+            json.dump({
+                'imageUrl': 'https://upload.wikimedia.org/x.jpg',
+                'pageUrl': 'https://commons.wikimedia.org/wiki/File:X.jpg',
+                'licenseType': 'CC0'
+            }, f)
+        return path
+
+    def test_upload_does_not_delete_sidecar(self, both_client):
+        client, images_dir = both_client
+        sidecar = self._write_sidecar(images_dir)
+
+        data = {'file': (io.BytesIO(JPEG_HEADER), 'bird.jpg')}
+        response = client.post('/api/bird/American Robin/image',
+                               data=data, content_type='multipart/form-data')
+        assert response.status_code == 200
+        assert os.path.exists(sidecar)
+
+    def test_delete_image_does_not_delete_sidecar(self, both_client):
+        client, images_dir = both_client
+        # Set up both a custom file and a sidecar.
+        with open(os.path.join(images_dir, 'American_Robin.jpg'), 'wb') as f:
+            f.write(JPEG_HEADER)
+        sidecar = self._write_sidecar(images_dir)
+
+        response = client.delete('/api/bird/American Robin/image')
+        assert response.status_code == 200
+        assert os.path.exists(sidecar)

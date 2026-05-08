@@ -7,6 +7,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timedelta
+from urllib.parse import urlparse
 
 import requests
 from flask import (
@@ -292,20 +293,23 @@ def _cleanup_expired_cache():
         })
 
 
-def get_cached_image(species_name):
+def get_cached_image(species_name, limit=1):
+    cache_key = (species_name, limit)
     with _image_cache_lock:
-        if species_name in image_cache:
-            cached_data = image_cache[species_name]
+        if cache_key in image_cache:
+            cached_data = image_cache[cache_key]
             if time.time() - cached_data['timestamp'] < CACHE_EXPIRATION:
                 logger.debug("Image cache hit", extra={
                     'species': species_name,
+                    'limit': limit,
                     'age_seconds': int(time.time() - cached_data['timestamp'])
                 })
                 return cached_data['data']
     return None
 
 
-def set_cached_image(species_name, data):
+def set_cached_image(species_name, data, limit=1):
+    cache_key = (species_name, limit)
     with _image_cache_lock:
         # Periodically clean up expired entries when adding new ones
         if len(image_cache) >= MAX_CACHE_SIZE:
@@ -315,7 +319,7 @@ def set_cached_image(species_name, data):
                 oldest_key = min(image_cache, key=lambda k: image_cache[k]['timestamp'])
                 del image_cache[oldest_key]
 
-        image_cache[species_name] = {
+        image_cache[cache_key] = {
             'data': data,
             'timestamp': time.time()
         }
@@ -355,6 +359,73 @@ def _delete_custom_image(species_name):
     return deleted
 
 
+CHOICE_SIDECAR_SUFFIX = '.choice.json'
+SIDECAR_REQUIRED_KEYS = ('imageUrl', 'pageUrl', 'licenseType')
+WIKIMEDIA_HOSTNAME_SUFFIX = '.wikimedia.org'
+
+
+def _get_choice_sidecar_path(species_name):
+    """Return the on-disk path for a species' Wikimedia-choice sidecar."""
+    sanitized = _sanitize_species_filename(species_name)
+    return os.path.join(CUSTOM_BIRD_IMAGES_DIR, sanitized + CHOICE_SIDECAR_SUFFIX)
+
+
+def _load_choice_sidecar(species_name):
+    """Load the Wikimedia-choice sidecar for a species. Returns dict or None on missing/corrupt."""
+    path = _get_choice_sidecar_path(species_name)
+    try:
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning("Failed to load choice sidecar", extra={
+            'species': species_name, 'error': str(e), 'path': path
+        })
+        return None
+
+    if not isinstance(data, dict) or not all(k in data for k in SIDECAR_REQUIRED_KEYS):
+        logger.warning("Choice sidecar missing required keys", extra={
+            'species': species_name, 'path': path
+        })
+        return None
+    return data
+
+
+def _save_choice_sidecar(species_name, payload):
+    """Atomically write a sidecar JSON for the species. Caller validates payload contents."""
+    if not all(k in payload for k in SIDECAR_REQUIRED_KEYS):
+        raise ValueError(f"Sidecar payload missing required keys: {SIDECAR_REQUIRED_KEYS}")
+    os.makedirs(CUSTOM_BIRD_IMAGES_DIR, exist_ok=True)
+    path = _get_choice_sidecar_path(species_name)
+    tmp_path = path + '.tmp'
+    with open(tmp_path, 'w', encoding='utf-8') as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, path)
+    return path
+
+
+def _delete_choice_sidecar(species_name):
+    """Idempotently remove the sidecar. Returns True if a file was deleted."""
+    path = _get_choice_sidecar_path(species_name)
+    try:
+        os.remove(path)
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def _is_wikimedia_url(url):
+    """Defense-in-depth check: only accept https URLs whose host is on wikimedia.org."""
+    if not isinstance(url, str) or not url.startswith('https://'):
+        return False
+    try:
+        host = (urlparse(url).hostname or '').lower()
+    except ValueError:
+        return False
+    return host == 'wikimedia.org' or host.endswith(WIKIMEDIA_HOSTNAME_SUFFIX)
+
+
 def _validate_image_magic_bytes(file_stream):
     """Validate that the file starts with known image magic bytes."""
     header = file_stream.read(4)
@@ -362,88 +433,134 @@ def _validate_image_magic_bytes(file_stream):
     return any(header[:len(m)] == m for m in IMAGE_MAGIC_PREFIXES)
 
 
-def fetch_wikimedia_image(species_name):
-    cached_data = get_cached_image(species_name)
-    if cached_data:
-        return cached_data, None
+WIKIMEDIA_TITLE_BLOCKLIST = re.compile(
+    r'\b(eggs?|nests?|skeletons?|skulls?|bones?|feathers?|specimens?)\b',
+    re.IGNORECASE,
+)
+
+
+WIKIMEDIA_THUMB_WIDTH = 400  # Wikimedia returns a CDN-cached thumbnail at this width.
+
+
+def _parse_wikimedia_imageinfo(file_title, image_info):
+    """Convert a wikimedia imageinfo entry to a candidate dict (URL + attribution + license).
+
+    `thumbUrl` is populated when imageinfo is queried with iiurlwidth — clients should
+    prefer it over `imageUrl` for grid tiles to avoid downloading full-res originals.
+    """
+    extmetadata = image_info.get('extmetadata', {})
+    candidate = {
+        'fileTitle': file_title,
+        'imageUrl': image_info.get('url'),
+        'thumbUrl': image_info.get('thumburl') or image_info.get('url'),
+        'pageUrl': f"https://commons.wikimedia.org/wiki/{file_title.replace(' ', '_')}",
+        'licenseType': extmetadata.get('LicenseShortName', {}).get('value', 'Unknown License'),
+        'authorName': 'Unknown Author',
+        'authorUrl': None,
+    }
+    author_html = extmetadata.get('Artist', {}).get('value', 'Unknown Author')
+    author_match = re.search(r'<a href="([^"]+)"[^>]*>([^<]+)</a>', author_html)
+    if author_match:
+        candidate['authorUrl'] = author_match.group(1)
+        if candidate['authorUrl'].startswith('//'):
+            candidate['authorUrl'] = 'https:' + candidate['authorUrl']
+        candidate['authorName'] = author_match.group(2)
+    else:
+        candidate['authorName'] = re.sub('<[^<]+?>', '', author_html)
+    return candidate
+
+
+def fetch_wikimedia_candidates(species_name, limit=8):
+    """Fetch up to `limit` Wikimedia image candidates for a species.
+
+    Returns (candidates_list, error_or_None). The candidates list preserves
+    Wikimedia search order (top-of-search first) and is empty on any failure.
+    """
+    cached = get_cached_image(species_name, limit=limit)
+    if cached is not None:
+        return cached, None
+
+    # User-Agent header required by Wikimedia API (enforced since 2024)
+    # Per Wikimedia policy: https://foundation.wikimedia.org/wiki/Policy:Wikimedia_Foundation_User-Agent_Policy
+    headers = {
+        'User-Agent': f'{DISPLAY_NAME}/{__version__} (Bird detection system; educational/personal use)'
+    }
+    api_url = "https://commons.wikimedia.org/w/api.php"
 
     try:
-        # User-Agent header required by Wikimedia API (enforced since 2024)
-        # Per Wikimedia policy: https://foundation.wikimedia.org/wiki/Policy:Wikimedia_Foundation_User-Agent_Policy
-        # TODO: Update with your actual contact info if you deploy this publicly
-        headers = {
-            'User-Agent': f'{DISPLAY_NAME}/{__version__} (Bird detection system; educational/personal use)'
-        }
-
-        # Search for images on Wikimedia Commons
-        search_url = "https://commons.wikimedia.org/w/api.php"
-        search_params = {
-            "action": "query",
-            "format": "json",
-            "list": "search",
-            "srsearch": f"{species_name} filetype:bitmap -egg -skeleton",
-            "srnamespace": "6",  # File namespace
-            "srlimit": "1"  # Limit to one result
-        }
-
-        search_response = requests.get(search_url, params=search_params, headers=headers, timeout=10)
+        search_response = requests.get(
+            api_url,
+            params={
+                "action": "query",
+                "format": "json",
+                "list": "search",
+                "srsearch": f"{species_name} filetype:bitmap -egg -skeleton",
+                "srnamespace": "6",  # File namespace
+                "srlimit": str(limit),
+            },
+            headers=headers,
+            timeout=10,
+        )
         search_response.raise_for_status()
-        search_data = search_response.json()
+        search_results = search_response.json().get('query', {}).get('search', [])
 
-        if not search_data['query']['search']:
-            return None, 'No results found'
+        if not search_results:
+            return [], 'No results found'
 
-        file_title = search_data['query']['search'][0]['title']
+        # Server-side `-egg -skeleton` is best-effort; filter titles too.
+        ordered_titles = [
+            hit['title'] for hit in search_results
+            if not WIKIMEDIA_TITLE_BLOCKLIST.search(hit['title'])
+        ]
+        if not ordered_titles:
+            return [], 'No results found'
 
-        # Fetch the image details
-        image_url = "https://commons.wikimedia.org/w/api.php"
-        image_params = {
-            "action": "query",
-            "format": "json",
-            "prop": "imageinfo",
-            "iiprop": "url|extmetadata",
-            "titles": file_title
+        info_response = requests.get(
+            api_url,
+            params={
+                "action": "query",
+                "format": "json",
+                "prop": "imageinfo",
+                "iiprop": "url|extmetadata",
+                "iiurlwidth": str(WIKIMEDIA_THUMB_WIDTH),
+                "titles": "|".join(ordered_titles),
+            },
+            headers=headers,
+            timeout=15,
+        )
+        info_response.raise_for_status()
+        pages = info_response.json().get('query', {}).get('pages', {})
+
+        # Pages are keyed by page-id; index by title to preserve search order.
+        title_to_info = {
+            page['title']: page['imageinfo'][0]
+            for page in pages.values()
+            if 'imageinfo' in page and page['imageinfo']
         }
 
-        image_response = requests.get(image_url, params=image_params, headers=headers, timeout=10)
-        image_response.raise_for_status()
-        image_data = image_response.json()
+        candidates = []
+        for title in ordered_titles:
+            info = title_to_info.get(title)
+            if info is None or not info.get('url'):
+                continue
+            candidates.append(_parse_wikimedia_imageinfo(title, info))
 
-        pages = image_data['query']['pages']
-        page = next(iter(pages.values()))
+        if not candidates:
+            return [], 'No image info found'
 
-        if 'imageinfo' in page:
-            image_info = page['imageinfo'][0]
-            extmetadata = image_info['extmetadata']
-
-            # Create a data structure with all the required information
-            image_data = {
-                'imageUrl': image_info['url'],
-                'pageUrl': f"https://commons.wikimedia.org/wiki/{file_title.replace(' ', '_')}",
-                'licenseType': extmetadata.get('LicenseShortName', {}).get('value', 'Unknown License'),
-                'authorName': 'Unknown Author',
-                'authorUrl': None
-            }
-
-            author_html = extmetadata.get('Artist', {}).get('value', 'Unknown Author')
-            author_match = re.search(r'<a href="([^"]+)"[^>]*>([^<]+)</a>', author_html)
-
-            if author_match:
-                image_data['authorUrl'] = author_match.group(1)
-                if image_data['authorUrl'].startswith('//'):
-                    image_data['authorUrl'] = 'https:' + image_data['authorUrl']
-                image_data['authorName'] = author_match.group(2)
-            else:
-                image_data['authorName'] = re.sub('<[^<]+?>', '', author_html)  # Remove any HTML tags
-
-            # Cache the result
-            set_cached_image(species_name, image_data)
-            return image_data, None
-        else:
-            return None, 'No image info found'
+        set_cached_image(species_name, candidates, limit=limit)
+        return candidates, None
 
     except requests.RequestException as e:
-        return None, f'Error fetching Wikimedia image: {str(e)}'
+        return [], f'Error fetching Wikimedia image: {str(e)}'
+
+
+def fetch_wikimedia_image(species_name):
+    """Backward-compatible single-result wrapper. Returns (dict_or_None, error_or_None)."""
+    candidates, error = fetch_wikimedia_candidates(species_name, limit=1)
+    if candidates:
+        return candidates[0], None
+    return None, error
 
 @api.route('/api/wikimedia_image', methods=['GET'])
 def get_wikimedia_image():
@@ -454,6 +571,20 @@ def get_wikimedia_image():
     custom_path, _ = _get_custom_image_path(species_name)
     has_custom = custom_path is not None
 
+    # Honor saved Wikimedia choice when sidecar is present (skip upstream fetch).
+    sidecar = _load_choice_sidecar(species_name)
+    if sidecar:
+        return jsonify({
+            'imageUrl': sidecar['imageUrl'],
+            'pageUrl': sidecar['pageUrl'],
+            'authorName': sidecar.get('authorName', 'Unknown Author'),
+            'authorUrl': sidecar.get('authorUrl'),
+            'licenseType': sidecar.get('licenseType', 'Unknown License'),
+            'fileTitle': sidecar.get('fileTitle'),
+            'hasCustomImage': has_custom,
+            'source': 'sidecar',
+        })
+
     image_data, error = fetch_wikimedia_image(species_name)
 
     if error:
@@ -462,6 +593,7 @@ def get_wikimedia_image():
         return jsonify({'error': error}), 404 if 'No results found' in error else 500
 
     image_data['hasCustomImage'] = has_custom
+    image_data['source'] = 'wikimedia-search'
 
     logger.debug("Wikimedia image fetched", extra={
         'species': species_name,
@@ -469,6 +601,98 @@ def get_wikimedia_image():
         'has_custom_image': has_custom
     })
     return jsonify(image_data)
+
+
+@api.route('/api/wikimedia_image/candidates', methods=['GET'])
+@log_api_request
+@handle_api_errors
+def get_wikimedia_image_candidates():
+    """Return up to `limit` Wikimedia candidates plus the user's currently-saved choice."""
+    species_name = request.args.get('species', '').strip()
+    if not species_name:
+        return jsonify({'error': 'Species name is required'}), 400
+
+    try:
+        limit = int(request.args.get('limit', 8))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'limit must be an integer'}), 400
+    limit = max(1, min(limit, 20))
+
+    candidates, error = fetch_wikimedia_candidates(species_name, limit=limit)
+
+    custom_path, _ = _get_custom_image_path(species_name)
+    has_custom = custom_path is not None
+    sidecar = _load_choice_sidecar(species_name)
+    selected_file_title = sidecar.get('fileTitle') if sidecar else None
+
+    payload = {
+        'species': species_name,
+        'candidates': candidates,
+        'selectedFileTitle': selected_file_title,
+        'hasCustomImage': has_custom,
+    }
+    if error and not candidates:
+        payload['error'] = error
+        status = 404 if 'No results found' in error else 502
+        return jsonify(payload), status
+    return jsonify(payload)
+
+
+@api.route('/api/bird/<species_name>/wikimedia_choice', methods=['GET'])
+@log_api_request
+@handle_api_errors
+def get_wikimedia_choice(species_name):
+    sidecar = _load_choice_sidecar(species_name)
+    if sidecar is None:
+        return jsonify({'error': 'No saved choice', 'hasChoice': False}), 404
+    return jsonify(sidecar)
+
+
+@api.route('/api/bird/<species_name>/wikimedia_choice', methods=['PUT'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def put_wikimedia_choice(species_name):
+    payload = request.get_json(silent=True) or {}
+    required = ('fileTitle', 'imageUrl', 'pageUrl', 'authorName', 'licenseType')
+    missing = [k for k in required if not payload.get(k)]
+    if missing:
+        return jsonify({'error': f'Missing keys: {", ".join(missing)}'}), 400
+
+    if not _is_wikimedia_url(payload['imageUrl']) or not _is_wikimedia_url(payload['pageUrl']):
+        return jsonify({'error': 'imageUrl and pageUrl must be wikimedia.org https URLs'}), 400
+
+    author_url = payload.get('authorUrl')
+    if author_url is not None and not isinstance(author_url, str):
+        return jsonify({'error': 'authorUrl must be a string or null'}), 400
+
+    sidecar = {
+        'schemaVersion': 1,
+        'source': 'wikimedia',
+        'fileTitle': payload['fileTitle'],
+        'imageUrl': payload['imageUrl'],
+        'pageUrl': payload['pageUrl'],
+        'authorName': payload['authorName'],
+        'authorUrl': author_url,
+        'licenseType': payload['licenseType'],
+        'savedAt': local_now().isoformat(),
+    }
+    _save_choice_sidecar(species_name, sidecar)
+    logger.info("Wikimedia choice saved", extra={
+        'species': species_name, 'fileTitle': payload['fileTitle']
+    })
+    return jsonify(sidecar)
+
+
+@api.route('/api/bird/<species_name>/wikimedia_choice', methods=['DELETE'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def delete_wikimedia_choice(species_name):
+    """Idempotently remove a saved Wikimedia choice."""
+    _delete_choice_sidecar(species_name)
+    logger.info("Wikimedia choice deleted", extra={'species': species_name})
+    return jsonify({'hasChoice': False})
 
 @api.route('/api/observations/latest', methods=['GET'])
 @log_api_request

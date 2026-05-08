@@ -95,7 +95,9 @@ const mountComponent = () => {
   return mount(BirdDetails, {
     global: {
       stubs: {
-        'router-link': RouterLinkStub
+        'router-link': RouterLinkStub,
+        // Stub the modal so this page-level test doesn't need to mount its candidate grid.
+        BirdImageModal: true
       }
     }
   })
@@ -378,7 +380,7 @@ describe('BirdDetails Custom Image', () => {
     expect(wrapper.text()).toContain('Revert to default')
   })
 
-  it('renders upload button', async () => {
+  it('renders the customize-image cog button (no inline upload control)', async () => {
     mockApi.get.mockImplementation((url) => {
       if (url.includes('/bird/') && url.includes('/recordings')) {
         return Promise.resolve({ data: [] })
@@ -398,14 +400,12 @@ describe('BirdDetails Custom Image', () => {
     const wrapper = mountComponent()
     await flushPromises()
 
-    // Should have the camera upload button
-    const uploadButton = wrapper.find('button[title="Upload custom image"]')
-    expect(uploadButton.exists()).toBe(true)
+    const customizeButton = wrapper.find('button[title="Customize image"]')
+    expect(customizeButton.exists()).toBe(true)
 
-    // Should have a hidden file input
-    const fileInput = wrapper.find('input[type="file"]')
-    expect(fileInput.exists()).toBe(true)
-    expect(fileInput.classes()).toContain('hidden')
+    // The legacy inline upload button + hidden file input must be gone.
+    expect(wrapper.find('button[title="Upload custom image"]').exists()).toBe(false)
+    expect(wrapper.find('input[type="file"]').exists()).toBe(false)
   })
 
   it('reverts to wikimedia on delete', async () => {
