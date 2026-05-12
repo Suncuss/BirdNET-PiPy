@@ -272,7 +272,7 @@ export function useBirdCharts() {
             callbacks: {
               title: (context) => {
                 const { x, y } = context[0].raw
-                return `${y} at ${x}`
+                return `${y} at ${formatHourLabel(x)}`
               },
               label: (context) => `Detections: ${context.raw.v}`
             },
@@ -389,7 +389,12 @@ export function useBirdCharts() {
           }
         },
         plugins: {
-          legend: { display: false }
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: (context) => formatHourLabel(context[0].label)
+            }
+          }
         }
       }
     })

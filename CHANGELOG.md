@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.6.10] - 2026-05-12
+
+- Fixed Hourly Activity bar chart and heatmap tooltips still showing raw 24-hour labels regardless of the time-format toggle — they now run through the same `formatHourLabel` helper the x-axes already use, so 12-hour users see "2 PM" and 24-hour users see "14:00" consistently between axis and hover (follow-up on #49)
+
 ## [0.6.9] - 2026-05-12
 
 - Extended the time-format preference to the Charts and Table date pickers — 12-hour users still see MM/DD/YYYY, 24-hour users now see ISO YYYY-MM-DD instead of the hardcoded US layout. The Table's From/To row also stretches edge-to-edge on mobile so the To picker's right edge lines up with the Species input below instead of clumping left (follow-up on #49)
