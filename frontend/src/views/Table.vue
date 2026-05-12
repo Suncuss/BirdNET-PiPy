@@ -25,6 +25,7 @@
               v-model="localStartDate"
               :max="todayDate"
               size="large"
+              fluid
               @change="applyFilters"
             />
           </div>
@@ -37,6 +38,7 @@
               :min="localStartDate || undefined"
               :max="todayDate"
               size="large"
+              fluid
               @change="applyFilters"
             />
           </div>
