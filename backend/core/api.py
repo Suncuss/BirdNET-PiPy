@@ -68,7 +68,7 @@ from core.bird_name_utils import (
     add_display_species,
     clear_bird_name_caches,
     get_bird_name_language,
-    get_localized_common_name_from_english,
+    get_localized_common_name,
 )
 from core.db import DatabaseManager
 from core.ha_mode import get_runtime_mode, is_home_assistant_mode
@@ -103,7 +103,7 @@ from core.runtime_config import (
 )
 from core.storage_manager import delete_detection_files
 from core.timezone_service import get_timezone_str, local_now
-from model_service.label_utils import get_species_list
+from model_service.label_utils import get_species_list, resolve_to_scientific_name
 from version import DISPLAY_NAME, __version__
 
 # Setup logging
@@ -875,11 +875,13 @@ def serve_spectrogram(filename):
 @log_api_request
 def get_bird_details(species_name):
     settings = load_user_settings()
-    details = db_manager.get_bird_details(species_name)
+    sci, common = _resolve_species_filter(species_name)
+    details = db_manager.get_bird_details(common, scientific_name=sci)
     if details:
         details = _localize_detection(details, settings=settings)
         logger.debug("Bird details retrieved", extra={
             'species': species_name,
+            'resolved_scientific': sci,
             'total_detections': details.get('detectionCount', 0)
         })
         return jsonify(details)
@@ -963,12 +965,14 @@ def get_bird_recordings(species_name):
         return jsonify({"error": "Sort must be 'recent' or 'best'"}), 400
 
     settings = load_user_settings()
+    sci, common = _resolve_species_filter(species_name)
     recordings = _localize_detection_list(
-        db_manager.get_bird_recordings(species_name, sort, limit),
+        db_manager.get_bird_recordings(common, sort, limit, scientific_name=sci),
         settings=settings,
     )
     logger.debug("Bird recordings retrieved", extra={
         'species': species_name,
+        'resolved_scientific': sci,
         'sort': sort,
         'limit': limit,
         'records_count': len(recordings)
@@ -981,7 +985,10 @@ def get_bird_recordings(species_name):
 def get_detection_distribution(species_name):
     view = request.args.get('view', 'month')
     date = request.args.get('date', local_now().strftime('%Y-%m-%d'))
-    distribution = db_manager.get_detection_distribution(species_name, view, date)
+    sci, common = _resolve_species_filter(species_name)
+    distribution = db_manager.get_detection_distribution(
+        common, view, date, scientific_name=sci,
+    )
     return jsonify(distribution)
 
 @api.route('/api/species/all', methods=['GET'])
@@ -1076,6 +1083,7 @@ def get_detections():
     per_page = min(max(1, per_page), 100)
     settings = load_user_settings()
     bird_name_language = get_bird_name_language(settings)
+    sci, common = _resolve_species_filter(species)
 
     if sort == 'common_name' and bird_name_language != DEFAULT_BIRD_NAME_LANGUAGE:
         # Sort the fully localized labels in memory so the rendered order matches
@@ -1084,7 +1092,8 @@ def get_detections():
             db_manager.get_all_detections(
                 start_date=start_date,
                 end_date=end_date,
-                species=species,
+                species=common,
+                scientific_name=sci,
             ),
             settings=settings,
         )
@@ -1103,9 +1112,10 @@ def get_detections():
             per_page=per_page,
             start_date=start_date,
             end_date=end_date,
-            species=species,
+            species=common,
             sort=sort,
-            order=order
+            order=order,
+            scientific_name=sci,
         )
         detections = _localize_detection_list(detections, settings=settings)
 
@@ -1150,11 +1160,13 @@ def export_detections_csv():
             except ValueError:
                 return jsonify({'error': f'Invalid {date_param} format. Use YYYY-MM-DD'}), 400
 
+    sci, common = _resolve_species_filter(species)
     # Fetch all detections
     detections = db_manager.get_all_detections_for_export(
         start_date=start_date,
         end_date=end_date,
-        species=species
+        species=common,
+        scientific_name=sci,
     )
 
     # Build CSV in memory
@@ -1303,6 +1315,25 @@ def delete_detections_batch():
 _available_species_cache = {}
 
 
+def _resolve_species_filter(name):
+    """Map a route-supplied English bird name to a DB filter pair.
+
+    Returns ``(scientific_name, common_name)`` where exactly one is populated.
+    When the resolver recognises the input (canonical common_name, V2 label_en,
+    or label_en_uk), we filter the underlying query by ``scientific_name`` —
+    this is what merges V2's "Eurasian Blackbird" and V3's "Common Blackbird"
+    history for the same Turdus merula into a single result.
+
+    When the resolver misses (unknown English string, legacy migration row),
+    we fall back to filtering by ``common_name`` so the user keeps access to
+    data the species table doesn't know about.
+    """
+    if not name:
+        return None, None
+    sci = resolve_to_scientific_name(name)
+    return (sci, None) if sci else (None, name)
+
+
 def _localize_detection(detection, settings=None):
     return add_display_common_name(
         detection,
@@ -1322,19 +1353,28 @@ def _localize_species_list(species_list, settings=None):
 
 
 def _localize_summary(summary, settings=None):
+    """Add ``mostCommonBirdDisplay`` and ``rarestBirdDisplay`` fields.
+
+    Looks up the translation by ``{key}ScientificName`` (the stable key from
+    the DB CTE), so V2's "Eurasian Blackbird" and V3's "Common Blackbird" for
+    the same Turdus merula both translate to "Amsel" under German. Falls back
+    to the English ``{key}`` value when no scientific name is available
+    (legacy rows) or when the summary is empty.
+    """
     localized_summary = dict(summary)
 
     for key in ('mostCommonBird', 'rarestBird'):
         bird_name = localized_summary.get(key)
-        localized_summary[f'{key}Display'] = (
-            get_localized_common_name_from_english(
+        sci_name = localized_summary.get(f'{key}ScientificName')
+        if bird_name and bird_name != 'N/A':
+            localized_summary[f'{key}Display'] = get_localized_common_name(
+                sci_name,
                 bird_name,
                 language=get_bird_name_language(settings),
                 settings=settings,
             )
-            if bird_name and bird_name != 'N/A'
-            else bird_name
-        )
+        else:
+            localized_summary[f'{key}Display'] = bird_name
 
     return localized_summary
 
@@ -1850,6 +1890,46 @@ def update_units_setting():
 
     except Exception as e:
         logger.error("Failed to update units setting", extra={
+            'error': str(e)
+        }, exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@api.route('/api/settings/time-format', methods=['PUT'])
+@log_api_request
+@require_auth
+def update_time_format_setting():
+    """Update the display time-format setting without triggering a restart.
+
+    Frontend-only preference for 12-hour vs 24-hour clock display.
+    Only explicit user choices are persisted; the absence of a value means
+    "detect from browser locale" and is the default for new installs.
+    """
+    try:
+        data = request.json
+        if not data or 'time_format' not in data:
+            return jsonify({'error': 'time_format field required'}), 400
+
+        time_format = data['time_format']
+        if time_format not in ('12h', '24h'):
+            return jsonify({'error': "time_format must be '12h' or '24h'"}), 400
+
+        current_settings = load_user_settings()
+        if 'display' not in current_settings:
+            current_settings['display'] = {}
+        current_settings['display']['time_format'] = time_format
+        save_user_settings(current_settings)
+        invalidate_runtime_settings_cache()
+
+        logger.info("Display time format changed", extra={'time_format': time_format})
+
+        return jsonify({
+            'success': True,
+            'time_format': time_format
+        }), 200
+
+    except Exception as e:
+        logger.error("Failed to update time format setting", extra={
             'error': str(e)
         }, exc_info=True)
         return jsonify({'error': str(e)}), 500

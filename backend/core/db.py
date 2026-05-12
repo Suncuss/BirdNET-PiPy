@@ -12,6 +12,37 @@ from core.timezone_service import local_now
 from core.utils import build_detection_filenames
 
 
+# Species grouping key used wherever aggregations would otherwise pin
+# scientific_name. Falling back to common_name when sci is empty keeps two
+# different legacy/migrated rows from collapsing into a single bogus row:
+# migration.py defaults Sci_Name to '' when the source CSV omits it, and the
+# detections schema only enforces NOT NULL (not non-empty). Within a real
+# (non-empty) species, this reduces to scientific_name and still merges
+# V2/V3 English-string drift as designed.
+def _species_key(alias: str = "") -> str:
+    """SQL expression for the stable species grouping key, optionally
+    qualified with a table alias prefix (e.g. ``"d."``)."""
+    return f"COALESCE(NULLIF({alias}scientific_name, ''), {alias}common_name)"
+
+
+_SPECIES_KEY = _species_key()
+
+
+def _resolve_filter_column(species_name=None, *, scientific_name=None):
+    """Resolve a (column, value) pair for species-keyed WHERE clauses.
+
+    Routes resolve their English input through the species table at ingress
+    and pass ``scientific_name=`` when known. Legacy or unknown names fall
+    back to ``common_name`` so migrated rows stay accessible. Returns
+    ``(None, None)`` when no species filter was supplied.
+    """
+    if scientific_name:
+        return 'scientific_name', scientific_name
+    if species_name:
+        return 'common_name', species_name
+    return None, None
+
+
 # Create a custom logger adapter that adds a prefix to all messages
 class DBLoggerAdapter(logging.LoggerAdapter):
     def process(self, msg, kwargs):
@@ -105,13 +136,20 @@ class DatabaseManager:
 
     def get_latest_detections(self, limit=15, unique=False):
         # Use window function to deduplicate detections.
-        # unique=False (default): highest confidence per (group_timestamp, common_name)
-        # unique=True: most recent detection per species (one row per common_name)
+        # unique=False (default): highest confidence per (group_timestamp, species_key)
+        # unique=True: most recent detection per species (one row per species_key)
+        #
+        # Partition on the species key (scientific_name, with common_name as a
+        # fallback when sci is empty) so that V2/V3 model history for the same
+        # species merges into one entry — V2 emits "Eurasian Blackbird" and V3
+        # emits "Common Blackbird" for Turdus merula. The COALESCE fallback
+        # prevents legacy migrated rows with blank sci from collapsing into a
+        # single bogus group.
         if unique:
-            partition = "PARTITION BY common_name"
+            partition = f"PARTITION BY {_SPECIES_KEY}"
             rank_order = "ORDER BY timestamp DESC"
         else:
-            partition = "PARTITION BY group_timestamp, common_name, audio_source"
+            partition = f"PARTITION BY group_timestamp, {_SPECIES_KEY}, audio_source"
             rank_order = "ORDER BY confidence DESC"
 
         # Pre-fetch recent rows so the window function scans ~hundreds
@@ -191,11 +229,18 @@ class DatabaseManager:
         })
 
         if unique:
-            query = """
+            # Partition by the species key so V2/V3 English variants of the
+            # same species collapse into one representative row, while legacy
+            # rows with blank scientific_name fall back to common_name and
+            # stay separate from one another.
+            query = f"""
             WITH RankedDetections AS (
                 SELECT
                     *,
-                    ROW_NUMBER() OVER (PARTITION BY common_name ORDER BY confidence DESC, timestamp DESC) AS rn
+                    ROW_NUMBER() OVER (
+                        PARTITION BY {_SPECIES_KEY}
+                        ORDER BY confidence DESC, timestamp DESC
+                    ) AS rn
                 FROM detections
                 WHERE timestamp BETWEEN ? AND ?
             )
@@ -270,11 +315,21 @@ class DatabaseManager:
 
         # Date range already logged in parent function
 
-        query = """
-        SELECT common_name, strftime('%H', timestamp) as hour, COUNT(*) as count
+        # GROUP BY the species key so that mixed V2/V3 English variants of the
+        # same species merge into one row. A representative common_name comes
+        # along for display; the API layer resolves the localized name from
+        # the stable scientific_name key. The MAX(scientific_name) gives the
+        # row's representative sci_name — for non-legacy data this is the
+        # constant non-empty value; for blank-sci legacy groups it's ''.
+        query = f"""
+        SELECT {_SPECIES_KEY} AS species_key,
+               MAX(scientific_name) AS scientific_name,
+               MIN(common_name) AS common_name,
+               strftime('%H', timestamp) as hour,
+               COUNT(*) as count
         FROM detections
         WHERE timestamp BETWEEN ? AND ?
-        GROUP BY common_name, hour
+        GROUP BY species_key, hour
         """
         with self.get_db_connection() as conn:
             cur = conn.cursor()
@@ -283,22 +338,31 @@ class DatabaseManager:
 
         species_hourly_activity = {}
         for row in results:
-            species = row['common_name']
+            key = row['species_key']
+            sci = row['scientific_name']
+            common = row['common_name']
             hour = row['hour']
             count = row['count']
 
-            if species not in species_hourly_activity:
-                species_hourly_activity[species] = [0] * 24
+            entry = species_hourly_activity.get(key)
+            if entry is None:
+                entry = {
+                    'scientific_name': sci or '',
+                    'common_name': common,
+                    'hourly': [0] * 24,
+                }
+                species_hourly_activity[key] = entry
 
-            species_hourly_activity[species][int(hour)] = count
+            entry['hourly'][int(hour)] = count
 
         species_activity = [
             {
-                'species': species,
-                'hourlyActivity': hourly_activity,
-                'totalObservations': sum(hourly_activity)
+                'scientific_name': entry['scientific_name'],
+                'species': entry['common_name'],
+                'hourlyActivity': entry['hourly'],
+                'totalObservations': sum(entry['hourly']),
             }
-            for species, hourly_activity in species_hourly_activity.items()
+            for entry in species_hourly_activity.values()
         ]
 
         species_activity.sort(key=lambda x: x['totalObservations'], reverse=(order != 'least'))
@@ -318,11 +382,16 @@ class DatabaseManager:
 
         end_of_day = start_of_day + timedelta(days=1)
 
-        query = """
-        SELECT common_name, strftime('%H', timestamp) as hour, COUNT(*) as count
+        # GROUP BY the species key — see get_activity_overview for rationale.
+        query = f"""
+        SELECT {_SPECIES_KEY} AS species_key,
+               MAX(scientific_name) AS scientific_name,
+               MIN(common_name) AS common_name,
+               strftime('%H', timestamp) as hour,
+               COUNT(*) as count
         FROM detections
         WHERE timestamp BETWEEN ? AND ?
-        GROUP BY common_name, hour
+        GROUP BY species_key, hour
         """
         with self.get_db_connection() as conn:
             cur = conn.cursor()
@@ -331,22 +400,31 @@ class DatabaseManager:
 
         species_hourly_activity = {}
         for row in results:
-            species = row['common_name']
+            key = row['species_key']
+            sci = row['scientific_name']
+            common = row['common_name']
             hour = row['hour']
             count = row['count']
 
-            if species not in species_hourly_activity:
-                species_hourly_activity[species] = [0] * 24
+            entry = species_hourly_activity.get(key)
+            if entry is None:
+                entry = {
+                    'scientific_name': sci or '',
+                    'common_name': common,
+                    'hourly': [0] * 24,
+                }
+                species_hourly_activity[key] = entry
 
-            species_hourly_activity[species][int(hour)] = count
+            entry['hourly'][int(hour)] = count
 
         species_activity = [
             {
-                'species': species,
-                'hourlyActivity': hourly_activity,
-                'totalObservations': sum(hourly_activity)
+                'scientific_name': entry['scientific_name'],
+                'species': entry['common_name'],
+                'hourlyActivity': entry['hourly'],
+                'totalObservations': sum(entry['hourly']),
             }
-            for species, hourly_activity in species_hourly_activity.items()
+            for entry in species_hourly_activity.values()
         ]
 
         most = sorted(species_activity, key=lambda x: x['totalObservations'], reverse=True)[:num_species]
@@ -375,17 +453,21 @@ class DatabaseManager:
                 'end_date': end_date[:10]
             })
 
-            # Single optimized query using CTEs (replaces 5 separate queries)
-            query = """
+            # Single optimized query using CTEs (replaces 5 separate queries).
+            # Species are grouped by the species key (scientific_name with a
+            # common_name fallback for legacy rows that have blank sci) so
+            # V2/V3 English drift collapses but unrelated empty-sci rows do
+            # not.
+            query = f"""
             WITH filtered_detections AS (
-                SELECT common_name, timestamp
+                SELECT scientific_name, common_name, timestamp
                 FROM detections
                 WHERE timestamp BETWEEN ? AND ?
             ),
             counts AS (
                 SELECT
                     COUNT(*) as total_observations,
-                    COUNT(DISTINCT common_name) as unique_species
+                    COUNT(DISTINCT {_SPECIES_KEY}) as unique_species
                 FROM filtered_detections
             ),
             hourly AS (
@@ -396,18 +478,21 @@ class DatabaseManager:
                 LIMIT 1
             ),
             species_counts AS (
-                SELECT common_name, COUNT(*) as count
+                SELECT {_SPECIES_KEY} AS species_key,
+                       MAX(scientific_name) AS scientific_name,
+                       MIN(common_name) AS common_name,
+                       COUNT(*) as count
                 FROM filtered_detections
-                GROUP BY common_name
+                GROUP BY species_key
             ),
             most_common AS (
-                SELECT common_name
+                SELECT scientific_name, common_name
                 FROM species_counts
                 ORDER BY count DESC
                 LIMIT 1
             ),
             rarest AS (
-                SELECT common_name
+                SELECT scientific_name, common_name
                 FROM species_counts
                 ORDER BY count ASC
                 LIMIT 1
@@ -417,7 +502,9 @@ class DatabaseManager:
                 (SELECT unique_species FROM counts) as uniqueSpecies,
                 (SELECT hour FROM hourly) as mostActiveHour,
                 (SELECT common_name FROM most_common) as mostCommonBird,
-                (SELECT common_name FROM rarest) as rarestBird
+                (SELECT scientific_name FROM most_common) as mostCommonBirdScientificName,
+                (SELECT common_name FROM rarest) as rarestBird,
+                (SELECT scientific_name FROM rarest) as rarestBirdScientificName
             """
 
             cur.execute(query, (start_date, end_date))
@@ -430,7 +517,9 @@ class DatabaseManager:
                     'uniqueSpecies': result['uniqueSpecies'] or 0,
                     'mostActiveHour': most_active_hour,
                     'mostCommonBird': result['mostCommonBird'] or "N/A",
-                    'rarestBird': result['rarestBird'] or "N/A"
+                    'mostCommonBirdScientificName': result['mostCommonBirdScientificName'] or "",
+                    'rarestBird': result['rarestBird'] or "N/A",
+                    'rarestBirdScientificName': result['rarestBirdScientificName'] or "",
                 }
 
         return {
@@ -438,46 +527,51 @@ class DatabaseManager:
             'uniqueSpecies': 0,
             'mostActiveHour': "N/A",
             'mostCommonBird': "N/A",
-            'rarestBird': "N/A"
+            'mostCommonBirdScientificName': "",
+            'rarestBird': "N/A",
+            'rarestBirdScientificName': "",
         }
 
     def get_species_sightings(self, limit=10, most_frequent=True):
-        # Use separate queries based on sort order (safer than f-string interpolation)
+        # Group/join by the species key so V2/V3 English drift for the same
+        # species merges into a single sighting entry. Blank-sci legacy rows
+        # fall back to common_name and stay separate from each other.
+        species_key_d = _species_key('d.')
         if most_frequent:
-            query = """
+            query = f"""
             WITH SpeciesCount AS (
-                SELECT common_name, COUNT(*) as count
+                SELECT {_SPECIES_KEY} AS species_key, COUNT(*) as count
                 FROM detections
-                GROUP BY common_name
+                GROUP BY species_key
                 ORDER BY count DESC
                 LIMIT ?
             )
             SELECT d.*
             FROM detections d
-            JOIN SpeciesCount sc ON d.common_name = sc.common_name
-            WHERE (d.common_name, d.timestamp) IN (
-                SELECT common_name, MAX(timestamp)
+            JOIN SpeciesCount sc ON {species_key_d} = sc.species_key
+            WHERE ({species_key_d}, d.timestamp) IN (
+                SELECT {_SPECIES_KEY}, MAX(timestamp)
                 FROM detections
-                GROUP BY common_name
+                GROUP BY {_SPECIES_KEY}
             )
             ORDER BY sc.count DESC, d.timestamp DESC
             """
         else:
-            query = """
+            query = f"""
             WITH SpeciesCount AS (
-                SELECT common_name, COUNT(*) as count
+                SELECT {_SPECIES_KEY} AS species_key, COUNT(*) as count
                 FROM detections
-                GROUP BY common_name
+                GROUP BY species_key
                 ORDER BY count ASC
                 LIMIT ?
             )
             SELECT d.*
             FROM detections d
-            JOIN SpeciesCount sc ON d.common_name = sc.common_name
-            WHERE (d.common_name, d.timestamp) IN (
-                SELECT common_name, MAX(timestamp)
+            JOIN SpeciesCount sc ON {species_key_d} = sc.species_key
+            WHERE ({species_key_d}, d.timestamp) IN (
+                SELECT {_SPECIES_KEY}, MAX(timestamp)
                 FROM detections
-                GROUP BY common_name
+                GROUP BY {_SPECIES_KEY}
             )
             ORDER BY sc.count ASC, d.timestamp DESC
             """
@@ -494,10 +588,25 @@ class DatabaseManager:
 
 
 
-    def get_bird_details(self, species_name):
-        query = """
+    def get_bird_details(self, species_name=None, *, scientific_name=None):
+        """Aggregate detection details for a species.
+
+        ``scientific_name`` is preferred — it merges V2/V3 English variants
+        (e.g. "Eurasian Blackbird" + "Common Blackbird" both Turdus merula)
+        into one detail record. ``species_name`` keeps the legacy English
+        filter for routes where the resolver couldn't map the input string.
+        """
+        filter_col, filter_value = _resolve_filter_column(
+            species_name, scientific_name=scientific_name,
+        )
+        if filter_col is None:
+            return None
+
+        # Inline the join column into the query — both options are validated
+        # above so f-string interpolation is safe here.
+        query = f"""
         SELECT
-            common_name,
+            MIN(common_name) AS common_name,
             scientific_name,
             COUNT(*) as total_visits,
             MIN(timestamp) as first_detected,
@@ -505,7 +614,7 @@ class DatabaseManager:
             AVG(confidence) as average_confidence,
             (SELECT strftime('%H:00', timestamp)
             FROM detections d2
-            WHERE d2.common_name = d1.common_name
+            WHERE d2.{filter_col} = d1.{filter_col}
             GROUP BY strftime('%H', timestamp)
             ORDER BY COUNT(*) DESC
             LIMIT 1) as peak_activity_time,
@@ -516,48 +625,61 @@ class DatabaseManager:
             END as seasonality,
             (SELECT json_extract(d3.extra, '$.ebird_code')
             FROM detections d3
-            WHERE d3.common_name = d1.common_name
+            WHERE d3.{filter_col} = d1.{filter_col}
               AND json_extract(d3.extra, '$.ebird_code') IS NOT NULL
             LIMIT 1) as ebird_code
         FROM detections d1
-        WHERE common_name = ?
-        GROUP BY common_name, scientific_name
+        WHERE {filter_col} = ?
+        GROUP BY scientific_name
         """
         with self.get_db_connection() as conn:
             cur = conn.cursor()
-            cur.execute(query, (species_name,))
+            cur.execute(query, (filter_value,))
             result = cur.fetchone()
             return dict(result) if result else None
 
 
-    def get_bird_recordings(self, species_name, sort='recent', limit=None):
+    def get_bird_recordings(self, species_name=None, sort='recent', limit=None,
+                             *, scientific_name=None):
         """
         Get recordings for a species with sorting options.
 
+        Filter by ``scientific_name`` when available (the stable path that
+        merges V2/V3 English variants); otherwise filter by the legacy
+        ``species_name`` (English common_name).
+
         Args:
-            species_name: Bird species common name
+            species_name: Bird species common name (legacy fallback)
             sort: 'recent' (timestamp DESC) or 'best' (confidence DESC)
             limit: Optional max number of records (None = all)
+            scientific_name: Stable species key (preferred when known)
 
         Returns:
             List of recording dicts with id, timestamp, common_name, confidence,
             audio_filename, spectrogram_filename
         """
-        # Use separate queries based on sort order (safer than f-string interpolation)
-        # LIMIT is parameterized using -1 for unlimited (SQLite treats negative LIMIT as no limit)
+        filter_col, filter_value = _resolve_filter_column(
+            species_name, scientific_name=scientific_name,
+        )
+        if filter_col is None:
+            return []
+
+        # Use separate queries based on sort order (safer than f-string interpolation
+        # of the entire query). The filter column is validated above.
+        # LIMIT is parameterized using -1 for unlimited (SQLite treats negative LIMIT as no limit).
         if sort == 'best':
-            query = """
+            query = f"""
             SELECT id, timestamp, common_name, confidence, extra, audio_source
             FROM detections
-            WHERE common_name = ?
+            WHERE {filter_col} = ?
             ORDER BY confidence DESC
             LIMIT ?
             """
         else:  # default to 'recent'
-            query = """
+            query = f"""
             SELECT id, timestamp, common_name, confidence, extra, audio_source
             FROM detections
-            WHERE common_name = ?
+            WHERE {filter_col} = ?
             ORDER BY timestamp DESC
             LIMIT ?
             """
@@ -567,47 +689,63 @@ class DatabaseManager:
 
         with self.get_db_connection() as conn:
             cur = conn.cursor()
-            cur.execute(query, (species_name, limit_param))
+            cur.execute(query, (filter_value, limit_param))
             rows = cur.fetchall()
 
         recordings = [self._normalize_detection(row, include_filenames=True) for row in rows]
 
         logger.debug("Bird recordings retrieved", extra={
-            'species': species_name,
+            'species': filter_value,
+            'filter_col': filter_col,
             'sort': sort,
             'limit': limit,
             'records_count': len(recordings)
         })
         return recordings
 
-    def get_detection_distribution(self, species_name, view, anchor_date_str):
+    def get_detection_distribution(self, species_name=None, view=None,
+                                    anchor_date_str=None, *, scientific_name=None):
+        """Compute detection counts across a time window for a single species.
+
+        Filters by ``scientific_name`` when provided (the stable path that
+        merges V2/V3 English variants); otherwise by the legacy
+        ``species_name`` English common_name.
+        """
         import datetime
+        filter_col, filter_value = _resolve_filter_column(
+            species_name, scientific_name=scientific_name,
+        )
+        if filter_col is None:
+            return {'labels': [], 'data': []}
+
         anchor_date = datetime.datetime.strptime(anchor_date_str, '%Y-%m-%d')
         logger.debug("Getting detection distribution", extra={
-            'species': species_name,
+            'species': filter_value,
+            'filter_col': filter_col,
             'view': view,
             'date': anchor_date_str
         })
 
-        # Initialize labels and data based on view type
+        # Initialize labels and data based on view type. Each query inlines
+        # the filter column (validated above) into safe f-string interpolation.
         if view == 'day':
             # 24 hours for the specific day
             labels = [f"{i:02d}:00" for i in range(24)]
             data = [0] * 24
 
-            query = """
+            query = f"""
             SELECT
                 strftime('%H', timestamp) as hour,
                 COUNT(*) as count
             FROM detections
-            WHERE common_name = ?
+            WHERE {filter_col} = ?
             AND date(timestamp) = date(?)
             GROUP BY hour
             """
 
             with self.get_db_connection() as conn:
                 cur = conn.cursor()
-                cur.execute(query, (species_name, anchor_date_str))
+                cur.execute(query, (filter_value, anchor_date_str))
                 results = cur.fetchall()
 
             for row in results:
@@ -626,12 +764,12 @@ class DatabaseManager:
                 labels.append(day.strftime('%a %m/%d'))
             data = [0] * 7
 
-            query = """
+            query = f"""
             SELECT
                 date(timestamp) as day,
                 COUNT(*) as count
             FROM detections
-            WHERE common_name = ?
+            WHERE {filter_col} = ?
             AND date(timestamp) >= date(?)
             AND date(timestamp) < date(?, '+7 days')
             GROUP BY day
@@ -639,7 +777,7 @@ class DatabaseManager:
 
             with self.get_db_connection() as conn:
                 cur = conn.cursor()
-                cur.execute(query, (species_name, week_start.strftime('%Y-%m-%d'), week_start.strftime('%Y-%m-%d')))
+                cur.execute(query, (filter_value, week_start.strftime('%Y-%m-%d'), week_start.strftime('%Y-%m-%d')))
                 results = cur.fetchall()
 
             for row in results:
@@ -657,19 +795,19 @@ class DatabaseManager:
             labels = [str(i) for i in range(1, num_days + 1)]
             data = [0] * num_days
 
-            query = """
+            query = f"""
             SELECT
                 strftime('%d', timestamp) as day,
                 COUNT(*) as count
             FROM detections
-            WHERE common_name = ?
+            WHERE {filter_col} = ?
             AND strftime('%Y-%m', timestamp) = ?
             GROUP BY day
             """
 
             with self.get_db_connection() as conn:
                 cur = conn.cursor()
-                cur.execute(query, (species_name, anchor_date.strftime('%Y-%m')))
+                cur.execute(query, (filter_value, anchor_date.strftime('%Y-%m')))
                 results = cur.fetchall()
 
             for row in results:
@@ -686,12 +824,12 @@ class DatabaseManager:
                 labels.append(month_date.strftime('%b'))
             data = [0] * 6
 
-            query = """
+            query = f"""
             SELECT
                 strftime('%m', timestamp) as month,
                 COUNT(*) as count
             FROM detections
-            WHERE common_name = ?
+            WHERE {filter_col} = ?
             AND strftime('%Y', timestamp) = ?
             AND CAST(strftime('%m', timestamp) AS INTEGER) >= ?
             AND CAST(strftime('%m', timestamp) AS INTEGER) < ?
@@ -700,7 +838,7 @@ class DatabaseManager:
 
             with self.get_db_connection() as conn:
                 cur = conn.cursor()
-                cur.execute(query, (species_name, str(anchor_date.year), start_month, start_month + 6))
+                cur.execute(query, (filter_value, str(anchor_date.year), start_month, start_month + 6))
                 results = cur.fetchall()
 
             for row in results:
@@ -713,19 +851,19 @@ class DatabaseManager:
             labels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
             data = [0] * 12
 
-            query = """
+            query = f"""
             SELECT
                 strftime('%m', timestamp) as month,
                 COUNT(*) as count
             FROM detections
-            WHERE common_name = ?
+            WHERE {filter_col} = ?
             AND strftime('%Y', timestamp) = ?
             GROUP BY month
             """
 
             with self.get_db_connection() as conn:
                 cur = conn.cursor()
-                cur.execute(query, (species_name, str(anchor_date.year)))
+                cur.execute(query, (filter_value, str(anchor_date.year)))
                 results = cur.fetchall()
 
             for row in results:
@@ -806,10 +944,17 @@ class DatabaseManager:
         return {'labels': labels, 'data': counts}
 
     def get_all_unique_species(self):
-        """Get all unique bird species ever detected, sorted alphabetically"""
-        query = """
-        SELECT DISTINCT common_name, scientific_name
+        """Get all unique bird species ever detected, sorted alphabetically.
+
+        Distinct on the species key so the same species detected under
+        different V2/V3 English variants surfaces as a single entry, while
+        blank-sci legacy rows still differentiate by common_name.
+        """
+        query = f"""
+        SELECT MAX(scientific_name) AS scientific_name,
+               MIN(common_name) AS common_name
         FROM detections
+        GROUP BY {_SPECIES_KEY}
         ORDER BY common_name ASC
         """
         with self.get_db_connection() as conn:
@@ -861,7 +1006,12 @@ class DatabaseManager:
                 audio_source, extra (raw JSON string)
             Ordered by timestamp ASC (oldest first)
         """
-        query = """
+        # Partition on the species key so retention is per-species rather than
+        # per-English-string: a Turdus merula history split between V2's
+        # "Eurasian Blackbird" and V3's "Common Blackbird" is protected once
+        # (top-N + recent-N total), not twice. Blank-sci legacy rows fall
+        # back to common_name so two unrelated legacy birds remain distinct.
+        query = f"""
         WITH RankedDetections AS (
             SELECT
                 id,
@@ -871,11 +1021,11 @@ class DatabaseManager:
                 audio_source,
                 extra,
                 ROW_NUMBER() OVER (
-                    PARTITION BY common_name
+                    PARTITION BY {_SPECIES_KEY}
                     ORDER BY confidence DESC
                 ) as confidence_rank,
                 ROW_NUMBER() OVER (
-                    PARTITION BY common_name
+                    PARTITION BY {_SPECIES_KEY}
                     ORDER BY timestamp DESC
                 ) as recency_rank
             FROM detections
@@ -907,7 +1057,7 @@ class DatabaseManager:
 
     def get_paginated_detections(self, page=1, per_page=25, start_date=None,
                                   end_date=None, species=None, sort='timestamp',
-                                  order='desc'):
+                                  order='desc', *, scientific_name=None):
         """Get paginated detection records with optional filtering.
 
         Args:
@@ -915,9 +1065,10 @@ class DatabaseManager:
             per_page: Results per page (max 100)
             start_date: Start date filter (YYYY-MM-DD)
             end_date: End date filter (YYYY-MM-DD)
-            species: Filter by common_name
+            species: Filter by common_name (English fallback)
             sort: Sort field (timestamp, confidence, common_name)
             order: Sort order (asc, desc)
+            scientific_name: Filter by scientific_name (preferred when known)
 
         Returns:
             tuple: (list of detections with filenames, total_count)
@@ -936,7 +1087,9 @@ class DatabaseManager:
         order = 'ASC' if order.lower() == 'asc' else 'DESC'
 
         # Build WHERE conditions
-        where_clause, params = self._build_detection_filters(start_date, end_date, species)
+        where_clause, params = self._build_detection_filters(
+            start_date, end_date, species, scientific_name=scientific_name,
+        )
 
         # Get total count
         count_query = f"""
@@ -997,13 +1150,17 @@ class DatabaseManager:
 
         return detections, total_count
 
-    def get_all_detections(self, start_date=None, end_date=None, species=None):
+    def get_all_detections(self, start_date=None, end_date=None, species=None,
+                            *, scientific_name=None):
         """Get all matching detections with normalized fields and filenames.
 
         Used for in-memory localized sorting where database ordering no longer
-        matches the names rendered in the UI.
+        matches the names rendered in the UI. Filter by ``scientific_name``
+        when known; falls back to ``species`` (English) for legacy callers.
         """
-        where_clause, params = self._build_detection_filters(start_date, end_date, species)
+        where_clause, params = self._build_detection_filters(
+            start_date, end_date, species, scientific_name=scientific_name,
+        )
 
         query = f"""
         SELECT
@@ -1044,7 +1201,8 @@ class DatabaseManager:
 
         return detections
 
-    def get_all_detections_for_export(self, start_date=None, end_date=None, species=None):
+    def get_all_detections_for_export(self, start_date=None, end_date=None,
+                                       species=None, *, scientific_name=None):
         """Get all detection records for CSV export.
 
         Fetches all matching rows in a single query. This is simpler and avoids
@@ -1057,13 +1215,16 @@ class DatabaseManager:
         Args:
             start_date: Start date filter (YYYY-MM-DD)
             end_date: End date filter (YYYY-MM-DD)
-            species: Filter by common_name
+            species: Filter by common_name (English fallback)
+            scientific_name: Filter by scientific_name (preferred when known)
 
         Returns:
             list: All detection records matching the filters
         """
         # Build WHERE conditions
-        where_clause, params = self._build_detection_filters(start_date, end_date, species)
+        where_clause, params = self._build_detection_filters(
+            start_date, end_date, species, scientific_name=scientific_name,
+        )
 
         query = f"""
         SELECT
@@ -1253,13 +1414,20 @@ class DatabaseManager:
     # Query building helpers
     # -------------------------------------------------------------------------
 
-    def _build_detection_filters(self, start_date=None, end_date=None, species=None):
+    def _build_detection_filters(self, start_date=None, end_date=None,
+                                  species=None, *, scientific_name=None):
         """Build WHERE clause components for detection queries.
+
+        ``scientific_name`` is preferred when known (the stable path that
+        merges V2/V3 English variants); otherwise filter on ``species``
+        which the API layer falls back to when the resolver couldn't map
+        an input string.
 
         Args:
             start_date: Start date filter (YYYY-MM-DD)
             end_date: End date filter (YYYY-MM-DD)
-            species: Filter by common_name
+            species: Filter by common_name (English fallback)
+            scientific_name: Filter by scientific_name (preferred)
 
         Returns:
             tuple: (where_clause, params) where where_clause is SQL string
@@ -1278,9 +1446,12 @@ class DatabaseManager:
             conditions.append("timestamp <= ?")
             params.append(end_date_iso)
 
-        if species:
-            conditions.append("common_name = ?")
-            params.append(species)
+        filter_col, filter_value = _resolve_filter_column(
+            species, scientific_name=scientific_name,
+        )
+        if filter_col:
+            conditions.append(f"{filter_col} = ?")
+            params.append(filter_value)
 
         where_clause = " AND ".join(conditions) if conditions else "1=1"
         return where_clause, params

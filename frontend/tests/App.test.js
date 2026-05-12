@@ -76,7 +76,7 @@ describe('App', () => {
     mockApi.get.mockResolvedValue({
       data: {
         location: { configured: true, timezone: 'America/New_York' },
-        display: { use_metric_units: true }
+        display: { use_metric_units: true, time_format: null }
       }
     })
   })

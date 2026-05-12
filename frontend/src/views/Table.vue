@@ -599,6 +599,7 @@
 	import { useTableData } from '@/composables/useTableData'
 	import { useAudioPlayer } from '@/composables/useAudioPlayer'
 	import { useAuth } from '@/composables/useAuth'
+	import { useTimeFormat } from '@/composables/useTimeFormat'
 	import { getDisplayCommonName, matchesBirdQuery } from '@/utils/birdNames'
 	import DetectionActions from '@/components/DetectionActions.vue'
 	import SpectrogramModal from '@/components/SpectrogramModal.vue'
@@ -723,12 +724,11 @@ const formatDate = (timestamp) => {
   })
 }
 
+const { formatTime: formatTimeOfDay } = useTimeFormat()
+
 const formatTime = (timestamp) => {
   if (!timestamp) return ''
-  return new Date(timestamp).toLocaleTimeString(undefined, {
-    hour: '2-digit',
-    minute: '2-digit'
-  })
+  return formatTimeOfDay(timestamp)
 }
 
 const formatDateTime = (timestamp) => {

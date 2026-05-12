@@ -20,8 +20,10 @@ _SPECIES_TABLE_PATH = os.path.join(
 # Storing as parallel arrays keyed by row index keeps per-row dict overhead
 # and duplicate-string allocations off the heap.
 _sci_to_idx: dict[str, int] | None = None
+_sci_names: list[str] | None = None
 _common_to_idx: dict[str, int] | None = None
 _common_names: list[str] | None = None
+_synonym_to_idx: dict[str, int] | None = None
 _in_v2: list[bool] | None = None
 _in_v3: list[bool] | None = None
 _loading_lock = threading.Lock()
@@ -34,10 +36,12 @@ _lang_lock = threading.Lock()
 def _ensure_loaded() -> None:
     """Load species metadata + index on first access (thread-safe).
 
-    Skips the ``label_*`` translation columns; those are loaded lazily by
-    :func:`_ensure_language_loaded` when a specific language is requested.
+    Reads the canonical columns plus ``label_en`` and ``label_en_uk`` to build
+    a case-folded English-synonym index. Other ``label_*`` translation columns
+    are loaded lazily by :func:`_ensure_language_loaded` on first request.
     """
-    global _sci_to_idx, _common_to_idx, _common_names, _in_v2, _in_v3
+    global _sci_to_idx, _sci_names, _common_to_idx, _common_names
+    global _synonym_to_idx, _in_v2, _in_v3
     if _sci_to_idx is not None:
         return
 
@@ -46,10 +50,18 @@ def _ensure_loaded() -> None:
             return
 
         sci_to_idx: dict[str, int] = {}
+        sci_names: list[str] = []
         common_to_idx: dict[str, int] = {}
         common_names: list[str] = []
         in_v2: list[bool] = []
         in_v3: list[bool] = []
+        # Collected during the row loop and merged afterwards so that
+        # canonical common_names always shadow label_en / label_en_uk aliases
+        # — without this, an earlier row's UK alias (e.g. Aegypius monachus
+        # label_en_uk = "Black Vulture") would mis-route the canonical
+        # "Black Vulture" (Coragyps atratus) by virtue of CSV row order.
+        canonical_synonyms: dict[str, int] = {}
+        alias_synonyms: dict[str, int] = {}
 
         try:
             with open(_SPECIES_TABLE_PATH, encoding='utf-8') as f:
@@ -57,23 +69,44 @@ def _ensure_loaded() -> None:
                 for idx, row in enumerate(reader):
                     sci = sys.intern(row['sci_name'])
                     sci_to_idx[sci] = idx
+                    sci_names.append(sci)
                     common = sys.intern(row.get('common_name', ''))
                     common_names.append(common)
                     if common:
                         common_to_idx[common] = idx
+                        # Canonical wins on collision: overwrite, not setdefault.
+                        # Two rows sharing a canonical common_name would still
+                        # collide here, but that's an authoritative ambiguity in
+                        # the species table itself.
+                        canonical_synonyms[common.casefold()] = idx
+                    for col in ('label_en', 'label_en_uk'):
+                        val = (row.get(col) or '').strip()
+                        if val:
+                            # Aliases use setdefault — first occurrence wins
+                            # when nothing canonical claims the same key.
+                            alias_synonyms.setdefault(val.casefold(), idx)
                     in_v2.append(row.get('in_v2') == 'True')
                     in_v3.append(row.get('in_v3') == 'True')
+
+            # Merge: aliases first, then canonical so canonical always wins.
+            synonym_to_idx: dict[str, int] = {**alias_synonyms, **canonical_synonyms}
             logger.info(
                 "Loaded species table",
-                extra={'species_count': len(sci_to_idx)},
+                extra={
+                    'species_count': len(sci_to_idx),
+                    'synonym_count': len(synonym_to_idx),
+                },
             )
         except Exception:
             logger.exception("Failed to load species table from %s", _SPECIES_TABLE_PATH)
+            synonym_to_idx = {}
 
         _common_to_idx = common_to_idx
         _common_names = common_names
+        _synonym_to_idx = synonym_to_idx
         _in_v2 = in_v2
         _in_v3 = in_v3
+        _sci_names = sci_names
         _sci_to_idx = sci_to_idx
 
 
@@ -124,10 +157,13 @@ def _ensure_language_loaded(language: str) -> list[str] | None:
 
 def clear_species_cache() -> None:
     """Reset the loaded species table. Used by tests."""
-    global _sci_to_idx, _common_to_idx, _common_names, _in_v2, _in_v3
+    global _sci_to_idx, _sci_names, _common_to_idx, _common_names
+    global _synonym_to_idx, _in_v2, _in_v3
     _sci_to_idx = None
+    _sci_names = None
     _common_to_idx = None
     _common_names = None
+    _synonym_to_idx = None
     _in_v2 = None
     _in_v3 = None
     _lang_columns.clear()
@@ -159,6 +195,26 @@ def get_localized_name_from_english(common_name: str, language: str) -> str | No
     """
     _ensure_loaded()
     return _localized_at(_common_to_idx.get(common_name), language)
+
+
+def resolve_to_scientific_name(name: str | None) -> str | None:
+    """Resolve an English bird name to its canonical scientific name.
+
+    Accepts any English variant carried by the species table: the canonical
+    ``common_name`` (built from V3.0), the V2.4 English label (``label_en``),
+    or the UK English variant (``label_en_uk``). Matching is case-insensitive
+    and trims surrounding whitespace.
+
+    Used at API ingress so a route param like ``/api/bird/Eurasian Blackbird``
+    can be served by querying the DB on the stable ``Turdus merula`` key.
+    Returns None for unknown names — callers should fall back to filtering by
+    common_name to preserve access to legacy or migrated rows.
+    """
+    if not name:
+        return None
+    _ensure_loaded()
+    idx = _synonym_to_idx.get(name.strip().casefold())
+    return _sci_names[idx] if idx is not None else None
 
 
 def get_species_list(model_type: str) -> list[dict]:

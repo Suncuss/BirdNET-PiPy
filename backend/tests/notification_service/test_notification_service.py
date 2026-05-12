@@ -293,7 +293,9 @@ class TestNotificationService:
     def test_build_title_new_species(self, notification_service):
         """Title shows 'New species' for new_species trigger (highest priority)."""
         service, _ = notification_service
-        detection = make_detection(common_name='Snowy Owl')
+        # Empty scientific_name pins the test to common_name formatting only;
+        # localization is exercised separately below.
+        detection = make_detection(common_name='Snowy Owl', scientific_name='')
         title = service._build_title(detection, ['new_species', 'first_of_day'])
         assert 'New species' in title
         assert 'Snowy Owl' in title
@@ -301,7 +303,7 @@ class TestNotificationService:
     def test_build_title_first_of_day(self, notification_service):
         """Title shows 'First sighting today' for first_of_day trigger."""
         service, _ = notification_service
-        detection = make_detection(common_name='Robin')
+        detection = make_detection(common_name='Robin', scientific_name='')
         title = service._build_title(detection, ['first_of_day', 'every_detection'])
         assert 'First sighting today' in title
         assert 'Robin' in title
@@ -309,7 +311,7 @@ class TestNotificationService:
     def test_build_title_rare_species(self, notification_service):
         """Title shows 'Rare species' for rare_species trigger."""
         service, _ = notification_service
-        detection = make_detection(common_name='Warbler')
+        detection = make_detection(common_name='Warbler', scientific_name='')
         title = service._build_title(detection, ['rare_species'])
         assert 'Rare species' in title
         assert 'Warbler' in title
@@ -317,7 +319,7 @@ class TestNotificationService:
     def test_build_title_every_detection(self, notification_service):
         """Title shows 'Bird detected' for every_detection trigger only."""
         service, _ = notification_service
-        detection = make_detection(common_name='Sparrow')
+        detection = make_detection(common_name='Sparrow', scientific_name='')
         title = service._build_title(detection, ['every_detection'])
         assert 'Bird detected' in title
         assert 'Sparrow' in title
@@ -477,3 +479,108 @@ class TestNotificationServiceFactory:
 
         result = _extract_apprise_error('MQTT Connection Error received from 127.0.0.1:9999')
         assert result == 'MQTT Connection Error received from 127.0.0.1:9999'
+
+
+class TestNotificationStationName:
+    """Title prefix and body line include display.station_name when set."""
+
+    def test_title_has_station_prefix_when_set(self, notification_service):
+        service, set_settings = notification_service
+        set_settings(display={'station_name': 'Backyard'})
+
+        detection = make_detection(common_name='Robin', scientific_name='')
+        title = service._build_title(detection, ['new_species'])
+        assert title.startswith('[Backyard] ')
+        assert 'New species' in title
+
+    def test_title_has_no_prefix_when_station_name_empty(self, notification_service):
+        service, _set_settings = notification_service
+        # Default fixture leaves station_name unset.
+        detection = make_detection(common_name='Robin', scientific_name='')
+        title = service._build_title(detection, ['new_species'])
+        assert not title.startswith('[')
+
+    def test_title_ignores_whitespace_only_station_name(self, notification_service):
+        service, set_settings = notification_service
+        set_settings(display={'station_name': '   '})
+
+        detection = make_detection(common_name='Robin', scientific_name='')
+        title = service._build_title(detection, ['every_detection'])
+        assert not title.startswith('[')
+
+    def test_message_includes_station_line_when_set(self, notification_service):
+        service, set_settings = notification_service
+        set_settings(display={'station_name': 'Backyard'})
+
+        detection = make_detection()
+        message = service._build_message(detection, ['every_detection'])
+        assert 'Station: Backyard' in message
+
+    def test_message_omits_station_line_when_empty(self, notification_service):
+        service, _set_settings = notification_service
+        detection = make_detection()
+        message = service._build_message(detection, ['every_detection'])
+        assert 'Station:' not in message
+
+
+class TestNotificationLanguageLocalization:
+    """Notification body honors display.bird_name_language (regression for #47).
+
+    The notification path used to pull common_name straight off the detection
+    dict, ignoring the user's language preference. These tests pin the
+    localized behavior so that regression cannot recur.
+    """
+
+    def test_german_setting_localizes_title(self, notification_service):
+        service, set_settings = notification_service
+        set_settings(display={'bird_name_language': 'de'})
+
+        # Simulate a V2-emitted detection: common_name is the V2 English
+        # variant, scientific_name is the stable key.
+        detection = make_detection(
+            common_name='Eurasian Blackbird',
+            scientific_name='Turdus merula',
+        )
+        title = service._build_title(detection, ['new_species'])
+        assert 'Amsel' in title
+        assert 'Eurasian Blackbird' not in title
+
+    def test_german_setting_localizes_message_body(self, notification_service):
+        service, set_settings = notification_service
+        set_settings(display={'bird_name_language': 'de'})
+
+        detection = make_detection(
+            common_name='Eurasian Blackbird',
+            scientific_name='Turdus merula',
+            confidence=0.92,
+            timestamp='2024-06-15T14:30:00',
+        )
+        message = service._build_message(detection, ['every_detection'])
+        assert 'Amsel' in message
+        assert 'Turdus merula' in message  # scientific name still shown in parens
+
+    def test_english_setting_keeps_english_name(self, notification_service):
+        service, _set_settings = notification_service
+        # Default fixture is English; no override needed.
+        detection = make_detection(
+            common_name='Eurasian Blackbird',
+            scientific_name='Turdus merula',
+        )
+        title = service._build_title(detection, ['every_detection'])
+        # Under English we render the species table's canonical English
+        # ('Common Blackbird' for Turdus merula), not the V2 variant.
+        assert 'Common Blackbird' in title or 'Eurasian Blackbird' in title
+        assert 'Amsel' not in title
+
+    def test_unknown_species_falls_back_to_common_name(self, notification_service):
+        service, set_settings = notification_service
+        set_settings(display={'bird_name_language': 'de'})
+
+        detection = make_detection(
+            common_name='Some Custom Migrated Name',
+            scientific_name='Fakeus birdus',
+        )
+        title = service._build_title(detection, ['rare_species'])
+        # Resolver can't find this species; helper returns the input
+        # common_name. The notification still works.
+        assert 'Some Custom Migrated Name' in title

@@ -44,10 +44,16 @@
           v-else-if="!isDataEmpty && !detailedBirdActivityError"
           class="flex h-[calc(100%-2rem)]"
         >
-          <div class="w-full lg:w-1/3 lg:pr-2">
+          <div class="w-full lg:w-1/3 lg:pr-2 relative">
             <canvas
               ref="totalObservationsChart"
               class="h-full"
+            />
+            <SpeciesAxisLinks
+              :ticks="speciesAxisLayout.ticks"
+              :axis-left="speciesAxisLayout.axisLeft"
+              :axis-width="speciesAxisLayout.axisWidth"
+              :row-height="speciesAxisLayout.rowHeight"
             />
           </div>
           <div class="hidden lg:block lg:w-2/3 lg:pl-2 h-full">
@@ -394,8 +400,10 @@ import { faPlay, faPause, faCircleInfo } from '@fortawesome/free-solid-svg-icons
 	import { useBirdCharts } from '@/composables/useBirdCharts';
 	import { useAudioPlayer } from '@/composables/useAudioPlayer';
 	import { useAppStatus } from '@/composables/useAppStatus';
+import { useTimeFormat } from '@/composables/useTimeFormat';
 import SpectrogramModal from '@/components/SpectrogramModal.vue';
 import CenteredMessage from '@/components/CenteredMessage.vue';
+import SpeciesAxisLinks from '@/components/SpeciesAxisLinks.vue';
 import { getAudioUrl, getSpectrogramUrl } from '@/services/media'
 import { getDisplayCommonName } from '@/utils/birdNames'
 
@@ -407,7 +415,8 @@ export default {
     components: {
         FontAwesomeIcon,
         SpectrogramModal,
-        CenteredMessage
+        CenteredMessage,
+        SpeciesAxisLinks
     },
     setup() {
         const {
@@ -533,11 +542,15 @@ export default {
             freezeChart,
             createTotalObservationsChart: createTotalObsChart,
             createHourlyActivityHeatmap: createHeatmap,
-            createHourlyActivityChart: createHourlyChart
+            createHourlyActivityChart: createHourlyChart,
+            speciesAxisLayout
         } = useBirdCharts()
 
         // App status for coordinating with setup flow
         const { locationConfigured } = useAppStatus()
+
+        // User-configurable time-format helper
+        const { formatTime: formatTimeOfDay, formatHourLabel } = useTimeFormat()
 
         const currentOrder = () => showLeastCommon.value ? 'least' : 'most'
         const recentMode = () => showUniqueSpecies.value ? 'unique' : 'all'
@@ -706,7 +719,10 @@ export default {
 
         const summaryEntries = computed(() => (
             Object.entries(currentPeriodSummary.value || {})
-                .filter(([key]) => !key.endsWith('Display'))
+                // Hide *Display variants (rendered separately via getSummaryBirdDisplay)
+                // and *ScientificName fields (backend-only stable key used by
+                // _localize_summary, not a user-visible summary entry).
+                .filter(([key]) => !key.endsWith('Display') && !key.endsWith('ScientificName'))
                 .map(([key, value]) => ({ key, value }))
         ))
 
@@ -849,8 +865,7 @@ export default {
         };
 
         const formatTimestamp = (dateString) => {
-            const date = new Date(dateString);
-            return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            return formatTimeOfDay(dateString)
         }
 
         const formatConfidence = (confidence) => {
@@ -862,7 +877,10 @@ export default {
         }
 
         const formatSummaryValue = (key, value) => {
-            if (key === 'mostActiveHour') return value
+            if (key === 'mostActiveHour') {
+                // Backend returns "H:00" or "N/A" — let the helper reformat per preference
+                return value === 'N/A' ? value : formatHourLabel(value)
+            }
             return typeof value === 'number' ? value.toLocaleString() : value
         }
 
@@ -916,6 +934,7 @@ export default {
             showSpectrogram,
             hourlyBirdActivityData,
             totalObservationsChart,
+            speciesAxisLayout,
             hourlyActivityHeatmap,
             isDataEmpty,
             latestObservationIsPlaying,

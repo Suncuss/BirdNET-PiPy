@@ -1,7 +1,8 @@
-import { nextTick } from 'vue'
+import { nextTick, ref } from 'vue'
 import Chart from 'chart.js/auto'
 import { useChartColors } from './useChartColors'
 import { useChartHelpers } from './useChartHelpers'
+import { useTimeFormat } from './useTimeFormat'
 import { getDisplaySpeciesName } from '@/utils/birdNames'
 
 /**
@@ -11,6 +12,11 @@ import { getDisplaySpeciesName } from '@/utils/birdNames'
 export function useBirdCharts() {
   const { colorPalette, secondaryRGB } = useChartColors()
   const { resolveCanvas, destroyChart, freezeChart, generateHourLabels, calculateRowStats, prepareDataForCategoryMatrix } = useChartHelpers()
+  const { formatHourLabel } = useTimeFormat()
+
+  // Reactive layout state for the species-axis HTML overlay (SpeciesAxisLinks).
+  // Populated by createTotalObservationsChart via a Chart.js afterLayout plugin.
+  const speciesAxisLayout = ref({ ticks: [], axisLeft: 0, axisWidth: 0, rowHeight: 0 })
 
   /**
    * Create custom grid plugin for matrix/heatmap charts.
@@ -87,6 +93,10 @@ export function useBirdCharts() {
    * @param {boolean} options.animate - Enable animation (default: true)
    * @param {string} options.title - Chart title (default: 'Total Detections by Species')
    * @returns {Promise<Chart|null>} Chart instance or null if canvas not available
+   *
+   * Side effect: emits axis tick positions into `speciesAxisLayout` (returned from useBirdCharts)
+   * so an HTML overlay can render the species labels as real router-links. The canvas y-axis
+   * ticks are rendered transparent — they still reserve layout width but are not visible.
    */
   const createTotalObservationsChart = async (canvasRef, data, options = {}) => {
     const { animate = true, title = 'Total Detections by Species' } = options
@@ -101,6 +111,7 @@ export function useBirdCharts() {
     // In-place update if a bar chart already exists on this canvas
     const existing = Chart.getChart(canvas)
     if (existing && existing.config.type === 'bar') {
+      if (existing.$speciesAxisCtx) existing.$speciesAxisCtx.data = data
       existing.data.labels = data.map(d => getDisplaySpeciesName(d))
       existing.data.datasets[0].data = data.map(d => d.hourlyActivity.reduce((sum, val) => sum + val, 0))
       existing.options.animation = animate
@@ -111,7 +122,45 @@ export function useBirdCharts() {
     destroyChart(canvasRef)
     const ctx = canvas.getContext('2d')
 
-    return new Chart(ctx, {
+    // Shared mutable context: plugin closure reads `data` from here so in-place updates
+    // (polling refresh, Most/Least toggle) are reflected on the next layout pass.
+    const speciesAxisCtx = { data }
+
+    const speciesLayoutPlugin = {
+      id: 'speciesLayoutEmitter',
+      afterLayout: (chart) => {
+        const yScale = chart.scales?.y
+        if (!yScale) return
+        const speciesData = speciesAxisCtx.data || []
+        const labels = chart.data.labels || []
+        const ticks = speciesData.map((d, i) => ({
+          y: yScale.getPixelForValue(i),
+          label: labels[i],
+          commonName: d.species
+        }))
+        const rowHeight = speciesData.length > 0
+          ? (yScale.bottom - yScale.top) / speciesData.length
+          : 0
+        const axisLeft = yScale.left
+        const axisWidth = yScale.width
+
+        // Skip the ref write when geometry and species set are unchanged — avoids
+        // a Vue re-render of the overlay on every polling refresh that returned the
+        // same data.
+        const prev = speciesAxisLayout.value
+        if (prev.ticks.length === ticks.length
+          && prev.axisLeft === axisLeft
+          && prev.axisWidth === axisWidth
+          && prev.rowHeight === rowHeight
+          && prev.ticks.every((t, i) => t.commonName === ticks[i].commonName && t.y === ticks[i].y && t.label === ticks[i].label)) {
+          return
+        }
+
+        speciesAxisLayout.value = { ticks, axisLeft, axisWidth, rowHeight }
+      }
+    }
+
+    const chart = new Chart(ctx, {
       type: 'bar',
       data: {
         labels: data.map(d => getDisplaySpeciesName(d)),
@@ -143,14 +192,19 @@ export function useBirdCharts() {
             ticks: { color: colorPalette.text, precision: 0 }
           },
           y: {
-            ticks: { color: colorPalette.text }
+            // Transparent ticks reserve layout space; HTML overlay renders the real labels as links.
+            ticks: { color: 'transparent' }
           }
         },
         layout: {
           padding: { left: 10, right: 10, top: 0, bottom: 0 }
         }
-      }
+      },
+      plugins: [speciesLayoutPlugin]
     })
+
+    chart.$speciesAxisCtx = speciesAxisCtx
+    return chart
   }
 
   /**
@@ -231,7 +285,14 @@ export function useBirdCharts() {
           x: {
             type: 'category',
             labels: generateHourLabels(),
-            ticks: { maxRotation: 0, autoSkip: false, font: { size: 9 } },
+            ticks: {
+              maxRotation: 0,
+              autoSkip: false,
+              font: { size: 9 },
+              callback: function(value, index) {
+                return formatHourLabel(this.getLabelForValue(index))
+              }
+            },
             grid: { display: false },
             title: { display: true, text: 'Hour of Day', color: colorPalette.text }
           },
@@ -322,10 +383,7 @@ export function useBirdCharts() {
             ticks: {
               color: colorPalette.text,
               callback: function(value, index) {
-                const hour = parseInt(this.getLabelForValue(index).split(':')[0])
-                if (hour === 0) return '12AM'
-                if (hour === 12) return '12PM'
-                return hour > 12 ? `${hour - 12}PM` : `${hour}AM`
+                return formatHourLabel(this.getLabelForValue(index))
               }
             }
           }
@@ -343,6 +401,7 @@ export function useBirdCharts() {
     freezeChart,
     createTotalObservationsChart,
     createHourlyActivityHeatmap,
-    createHourlyActivityChart
+    createHourlyActivityChart,
+    speciesAxisLayout
   }
 }

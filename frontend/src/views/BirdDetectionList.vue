@@ -44,7 +44,8 @@
   import { defineComponent } from 'vue'
   import { useRouter } from 'vue-router'
   import { getDisplayCommonName } from '@/utils/birdNames'
-  
+  import { useTimeFormat } from '@/composables/useTimeFormat'
+
   export default defineComponent({
     name: 'BirdDetectionList',
     props: {
@@ -55,9 +56,10 @@
     },
     setup() {
       const router = useRouter()
-      
+      const { formatTime: formatTimeOfDay } = useTimeFormat()
+
       const formatTime = (timestamp) => {
-        return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        return formatTimeOfDay(timestamp, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
       }
       
       const navigateToBirdDetails = (commonName) => {

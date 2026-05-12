@@ -7,6 +7,7 @@ import { useAppStatus } from '@/composables/useAppStatus'
 import { useAudioPlayer } from '@/composables/useAudioPlayer'
 import { useBirdCharts } from '@/composables/useBirdCharts'
 import { useSystemUpdate } from '@/composables/useSystemUpdate'
+import { useTimeFormat } from '@/composables/useTimeFormat'
 
 vi.mock('@/composables/useFetchBirdData')
 vi.mock('@/composables/useAppStatus')
@@ -118,7 +119,8 @@ describe('Dashboard', () => {
       freezeChart: vi.fn(),
       createTotalObservationsChart: vi.fn(),
       createHourlyActivityHeatmap: vi.fn(),
-      createHourlyActivityChart: vi.fn()
+      createHourlyActivityChart: vi.fn(),
+      speciesAxisLayout: ref({ ticks: [], axisLeft: 0, axisWidth: 0, rowHeight: 0 })
     })
     useSystemUpdate.mockReturnValue({
       checkForUpdates: vi.fn().mockResolvedValue({}),
@@ -179,12 +181,19 @@ describe('Dashboard', () => {
   })
 
   it('formats summary keys and values', async () => {
+    // Force 24h so the most-active-hour assertion is locale-independent
+    useTimeFormat().setTimeFormat('24h')
     const wrapper = mountDashboard()
     await flushPromises()
 
     expect(wrapper.vm.formatSummaryKey('mostActiveHour')).toBe('Most Active Hour')
     expect(wrapper.vm.formatSummaryValue('totalDetections', 1234)).toBe('1,234')
     expect(wrapper.vm.formatSummaryValue('mostActiveHour', '09:00')).toBe('09:00')
+    expect(wrapper.vm.formatSummaryValue('mostActiveHour', 'N/A')).toBe('N/A')
+
+    // 12h mode formats the same value differently
+    useTimeFormat().setTimeFormat('12h')
+    expect(wrapper.vm.formatSummaryValue('mostActiveHour', '09:00')).toBe('9 AM')
   })
 
   it('shows error messages when set', async () => {

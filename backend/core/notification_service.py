@@ -8,6 +8,7 @@ import queue
 import threading
 from datetime import datetime
 
+from core.bird_name_utils import get_localized_common_name
 from core.logging_config import get_logger
 from core.runtime_config import get_runtime_settings, resolve_source_label
 
@@ -36,6 +37,9 @@ class NotificationService:
     def _load_config(self):
         """Load notification config from runtime settings cache."""
         settings = load_user_settings()
+        # Keep the full settings dict so the message-builders can reach the
+        # display.bird_name_language preference without a second load.
+        self._settings = settings
         notif = settings['notifications']
         self._apprise_urls = notif['apprise_urls']
         self._every_detection = notif['every_detection']
@@ -125,16 +129,26 @@ class NotificationService:
         self._last_notified[scientific_name] = detection_ts
         return True
 
+    def _station_prefix(self):
+        """Return '[Station Name] ' if station_name is configured, else ''."""
+        station = self._settings.get('display', {}).get('station_name', '').strip()
+        return f"[{station}] " if station else ""
+
     def _build_title(self, detection, triggers):
         """Build notification title based on most notable trigger."""
-        common_name = detection.get('common_name', 'Unknown')
+        display_name = get_localized_common_name(
+            detection.get('scientific_name'),
+            detection.get('common_name'),
+            settings=self._settings,
+        ) or 'Unknown'
+        prefix = self._station_prefix()
         if 'new_species' in triggers:
-            return f"New species: {common_name}"
+            return f"{prefix}New species: {display_name}"
         if 'first_of_day' in triggers:
-            return f"First sighting today: {common_name}"
+            return f"{prefix}First sighting today: {display_name}"
         if 'rare_species' in triggers:
-            return f"Rare species: {common_name}"
-        return f"Bird detected: {common_name}"
+            return f"{prefix}Rare species: {display_name}"
+        return f"{prefix}Bird detected: {display_name}"
 
     @staticmethod
     def _resolve_source_label(source_id):
@@ -143,8 +157,12 @@ class NotificationService:
 
     def _build_message(self, detection, triggers):
         """Build notification message body."""
-        common_name = detection.get('common_name', 'Unknown')
         sci_name = detection.get('scientific_name', '')
+        display_name = get_localized_common_name(
+            sci_name,
+            detection.get('common_name'),
+            settings=self._settings,
+        ) or 'Unknown'
         confidence = detection.get('confidence', 0)
         timestamp = detection.get('timestamp', '')
 
@@ -152,7 +170,7 @@ class NotificationService:
         time_str = timestamp.split('T')[1].split('.')[0] if 'T' in timestamp else timestamp
 
         lines = [
-            f"{common_name} ({sci_name})",
+            f"{display_name} ({sci_name})",
             f"Confidence: {confidence * 100:.0f}%",
             f"Time: {time_str}",
         ]
@@ -162,6 +180,10 @@ class NotificationService:
         if audio_source:
             source_label = self._resolve_source_label(audio_source)
             lines.append(f"Source: {source_label}")
+
+        station = self._settings.get('display', {}).get('station_name', '').strip()
+        if station:
+            lines.append(f"Station: {station}")
 
         reasons = []
         if 'new_species' in triggers:

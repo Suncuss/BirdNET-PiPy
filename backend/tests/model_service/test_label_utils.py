@@ -13,6 +13,7 @@ from model_service.label_utils import (
     get_localized_name,
     get_localized_name_from_english,
     get_species_list,
+    resolve_to_scientific_name,
 )
 
 
@@ -48,6 +49,63 @@ class TestSpeciesTableLayout:
         v2 = get_species_list('birdnet')
         v3 = get_species_list('birdnet_v3')
         assert len(v3) > len(v2)
+
+
+class TestResolveToScientificName:
+    """English-synonym resolver covering canonical + V2 label drift."""
+
+    def test_canonical_common_name_resolves(self):
+        # 'Common Blackbird' is the V3 canonical for Turdus merula.
+        assert resolve_to_scientific_name('Common Blackbird') == 'Turdus merula'
+
+    def test_v2_label_en_synonym_resolves(self):
+        # The V2 model emits 'Eurasian Blackbird' for the same species.
+        # Pre-resolver, this string missed _common_to_idx and broke
+        # add_display_species translation.
+        assert resolve_to_scientific_name('Eurasian Blackbird') == 'Turdus merula'
+
+    def test_resolution_is_case_insensitive(self):
+        assert resolve_to_scientific_name('eurasian blackbird') == 'Turdus merula'
+        assert resolve_to_scientific_name('  COMMON BLACKBIRD  ') == 'Turdus merula'
+
+    def test_unknown_name_returns_none(self):
+        assert resolve_to_scientific_name('Definitely Not A Real Bird') is None
+
+    def test_empty_inputs_return_none(self):
+        assert resolve_to_scientific_name('') is None
+        assert resolve_to_scientific_name(None) is None
+        assert resolve_to_scientific_name('   ') is None
+
+    def test_canonical_wins_over_label_en_within_a_row(self):
+        # Within a single row, the canonical common_name takes precedence
+        # over label_en when both are present and different. For Turdus merula
+        # both columns lead to the same row, so we only need to assert the
+        # value is the correct scientific name.
+        assert resolve_to_scientific_name('Common Blackbird') == 'Turdus merula'
+        assert resolve_to_scientific_name('Eurasian Blackbird') == 'Turdus merula'
+
+    def test_canonical_wins_across_rows_black_vulture(self):
+        # Cross-row shadowing regression. Aegypius monachus (Cinereous Vulture,
+        # CSV row "A") has label_en_uk = "Black Vulture". Coragyps atratus (CSV
+        # row "C") has common_name = "Black Vulture". An earlier setdefault-
+        # only pass would route "Black Vulture" detections to Aegypius monachus
+        # — the Old World species — and the /api/bird/Black Vulture detail
+        # page would miss every real V2 BirdNET detection.
+        assert resolve_to_scientific_name('Black Vulture') == 'Coragyps atratus'
+        # The Aegypius side is still reachable via its canonical name.
+        assert resolve_to_scientific_name('Cinereous Vulture') == 'Aegypius monachus'
+
+    def test_taxonomic_rename_resolves_to_v3_canonical(self):
+        # Shikra is one of ~137 species where V2 and V3 use different
+        # scientific names for the same bird (V2: Accipiter badius,
+        # V3: Tachyspiza badia). Both rows live in the species table; the
+        # resolver returns whichever canonical common_name appears last in
+        # CSV order — for Shikra that's the V3 Tachyspiza row, which matches
+        # what new V3 detections store. Known limitation: a V2-on-disk user
+        # with detections saved under "Accipiter badius" will not see those
+        # rows merged on /api/bird/Shikra; a scientific-name synonym table
+        # is the right follow-up but is out of scope for this PR.
+        assert resolve_to_scientific_name('Shikra') == 'Tachyspiza badia'
 
 
 def _retained_module_cache_bytes(module: types.ModuleType) -> int:

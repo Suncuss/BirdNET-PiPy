@@ -927,6 +927,20 @@
             @update:model-value="toggleMetricUnits"
           />
         </div>
+
+        <div class="pt-4 border-t border-gray-100 flex items-center justify-between">
+          <div>
+            <label class="text-sm text-gray-600">Use 24-hour Clock</label>
+            <p class="text-xs text-gray-400">
+              Show times like 14:30 instead of 2:30 PM
+            </p>
+          </div>
+          <ToggleSwitch
+            :model-value="!timeFormatSettings.hour12.value"
+            :disabled="timeFormatSaving"
+            @update:model-value="toggleTimeFormat"
+          />
+        </div>
       </CollapsibleSection>
 
       <!-- Management (Collapsible) -->
@@ -1373,6 +1387,7 @@ import { useSystemUpdate } from '@/composables/useSystemUpdate'
 import { requestRestart, useServiceRestart } from '@/composables/useServiceRestart'
 import { useAuth } from '@/composables/useAuth'
 import { useUnitSettings } from '@/composables/useUnitSettings'
+import { useTimeFormat } from '@/composables/useTimeFormat'
 import { useAppStatus } from '@/composables/useAppStatus'
 import { limitDecimals } from '@/utils/inputHelpers'
 import { FILTER_DEFAULTS, modelTypeOptions } from '@/utils/modelDefaults'
@@ -1416,6 +1431,7 @@ export default {
     const serviceRestart = useServiceRestart()
     const auth = useAuth()
     const unitSettings = useUnitSettings()
+    const timeFormatSettings = useTimeFormat()
     const appStatus = useAppStatus()
 
     // Dropdown options (static configuration)
@@ -1629,6 +1645,7 @@ export default {
     let notifSaveInFlight = 0
     const updateChannelSaving = ref(false)
     const metricUnitsSaving = ref(false)
+    const timeFormatSaving = ref(false)
 
     // Minimal settings skeleton - actual values loaded from API
     const settings = ref({
@@ -1865,6 +1882,7 @@ export default {
         normalizeSettingsData(data)
         settings.value = data
         unitSettings.setUseMetricUnits(settings.value.display.use_metric_units ?? true)
+        timeFormatSettings.setTimeFormat(settings.value.display.time_format)
         if (saveStatus.value?.type === 'error') {
           saveStatus.value = null
         }
@@ -2020,6 +2038,25 @@ export default {
         showStatus('error', 'Failed to save channel setting')
       } finally {
         updateChannelSaving.value = false
+      }
+    }
+
+    // Toggle time-format preference (saves immediately, no restart needed).
+    const toggleTimeFormat = async () => {
+      if (timeFormatSaving.value) return
+      const target = timeFormatSettings.hour12.value ? '24h' : '12h'
+      timeFormatSaving.value = true
+      try {
+        const ok = await timeFormatSettings.saveTimeFormat(target)
+        if (ok) {
+          // Keep settings.value in sync so a subsequent full PUT /settings
+          // doesn't overwrite the just-saved preference with the stale value.
+          if (!settings.value.display) settings.value.display = {}
+          settings.value.display.time_format = target
+        }
+        showStatus(ok ? 'success' : 'error', ok ? 'Settings applied.' : 'Failed to save time format setting')
+      } finally {
+        timeFormatSaving.value = false
       }
     }
 
@@ -2537,6 +2574,8 @@ export default {
       versionChangelogUrl,
       updateSubLabel,
       toggleMetricUnits,
+      toggleTimeFormat,
+      timeFormatSettings,
       showRecorderError,
       limitDecimals,
       updateBirdweatherId,
@@ -2547,6 +2586,7 @@ export default {
       dismissSettingsError,
       updateChannelSaving,
       metricUnitsSaving,
+      timeFormatSaving,
       // Auth
       auth,
       authLoading,

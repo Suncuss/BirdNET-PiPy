@@ -178,6 +178,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useLogger } from '@/composables/useLogger'
 import { useAuth } from '@/composables/useAuth'
 import { useUnitSettings } from '@/composables/useUnitSettings'
+import { useTimeFormat } from '@/composables/useTimeFormat'
 import { useAppStatus } from '@/composables/useAppStatus'
 import { useSystemUpdate } from '@/composables/useSystemUpdate'
 import { useRecorderHealth } from '@/composables/useRecorderHealth'
@@ -201,6 +202,7 @@ export default {
     const router = useRouter()
     const auth = useAuth()
     const unitSettings = useUnitSettings()
+    const timeFormat = useTimeFormat()
     const { stationName, setStationName, setLocationConfigured } = useAppStatus()
     const systemUpdate = useSystemUpdate()
     const recorderHealth = useRecorderHealth()
@@ -220,8 +222,9 @@ export default {
     const checkLocationSetup = async () => {
       try {
         const { data: settings } = await api.get('/settings')
-        // Sync unit preference from settings
+        // Sync display preferences from settings
         unitSettings.setUseMetricUnits(settings.display?.use_metric_units ?? true)
+        timeFormat.setTimeFormat(settings.display?.time_format)
         setStationName(settings.display?.station_name)
         // Show setup modal if location has not been configured
         if (!settings.location?.configured) {
