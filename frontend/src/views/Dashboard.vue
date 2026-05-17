@@ -401,6 +401,7 @@
 
 <script>
 import { ref, onMounted, onUnmounted, onActivated, onDeactivated, computed, watch, nextTick } from 'vue'
+import { useRouter } from 'vue-router'
 import Chart from 'chart.js/auto'
 import { MatrixController, MatrixElement } from 'chartjs-chart-matrix'
 
@@ -420,6 +421,7 @@ import SpeciesAxisLinks from '@/components/SpeciesAxisLinks.vue';
 import TimeAxisLinks from '@/components/TimeAxisLinks.vue';
 import { getAudioUrl, getSpectrogramUrl } from '@/services/media'
 import { getDisplayCommonName } from '@/utils/birdNames'
+import { tableDetectionsLink } from '@/utils/detectionLinks'
 
 library.add(faPlay, faPause, faCircleInfo);
 Chart.register(MatrixController, MatrixElement)
@@ -569,6 +571,15 @@ export default {
         // User-configurable time-format helper
         const { formatTime: formatTimeOfDay, formatHourLabel } = useTimeFormat()
 
+        const router = useRouter()
+
+        // Heatmap cell drill-down: open the Table view filtered to that
+        // species + hour (+ the heatmap's date). Shares the deep-link query
+        // contract with the TimeAxisLinks hour labels via tableDetectionsLink.
+        const goToCellDetections = ({ commonName, hour, date }) => {
+            router.push(tableDetectionsLink({ hour, date, species: commonName }))
+        }
+
         const currentOrder = () => showLeastCommon.value ? 'least' : 'most'
         const recentMode = () => showUniqueSpecies.value ? 'unique' : 'all'
 
@@ -631,7 +642,7 @@ export default {
             }
             if (!isDataEmpty.value) {
                 createTotalObsChart(totalObservationsChart, detailedBirdActivityData.value, { animate: initialLoad.value, title: null });
-                createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: initialLoad.value, title: null, date: getLocalDateString() });
+                createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: initialLoad.value, title: null, date: getLocalDateString(), onCellClick: goToCellDetections });
             }
 
             // Initialize spectrogram canvas after DOM updates with new data
@@ -917,7 +928,7 @@ export default {
             try {
                 setActivityOrder(currentOrder())
                 await createTotalObsChart(totalObservationsChart, detailedBirdActivityData.value, { animate: true, title: null })
-                await createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: true, title: null, date: getLocalDateString() })
+                await createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: true, title: null, date: getLocalDateString(), onCellClick: goToCellDetections })
             } finally {
                 isActivityUpdating.value = false
             }
@@ -927,7 +938,7 @@ export default {
         const redrawCharts = async (animate = false) => {
             initialLoad.value = false;
             await createTotalObsChart(totalObservationsChart, detailedBirdActivityData.value, { animate, title: null });
-            await createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate, title: null, date: getLocalDateString() });
+            await createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate, title: null, date: getLocalDateString(), onCellClick: goToCellDetections });
             await createHourlyChart(hourlyActivityChart, hourlyBirdActivityData.value, { animate });
         };
 

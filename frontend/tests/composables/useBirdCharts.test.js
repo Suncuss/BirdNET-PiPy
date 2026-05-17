@@ -2,7 +2,7 @@
  * Tests for useBirdCharts composable
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { ref, nextTick } from 'vue'
+import { ref } from 'vue'
 import { useBirdCharts } from '@/composables/useBirdCharts'
 
 // Mock Chart.js
@@ -287,6 +287,71 @@ describe('useBirdCharts', () => {
           })
         })
       )
+    })
+
+    it('onClick deep-links a non-empty cell via onCellClick', async () => {
+      const onCellClick = vi.fn()
+      const canvasRef = ref(mockCanvas)
+      await charts.createHourlyActivityHeatmap(canvasRef, mockData, { date: '2024-01-15', onCellClick })
+
+      const { onClick } = Chart.mock.calls[0][1].options
+      onClick({}, [], {
+        getElementsAtEventForMode: vi.fn(() => [{ index: 0 }]),
+        data: { datasets: [{ data: [{ v: 62, hour: 14, commonName: 'American Robin' }] }] }
+      })
+
+      expect(onCellClick).toHaveBeenCalledWith({
+        commonName: 'American Robin',
+        hour: 14,
+        count: 62,
+        date: '2024-01-15'
+      })
+    })
+
+    it('onClick ignores an empty cell (v <= 0)', async () => {
+      const onCellClick = vi.fn()
+      const canvasRef = ref(mockCanvas)
+      await charts.createHourlyActivityHeatmap(canvasRef, mockData, { onCellClick })
+
+      const { onClick } = Chart.mock.calls[0][1].options
+      onClick({}, [], {
+        getElementsAtEventForMode: vi.fn(() => [{ index: 0 }]),
+        data: { datasets: [{ data: [{ v: 0, hour: 3, commonName: 'Robin' }] }] }
+      })
+
+      expect(onCellClick).not.toHaveBeenCalled()
+    })
+
+    it('onClick is inert when no onCellClick is provided', async () => {
+      const canvasRef = ref(mockCanvas)
+      await charts.createHourlyActivityHeatmap(canvasRef, mockData)
+
+      const { onClick } = Chart.mock.calls[0][1].options
+      expect(() => onClick({}, [], {
+        getElementsAtEventForMode: vi.fn(() => []),
+        data: { datasets: [{ data: [] }] }
+      })).not.toThrow()
+    })
+
+    it('onHover shows a pointer cursor only over a clickable cell', async () => {
+      const onCellClick = vi.fn()
+      const canvasRef = ref(mockCanvas)
+      await charts.createHourlyActivityHeatmap(canvasRef, mockData, { onCellClick })
+
+      const { onHover } = Chart.mock.calls[0][1].options
+      const target = { style: { cursor: '' } }
+
+      onHover({ native: { target } }, [], {
+        getElementsAtEventForMode: vi.fn(() => [{ index: 0 }]),
+        data: { datasets: [{ data: [{ v: 5 }] }] }
+      })
+      expect(target.style.cursor).toBe('pointer')
+
+      onHover({ native: { target } }, [], {
+        getElementsAtEventForMode: vi.fn(() => []),
+        data: { datasets: [{ data: [] }] }
+      })
+      expect(target.style.cursor).toBe('default')
     })
   })
 

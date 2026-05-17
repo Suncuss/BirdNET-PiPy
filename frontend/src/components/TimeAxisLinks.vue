@@ -18,6 +18,7 @@
 
 <script>
 import { useTimeFormat } from '@/composables/useTimeFormat'
+import { tableDetectionsLink } from '@/utils/detectionLinks'
 
 // Responsive size of the hour-label overlay. MIN fits all 24 verbose
 // ("12 AM" … "11 PM") labels at the narrowest width the heatmap is shown
@@ -147,9 +148,7 @@ export default {
   },
   methods: {
     linkTo(tick) {
-      const query = { hour: tick.hour }
-      if (this.date) query.date = this.date
-      return { name: 'Table', query }
+      return tableDetectionsLink({ hour: tick.hour, date: this.date })
     },
     tickStyle(tick) {
       const w = Math.max(this.colWidth, 1)

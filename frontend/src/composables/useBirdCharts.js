@@ -251,6 +251,9 @@ export function useBirdCharts() {
    * @param {string} options.date - Date (YYYY-MM-DD) the heatmap represents; emitted
    *   into timeAxisLayout so the TimeAxisLinks overlay can deep-link the Table view
    *   to that date + clicked hour.
+   * @param {Function} [options.onCellClick] - Invoked when a non-empty cell is
+   *   clicked, with `{ commonName, hour, count, date }` so the caller can
+   *   deep-link the Table view to that species + hour (+ date).
    * @returns {Promise<Chart|null>} Chart instance or null if canvas not available
    *
    * Side effect: emits x-axis tick positions into `timeAxisLayout` (returned from
@@ -259,7 +262,15 @@ export function useBirdCharts() {
    * height but is not visible.
    */
   const createHourlyActivityHeatmap = async (canvasRef, data, options = {}) => {
-    const { animate = true, title = 'Hourly Activity Heatmap', date = null } = options
+    const { animate = true, title = 'Hourly Activity Heatmap', date = null, onCellClick = null } = options
+
+    // Resolve the data point under a pointer event, or null if the pointer
+    // isn't over a cell. Shared by onClick (navigate) and onHover (cursor).
+    const cellAtEvent = (event, chart) => {
+      const items = chart.getElementsAtEventForMode(event, 'nearest', { intersect: true }, false)
+      if (!items.length) return null
+      return chart.data.datasets[0].data[items[0].index] || null
+    }
 
     const canvas = resolveCanvas(canvasRef)
     if (!canvas) {
@@ -323,6 +334,25 @@ export function useBirdCharts() {
         responsive: true,
         animation: animate,
         maintainAspectRatio: false,
+        // Cell drill-down: a click on a non-empty cell deep-links the Table
+        // view to that species + hour (+ date). Empty cells (v <= 0) are
+        // inert so clicking the heatmap's whitespace does nothing.
+        onClick: (event, _elements, chart) => {
+          if (!onCellClick) return
+          const point = cellAtEvent(event, chart)
+          if (!point || point.v <= 0) return
+          onCellClick({ commonName: point.commonName, hour: point.hour, count: point.v, date })
+        },
+        // A pointer cursor marks clickable (non-empty) cells. onHover fires
+        // on every pointer move, so skip the CSSOM write unless the cursor
+        // actually changes — same no-op-write discipline as commitAxisLayout.
+        onHover: (event, _elements, chart) => {
+          const target = event?.native?.target
+          if (!target) return
+          const point = onCellClick ? cellAtEvent(event, chart) : null
+          const cursor = point && point.v > 0 ? 'pointer' : 'default'
+          if (target.style.cursor !== cursor) target.style.cursor = cursor
+        },
         layout: {
           padding: { left: 0, right: 10, top: 10, bottom: 0 }
         },

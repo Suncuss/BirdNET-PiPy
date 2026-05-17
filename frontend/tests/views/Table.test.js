@@ -409,6 +409,33 @@ describe('Table.vue', () => {
       expect(detectionCall[1].params.hour).toBe(0)
     })
 
+    it('seeds the species filter from the route query (heatmap cell deep-link)', async () => {
+      mockRoute.query = { date: '2024-01-15', hour: '14', species: 'American Robin' }
+
+      await mountTable()
+
+      const detectionCall = mockApi.get.mock.calls.find(
+        ([url]) => url === '/detections'
+      )
+      expect(detectionCall[1].params).toMatchObject({
+        start_date: '2024-01-15',
+        end_date: '2024-01-15',
+        hour: 14,
+        species: 'American Robin'
+      })
+    })
+
+    it('trims a space-padded species from the route query', async () => {
+      mockRoute.query = { species: '  American Robin  ' }
+
+      await mountTable()
+
+      const detectionCall = mockApi.get.mock.calls.find(
+        ([url]) => url === '/detections'
+      )
+      expect(detectionCall[1].params.species).toBe('American Robin')
+    })
+
     it('does not send date/hour params when the route query is empty', async () => {
       await mountTable()
 
@@ -419,8 +446,8 @@ describe('Table.vue', () => {
       expect(detectionCall[1].params).not.toHaveProperty('start_date')
     })
 
-    it('strips date/hour from the route query when filters are cleared', async () => {
-      mockRoute.query = { date: '2024-01-15', hour: '14' }
+    it('strips date/hour/species from the route query when filters are cleared', async () => {
+      mockRoute.query = { date: '2024-01-15', hour: '14', species: 'American Robin' }
 
       const wrapper = await mountTable()
 

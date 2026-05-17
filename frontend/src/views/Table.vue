@@ -877,10 +877,11 @@ const handleClearFilters = () => {
   // Strip the deep-link params (seedFiltersFromQuery reads these on mount), or
   // a later refresh / shared URL / back-forward resurrects the filters we just
   // cleared. Guarded so a normal clear doesn't trigger a redundant navigation.
-  if ('date' in route.query || 'hour' in route.query) {
+  if ('date' in route.query || 'hour' in route.query || 'species' in route.query) {
     const query = { ...route.query }
     delete query.date
     delete query.hour
+    delete query.species
     router.replace({ query })
   }
 }
@@ -955,11 +956,13 @@ const executeDelete = async () => {
 
 // --- Lifecycle & Watchers ---
 
-// Seed filters from the route query when arriving from a chart's time-axis
-// link ({ date: 'YYYY-MM-DD', hour: '0'-'23' }). Returns true when at least
-// one filter was applied, so the caller can skip a redundant unfiltered fetch.
+// Seed filters from the route query when arriving from a chart deep-link
+// ({ date: 'YYYY-MM-DD', hour: '0'-'23', species: <common_name> }) — the
+// heatmap hour labels send date+hour; a heatmap cell additionally sends
+// species. Returns true when at least one filter was applied, so the caller
+// can skip a redundant unfiltered fetch.
 const seedFiltersFromQuery = () => {
-  const { date, hour } = route.query
+  const { date, hour, species } = route.query
   let applied = false
 
   if (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
@@ -971,6 +974,12 @@ const seedFiltersFromQuery = () => {
   const h = normalizeHour(hour)
   if (h !== null) {
     selectedHour.value = h
+    applied = true
+  }
+
+  const trimmedSpecies = typeof species === 'string' ? species.trim() : ''
+  if (trimmedSpecies) {
+    selectedSpecies.value = trimmedSpecies
     applied = true
   }
 

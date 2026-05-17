@@ -31,6 +31,13 @@ vi.mock('chartjs-chart-matrix', () => ({
   MatrixElement: {}
 }))
 
+// Dashboard uses useRouter() to deep-link heatmap-cell clicks to the Table
+// view. router-link in the template is stubbed separately (global stubs).
+const mockRouter = vi.hoisted(() => ({ push: vi.fn() }))
+vi.mock('vue-router', () => ({
+  useRouter: () => mockRouter
+}))
+
 const baseState = () => ({
   hourlyBirdActivityData: ref([]),
   detailedBirdActivityData: ref([]),
@@ -257,7 +264,7 @@ describe('Dashboard', () => {
     })
     useFetchBirdData.mockReturnValue(state)
 
-    const wrapper = mountDashboard()
+    mountDashboard()
     await flushPromises()
 
     // Canvas initialized once
