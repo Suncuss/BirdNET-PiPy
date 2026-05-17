@@ -280,13 +280,16 @@ class TestNotificationService:
             mock_apprise_instance.notify.return_value = True
 
             with patch('apprise.Apprise', return_value=mock_apprise_instance) as MockApprise:
+                import apprise
                 service._send("Test Title", "Test Body")
                 MockApprise.assert_called_once()
                 assert mock_apprise_instance.add.call_count == 2
                 mock_apprise_instance.add.assert_any_call('tgram://bot/chat')
                 mock_apprise_instance.add.assert_any_call('discord://webhook')
                 mock_apprise_instance.notify.assert_called_once_with(
-                    title="Test Title", body="Test Body")
+                    title="Test Title",
+                    body="Test Body",
+                    body_format=apprise.NotifyFormat.HTML)
         finally:
             patcher.stop()
 
@@ -337,7 +340,23 @@ class TestNotificationService:
         assert 'Robin' in message
         assert 'Turdus migratorius' in message
         assert '92%' in message
-        assert '14:30:00' in message
+        assert '2024-06-15 14:30:00' in message  # defaults to 24h
+
+    def test_build_message_respects_12h_time_format(self, notification_service):
+        """Message time follows display.time_format = '12h'."""
+        service, set_settings = notification_service
+        set_settings(display={'time_format': '12h'})
+        detection = make_detection(timestamp='2024-06-15T14:30:05')
+        message = service._build_message(detection, ['every_detection'])
+        assert '2024-06-15 2:30:05 PM' in message
+
+    def test_build_message_respects_24h_time_format(self, notification_service):
+        """Message time follows display.time_format = '24h'."""
+        service, set_settings = notification_service
+        set_settings(display={'time_format': '24h'})
+        detection = make_detection(timestamp='2024-06-15T14:30:05')
+        message = service._build_message(detection, ['every_detection'])
+        assert '2024-06-15 14:30:05' in message
 
     def test_process_detection_returns_early_when_no_urls(self):
         """_process_detection returns early when apprise_urls is empty."""
@@ -521,6 +540,36 @@ class TestNotificationStationName:
         detection = make_detection()
         message = service._build_message(detection, ['every_detection'])
         assert 'Station:' not in message
+
+
+class TestNotificationHtmlSafety:
+    """The HTML body must escape user-controllable fields so a stray
+    ``&`` or ``<`` in a station/species name can't break the markup
+    (regression guard for the plain-text -> HTML body switch).
+    """
+
+    def test_station_name_is_html_escaped(self, notification_service):
+        service, set_settings = notification_service
+        set_settings(display={'station_name': "Tom & Jerry's <Yard>"})
+        detection = make_detection()
+        message = service._build_message(detection, ['every_detection'])
+        assert 'Tom &amp; Jerry&#x27;s &lt;Yard&gt;' in message
+        assert '<Yard>' not in message
+
+    def test_species_name_is_html_escaped(self, notification_service):
+        service, _set_settings = notification_service
+        detection = make_detection(
+            common_name='Fish & Chips <bird>', scientific_name='A & B')
+        message = service._build_message(detection, ['every_detection'])
+        assert 'Fish &amp; Chips &lt;bird&gt;' in message
+        assert 'A &amp; B' in message
+
+    def test_malformed_timestamp_falls_back_gracefully(self, notification_service):
+        service, _set_settings = notification_service
+        detection = make_detection(timestamp='not-a-timestamp')
+        message = service._build_message(detection, ['every_detection'])
+        # Best-effort fallback: no crash, raw value passed through.
+        assert 'not-a-timestamp' in message
 
 
 class TestNotificationLanguageLocalization:

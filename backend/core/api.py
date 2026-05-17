@@ -2936,7 +2936,18 @@ def migration_validate():
     temp_path = os.path.join(MIGRATION_TEMP_DIR, temp_filename)
 
     try:
-        file.save(temp_path)
+        # Chunked copy instead of file.save(): save() is a disk->disk copy of
+        # the whole DB (hundreds of MB on a Pi SD card) and disk I/O is not
+        # gevent-patched, so yield between chunks to keep the single gevent
+        # worker responsive.
+        chunk_size = 1024 * 1024
+        with open(temp_path, 'wb') as dst:
+            while True:
+                chunk = file.stream.read(chunk_size)
+                if not chunk:
+                    break
+                dst.write(chunk)
+                _cooperative_yield()
         logger.info("Migration file uploaded", extra={
             'original_filename': file.filename,
             'temp_path': temp_path
@@ -2989,7 +3000,8 @@ def _run_migration_background(temp_path, total_records, skip_duplicates):
             temp_path,
             skip_duplicates=skip_duplicates,
             temp_path=temp_path,
-            total_records=total_records
+            total_records=total_records,
+            yield_control=_cooperative_yield
         )
 
         logger.info("Migration import completed", extra={
@@ -3268,7 +3280,8 @@ def migration_audio_import():
     # Start background thread
     def run_import():
         try:
-            import_audio_files(db_manager, scan_result['matched_files'], import_id)
+            import_audio_files(db_manager, scan_result['matched_files'], import_id,
+                                yield_control=_cooperative_yield)
         finally:
             # Clear progress tracking after a delay
             def cleanup_progress():
@@ -3407,7 +3420,8 @@ def migration_spectrogram_generate():
     # Start background thread
     def run_generation():
         try:
-            generate_spectrograms_batch(scan_result['files_needing'], generation_id)
+            generate_spectrograms_batch(scan_result['files_needing'], generation_id,
+                                        yield_control=_cooperative_yield)
         finally:
             # Clear progress tracking after a delay
             def cleanup_progress():
@@ -3475,13 +3489,27 @@ def migration_spectrogram_skip():
     return jsonify({'status': 'skipped', 'message': 'Spectrogram generation skipped'}), 200
 
 
+@api.route('/api/health', methods=['GET'])
+def health_check():
+    """Unauthenticated liveness probe. Deliberately DB-free: a DB touch would
+    couple liveness to transient SQLite locks. Must stay unauthenticated.
+    """
+    return jsonify({'status': 'ok'}), 200
+
+
 # Global SocketIO instance to be used by other modules
 socketio = None
+
+
+def _cooperative_yield():
+    """Yield the single gevent worker from long loops; no-op until create_app() sets `socketio`."""
+    if socketio is not None:
+        socketio.sleep(0)
 
 # Latest recorder health status (populated by main container broadcasts)
 _recorder_status = {}
 
-def create_app():
+def create_app(async_mode='threading'):
     global socketio
     app = Flask(__name__)
 
@@ -3502,7 +3530,8 @@ def create_app():
     # Initialize SocketIO.
     # `cors_allowed_origins=None` lets Engine.IO compute allowed origins from the
     # request host headers (same-origin only). Do not set this to [] (blocks all origins).
-    socketio = SocketIO(app, cors_allowed_origins=None, logger=False, engineio_logger=False)
+    socketio = SocketIO(app, async_mode=async_mode, cors_allowed_origins=None,
+                         logger=False, engineio_logger=False)
 
     # WebSocket event handlers
     @socketio.on('connect')

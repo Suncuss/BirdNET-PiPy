@@ -422,7 +422,7 @@ class TestMigrationAudioImportEndpoint:
 
         block_event = threading.Event()
 
-        def blocking_import(db_manager, matched_files, import_id):
+        def blocking_import(db_manager, matched_files, import_id, yield_control=None):
             from core.migration_audio import set_audio_import_progress
             total = len(matched_files)
             set_audio_import_progress(import_id, {
@@ -643,7 +643,7 @@ class TestMigrationSpectrogramGenerateEndpoint:
         """Test generate returns running job ID when another generation is in progress."""
         block_event = threading.Event()
 
-        def blocking_generate(audio_files, generation_id):
+        def blocking_generate(audio_files, generation_id, yield_control=None):
             from core.migration_audio import set_spectrogram_progress
             total = len(audio_files)
             set_spectrogram_progress(generation_id, {
@@ -800,3 +800,41 @@ class TestMigrationAudioIntegration:
                             assert len(files) == 1
                             # File should be renamed to BirdNET-PiPy format
                             assert 'American_Robin' in files[0]
+
+
+class TestCooperativeYieldHooks:
+    """Tests that audio import and spectrogram generation invoke yield_control per item."""
+
+    def test_import_audio_files_invokes_yield_control_per_file(self):
+        from unittest.mock import Mock
+
+        from core.migration_audio import import_audio_files
+
+        db = Mock()
+        db.get_detection_by_id.return_value = None  # short-circuit each file
+        yielder = Mock()
+        matched = [(1, '/nonexistent/a.mp3', 0), (2, '/nonexistent/b.mp3', 0)]
+
+        with tempfile.TemporaryDirectory() as dest_dir:
+            with patch('core.migration_audio.EXTRACTED_AUDIO_DIR', dest_dir):
+                import_audio_files(db, matched, 'imp_yield_test',
+                                   yield_control=yielder)
+
+        assert yielder.call_count == len(matched)
+
+    def test_generate_spectrograms_batch_invokes_yield_control_per_file(self):
+        from unittest.mock import Mock
+
+        from core.migration_audio import generate_spectrograms_batch
+
+        yielder = Mock()
+        files = ['missing_one.mp3', 'missing_two.mp3']
+
+        with tempfile.TemporaryDirectory() as audio_dir:
+            with tempfile.TemporaryDirectory() as spec_dir:
+                with patch('core.migration_audio.EXTRACTED_AUDIO_DIR', audio_dir):
+                    with patch('core.migration_audio.SPECTROGRAM_DIR', spec_dir):
+                        generate_spectrograms_batch(files, 'gen_yield_test',
+                                                    yield_control=yielder)
+
+        assert yielder.call_count == len(files)

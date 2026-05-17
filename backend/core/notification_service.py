@@ -4,6 +4,7 @@ Supports 100+ notification services (Telegram, Discord, Slack, ntfy, email, etc.
 Uses async queue with background worker thread, following birdweather_service.py pattern.
 """
 
+import html
 import queue
 import threading
 from datetime import datetime
@@ -150,13 +151,40 @@ class NotificationService:
             return f"{prefix}Rare species: {display_name}"
         return f"{prefix}Bird detected: {display_name}"
 
+    def _format_when(self, timestamp):
+        """Format an ISO timestamp as 'YYYY-MM-DD HH:MM:SS', honoring the
+        user's display.time_format ('12h' / '24h'). Unset or legacy values
+        fall back to 24-hour, matching the stored ISO time.
+        """
+        if not timestamp:
+            return ''
+        try:
+            dt = datetime.fromisoformat(timestamp)
+        except (ValueError, TypeError):
+            # Best-effort: drop the 'T' separator and fractional seconds.
+            return timestamp.replace('T', ' ').split('.')[0]
+
+        fmt = self._settings.get('display', {}).get('time_format')
+        if fmt == '12h':
+            # %I is zero-padded (01–12); strip the leading zero for "2:30:05 PM".
+            time_part = dt.strftime('%I:%M:%S %p').lstrip('0')
+        else:
+            time_part = dt.strftime('%H:%M:%S')
+        return f"{dt.strftime('%Y-%m-%d')} {time_part}"
+
     @staticmethod
     def _resolve_source_label(source_id):
         """Look up human-readable label for a source ID from runtime settings."""
         return resolve_source_label(source_id, fallback=source_id)
 
     def _build_message(self, detection, triggers):
-        """Build notification message body."""
+        """Build the notification body as HTML.
+
+        Apprise downconverts this to clean plain text for services that
+        don't render HTML (Telegram, ntfy, etc.), so email gets the rich
+        version while everything else stays readable. User-controllable
+        fields are HTML-escaped to keep the markup intact.
+        """
         sci_name = detection.get('scientific_name', '')
         display_name = get_localized_common_name(
             sci_name,
@@ -166,24 +194,26 @@ class NotificationService:
         confidence = detection.get('confidence', 0)
         timestamp = detection.get('timestamp', '')
 
-        # Format time portion
-        time_str = timestamp.split('T')[1].split('.')[0] if 'T' in timestamp else timestamp
+        when = self._format_when(timestamp)
+
+        esc_name = html.escape(display_name)
+        esc_sci = html.escape(sci_name)
 
         lines = [
-            f"{display_name} ({sci_name})",
+            f"<b>{esc_name}</b>" + (f" <i>({esc_sci})</i>" if esc_sci else ""),
             f"Confidence: {confidence * 100:.0f}%",
-            f"Time: {time_str}",
+            f"Time: {html.escape(when)}",
         ]
 
         # Include source label if available
         audio_source = detection.get('audio_source')
         if audio_source:
             source_label = self._resolve_source_label(audio_source)
-            lines.append(f"Source: {source_label}")
+            lines.append(f"Source: {html.escape(str(source_label))}")
 
         station = self._settings.get('display', {}).get('station_name', '').strip()
         if station:
-            lines.append(f"Station: {station}")
+            lines.append(f"Station: {html.escape(station)}")
 
         reasons = []
         if 'new_species' in triggers:
@@ -196,9 +226,9 @@ class NotificationService:
             reasons.append("New detection")
 
         if reasons:
-            lines.append(f"Trigger: {', '.join(reasons)}")
+            lines.append(f"Trigger: {html.escape(', '.join(reasons))}")
 
-        return '\n'.join(lines)
+        return '<br>\n'.join(lines)
 
     def _send(self, title, message):
         """Send notification to all configured Apprise URLs."""
@@ -207,7 +237,11 @@ class NotificationService:
             ap = apprise.Apprise()
             for url in self._apprise_urls:
                 ap.add(url)
-            result = ap.notify(title=title, body=message)
+            result = ap.notify(
+                title=title,
+                body=message,
+                body_format=apprise.NotifyFormat.HTML,
+            )
             if result:
                 logger.info("Notification sent", extra={'title': title})
             else:

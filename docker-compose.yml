@@ -24,8 +24,26 @@ services:
   api:
     image: ghcr.io/suncuss/birdnet-pipy-backend:${BIRDNET_CHANNEL:-main}
     # No build: — shares image built by model-server service
-    command: python -m core.api
+    # Single gevent worker is mandatory: detections fan out via an in-process
+    # socketio.emit (no Redis message_queue), so multiple workers would
+    # silently drop broadcasts to clients on other workers.
+    command: >
+      gunicorn wsgi:application
+      --worker-class geventwebsocket.gunicorn.workers.GeventWebSocketWorker
+      --workers 1
+      --bind 0.0.0.0:5002
+      --timeout 120
+      --graceful-timeout 30
+      --keep-alive 65
+      --access-logfile -
+      --error-logfile -
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5002/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     volumes:
       - ./backend:/app
       - ./data:/app/data
@@ -64,8 +82,10 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      - model-server
-      - api
+      model-server:
+        condition: service_started
+      api:
+        condition: service_healthy
 
   icecast:
     image: ghcr.io/suncuss/birdnet-pipy-icecast:${BIRDNET_CHANNEL:-main}
@@ -103,4 +123,5 @@ services:
     environment:
       - TZ=UTC
     depends_on:
-      - api
+      api:
+        condition: service_healthy
