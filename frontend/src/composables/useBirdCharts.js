@@ -5,6 +5,22 @@ import { useChartHelpers } from './useChartHelpers'
 import { useTimeFormat } from './useTimeFormat'
 import { getDisplaySpeciesName } from '@/utils/birdNames'
 
+// Assign `next` to `layoutRef` only if it differs from the current value.
+// Each layout is flat scalars plus a `ticks` array of flat objects; equality
+// is a shallow compare of both. Skipping equal writes avoids a Vue re-render
+// of the axis overlay on every polling refresh that produced the same geometry.
+const commitAxisLayout = (layoutRef, next) => {
+  const prev = layoutRef.value
+  const sameScalars = Object.keys(next).every(k => k === 'ticks' || prev[k] === next[k])
+  const sameTicks = prev.ticks.length === next.ticks.length
+    && next.ticks.every((t, i) => {
+      const p = prev.ticks[i]
+      return p && Object.keys(t).every(k => p[k] === t[k])
+    })
+  if (sameScalars && sameTicks) return
+  layoutRef.value = next
+}
+
 /**
  * Composable for creating bird activity charts.
  * Provides factory functions for Total Observations bar chart and Hourly Activity heatmap.
@@ -17,6 +33,21 @@ export function useBirdCharts() {
   // Reactive layout state for the species-axis HTML overlay (SpeciesAxisLinks).
   // Populated by createTotalObservationsChart via a Chart.js afterLayout plugin.
   const speciesAxisLayout = ref({ ticks: [], axisLeft: 0, axisWidth: 0, rowHeight: 0 })
+
+  // Reactive layout state for the time-axis HTML overlay (TimeAxisLinks).
+  // Populated by createHourlyActivityHeatmap via a Chart.js afterLayout plugin.
+  const timeAxisLayout = ref({ ticks: [], axisLeft: 0, axisTop: 0, axisHeight: 0, colWidth: 0, date: null })
+
+  // Shared x-axis tick font size for BOTH the Total Observations bar chart
+  // (visible numeric labels) and the heatmap (transparent ticks; hour
+  // labels are drawn by the TimeAxisLinks overlay). Applied to both so the
+  // bands stay equal and the two plots stay row/bottom-aligned. Matches
+  // TimeAxisLinks' HOUR_LABEL_FONT_MAX_PX (11) so the bar numbers and hour
+  // labels read at the same size once the layout is wide enough for the
+  // overlay font to scale up to its ceiling. The label-row offset is font-independent
+  // (LABEL_TOP_OFFSET_PX = tickLength + ticks.padding), so changing this
+  // does not disturb the vertical alignment.
+  const X_AXIS_TICK_FONT_SIZE = 11
 
   /**
    * Create custom grid plugin for matrix/heatmap charts.
@@ -144,19 +175,7 @@ export function useBirdCharts() {
         const axisLeft = yScale.left
         const axisWidth = yScale.width
 
-        // Skip the ref write when geometry and species set are unchanged — avoids
-        // a Vue re-render of the overlay on every polling refresh that returned the
-        // same data.
-        const prev = speciesAxisLayout.value
-        if (prev.ticks.length === ticks.length
-          && prev.axisLeft === axisLeft
-          && prev.axisWidth === axisWidth
-          && prev.rowHeight === rowHeight
-          && prev.ticks.every((t, i) => t.commonName === ticks[i].commonName && t.y === ticks[i].y && t.label === ticks[i].label)) {
-          return
-        }
-
-        speciesAxisLayout.value = { ticks, axisLeft, axisWidth, rowHeight }
+        commitAxisLayout(speciesAxisLayout, { ticks, axisLeft, axisWidth, rowHeight })
       }
     }
 
@@ -189,15 +208,28 @@ export function useBirdCharts() {
         scales: {
           x: {
             title: { display: true, text: 'Detections', color: colorPalette.text },
-            ticks: { color: colorPalette.text, precision: 0 }
+            // Shared font size keeps this band the same height as the heatmap
+            // x-axis so the two plots stay row-aligned.
+            ticks: { color: colorPalette.text, precision: 0, font: { size: X_AXIS_TICK_FONT_SIZE } },
+            // Render the tick-mark stubs transparent rather than disabling
+            // them: invisible, but they still reserve their layout space so
+            // the band height (and the alignment with the heatmap) is
+            // unchanged. Gridlines and numeric labels stay visible.
+            grid: { tickColor: 'transparent' }
           },
           y: {
             // Transparent ticks reserve layout space; HTML overlay renders the real labels as links.
-            ticks: { color: 'transparent' }
+            // autoSkip:false guarantees one tick (and therefore one gridline)
+            // per species, so every bar stays bounded by gridlines even when
+            // the plot is short (e.g. mobile). Without this, Chart.js drops
+            // half the category ticks and gridlines cross the bars.
+            ticks: { color: 'transparent', autoSkip: false }
           }
         },
         layout: {
-          padding: { left: 10, right: 10, top: 0, bottom: 0 }
+          // top matches the heatmap's layout.padding.top so both plots
+          // start at the same y and the species rows line up.
+          padding: { left: 10, right: 10, top: 10, bottom: 0 }
         }
       },
       plugins: [speciesLayoutPlugin]
@@ -216,10 +248,18 @@ export function useBirdCharts() {
    * @param {Object} options - Chart options
    * @param {boolean} options.animate - Enable animation (default: true)
    * @param {string} options.title - Chart title (default: 'Hourly Activity Heatmap')
+   * @param {string} options.date - Date (YYYY-MM-DD) the heatmap represents; emitted
+   *   into timeAxisLayout so the TimeAxisLinks overlay can deep-link the Table view
+   *   to that date + clicked hour.
    * @returns {Promise<Chart|null>} Chart instance or null if canvas not available
+   *
+   * Side effect: emits x-axis tick positions into `timeAxisLayout` (returned from
+   * useBirdCharts) so an HTML overlay can render the hour labels as real router-links.
+   * The canvas x-axis tick text is rendered transparent — it still reserves layout
+   * height but is not visible.
    */
   const createHourlyActivityHeatmap = async (canvasRef, data, options = {}) => {
-    const { animate = true, title = 'Hourly Activity Heatmap' } = options
+    const { animate = true, title = 'Hourly Activity Heatmap', date = null } = options
 
     const canvas = resolveCanvas(canvasRef)
     if (!canvas) {
@@ -233,6 +273,32 @@ export function useBirdCharts() {
     const species = data.map(d => getDisplaySpeciesName(d))
     const rowStats = calculateRowStats(data)
     const [r, g, b] = secondaryRGB
+    const hourLabels = generateHourLabels()
+
+    const timeLayoutPlugin = {
+      id: 'timeLayoutEmitter',
+      afterLayout: (chart) => {
+        const area = chart.chartArea
+        const xScale = chart.scales?.x
+        if (!area || !xScale) return
+        // Derive geometry from chartArea — each matrix cell is
+        // chartArea.width / 24 wide, tiled from chartArea.left, so the cell
+        // centre for hour i is left + (i + 0.5) * colWidth. (This equals the
+        // x-scale's getPixelForValue(i); chartArea is just the clearer source.)
+        const n = hourLabels.length
+        const colWidth = area.width / n
+        const ticks = hourLabels.map((label, i) => ({
+          x: area.left + (i + 0.5) * colWidth,
+          label,
+          hour: i
+        }))
+        const axisLeft = area.left
+        const axisTop = area.bottom
+        const axisHeight = xScale.height
+
+        commitAxisLayout(timeAxisLayout, { ticks, axisLeft, axisTop, axisHeight, colWidth, date })
+      }
+    }
 
     return new Chart(ctx, {
       type: 'matrix',
@@ -284,11 +350,16 @@ export function useBirdCharts() {
         scales: {
           x: {
             type: 'category',
-            labels: generateHourLabels(),
+            labels: hourLabels,
             ticks: {
+              // Transparent: the visible hour labels are drawn by the
+              // TimeAxisLinks overlay. Shared font size keeps this band the
+              // same height as the bar chart x-axis (so the plots stay
+              // row-aligned) and sizes the room available to the overlay.
+              color: 'transparent',
               maxRotation: 0,
               autoSkip: false,
-              font: { size: 9 },
+              font: { size: X_AXIS_TICK_FONT_SIZE },
               callback: function(value, index) {
                 return formatHourLabel(this.getLabelForValue(index))
               }
@@ -307,7 +378,7 @@ export function useBirdCharts() {
           }
         }
       },
-      plugins: [createCustomGridPlugin(species), createMatrixLabelsPlugin()]
+      plugins: [createCustomGridPlugin(species), createMatrixLabelsPlugin(), timeLayoutPlugin]
     })
   }
 
@@ -407,6 +478,7 @@ export function useBirdCharts() {
     createTotalObservationsChart,
     createHourlyActivityHeatmap,
     createHourlyActivityChart,
-    speciesAxisLayout
+    speciesAxisLayout,
+    timeAxisLayout
   }
 }

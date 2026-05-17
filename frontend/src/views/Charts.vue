@@ -105,10 +105,22 @@
             />
           </div>
           <div class="hidden lg:block lg:w-2/3 lg:pl-2 h-full">
-            <canvas
-              ref="hourlyActivityHeatmap"
-              class="h-full"
-            />
+            <!-- Inner wrapper is the positioning context: it has no padding,
+                 so the absolute overlay's origin matches the canvas origin
+                 (the chart's pixel coords are canvas-relative). -->
+            <div class="h-full relative">
+              <canvas
+                ref="hourlyActivityHeatmap"
+                class="h-full"
+              />
+              <TimeAxisLinks
+                :ticks="timeAxisLayout.ticks"
+                :axis-top="timeAxisLayout.axisTop"
+                :axis-height="timeAxisLayout.axisHeight"
+                :col-width="timeAxisLayout.colWidth"
+                :date="timeAxisLayout.date"
+              />
+            </div>
           </div>
         </div>
         <div
@@ -446,6 +458,7 @@ import api from '@/services/api'
 import AppButton from '@/components/AppButton.vue'
 import AppDatePicker from '@/components/AppDatePicker.vue'
 import SpeciesAxisLinks from '@/components/SpeciesAxisLinks.vue'
+import TimeAxisLinks from '@/components/TimeAxisLinks.vue'
 import { getDisplayCommonName, matchesBirdQuery } from '@/utils/birdNames'
 
 Chart.register(MatrixController, MatrixElement)
@@ -455,7 +468,8 @@ export default {
     components: {
         AppButton,
         AppDatePicker,
-        SpeciesAxisLinks
+        SpeciesAxisLinks,
+        TimeAxisLinks
     },
     setup() {
         const {
@@ -471,7 +485,8 @@ export default {
             destroyChart,
             createTotalObservationsChart: createTotalObsChart,
             createHourlyActivityHeatmap: createHeatmap,
-            speciesAxisLayout
+            speciesAxisLayout,
+            timeAxisLayout
         } = useBirdCharts()
 
         const { getLocalDateString } = useChartHelpers()
@@ -635,7 +650,7 @@ export default {
             // Add small delay to ensure DOM is ready
             await nextTick()
             await createTotalObsChart(totalObservationsChart, limitedBirdActivityData.value, { title: null })
-            await createHeatmap(hourlyActivityHeatmap, limitedBirdActivityData.value, { title: null })
+            await createHeatmap(hourlyActivityHeatmap, limitedBirdActivityData.value, { title: null, date: selectedDate.value })
         }
 
         const setSpeciesLimit = (limit) => {
@@ -1003,6 +1018,7 @@ export default {
             maxDate,
             totalObservationsChart,
             speciesAxisLayout,
+            timeAxisLayout,
             hourlyActivityHeatmap,
             isDataEmpty,
             detailedBirdActivityError,

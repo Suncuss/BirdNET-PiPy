@@ -120,7 +120,8 @@ describe('Dashboard', () => {
       createTotalObservationsChart: vi.fn(),
       createHourlyActivityHeatmap: vi.fn(),
       createHourlyActivityChart: vi.fn(),
-      speciesAxisLayout: ref({ ticks: [], axisLeft: 0, axisWidth: 0, rowHeight: 0 })
+      speciesAxisLayout: ref({ ticks: [], axisLeft: 0, axisWidth: 0, rowHeight: 0 }),
+      timeAxisLayout: ref({ ticks: [], axisLeft: 0, axisTop: 0, axisHeight: 0, colWidth: 0, date: null })
     })
     useSystemUpdate.mockReturnValue({
       checkForUpdates: vi.fn().mockResolvedValue({}),

@@ -57,10 +57,22 @@
             />
           </div>
           <div class="hidden lg:block lg:w-2/3 lg:pl-2 h-full">
-            <canvas
-              ref="hourlyActivityHeatmap"
-              class="h-full"
-            />
+            <!-- Inner wrapper is the positioning context: it has no padding,
+                 so the absolute overlay's origin matches the canvas origin
+                 (the chart's pixel coords are canvas-relative). -->
+            <div class="h-full relative">
+              <canvas
+                ref="hourlyActivityHeatmap"
+                class="h-full"
+              />
+              <TimeAxisLinks
+                :ticks="timeAxisLayout.ticks"
+                :axis-top="timeAxisLayout.axisTop"
+                :axis-height="timeAxisLayout.axisHeight"
+                :col-width="timeAxisLayout.colWidth"
+                :date="timeAxisLayout.date"
+              />
+            </div>
           </div>
         </div>
         <CenteredMessage
@@ -398,12 +410,14 @@ import { faPlay, faPause, faCircleInfo } from '@fortawesome/free-solid-svg-icons
 
 	import { useFetchBirdData } from '@/composables/useFetchBirdData';
 	import { useBirdCharts } from '@/composables/useBirdCharts';
+	import { useChartHelpers } from '@/composables/useChartHelpers';
 	import { useAudioPlayer } from '@/composables/useAudioPlayer';
 	import { useAppStatus } from '@/composables/useAppStatus';
 import { useTimeFormat } from '@/composables/useTimeFormat';
 import SpectrogramModal from '@/components/SpectrogramModal.vue';
 import CenteredMessage from '@/components/CenteredMessage.vue';
 import SpeciesAxisLinks from '@/components/SpeciesAxisLinks.vue';
+import TimeAxisLinks from '@/components/TimeAxisLinks.vue';
 import { getAudioUrl, getSpectrogramUrl } from '@/services/media'
 import { getDisplayCommonName } from '@/utils/birdNames'
 
@@ -416,7 +430,8 @@ export default {
         FontAwesomeIcon,
         SpectrogramModal,
         CenteredMessage,
-        SpeciesAxisLinks
+        SpeciesAxisLinks,
+        TimeAxisLinks
     },
     setup() {
         const {
@@ -543,8 +558,10 @@ export default {
             createTotalObservationsChart: createTotalObsChart,
             createHourlyActivityHeatmap: createHeatmap,
             createHourlyActivityChart: createHourlyChart,
-            speciesAxisLayout
+            speciesAxisLayout,
+            timeAxisLayout
         } = useBirdCharts()
+        const { getLocalDateString } = useChartHelpers()
 
         // App status for coordinating with setup flow
         const { locationConfigured } = useAppStatus()
@@ -614,7 +631,7 @@ export default {
             }
             if (!isDataEmpty.value) {
                 createTotalObsChart(totalObservationsChart, detailedBirdActivityData.value, { animate: initialLoad.value, title: null });
-                createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: initialLoad.value, title: null });
+                createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: initialLoad.value, title: null, date: getLocalDateString() });
             }
 
             // Initialize spectrogram canvas after DOM updates with new data
@@ -900,7 +917,7 @@ export default {
             try {
                 setActivityOrder(currentOrder())
                 await createTotalObsChart(totalObservationsChart, detailedBirdActivityData.value, { animate: true, title: null })
-                await createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: true, title: null })
+                await createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: true, title: null, date: getLocalDateString() })
             } finally {
                 isActivityUpdating.value = false
             }
@@ -910,7 +927,7 @@ export default {
         const redrawCharts = async (animate = false) => {
             initialLoad.value = false;
             await createTotalObsChart(totalObservationsChart, detailedBirdActivityData.value, { animate, title: null });
-            await createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate, title: null });
+            await createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate, title: null, date: getLocalDateString() });
             await createHourlyChart(hourlyActivityChart, hourlyBirdActivityData.value, { animate });
         };
 
@@ -935,6 +952,7 @@ export default {
             hourlyBirdActivityData,
             totalObservationsChart,
             speciesAxisLayout,
+            timeAxisLayout,
             hourlyActivityHeatmap,
             isDataEmpty,
             latestObservationIsPlaying,

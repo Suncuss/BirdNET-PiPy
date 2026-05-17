@@ -1057,7 +1057,8 @@ class DatabaseManager:
 
     def get_paginated_detections(self, page=1, per_page=25, start_date=None,
                                   end_date=None, species=None, sort='timestamp',
-                                  order='desc', *, scientific_name=None):
+                                  order='desc', *, scientific_name=None,
+                                  hour=None):
         """Get paginated detection records with optional filtering.
 
         Args:
@@ -1069,6 +1070,7 @@ class DatabaseManager:
             sort: Sort field (timestamp, confidence, common_name)
             order: Sort order (asc, desc)
             scientific_name: Filter by scientific_name (preferred when known)
+            hour: Filter by hour of day (integer 0-23)
 
         Returns:
             tuple: (list of detections with filenames, total_count)
@@ -1089,6 +1091,7 @@ class DatabaseManager:
         # Build WHERE conditions
         where_clause, params = self._build_detection_filters(
             start_date, end_date, species, scientific_name=scientific_name,
+            hour=hour,
         )
 
         # Get total count
@@ -1151,7 +1154,7 @@ class DatabaseManager:
         return detections, total_count
 
     def get_all_detections(self, start_date=None, end_date=None, species=None,
-                            *, scientific_name=None):
+                            *, scientific_name=None, hour=None):
         """Get all matching detections with normalized fields and filenames.
 
         Used for in-memory localized sorting where database ordering no longer
@@ -1160,6 +1163,7 @@ class DatabaseManager:
         """
         where_clause, params = self._build_detection_filters(
             start_date, end_date, species, scientific_name=scientific_name,
+            hour=hour,
         )
 
         query = f"""
@@ -1415,7 +1419,8 @@ class DatabaseManager:
     # -------------------------------------------------------------------------
 
     def _build_detection_filters(self, start_date=None, end_date=None,
-                                  species=None, *, scientific_name=None):
+                                  species=None, *, scientific_name=None,
+                                  hour=None):
         """Build WHERE clause components for detection queries.
 
         ``scientific_name`` is preferred when known (the stable path that
@@ -1428,6 +1433,7 @@ class DatabaseManager:
             end_date: End date filter (YYYY-MM-DD)
             species: Filter by common_name (English fallback)
             scientific_name: Filter by scientific_name (preferred)
+            hour: Filter by hour of day (integer 0-23)
 
         Returns:
             tuple: (where_clause, params) where where_clause is SQL string
@@ -1445,6 +1451,12 @@ class DatabaseManager:
             end_date_iso = f"{end_date}T23:59:59"
             conditions.append("timestamp <= ?")
             params.append(end_date_iso)
+
+        if hour is not None:
+            # strftime('%H', ...) yields a zero-padded 2-digit hour string,
+            # matching the hourly-activity queries elsewhere in this module.
+            conditions.append("strftime('%H', timestamp) = ?")
+            params.append(f"{int(hour):02d}")
 
         filter_col, filter_value = _resolve_filter_column(
             species, scientific_name=scientific_name,

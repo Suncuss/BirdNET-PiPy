@@ -1060,6 +1060,7 @@ def get_detections():
     - start_date: Start date filter (YYYY-MM-DD)
     - end_date: End date filter (YYYY-MM-DD)
     - species: Filter by common_name
+    - hour: Filter by hour of day, integer 0-23
     - sort: Sort field - timestamp, confidence, common_name (default: timestamp)
     - order: Sort order - asc, desc (default: desc)
     """
@@ -1079,6 +1080,18 @@ def get_detections():
             except ValueError:
                 return jsonify({'error': f'Invalid {date_param} format. Use YYYY-MM-DD'}), 400
 
+    # Validate hour filter if provided (parsed manually so a non-integer
+    # value is a hard 400 rather than being silently dropped).
+    hour = None
+    hour_raw = request.args.get('hour')
+    if hour_raw not in (None, ''):
+        try:
+            hour = int(hour_raw)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'Invalid hour. Use an integer 0-23'}), 400
+        if not 0 <= hour <= 23:
+            return jsonify({'error': 'Invalid hour. Use an integer 0-23'}), 400
+
     # Cap per_page at 100 (same as db method)
     per_page = min(max(1, per_page), 100)
     settings = load_user_settings()
@@ -1094,6 +1107,7 @@ def get_detections():
                 end_date=end_date,
                 species=common,
                 scientific_name=sci,
+                hour=hour,
             ),
             settings=settings,
         )
@@ -1116,6 +1130,7 @@ def get_detections():
             sort=sort,
             order=order,
             scientific_name=sci,
+            hour=hour,
         )
         detections = _localize_detection_list(detections, settings=settings)
 

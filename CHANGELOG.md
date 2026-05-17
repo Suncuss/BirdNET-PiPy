@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Made the Hourly Activity heatmap's hour axis clickable — clicking an hour label opens the Table filtered to that day and hour, and the Table gained an "Hour" dropdown (desktop) for filtering directly. Backed by a new `hour` (0–23) query parameter on `/api/detections`. As with the Total Detections species axis (0.6.9), the hour labels are an HTML overlay over the Chart.js canvas (canvas text can't be hyperlinked), font-matched to the chart's ticks; the bar chart and heatmap x-axes were realigned so the overlay sits exactly on the bar number line and one gridline falls per species. Clearing filters now also strips the `date`/`hour` deep-link params from the URL, so a shared or refreshed "cleared" view stays cleared instead of re-seeding the old filter on the next mount
+- Upgraded the frontend build to Vite 7 and `@vitejs/plugin-vue` 6, dropping the temporary `esbuild >=0.25.0` dependency override that is no longer needed with the newer toolchain
+
 ## [0.6.10] - 2026-05-12
 
 - Fixed Hourly Activity bar chart and heatmap tooltips still showing raw 24-hour labels regardless of the time-format toggle — they now run through the same `formatHourLabel` helper the x-axes already use, so 12-hour users see "2 PM" and 24-hour users see "14:00" consistently between axis and hover (follow-up on #49)
