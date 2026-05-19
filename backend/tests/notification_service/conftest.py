@@ -18,6 +18,7 @@ DEFAULT_NOTIF_CONFIG = {
     'rare_species': False,
     'rare_threshold': 3,
     'rare_window_days': 7,
+    'audio_status': False,
 }
 
 DEFAULT_DISPLAY_CONFIG = {

@@ -633,3 +633,95 @@ class TestNotificationLanguageLocalization:
         # Resolver can't find this species; helper returns the input
         # common_name. The notification still works.
         assert 'Some Custom Migrated Name' in title
+
+
+class TestAudioStatusNotifications:
+    """Tests for the audio-pipeline status notification path."""
+
+    def test_audio_status_disabled_does_not_send(self):
+        service, patcher = _create_service(
+            notif_overrides={'audio_status': False})
+        try:
+            with patch.object(service, '_send') as mock_send:
+                service._process_audio_status({
+                    'state': 'degraded', 'previous_state': 'running',
+                    'problem_sources': [{'label': 'Cam', 'state': 'degraded',
+                                         'error': 'boom'}],
+                })
+                mock_send.assert_not_called()
+        finally:
+            patcher.stop()
+
+    def test_audio_status_enabled_sends_degraded(self):
+        service, patcher = _create_service(
+            notif_overrides={'audio_status': True})
+        try:
+            with patch.object(service, '_send') as mock_send:
+                service._process_audio_status({
+                    'state': 'degraded', 'previous_state': 'running',
+                    'problem_sources': [{'label': 'Backyard Cam',
+                                         'state': 'degraded',
+                                         'error': 'RTSP recording failed: timeout'}],
+                })
+                mock_send.assert_called_once()
+                title, body = mock_send.call_args.args
+                assert 'degraded' in title.lower()
+                assert 'Backyard Cam' in body
+                assert 'timeout' in body
+        finally:
+            patcher.stop()
+
+    def test_audio_status_recovery_message(self):
+        service, patcher = _create_service(
+            notif_overrides={'audio_status': True})
+        try:
+            with patch.object(service, '_send') as mock_send:
+                service._process_audio_status({
+                    'state': 'running', 'previous_state': 'degraded',
+                    'problem_sources': [],
+                })
+                title, body = mock_send.call_args.args
+                assert 'recovered' in title.lower()
+                assert 'recovered' in body.lower()
+        finally:
+            patcher.stop()
+
+    def test_audio_status_no_urls_does_not_send(self):
+        service, patcher = _create_service(
+            notif_overrides={'audio_status': True, 'apprise_urls': []})
+        try:
+            with patch.object(service, '_send') as mock_send:
+                service._process_audio_status({
+                    'state': 'stopped', 'previous_state': 'running',
+                    'problem_sources': [],
+                })
+                mock_send.assert_not_called()
+        finally:
+            patcher.stop()
+
+    def test_audio_status_envelope_is_distinct_from_detection(self):
+        from core.notification_service import _AudioStatusEvent
+        payload = {'state': 'stopped'}
+        ev = _AudioStatusEvent(payload)
+        assert ev.payload is payload
+        assert not isinstance(ev, dict)
+
+    def test_notify_audio_status_enqueues_and_worker_dispatches(self):
+        import time
+
+        service, patcher = _create_service(
+            notif_overrides={'audio_status': True})
+        try:
+            with patch.object(service, '_process_audio_status') as mock_proc:
+                payload = {'state': 'stopped', 'previous_state': 'running',
+                           'problem_sources': []}
+                service.notify_audio_status(payload)
+
+                # Background worker thread routes the envelope.
+                deadline = time.time() + 2
+                while time.time() < deadline and not mock_proc.called:
+                    time.sleep(0.01)
+
+                mock_proc.assert_called_once_with(payload)
+        finally:
+            patcher.stop()

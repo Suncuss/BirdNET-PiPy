@@ -1743,7 +1743,8 @@ def should_show_update_note(current_commit, note_data):
 
 VALID_NOTIFICATION_FIELDS = {
     'apprise_urls', 'every_detection', 'rate_limit_seconds',
-    'first_of_day', 'new_species', 'rare_species', 'rare_threshold', 'rare_window_days'
+    'first_of_day', 'new_species', 'rare_species', 'rare_threshold', 'rare_window_days',
+    'audio_status'
 }
 
 def _validate_notification_settings(notif):
@@ -1756,7 +1757,8 @@ def _validate_notification_settings(notif):
     unknown = set(notif.keys()) - VALID_NOTIFICATION_FIELDS
     if unknown:
         return f'Unknown notification fields: {", ".join(sorted(unknown))}'
-    for bool_field in ('every_detection', 'first_of_day', 'new_species', 'rare_species'):
+    for bool_field in ('every_detection', 'first_of_day', 'new_species',
+                       'rare_species', 'audio_status'):
         if bool_field in notif and not isinstance(notif[bool_field], bool):
             return f'notifications.{bool_field} must be a boolean'
     if 'apprise_urls' in notif:

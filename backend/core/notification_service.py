@@ -9,13 +9,29 @@ import queue
 import threading
 from datetime import datetime
 
+from config.constants import RecorderState
 from core.bird_name_utils import get_localized_common_name
 from core.logging_config import get_logger
 from core.runtime_config import get_runtime_settings, resolve_source_label
+from core.timezone_service import local_now
 
 logger = get_logger(__name__)
 
 NOTIFICATION_QUEUE_MAXSIZE = 100
+
+
+class _AudioStatusEvent:
+    """Queue envelope marking an audio-pipeline status change.
+
+    Wrapping the payload (rather than putting a bare dict on the queue)
+    keeps it unambiguously distinct from detection dicts the worker also
+    processes.
+    """
+
+    __slots__ = ('payload',)
+
+    def __init__(self, payload):
+        self.payload = payload
 
 
 def load_user_settings():
@@ -50,6 +66,7 @@ class NotificationService:
         self._rare_species = notif['rare_species']
         self._rare_threshold = notif['rare_threshold']
         self._rare_window_days = notif['rare_window_days']
+        self._audio_status = notif.get('audio_status', False)
 
     def notify(self, detection):
         """Queue detection for notification processing. Non-blocking."""
@@ -60,12 +77,30 @@ class NotificationService:
                 'species': detection.get('common_name')
             })
 
+    def notify_audio_status(self, payload):
+        """Queue an audio-pipeline status change for notification.
+
+        Non-blocking. ``payload`` is a dict describing the transition; see
+        ``_process_audio_status`` for the expected shape. The audio_status
+        toggle is re-checked at send time so this is safe to call
+        unconditionally from the recording thread.
+        """
+        try:
+            self._queue.put_nowait(_AudioStatusEvent(payload))
+        except queue.Full:
+            logger.warning("Notification queue full, dropping audio status", extra={
+                'state': payload.get('state'),
+            })
+
     def _worker_loop(self):
         """Process notifications sequentially in background."""
         while True:
-            detection = self._queue.get()
+            item = self._queue.get()
             try:
-                self._process_detection(detection)
+                if isinstance(item, _AudioStatusEvent):
+                    self._process_audio_status(item.payload)
+                else:
+                    self._process_detection(item)
             except Exception as e:
                 logger.error("Notification processing failed", extra={'error': str(e)})
 
@@ -114,6 +149,75 @@ class NotificationService:
         title = self._build_title(detection, triggers)
         message = self._build_message(detection, triggers)
         self._send(title, message)
+
+    def _process_audio_status(self, payload):
+        """Send an audio-pipeline status notification if enabled.
+
+        ``payload`` keys:
+            state:         current aggregate state ('degraded'|'stopped'|'running')
+            previous_state: state before this transition (may be None)
+            problem_sources: list of {label, state, error} for affected sources
+                             (empty on a recovery)
+        """
+        self._load_config()
+
+        if not self._apprise_urls or not self._audio_status:
+            return
+
+        state = payload.get('state', '')
+        recovered = state == RecorderState.RUNNING
+
+        if recovered:
+            title = f"{self._station_prefix()}Audio recovered"
+        elif state == RecorderState.STOPPED:
+            title = f"{self._station_prefix()}Audio stopped"
+        else:
+            title = f"{self._station_prefix()}Audio degraded"
+
+        message = self._build_audio_status_message(payload, recovered)
+        self._send(title, message)
+
+    def _build_audio_status_message(self, payload, recovered):
+        """Build the audio-status notification body as HTML."""
+        state = payload.get('state', '')
+        previous_state = payload.get('previous_state')
+        problem_sources = payload.get('problem_sources') or []
+
+        when = self._format_when(local_now().isoformat())
+
+        if recovered:
+            headline = "Audio capture has recovered and is running normally."
+        elif state == RecorderState.STOPPED:
+            headline = "Audio capture has stopped — no recordings are being made."
+        else:
+            headline = "Audio capture is degraded."
+
+        lines = [f"<b>{html.escape(headline)}</b>"]
+
+        if previous_state:
+            lines.append(
+                f"State: {html.escape(str(previous_state))} → {html.escape(str(state))}"
+            )
+        else:
+            lines.append(f"State: {html.escape(str(state))}")
+
+        for src in problem_sources:
+            label = html.escape(str(src.get('label', 'Unknown source')))
+            src_state = html.escape(str(src.get('state', '')))
+            lines.append(f"<b>{label}</b> ({src_state})")
+            error = src.get('error')
+            if error:
+                # Errors can be multi-line ffmpeg output; keep it compact.
+                snippet = str(error).strip().splitlines()[0][:200]
+                lines.append(f"  {html.escape(snippet)}")
+
+        lines.append(f"Time: {html.escape(when)}")
+
+        station = self._settings.get('display', {}).get('station_name', '').strip()
+        if station:
+            lines.append(f"Station: {html.escape(station)}")
+
+        return '<br>\n'.join(lines)
 
     def _check_rate_limit(self, scientific_name, detection_ts):
         """Check per-species rate limit. Returns True if notification should be sent."""

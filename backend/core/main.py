@@ -4,6 +4,7 @@ import os
 import signal
 import threading
 import time
+from dataclasses import dataclass
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -59,6 +60,7 @@ RECORDING_THREAD_SHUTDOWN_TIMEOUT = 10  # Max wait for recording thread (seconds
 PROCESSING_THREAD_SHUTDOWN_TIMEOUT = 5  # Max wait for processing thread (seconds)
 DEGRADED_FAILURE_THRESHOLD = 3  # Consecutive failures before 'degraded' state
 STATUS_REFRESH_INTERVAL = 60   # Re-broadcast recorder status every N seconds
+AUDIO_STATUS_NOTIFY_COOLDOWN = 600  # Min seconds between repeat audio-degradation alerts
 
 # Setup logging
 setup_logging('main')
@@ -271,6 +273,118 @@ def broadcast_recorder_status(
         return False
 
 
+def _collect_problem_sources(
+    recorders: dict[str, BaseRecorder],
+    sources: list[dict],
+    health_cache: dict[str, bool],
+) -> list[dict]:
+    """List sources whose recorder is not in the running state.
+
+    Each entry carries the human label, current per-source state, and the
+    most recent error message — enough for a useful notification body.
+    """
+    problems = []
+    for source in sources:
+        sid = source.get('id', '')
+        label = source.get('label', sid)
+        recorder = recorders.get(sid)
+        if recorder is None:
+            problems.append({'label': label, 'state': RecorderState.STOPPED, 'error': ''})
+            continue
+        healthy = health_cache.get(sid, recorder.is_healthy())
+        state = _get_recorder_state(recorder, healthy)
+        if state != RecorderState.RUNNING:
+            problems.append({
+                'label': label,
+                'state': state,
+                'error': recorder.last_error_message,
+            })
+    return problems
+
+
+@dataclass
+class _AudioAlertTracker:
+    """Episode bookkeeping for audio-status notifications.
+
+    Lives for the recorder thread's lifetime. ``decide`` debounces flapping
+    so a persistently-broken stream alerts once (not every tick) while still
+    letting a degraded→stopped escalation through.
+    """
+
+    active: bool = False  # an unresolved problem alert was sent
+    problem_state: str | None = None
+    last_problem_time: float = 0.0
+
+    def decide(self, current_state: str, prev_state: str | None) -> str | None:
+        """Classify a state transition, mutating episode state when it
+        warrants an alert. Returns 'problem', 'recovery', or None.
+        """
+        if prev_state is None or current_state == prev_state:
+            return None
+
+        if current_state in (RecorderState.DEGRADED, RecorderState.STOPPED):
+            escalated = (
+                current_state == RecorderState.STOPPED
+                and self.problem_state == RecorderState.DEGRADED
+            )
+            new_episode = (
+                not self.active
+                and (time.time() - self.last_problem_time)
+                >= AUDIO_STATUS_NOTIFY_COOLDOWN
+            )
+            if not (escalated or new_episode):
+                return None
+            self.active = True
+            self.problem_state = current_state
+            self.last_problem_time = time.time()
+            return 'problem'
+
+        if self.active:
+            self.active = False
+            self.problem_state = None
+            return 'recovery'
+        return None
+
+
+def _maybe_notify_audio_status(
+    current_state: str,
+    prev_state: str | None,
+    recorders: dict[str, BaseRecorder],
+    sources: list[dict],
+    health_cache: dict[str, bool],
+    tracker: _AudioAlertTracker,
+    thread_logger,
+) -> None:
+    """Surface audio pipeline degradation/recovery via the notification service.
+
+    No-op unless the user has both notification URLs configured and the
+    ``audio_status`` toggle enabled (both enforced inside the service).
+    """
+    if prev_state is None or current_state == prev_state:
+        return
+
+    notif_service = get_notification_service(db_manager)
+    if notif_service is None:
+        return
+
+    kind = tracker.decide(current_state, prev_state)
+    if kind is None:
+        return
+
+    problem_sources = (
+        _collect_problem_sources(recorders, sources, health_cache)
+        if kind == 'problem' else []
+    )
+    notif_service.notify_audio_status({
+        'state': current_state,
+        'previous_state': prev_state,
+        'problem_sources': problem_sources,
+    })
+    thread_logger.info("Audio status alert queued", extra={
+        'kind': kind, 'state': current_state, 'previous_state': prev_state,
+    })
+
+
 def continuous_audio_recording(thread_logger):
     """Continuous audio recording from one or more audio sources.
 
@@ -281,6 +395,8 @@ def continuous_audio_recording(thread_logger):
     current_signature: tuple | None = None
     last_broadcast_state: str | None = None
     last_broadcast_time: float = 0.0
+    last_notify_state: str | None = None
+    audio_alert_tracker = _AudioAlertTracker()
 
     def _start_all(audio_settings, sig):
         nonlocal current_signature
@@ -351,6 +467,15 @@ def continuous_audio_recording(thread_logger):
                     if ok:
                         last_broadcast_state = current_state
                         last_broadcast_time = time.time()
+
+                # Runs even if the broadcast above failed, so a flaky API
+                # socket can't mask audio degradation.
+                _maybe_notify_audio_status(
+                    current_state, last_notify_state, recorders,
+                    enabled_sources, health_cache, audio_alert_tracker,
+                    thread_logger,
+                )
+                last_notify_state = current_state
 
                 time.sleep(FILE_SCAN_INTERVAL)
 

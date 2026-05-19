@@ -644,7 +644,7 @@
       <!-- Notifications (Collapsible) -->
       <CollapsibleSection
         title="Notifications"
-        subtitle="Get alerts when birds are detected"
+        subtitle="Detection and system status alerts"
       >
         <!-- Apprise URLs -->
         <div class="mb-4">
@@ -834,6 +834,20 @@
               </button>
             </div>
           </div>
+        </div>
+
+        <!-- Trigger: Audio Status -->
+        <div class="flex items-center justify-between py-2 border-t border-gray-100">
+          <div>
+            <label class="text-sm text-gray-600">Audio Status</label>
+            <p class="text-xs text-gray-400">
+              Alert when audio capture degrades or stops, and when it recovers
+            </p>
+          </div>
+          <ToggleSwitch
+            :model-value="settings.notifications.audio_status"
+            @update:model-value="toggleNotificationSetting('audio_status')"
+          />
         </div>
       </CollapsibleSection>
 

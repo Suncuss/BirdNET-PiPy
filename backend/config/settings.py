@@ -76,7 +76,8 @@ DEFAULT_SETTINGS = {
         "new_species": False,
         "rare_species": False,
         "rare_threshold": 3,
-        "rare_window_days": 7
+        "rare_window_days": 7,
+        "audio_status": False
     },
     "access": {
         "charts_public": False,
@@ -316,6 +317,7 @@ NOTIFICATIONS_FIRST_OF_DAY = user_settings['notifications']['first_of_day']
 NOTIFICATIONS_RARE_SPECIES = user_settings['notifications']['rare_species']
 NOTIFICATIONS_RARE_THRESHOLD = user_settings['notifications']['rare_threshold']
 NOTIFICATIONS_RARE_WINDOW_DAYS = user_settings['notifications']['rare_window_days']
+NOTIFICATIONS_AUDIO_STATUS = user_settings['notifications']['audio_status']
 
 # ── Spectrogram ───────────────────────────────────────────────────────────────
 
