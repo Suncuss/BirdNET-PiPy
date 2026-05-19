@@ -30,13 +30,15 @@ const styles = {
   component: 'color: #8B5CF6; font-weight: bold'
 }
 
-// Format timestamp
+// Format timestamp.
+// Logs are intentionally always 24h regardless of the user's time-format preference —
+// console output is for developers/operators, where 24h is the convention.
 const getTimestamp = () => {
   const now = new Date()
-  return now.toLocaleTimeString('en-US', { 
-    hour12: false, 
-    hour: '2-digit', 
-    minute: '2-digit', 
+  return now.toLocaleTimeString('en-US', {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
     second: '2-digit',
     fractionalSecondDigits: 3
   })

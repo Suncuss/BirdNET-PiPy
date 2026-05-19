@@ -32,57 +32,33 @@
                 class="absolute inset-0 w-full h-full object-cover transition-[opacity,transform] duration-200 hover:scale-110"
                 :class="{ 'opacity-0': !imageReady, 'opacity-100': imageReady }"
                 :style="{ objectPosition: imageFocalPoint }"
+                @error="onWikimediaImageError"
               >
             </a>
           </template>
           <button
-            class="absolute bottom-2 right-2 bg-black/50 hover:bg-black/70 text-white rounded-full w-9 h-9 flex items-center justify-center transition-colors"
-            title="Upload custom image"
-            :disabled="isUploading"
-            @click="triggerFileUpload"
+            class="group absolute bottom-2 right-2 bg-black/50 hover:bg-black/70 text-white rounded-full h-9 px-2 flex items-center justify-end overflow-hidden transition-colors"
+            title="Customize image"
+            @click="openImageModal"
           >
+            <span
+              class="max-w-0 group-hover:max-w-[12rem] group-hover:mr-2 overflow-hidden whitespace-nowrap text-sm transition-[max-width,margin] duration-300 ease-out"
+            >
+              Customize image
+            </span>
             <svg
-              v-if="!isUploading"
               xmlns="http://www.w3.org/2000/svg"
-              class="w-5 h-5"
+              class="w-5 h-5 shrink-0"
               viewBox="0 0 20 20"
               fill="currentColor"
             >
               <path
                 fill-rule="evenodd"
-                d="M4 5a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2V7a2 2 0 00-2-2h-1.586a1 1 0 01-.707-.293l-1.121-1.121A2 2 0 0011.172 3H8.828a2 2 0 00-1.414.586L6.293 4.707A1 1 0 015.586 5H4zm6 9a3 3 0 100-6 3 3 0 000 6z"
+                d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 0 1-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 0 1 .947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 0 1 2.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 0 1 2.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 0 1 .947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 0 1-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 0 1-2.287-.947ZM10 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"
                 clip-rule="evenodd"
               />
             </svg>
-            <svg
-              v-else
-              class="animate-spin w-5 h-5"
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-            >
-              <circle
-                class="opacity-25"
-                cx="12"
-                cy="12"
-                r="10"
-                stroke="currentColor"
-                stroke-width="4"
-              />
-              <path
-                class="opacity-75"
-                fill="currentColor"
-                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-              />
-            </svg>
           </button>
-          <input
-            ref="imageFileInput"
-            type="file"
-            accept="image/*"
-            class="hidden"
-            @change="handleImageUpload"
-          >
         </div>
         <div class="p-4 bg-gray-100 text-sm text-gray-600">
           <template v-if="hasCustomImage">
@@ -327,6 +303,17 @@
       alt="Spectrogram"
       @close="closeSpectrogram"
     />
+
+    <!-- Bird Image Customization Modal -->
+    <BirdImageModal
+      v-if="birdDetails"
+      :is-visible="imageModalOpen"
+      :species-name="birdDetails.common_name"
+      :has-custom-image="hasCustomImage"
+      :selected-file-title="selectedFileTitle"
+      @close="imageModalOpen = false"
+      @applied="onImageApplied"
+    />
   </div>
 </template>
 
@@ -336,6 +323,7 @@ import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import Chart from 'chart.js/auto'
 import SpectrogramModal from '@/components/SpectrogramModal.vue'
+import BirdImageModal from '@/components/BirdImageModal.vue'
 import { useAuth } from '@/composables/useAuth'
 import { useDateNavigation } from '@/composables/useDateNavigation'
 import { useChartHelpers } from '@/composables/useChartHelpers'
@@ -353,7 +341,8 @@ import {
 export default {
   name: 'BirdDetails',
   components: {
-    SpectrogramModal
+    SpectrogramModal,
+    BirdImageModal
   },
   setup() {
     const route = useRoute()
@@ -376,9 +365,10 @@ export default {
     const selectedSpectrogramUrl = ref(null)
 
     const hasCustomImage = ref(false)
-    const imageFileInput = ref(null)
-    const isUploading = ref(false)
     const customImageSrc = ref(getBirdImageUrl(route.params.name))
+    const selectedFileTitle = ref(null)
+    const imageModalOpen = ref(false)
+    const wikimediaRetried = ref(false)
 
     const birdImageData = ref({
       imageUrl: getDefaultBirdImageUrl(),
@@ -482,7 +472,9 @@ export default {
         // Always store wikimedia data for revert fallback
         if (imageData.imageUrl) {
           birdImageData.value = imageData
+          wikimediaRetried.value = false
         }
+        selectedFileTitle.value = imageData.fileTitle ?? null
 
         if (imageData.hasCustomImage) {
           hasCustomImage.value = true
@@ -679,46 +671,83 @@ export default {
       updateChart()
     }
 
-    const triggerFileUpload = () => {
+    const openImageModal = () => {
       if (needsLogin.value) {
         window.dispatchEvent(new CustomEvent('auth:required'))
         return
       }
-      imageFileInput.value?.click()
+      imageModalOpen.value = true
     }
 
-    const handleImageUpload = async (event) => {
-      const file = event.target.files?.[0]
-      if (!file) return
-
-      if (!file.type.startsWith('image/')) {
-        console.error('Invalid file type')
-        return
+    const refreshWikimediaImage = async () => {
+      const { data: imageData } = await api.get('/wikimedia_image', {
+        params: { species: birdDetails.value.common_name }
+      })
+      if (imageData.imageUrl) {
+        birdImageData.value = imageData
+        wikimediaRetried.value = false
       }
-
-      if (file.size > 10 * 1024 * 1024) {
-        console.error('File too large (max 10MB)')
-        return
+      selectedFileTitle.value = imageData.fileTitle ?? null
+      if (!isDefaultBirdImageUrl(imageData.imageUrl)) {
+        await updateFocalPoint(imageData.imageUrl)
       }
+    }
 
-      isUploading.value = true
-      try {
-        const formData = new FormData()
-        formData.append('file', file)
-        await api.post(`/bird/${route.params.name}/image`, formData, {
-          headers: { 'Content-Type': 'multipart/form-data' }
-        })
+    const onImageApplied = async (payload) => {
+      if (payload.kind === 'upload') {
         hasCustomImage.value = true
         customImageSrc.value = `${getBirdImageUrl(route.params.name)}?t=${Date.now()}`
-      } catch (error) {
-        console.error('Error uploading image:', error)
-      } finally {
-        isUploading.value = false
-        // Reset file input so the same file can be re-selected
-        if (imageFileInput.value) imageFileInput.value.value = ''
+        return
+      }
+      if (payload.kind === 'wikimedia') {
+        hasCustomImage.value = false
+        birdImageData.value = {
+          imageUrl: payload.candidate.imageUrl,
+          pageUrl: payload.candidate.pageUrl,
+          authorName: payload.candidate.authorName,
+          authorUrl: payload.candidate.authorUrl,
+          licenseType: payload.candidate.licenseType
+        }
+        selectedFileTitle.value = payload.candidate.fileTitle
+        wikimediaRetried.value = false
+        await updateFocalPoint(payload.candidate.imageUrl)
+        return
+      }
+      if (payload.kind === 'reset') {
+        hasCustomImage.value = false
+        await refreshWikimediaImage()
       }
     }
 
+    const onWikimediaImageError = async () => {
+      // Link rot fallback: if a saved Wikimedia URL goes 404, silently swap to top-of-search.
+      // The stale sidecar persists until the user re-opens the modal and picks again.
+      if (wikimediaRetried.value || !birdDetails.value) return
+      wikimediaRetried.value = true
+      try {
+        const { data } = await api.get('/wikimedia_image/candidates', {
+          params: { species: birdDetails.value.common_name, limit: 1 }
+        })
+        const top = Array.isArray(data?.candidates) ? data.candidates[0] : null
+        if (top && top.imageUrl !== birdImageData.value.imageUrl) {
+          birdImageData.value = {
+            imageUrl: top.imageUrl,
+            pageUrl: top.pageUrl,
+            authorName: top.authorName,
+            authorUrl: top.authorUrl,
+            licenseType: top.licenseType
+          }
+          await updateFocalPoint(top.imageUrl)
+        }
+      } catch (err) {
+        console.error('Wikimedia fallback failed:', err)
+      }
+    }
+
+    // Quick "Revert to default" link in the attribution panel — deletes only the
+    // custom upload, leaving any saved Wikimedia choice (sidecar) intact. Distinct
+    // from the modal's full reset, which deletes both. Per our precedence
+    // (custom > sidecar > top-of-search), this surfaces the sidecar if one exists.
     const revertToWikimedia = async () => {
       if (needsLogin.value) {
         window.dispatchEvent(new CustomEvent('auth:required'))
@@ -727,7 +756,6 @@ export default {
       try {
         await api.delete(`/bird/${route.params.name}/image`)
         hasCustomImage.value = false
-        // Recalculate focal point for wikimedia image
         if (birdImageData.value.imageUrl && !isDefaultBirdImageUrl(birdImageData.value.imageUrl)) {
           await updateFocalPoint(birdImageData.value.imageUrl)
         }
@@ -783,10 +811,11 @@ export default {
       imageReady,
       hasCustomImage,
       customImageSrc,
-      imageFileInput,
-      isUploading,
-      triggerFileUpload,
-      handleImageUpload,
+      selectedFileTitle,
+      imageModalOpen,
+      openImageModal,
+      onImageApplied,
+      onWikimediaImageError,
       revertToWikimedia,
       averageConfidence,
       peakActivityTime,

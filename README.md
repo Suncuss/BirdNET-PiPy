@@ -29,6 +29,8 @@ Once installed, access the dashboard from any device on the same network:
 - **Using hostname:** `http://<hostname>.local` (e.g., `http://raspberrypi.local`)
 - **Using IP address:** `http://<ip-address>` (e.g., `http://192.168.1.100`)
 
+> 💡 **Running Home Assistant?** BirdNET-PiPy is also available as an add-on via [alexbelgium's hassio-addons](https://github.com/alexbelgium/hassio-addons/tree/master/birdnet-pipy).
+
 ## Documentation
 
 - **[Installation Guide](docs/INSTALLATION.md):** Detailed hardware requirements and setup instructions.
@@ -51,6 +53,8 @@ This project is built upon:
 - **[BirdNET-Pi](https://github.com/mcguirepr89/BirdNET-Pi)** - Original Raspberry Pi implementation by Patrick McGuire
 
 BirdNET-PiPy extends these projects with a modern Vue.js frontend, containerized architecture, and enhanced user interface.
+
+Thanks to **[alexbelgium](https://github.com/alexbelgium)** for packaging and maintaining the [Home Assistant add-on](https://github.com/alexbelgium/hassio-addons/tree/master/birdnet-pipy).
 
 ---
 

@@ -7,6 +7,7 @@ by both the model service and the API server.
 import csv
 import logging
 import os
+import sys
 import threading
 
 logger = logging.getLogger(__name__)
@@ -15,47 +16,167 @@ _SPECIES_TABLE_PATH = os.path.join(
     os.path.dirname(__file__), 'models', 'species_table.csv'
 )
 
-# Loaded lazily by _ensure_loaded()
-_species_by_sci: dict[str, dict] | None = None
-_species_by_common: dict[str, str] | None = None
+# Columnar species store, populated by _ensure_loaded().
+# Storing as parallel arrays keyed by row index keeps per-row dict overhead
+# and duplicate-string allocations off the heap.
+_sci_to_idx: dict[str, int] | None = None
+_sci_names: list[str] | None = None
+_common_to_idx: dict[str, int] | None = None
+_common_names: list[str] | None = None
+_synonym_to_idx: dict[str, int] | None = None
+_in_v2: list[bool] | None = None
+_in_v3: list[bool] | None = None
 _loading_lock = threading.Lock()
 
+# Per-language label arrays, loaded on first request for that language.
+_lang_columns: dict[str, list[str]] = {}
+_lang_lock = threading.Lock()
 
-def _ensure_loaded():
-    """Load species table on first access (thread-safe)."""
-    global _species_by_sci, _species_by_common
-    if _species_by_sci is not None:
+
+def _ensure_loaded() -> None:
+    """Load species metadata + index on first access (thread-safe).
+
+    Reads the canonical columns plus ``label_en`` and ``label_en_uk`` to build
+    a case-folded English-synonym index. Other ``label_*`` translation columns
+    are loaded lazily by :func:`_ensure_language_loaded` on first request.
+    """
+    global _sci_to_idx, _sci_names, _common_to_idx, _common_names
+    global _synonym_to_idx, _in_v2, _in_v3
+    if _sci_to_idx is not None:
         return
 
     with _loading_lock:
-        if _species_by_sci is not None:
+        if _sci_to_idx is not None:
             return
 
-        by_sci = {}
-        by_common = {}
+        sci_to_idx: dict[str, int] = {}
+        sci_names: list[str] = []
+        common_to_idx: dict[str, int] = {}
+        common_names: list[str] = []
+        in_v2: list[bool] = []
+        in_v3: list[bool] = []
+        # Collected during the row loop and merged afterwards so that
+        # canonical common_names always shadow label_en / label_en_uk aliases
+        # — without this, an earlier row's UK alias (e.g. Aegypius monachus
+        # label_en_uk = "Black Vulture") would mis-route the canonical
+        # "Black Vulture" (Coragyps atratus) by virtue of CSV row order.
+        canonical_synonyms: dict[str, int] = {}
+        alias_synonyms: dict[str, int] = {}
 
         try:
             with open(_SPECIES_TABLE_PATH, encoding='utf-8') as f:
                 reader = csv.DictReader(f, delimiter=';')
-                for row in reader:
-                    sci = row['sci_name']
-                    by_sci[sci] = row
-                    common = row.get('common_name', '')
+                for idx, row in enumerate(reader):
+                    sci = sys.intern(row['sci_name'])
+                    sci_to_idx[sci] = idx
+                    sci_names.append(sci)
+                    common = sys.intern(row.get('common_name', ''))
+                    common_names.append(common)
                     if common:
-                        by_common[common] = sci
-            logger.info("Loaded species table: %d species", len(by_sci))
+                        common_to_idx[common] = idx
+                        # Canonical wins on collision: overwrite, not setdefault.
+                        # Two rows sharing a canonical common_name would still
+                        # collide here, but that's an authoritative ambiguity in
+                        # the species table itself.
+                        canonical_synonyms[common.casefold()] = idx
+                    for col in ('label_en', 'label_en_uk'):
+                        val = (row.get(col) or '').strip()
+                        if val:
+                            # Aliases use setdefault — first occurrence wins
+                            # when nothing canonical claims the same key.
+                            alias_synonyms.setdefault(val.casefold(), idx)
+                    in_v2.append(row.get('in_v2') == 'True')
+                    in_v3.append(row.get('in_v3') == 'True')
+
+            # Merge: aliases first, then canonical so canonical always wins.
+            synonym_to_idx: dict[str, int] = {**alias_synonyms, **canonical_synonyms}
+            logger.info(
+                "Loaded species table",
+                extra={
+                    'species_count': len(sci_to_idx),
+                    'synonym_count': len(synonym_to_idx),
+                },
+            )
         except Exception:
             logger.exception("Failed to load species table from %s", _SPECIES_TABLE_PATH)
+            synonym_to_idx = {}
 
-        _species_by_common = by_common
-        _species_by_sci = by_sci
+        _common_to_idx = common_to_idx
+        _common_names = common_names
+        _synonym_to_idx = synonym_to_idx
+        _in_v2 = in_v2
+        _in_v3 = in_v3
+        _sci_names = sci_names
+        _sci_to_idx = sci_to_idx
 
 
-def clear_species_cache():
+def _ensure_language_loaded(language: str) -> list[str] | None:
+    """Load a single language column on demand.
+
+    Returns the column array (idx -> translated name), or None if loading
+    failed. The CSV is reread once per language; the OS page cache makes
+    the second pass effectively free.
+    """
+    column = _lang_columns.get(language)
+    if column is not None:
+        return column
+
+    with _lang_lock:
+        column = _lang_columns.get(language)
+        if column is not None:
+            return column
+
+        col_name = f'label_{language}'
+        values: list[str] = []
+        try:
+            with open(_SPECIES_TABLE_PATH, encoding='utf-8') as f:
+                reader = csv.DictReader(f, delimiter=';')
+                if col_name not in (reader.fieldnames or ()):
+                    logger.warning(
+                        "Requested language column missing",
+                        extra={'language': language, 'column': col_name},
+                    )
+                    return None
+                for row in reader:
+                    values.append(sys.intern(row.get(col_name, '')))
+            logger.info(
+                "Loaded species language column",
+                extra={'language': language, 'species_count': len(values)},
+            )
+        except Exception:
+            logger.exception(
+                "Failed to load language column %s from %s",
+                col_name,
+                _SPECIES_TABLE_PATH,
+            )
+            return None
+
+        _lang_columns[language] = values
+        return values
+
+
+def clear_species_cache() -> None:
     """Reset the loaded species table. Used by tests."""
-    global _species_by_sci, _species_by_common
-    _species_by_sci = None
-    _species_by_common = None
+    global _sci_to_idx, _sci_names, _common_to_idx, _common_names
+    global _synonym_to_idx, _in_v2, _in_v3
+    _sci_to_idx = None
+    _sci_names = None
+    _common_to_idx = None
+    _common_names = None
+    _synonym_to_idx = None
+    _in_v2 = None
+    _in_v3 = None
+    _lang_columns.clear()
+
+
+def _localized_at(idx: int | None, language: str) -> str | None:
+    """Resolve the translation for a row index in a given language."""
+    if idx is None:
+        return None
+    column = _ensure_language_loaded(language)
+    if column is None:
+        return None
+    return column[idx] or None
 
 
 def get_localized_name(sci_name: str, language: str) -> str | None:
@@ -64,11 +185,7 @@ def get_localized_name(sci_name: str, language: str) -> str | None:
     Returns None if species or language translation not found.
     """
     _ensure_loaded()
-    row = _species_by_sci.get(sci_name)
-    if not row:
-        return None
-    name = row.get(f'label_{language}', '')
-    return name if name else None
+    return _localized_at(_sci_to_idx.get(sci_name), language)
 
 
 def get_localized_name_from_english(common_name: str, language: str) -> str | None:
@@ -77,20 +194,27 @@ def get_localized_name_from_english(common_name: str, language: str) -> str | No
     Returns None if species or translation not found.
     """
     _ensure_loaded()
-    sci_name = _species_by_common.get(common_name)
-    if not sci_name:
+    return _localized_at(_common_to_idx.get(common_name), language)
+
+
+def resolve_to_scientific_name(name: str | None) -> str | None:
+    """Resolve an English bird name to its canonical scientific name.
+
+    Accepts any English variant carried by the species table: the canonical
+    ``common_name`` (built from V3.0), the V2.4 English label (``label_en``),
+    or the UK English variant (``label_en_uk``). Matching is case-insensitive
+    and trims surrounding whitespace.
+
+    Used at API ingress so a route param like ``/api/bird/Eurasian Blackbird``
+    can be served by querying the DB on the stable ``Turdus merula`` key.
+    Returns None for unknown names — callers should fall back to filtering by
+    common_name to preserve access to legacy or migrated rows.
+    """
+    if not name:
         return None
-    return get_localized_name(sci_name, language)
-
-
-def get_ebird_code(sci_name: str) -> str | None:
-    """Look up eBird species code for a scientific name."""
     _ensure_loaded()
-    row = _species_by_sci.get(sci_name)
-    if not row:
-        return None
-    code = row.get('ebird_code', '')
-    return code if code else None
+    idx = _synonym_to_idx.get(name.strip().casefold())
+    return _sci_names[idx] if idx is not None else None
 
 
 def get_species_list(model_type: str) -> list[dict]:
@@ -102,12 +226,12 @@ def get_species_list(model_type: str) -> list[dict]:
     from config.constants import ModelType
 
     _ensure_loaded()
-    flag = 'in_v3' if model_type == ModelType.BIRDNET_V3.value else 'in_v2'
+    flags = _in_v3 if model_type == ModelType.BIRDNET_V3.value else _in_v2
 
     species = [
-        {'scientific_name': row['sci_name'], 'common_name': row['common_name']}
-        for row in _species_by_sci.values()
-        if row.get(flag) == 'True'
+        {'scientific_name': sci, 'common_name': _common_names[idx]}
+        for sci, idx in _sci_to_idx.items()
+        if flags[idx]
     ]
     species.sort(key=lambda s: s['common_name'])
     return species

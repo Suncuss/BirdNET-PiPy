@@ -18,15 +18,28 @@ DEFAULT_NOTIF_CONFIG = {
     'rare_species': False,
     'rare_threshold': 3,
     'rare_window_days': 7,
+    'audio_status': False,
+}
+
+DEFAULT_DISPLAY_CONFIG = {
+    'bird_name_language': 'en',
 }
 
 
-def make_mock_settings(overrides=None):
-    """Build a mock settings dict with notification overrides."""
-    config = dict(DEFAULT_NOTIF_CONFIG)
+def make_mock_settings(overrides=None, *, display=None):
+    """Build a mock settings dict.
+
+    ``overrides`` patches the notifications section (back-compat with existing
+    tests). ``display`` patches the display section — used for bird-name
+    localization tests.
+    """
+    notif = dict(DEFAULT_NOTIF_CONFIG)
     if overrides:
-        config.update(overrides)
-    return {'notifications': config}
+        notif.update(overrides)
+    display_cfg = dict(DEFAULT_DISPLAY_CONFIG)
+    if display:
+        display_cfg.update(display)
+    return {'notifications': notif, 'display': display_cfg}
 
 
 @pytest.fixture
@@ -48,7 +61,10 @@ def notification_service():
         from core.notification_service import NotificationService
         service = NotificationService(db)
 
-        def set_settings(overrides=None):
-            settings_holder[0] = make_mock_settings(overrides)
+        def set_settings(overrides=None, *, display=None):
+            settings_holder[0] = make_mock_settings(overrides, display=display)
+            # Refresh the service's stored settings so build methods called
+            # outside _process_detection see the new language.
+            service._load_config()
 
         yield service, set_settings

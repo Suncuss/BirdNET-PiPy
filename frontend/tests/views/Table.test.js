@@ -29,6 +29,16 @@ vi.mock('@/services/api', () => ({
   default: mockApi
 }))
 
+// Mock vue-router's useRoute — Table seeds filters from route.query on mount.
+// Tests mutate mockRoute.query before mounting to exercise deep-link seeding.
+const mockRoute = vi.hoisted(() => ({ query: {} }))
+const mockRouter = vi.hoisted(() => ({ replace: vi.fn() }))
+
+vi.mock('vue-router', () => ({
+  useRoute: () => mockRoute,
+  useRouter: () => mockRouter
+}))
+
 // Mock useLogger
 vi.mock('@/composables/useLogger', () => ({
   useLogger: () => ({
@@ -60,6 +70,7 @@ vi.mock('@/components/AppDatePicker.vue', () => ({
 describe('Table.vue', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockRoute.query = {}
 
     // Default mock responses
     mockApi.get.mockImplementation((url) => {
@@ -307,6 +318,148 @@ describe('Table.vue', () => {
     })
   })
 
+  describe('hour filter', () => {
+    it('renders a desktop-only custom hour dropdown, blank by default + 24 hours', async () => {
+      const wrapper = await mountTable()
+
+      const hourLabel = wrapper.findAll('label').find(l => l.text() === 'Hour')
+      expect(hourLabel).toBeTruthy()
+
+      // Hidden on mobile, shown from the lg breakpoint up
+      const container = hourLabel.element.parentElement
+      expect(container.className).toContain('hidden')
+      expect(container.className).toContain('lg:block')
+
+      const buttons = [...container.querySelectorAll('button')]
+      // Trigger (blank until a hour is picked) + 24 hour options
+      expect(buttons[0].textContent.trim()).toBe('')
+      const hourOptions = buttons.slice(1)
+      expect(hourOptions).toHaveLength(24)
+    })
+
+    it('selecting an hour applies it as a detections filter', async () => {
+      const wrapper = await mountTable()
+
+      const container = wrapper
+        .findAll('label')
+        .find(l => l.text() === 'Hour')
+        .element.parentElement
+      // buttons[0] is the trigger; the rest are hours 0..23 in order
+      const hourOptions = wrapper
+        .findAll('button')
+        .filter(b => container.contains(b.element))
+        .slice(1)
+
+      await hourOptions[14].trigger('mousedown')
+      await flushPromises()
+
+      const detectionCalls = mockApi.get.mock.calls.filter(
+        ([url]) => url === '/detections'
+      )
+      expect(detectionCalls.at(-1)[1].params.hour).toBe(14)
+    })
+
+    it('keeps the hour trigger box-aligned with the other filter controls', async () => {
+      const wrapper = await mountTable()
+
+      const hourContainer = wrapper
+        .findAll('label')
+        .find(l => l.text() === 'Hour')
+        .element.parentElement
+      const trigger = hourContainer.querySelector('button')
+
+      // Regression guard: the trigger must be a flex box, not the default
+      // inline-block. An inline-block button adds a ~6px baseline descender
+      // gap below it, which made the Hour box render 6px higher than the
+      // From/To/Species controls. happy-dom has no layout engine so we can't
+      // measure rects here — assert the structural cause instead.
+      expect(trigger.className).toContain('flex')
+      expect(trigger.className).toContain('items-center')
+
+      // ...and it must share the h-10 height the sibling controls use.
+      expect(trigger.className).toContain('h-10')
+      const speciesInput = wrapper.find('input[placeholder="All species"]')
+      expect(speciesInput.classes()).toContain('h-10')
+    })
+
+    it('seeds date + hour filters from the route query on mount', async () => {
+      mockRoute.query = { date: '2024-01-15', hour: '14' }
+
+      await mountTable()
+
+      const detectionCall = mockApi.get.mock.calls.find(
+        ([url]) => url === '/detections'
+      )
+      expect(detectionCall).toBeTruthy()
+      expect(detectionCall[1].params).toMatchObject({
+        start_date: '2024-01-15',
+        end_date: '2024-01-15',
+        hour: 14
+      })
+    })
+
+    it('seeds hour 0 from the route query (falsy but valid)', async () => {
+      mockRoute.query = { date: '2024-01-15', hour: '0' }
+
+      await mountTable()
+
+      const detectionCall = mockApi.get.mock.calls.find(
+        ([url]) => url === '/detections'
+      )
+      expect(detectionCall[1].params.hour).toBe(0)
+    })
+
+    it('seeds the species filter from the route query (heatmap cell deep-link)', async () => {
+      mockRoute.query = { date: '2024-01-15', hour: '14', species: 'American Robin' }
+
+      await mountTable()
+
+      const detectionCall = mockApi.get.mock.calls.find(
+        ([url]) => url === '/detections'
+      )
+      expect(detectionCall[1].params).toMatchObject({
+        start_date: '2024-01-15',
+        end_date: '2024-01-15',
+        hour: 14,
+        species: 'American Robin'
+      })
+    })
+
+    it('trims a space-padded species from the route query', async () => {
+      mockRoute.query = { species: '  American Robin  ' }
+
+      await mountTable()
+
+      const detectionCall = mockApi.get.mock.calls.find(
+        ([url]) => url === '/detections'
+      )
+      expect(detectionCall[1].params.species).toBe('American Robin')
+    })
+
+    it('does not send date/hour params when the route query is empty', async () => {
+      await mountTable()
+
+      const detectionCall = mockApi.get.mock.calls.find(
+        ([url]) => url === '/detections'
+      )
+      expect(detectionCall[1].params).not.toHaveProperty('hour')
+      expect(detectionCall[1].params).not.toHaveProperty('start_date')
+    })
+
+    it('strips date/hour/species from the route query when filters are cleared', async () => {
+      mockRoute.query = { date: '2024-01-15', hour: '14', species: 'American Robin' }
+
+      const wrapper = await mountTable()
+
+      const clearBtn = wrapper.findAll('button').find(b => b.text() === 'Clear')
+      expect(clearBtn).toBeTruthy()
+      await clearBtn.trigger('click')
+
+      // Without this, a remount/refresh re-seeds the just-cleared filters.
+      expect(mockRouter.replace).toHaveBeenCalledWith({ query: {} })
+    })
+  })
+
   describe('table interactions', () => {
     it('renders sortable column headers', async () => {
       mockApi.get.mockImplementation((url) => {
@@ -479,8 +632,9 @@ describe('Table.vue', () => {
 
       const wrapper = await mountTable()
 
-      const select = wrapper.find('select')
-      expect(select.exists()).toBe(true)
+      // The filter bar also has an hour <select>; target the per-page one.
+      const select = wrapper.findAll('select').find(s => s.text().includes('25'))
+      expect(select).toBeTruthy()
 
       const options = select.findAll('option')
       expect(options.map(o => o.text())).toContain('25')

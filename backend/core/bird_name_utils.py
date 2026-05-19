@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from core.runtime_config import get_runtime_settings
+from model_service.ebird_codes_lookup import clear_ebird_codes_cache
 from model_service.label_utils import (
     clear_species_cache,
     get_localized_name,
     get_localized_name_from_english,
+    resolve_to_scientific_name,
 )
 
 DEFAULT_BIRD_NAME_LANGUAGE = 'en'
@@ -74,6 +76,7 @@ def _resolve_language(language: str | None, settings: dict | None) -> str:
 def clear_bird_name_caches() -> None:
     """Clear cached label mappings."""
     clear_species_cache()
+    clear_ebird_codes_cache()
 
 
 def get_localized_common_name(
@@ -189,12 +192,28 @@ def add_display_species(
     language: str | None = None,
     settings: dict | None = None,
 ) -> dict | None:
-    """Return a copy with displaySpecies attached."""
+    """Return a copy with displaySpecies attached.
+
+    Resolves the translation by ``scientific_name`` when available — the
+    aggregation queries return it alongside ``species`` so the stable-key
+    path is the norm. For legacy or partial records where ``scientific_name``
+    is missing, falls back to the English-synonym resolver before giving up
+    on the English string. This is what makes both V2's "Eurasian Blackbird"
+    and V3's "Common Blackbird" translate correctly when the record carries
+    only the English form.
+    """
     if not data:
         return data
 
-    localized = get_localized_common_name_from_english(
-        data.get('species'),
+    sci = data.get('scientific_name')
+    common = data.get('species') or data.get('common_name')
+
+    if not sci and common:
+        sci = resolve_to_scientific_name(common)
+
+    localized = get_localized_common_name(
+        sci,
+        common,
         language=language,
         settings=settings,
     )

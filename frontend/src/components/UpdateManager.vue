@@ -101,7 +101,7 @@
       class="mt-4 bg-blue-50 border border-blue-200 p-4 rounded"
     >
       <div class="flex items-center">
-        <div class="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600 mr-3" />
+        <Spinner class="h-5 w-5 mr-3 text-blue-600" />
         <span class="text-blue-800">{{ updateProgress }}</span>
       </div>
     </div>
@@ -121,6 +121,7 @@
 <script setup>
 import { ref } from 'vue'
 import api, { createLongRequest } from '@/services/api'
+import Spinner from '@/components/Spinner.vue'
 
 const checking = ref(false)
 const updating = ref(false)

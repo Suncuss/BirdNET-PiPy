@@ -1,6 +1,7 @@
 import { ref, computed } from 'vue'
 import api from '@/services/api'
 import { useLogger } from './useLogger'
+import { normalizeHour } from '@/utils/inputHelpers'
 
 /**
  * Composable for managing paginated detection table data.
@@ -27,6 +28,9 @@ export function useTableData() {
   const startDate = ref(null)
   const endDate = ref(null)
   const selectedSpecies = ref(null)
+  // Hour-of-day filter (0-23), or null for "any hour". 0 is a valid value,
+  // so every check below uses `!== null` rather than a truthy test.
+  const selectedHour = ref(null)
 
   // Sorting state
   const sortField = ref('timestamp')
@@ -41,7 +45,8 @@ export function useTableData() {
 
   // Computed for active filters
   const hasActiveFilters = computed(() =>
-    !!(startDate.value || endDate.value || selectedSpecies.value)
+    !!(startDate.value || endDate.value || selectedSpecies.value) ||
+    selectedHour.value !== null
   )
 
   // Computed for selection
@@ -70,6 +75,7 @@ export function useTableData() {
         if (startDate.value) params.start_date = startDate.value
         if (endDate.value) params.end_date = endDate.value
         if (selectedSpecies.value) params.species = selectedSpecies.value
+        if (selectedHour.value !== null) params.hour = selectedHour.value
 
         logger.info('Fetching detections', params)
 
@@ -271,11 +277,13 @@ export function useTableData() {
    * @param {string} [filters.startDate] - Start date (YYYY-MM-DD)
    * @param {string} [filters.endDate] - End date (YYYY-MM-DD)
    * @param {string} [filters.species] - Species common name
+   * @param {number|string|null} [filters.hour] - Hour of day 0-23, or null/'' to clear
    */
   function setFilters(filters) {
     if (filters.startDate !== undefined) startDate.value = filters.startDate || null
     if (filters.endDate !== undefined) endDate.value = filters.endDate || null
     if (filters.species !== undefined) selectedSpecies.value = filters.species || null
+    if (filters.hour !== undefined) selectedHour.value = normalizeHour(filters.hour)
 
     // Reset to page 1 when filters change
     currentPage.value = 1
@@ -289,6 +297,7 @@ export function useTableData() {
     startDate.value = null
     endDate.value = null
     selectedSpecies.value = null
+    selectedHour.value = null
     currentPage.value = 1
     fetchDetections()
   }
@@ -351,6 +360,7 @@ export function useTableData() {
     startDate,
     endDate,
     selectedSpecies,
+    selectedHour,
     hasActiveFilters,
 
     // Sorting

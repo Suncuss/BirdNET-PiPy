@@ -41,26 +41,7 @@
       class="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg"
     >
       <div class="flex items-center gap-2 text-blue-700 text-sm">
-        <svg
-          class="animate-spin h-4 w-4"
-          xmlns="http://www.w3.org/2000/svg"
-          fill="none"
-          viewBox="0 0 24 24"
-        >
-          <circle
-            class="opacity-25"
-            cx="12"
-            cy="12"
-            r="10"
-            stroke="currentColor"
-            stroke-width="4"
-          />
-          <path
-            class="opacity-75"
-            fill="currentColor"
-            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-          />
-        </svg>
+        <Spinner class="h-4 w-4" />
         <span>{{ serviceRestart.restartMessage.value || systemUpdate.restartMessage.value }}</span>
       </div>
     </div>
@@ -663,7 +644,7 @@
       <!-- Notifications (Collapsible) -->
       <CollapsibleSection
         title="Notifications"
-        subtitle="Get alerts when birds are detected"
+        subtitle="Detection and system status alerts"
       >
         <!-- Apprise URLs -->
         <div class="mb-4">
@@ -854,6 +835,20 @@
             </div>
           </div>
         </div>
+
+        <!-- Trigger: Audio Status -->
+        <div class="flex items-center justify-between py-2 border-t border-gray-100">
+          <div>
+            <label class="text-sm text-gray-600">Audio Status</label>
+            <p class="text-xs text-gray-400">
+              Alert when audio capture degrades or stops, and when it recovers
+            </p>
+          </div>
+          <ToggleSwitch
+            :model-value="settings.notifications.audio_status"
+            @update:model-value="toggleNotificationSetting('audio_status')"
+          />
+        </div>
       </CollapsibleSection>
 
       <!-- Integrations (Collapsible) -->
@@ -944,6 +939,20 @@
             :model-value="settings.display?.use_metric_units !== false"
             :disabled="metricUnitsSaving"
             @update:model-value="toggleMetricUnits"
+          />
+        </div>
+
+        <div class="pt-4 border-t border-gray-100 flex items-center justify-between">
+          <div>
+            <label class="text-sm text-gray-600">Use 24-hour Clock</label>
+            <p class="text-xs text-gray-400">
+              Show times like 14:30 instead of 2:30 PM
+            </p>
+          </div>
+          <ToggleSwitch
+            :model-value="!timeFormatSettings.hour12.value"
+            :disabled="timeFormatSaving"
+            @update:model-value="toggleTimeFormat"
           />
         </div>
       </CollapsibleSection>
@@ -1392,8 +1401,10 @@ import { useSystemUpdate } from '@/composables/useSystemUpdate'
 import { requestRestart, useServiceRestart } from '@/composables/useServiceRestart'
 import { useAuth } from '@/composables/useAuth'
 import { useUnitSettings } from '@/composables/useUnitSettings'
+import { useTimeFormat } from '@/composables/useTimeFormat'
 import { useAppStatus } from '@/composables/useAppStatus'
 import { limitDecimals } from '@/utils/inputHelpers'
+import { FILTER_DEFAULTS, modelTypeOptions } from '@/utils/modelDefaults'
 import { RECORDER_STATES } from '@/utils/recorderStates'
 import api, { createLongRequest } from '@/services/api'
 import { SOCKET_PATH } from '@/services/baseUrl'
@@ -1408,6 +1419,7 @@ import StreamSourceModal from '@/components/StreamSourceModal.vue'
 import CollapsibleSection from '@/components/CollapsibleSection.vue'
 import ToggleSwitch from '@/components/ToggleSwitch.vue'
 import LogsModal from '@/components/LogsModal.vue'
+import Spinner from '@/components/Spinner.vue'
 import { SCHEME_TO_SERVICE_NAME } from '@/utils/notificationServices'
 
 const DEFAULT_REPOSITORY_URL = 'https://github.com/Suncuss/BirdNET-PiPy'
@@ -1425,13 +1437,15 @@ export default {
     StreamSourceModal,
     CollapsibleSection,
     ToggleSwitch,
-    LogsModal
+    LogsModal,
+    Spinner
   },
   setup() {
     // Composables
     const serviceRestart = useServiceRestart()
     const auth = useAuth()
     const unitSettings = useUnitSettings()
+    const timeFormatSettings = useTimeFormat()
     const appStatus = useAppStatus()
 
     // Dropdown options (static configuration)
@@ -1448,11 +1462,6 @@ export default {
       { value: 2.0, label: '2.0s' },
       { value: 2.5, label: '2.5s' }
     ]
-    const modelTypeOptions = [
-      { value: 'birdnet', label: 'BirdNET v2.4 (6K species)' },
-      { value: 'birdnet_v3', label: 'BirdNET v3.0 (11K species, preview)' }
-    ]
-    const FILTER_DEFAULTS = { birdnet: 0.03, birdnet_v3: 0.15 }
     const onModelTypeChange = () => {
       settings.value.detection.species_filter_threshold =
         FILTER_DEFAULTS[settings.value.model.type] ?? 0.03
@@ -1650,6 +1659,7 @@ export default {
     let notifSaveInFlight = 0
     const updateChannelSaving = ref(false)
     const metricUnitsSaving = ref(false)
+    const timeFormatSaving = ref(false)
 
     // Minimal settings skeleton - actual values loaded from API
     const settings = ref({
@@ -1886,6 +1896,7 @@ export default {
         normalizeSettingsData(data)
         settings.value = data
         unitSettings.setUseMetricUnits(settings.value.display.use_metric_units ?? true)
+        timeFormatSettings.setTimeFormat(settings.value.display.time_format)
         if (saveStatus.value?.type === 'error') {
           saveStatus.value = null
         }
@@ -2041,6 +2052,25 @@ export default {
         showStatus('error', 'Failed to save channel setting')
       } finally {
         updateChannelSaving.value = false
+      }
+    }
+
+    // Toggle time-format preference (saves immediately, no restart needed).
+    const toggleTimeFormat = async () => {
+      if (timeFormatSaving.value) return
+      const target = timeFormatSettings.hour12.value ? '24h' : '12h'
+      timeFormatSaving.value = true
+      try {
+        const ok = await timeFormatSettings.saveTimeFormat(target)
+        if (ok) {
+          // Keep settings.value in sync so a subsequent full PUT /settings
+          // doesn't overwrite the just-saved preference with the stale value.
+          if (!settings.value.display) settings.value.display = {}
+          settings.value.display.time_format = target
+        }
+        showStatus(ok ? 'success' : 'error', ok ? 'Settings applied.' : 'Failed to save time format setting')
+      } finally {
+        timeFormatSaving.value = false
       }
     }
 
@@ -2558,6 +2588,8 @@ export default {
       versionChangelogUrl,
       updateSubLabel,
       toggleMetricUnits,
+      toggleTimeFormat,
+      timeFormatSettings,
       showRecorderError,
       limitDecimals,
       updateBirdweatherId,
@@ -2568,6 +2600,7 @@ export default {
       dismissSettingsError,
       updateChannelSaving,
       metricUnitsSaving,
+      timeFormatSaving,
       // Auth
       auth,
       authLoading,

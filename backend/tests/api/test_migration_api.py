@@ -738,3 +738,60 @@ class TestMigrationIntegration:
         finally:
             if os.path.exists(db_path):
                 os.unlink(db_path)
+
+
+class TestMigrateCooperativeYield:
+    """Tests that migrate() invokes yield_control at batch boundaries."""
+
+    def test_migrate_invokes_yield_control(self, real_db_manager):
+        """Trailing sub-batch insert yields even below batch_size."""
+        from unittest.mock import Mock
+
+        from core.migration import BirdNETPiMigrator
+
+        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+            src_path = tmp.name
+        try:
+            create_birdnetpi_database(src_path)  # 3 default records
+            yielder = Mock()
+            migrator = BirdNETPiMigrator(real_db_manager)
+            result = migrator.migrate(src_path, yield_control=yielder)
+
+            assert result['imported'] == 3
+            assert yielder.called
+        finally:
+            if os.path.exists(src_path):
+                os.unlink(src_path)
+
+    def test_migrate_yields_per_batch_and_during_key_load(self, real_db_manager):
+        """>batch_size import yields per 500-record batch; _load_existing_keys
+        yields per fetched chunk."""
+        from unittest.mock import Mock
+
+        from core.migration import BirdNETPiMigrator
+
+        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+            src_path = tmp.name
+        try:
+            records = [
+                ('2024-01-15', f'{(i // 60):02d}:{(i % 60):02d}:00',
+                 'Turdus migratorius', 'American Robin', 0.70 + (i % 30) * 0.01,
+                 40.7128, -74.0060, 0.5, 3, 0.75, 0.25, f'robin_{i}.wav')
+                for i in range(600)
+            ]
+            create_birdnetpi_database(src_path, records)
+            migrator = BirdNETPiMigrator(real_db_manager)
+
+            yielder = Mock()
+            result = migrator.migrate(src_path, yield_control=yielder)
+            assert result['imported'] == 600
+            # One yield at the 500-record batch boundary + one trailing.
+            assert yielder.call_count >= 2
+
+            # Target now holds 600 rows; the duplicate-key preload must yield.
+            loader_yielder = Mock()
+            migrator._load_existing_keys(loader_yielder)
+            assert loader_yielder.called
+        finally:
+            if os.path.exists(src_path):
+                os.unlink(src_path)

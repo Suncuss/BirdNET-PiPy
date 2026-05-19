@@ -17,8 +17,9 @@ backend/htmlcov/
 backend/.coverage
 frontend/coverage/
 
-# Ignore Node.js dependencies
-/frontend/node_modules/
+# Ignore Node.js dependencies (and any stray cache dir, e.g. a test runner
+# invoked from the repo root instead of frontend/)
+node_modules/
 
 # Ignore Python cache files
 __pycache__/
@@ -37,6 +38,9 @@ AGENTS.md
 
 # Ignore claude code settings
 .claude/
+
+# Ignore codex settings
+.codex/
 
 # Ignore VS Code settings
 .vscode/

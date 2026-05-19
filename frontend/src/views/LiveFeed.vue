@@ -47,7 +47,7 @@
           @click="toggleAudio"
         >
           <template v-if="isLoading">
-            <div class="animate-spin w-4 h-4 rounded-full border-2 border-gray-100 border-t-blue-500 mr-2" />
+            <Spinner class="w-4 h-4 mr-2 text-white" />
             Loading...
           </template>
           <template v-else>
@@ -93,13 +93,15 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { io } from 'socket.io-client'
 import BirdDetectionList from './BirdDetectionList.vue'
+import Spinner from '@/components/Spinner.vue'
 import api from '@/services/api'
 import { SOCKET_PATH } from '@/services/baseUrl'
 
 export default {
   name: 'LiveFeed',
   components: {
-    BirdDetectionList
+    BirdDetectionList,
+    Spinner
   },
   setup() {
     const spectrogramCanvas = ref(null)

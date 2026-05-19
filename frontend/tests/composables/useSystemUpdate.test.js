@@ -434,6 +434,26 @@ describe('useSystemUpdate', () => {
     expect(statusType.value).toBeNull()
   })
 
+  it('triggerUpdate (HA mode) surfaces backend error response and stops polling', async () => {
+    const { triggerUpdate, versionInfo, isRestarting, statusType, statusMessage, updating } = useSystemUpdate()
+    versionInfo.value = { runtime_mode: 'ha', version: '0.6.4-dev21' }
+    const backendErr = new Error('Request failed with status code 502')
+    backendErr.response = { status: 502, data: { error: 'Could not find update entity for addon' } }
+    mockLongApi.post.mockRejectedValueOnce(backendErr)
+
+    await triggerUpdate(true)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(statusType.value).toBe('error')
+    expect(statusMessage.value).toContain('Could not find update entity')
+    expect(isRestarting.value).toBe(false)
+    expect(updating.value).toBe(false)
+
+    // Confirm polling was stopped — no GET on /system/version even after interval elapses
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(mockApi.get).not.toHaveBeenCalled()
+  })
+
   it('triggerUpdate (HA mode) reloads when version changes', async () => {
     const { triggerUpdate, versionInfo } = useSystemUpdate()
     versionInfo.value = { runtime_mode: 'ha', version: '0.6.4-dev21' }

@@ -37,6 +37,7 @@ ignore = [
 "tests/*" = ["B011"]  # Allow assert in tests
 "model_service/inference_server.py" = ["E402"]  # Imports after warnings.filterwarnings and sys.path
 "core/logging_config.py" = ["E402"]  # Imports inside function-like sections
+"wsgi.py" = ["E402"]  # Imports must follow gevent monkey.patch_all()
 
 [format]
 # Use double quotes (matches Black)

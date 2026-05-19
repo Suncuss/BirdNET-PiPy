@@ -173,12 +173,16 @@ describe('useChartHelpers', () => {
         x: '00:00',
         y: 'Robin',
         v: 1,
+        hour: 0,
+        commonName: 'Robin',
         rowStats: { min: 1, max: 2 }
       })
       expect(result[1]).toEqual({
         x: '01:00',
         y: 'Robin',
         v: 2,
+        hour: 1,
+        commonName: 'Robin',
         rowStats: { min: 1, max: 2 }
       })
     })
@@ -209,6 +213,10 @@ describe('useChartHelpers', () => {
       const result = helpers.prepareDataForCategoryMatrix(data, rowStats)
 
       expect(result[0].y).toBe('Amsel')
+      // commonName keeps the untranslated species key for filter deep-links,
+      // even when the displayed row label is localized.
+      expect(result[0].commonName).toBe('American Robin')
+      expect(result[0].hour).toBe(0)
     })
 
     it('creates 24 * species count data points for full day', () => {

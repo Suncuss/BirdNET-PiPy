@@ -54,6 +54,7 @@ describe('useTableData', () => {
       expect(result).toHaveProperty('startDate')
       expect(result).toHaveProperty('endDate')
       expect(result).toHaveProperty('selectedSpecies')
+      expect(result).toHaveProperty('selectedHour')
       expect(result).toHaveProperty('hasActiveFilters')
     })
 
@@ -100,6 +101,7 @@ describe('useTableData', () => {
 	      expect(result.startDate.value).toBeNull()
 	      expect(result.endDate.value).toBeNull()
 	      expect(result.selectedSpecies.value).toBeNull()
+	      expect(result.selectedHour.value).toBeNull()
 	      expect(result.sortField.value).toBe('timestamp')
 	      expect(result.sortOrder.value).toBe('desc')
 	    })
@@ -130,6 +132,19 @@ describe('useTableData', () => {
       result.startDate.value = null
       result.selectedSpecies.value = 'Robin'
       expect(result.hasActiveFilters.value).toBe(true)
+    })
+
+    it('treats hour 0 as an active filter', () => {
+      const result = useTableData()
+
+      expect(result.hasActiveFilters.value).toBe(false)
+
+      // 0 is falsy but a valid hour — must still count as an active filter
+      result.selectedHour.value = 0
+      expect(result.hasActiveFilters.value).toBe(true)
+
+      result.selectedHour.value = null
+      expect(result.hasActiveFilters.value).toBe(false)
     })
   })
 
@@ -190,6 +205,51 @@ describe('useTableData', () => {
           start_date: '2024-01-01',
           end_date: '2024-01-31',
           species: 'Blue Jay'
+        }
+      })
+    })
+
+    it('includes hour filter in request params, including hour 0', async () => {
+      mockApi.get.mockResolvedValue({
+        data: { detections: [], pagination: { total_items: 0 } }
+      })
+
+      const { fetchDetections, selectedHour } = useTableData()
+
+      selectedHour.value = 14
+      await fetchDetections()
+      expect(mockApi.get).toHaveBeenLastCalledWith('/detections', {
+        params: {
+          page: 1,
+          per_page: 25,
+          sort: 'timestamp',
+          order: 'desc',
+          hour: 14
+        }
+      })
+
+      // hour 0 is falsy but valid — it must still be sent
+      selectedHour.value = 0
+      await fetchDetections()
+      expect(mockApi.get).toHaveBeenLastCalledWith('/detections', {
+        params: {
+          page: 1,
+          per_page: 25,
+          sort: 'timestamp',
+          order: 'desc',
+          hour: 0
+        }
+      })
+
+      // null means "any hour" — param omitted entirely
+      selectedHour.value = null
+      await fetchDetections()
+      expect(mockApi.get).toHaveBeenLastCalledWith('/detections', {
+        params: {
+          page: 1,
+          per_page: 25,
+          sort: 'timestamp',
+          order: 'desc'
         }
       })
     })
@@ -433,10 +493,11 @@ describe('useTableData', () => {
         data: { detections: [], pagination: { total_items: 0 } }
       })
 
-      const { clearFilters, startDate, endDate, selectedSpecies, currentPage } = useTableData()
+      const { clearFilters, startDate, endDate, selectedSpecies, selectedHour, currentPage } = useTableData()
       startDate.value = '2024-01-01'
       endDate.value = '2024-01-31'
       selectedSpecies.value = 'Robin'
+      selectedHour.value = 0
       currentPage.value = 3
 
       await clearFilters()
@@ -444,8 +505,45 @@ describe('useTableData', () => {
       expect(startDate.value).toBeNull()
       expect(endDate.value).toBeNull()
       expect(selectedSpecies.value).toBeNull()
+      expect(selectedHour.value).toBeNull()
       expect(currentPage.value).toBe(1)
       expect(mockApi.get).toHaveBeenCalled()
+    })
+
+    it('setFilters normalizes the hour value', async () => {
+      mockApi.get.mockResolvedValue({
+        data: { detections: [], pagination: { total_items: 0 } }
+      })
+
+      const { setFilters, selectedHour } = useTableData()
+
+      await setFilters({ hour: 9 })
+      expect(selectedHour.value).toBe(9)
+
+      // 0 must be preserved, not coerced to null
+      await setFilters({ hour: 0 })
+      expect(selectedHour.value).toBe(0)
+
+      // numeric strings (route query) are coerced to numbers
+      await setFilters({ hour: '23' })
+      expect(selectedHour.value).toBe(23)
+
+      // empty string / null / non-numeric clear the filter
+      await setFilters({ hour: '' })
+      expect(selectedHour.value).toBeNull()
+
+      selectedHour.value = 5
+      await setFilters({ hour: null })
+      expect(selectedHour.value).toBeNull()
+
+      selectedHour.value = 5
+      await setFilters({ hour: 'abc' })
+      expect(selectedHour.value).toBeNull()
+
+      // omitting hour entirely leaves it untouched
+      selectedHour.value = 7
+      await setFilters({ species: 'Robin' })
+      expect(selectedHour.value).toBe(7)
     })
   })
 

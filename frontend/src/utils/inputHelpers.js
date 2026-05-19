@@ -21,3 +21,16 @@ export function limitDecimals(e, decimals = 2) {
 export function sanitizeLabel(value, maxLength = 30) {
   return value.replace(/[^A-Za-z0-9 _-]/g, '').slice(0, maxLength)
 }
+
+/**
+ * Normalize an hour-of-day input to an integer 0-23, or null.
+ * Empty string / null / undefined / non-integer / out-of-range all map to null.
+ * 0 is preserved (it is a valid hour, not "empty").
+ * @param {*} value - Raw input (number, route-query string, etc.)
+ * @returns {number|null}
+ */
+export function normalizeHour(value) {
+  if (value === null || value === undefined || value === '') return null
+  const h = Number(value)
+  return Number.isInteger(h) && h >= 0 && h <= 23 ? h : null
+}

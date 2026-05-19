@@ -44,7 +44,7 @@
               Set Your Location
             </h2>
             <p class="mt-2 text-sm text-gray-600">
-              BirdNET uses your location to filter bird species likely in your area and to retrieve local weather information.
+              BirdNET-PiPy uses your location to filter bird species likely in your area and to retrieve local weather information.
             </p>
           </div>
 
@@ -77,27 +77,10 @@
                     d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"
                   />
                 </svg>
-                <svg
+                <Spinner
                   v-else
-                  class="animate-spin h-5 w-5"
-                  xmlns="http://www.w3.org/2000/svg"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                >
-                  <circle
-                    class="opacity-25"
-                    cx="12"
-                    cy="12"
-                    r="10"
-                    stroke="currentColor"
-                    stroke-width="4"
-                  />
-                  <path
-                    class="opacity-75"
-                    fill="currentColor"
-                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                  />
-                </svg>
+                  class="h-5 w-5"
+                />
               </button>
             </div>
 
@@ -204,10 +187,10 @@
               </svg>
             </div>
             <h2 class="text-xl font-semibold text-gray-900">
-              Audio Source
+              Pick Your Audio Source
             </h2>
             <p class="mt-2 text-sm text-gray-600">
-              How will BirdNET listen for birds?
+              How will BirdNET-PiPy listen for birds?
             </p>
           </div>
 
@@ -320,26 +303,7 @@
                   v-if="testingStream"
                   class="flex items-center gap-2 text-blue-700 text-sm"
                 >
-                  <svg
-                    class="animate-spin h-4 w-4"
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                  >
-                    <circle
-                      class="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      stroke-width="4"
-                    />
-                    <path
-                      class="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                    />
-                  </svg>
+                  <Spinner class="h-4 w-4" />
                   <span>Testing stream connection...</span>
                 </div>
 
@@ -355,7 +319,7 @@
                     class="block text-gray-500 hover:text-gray-700 underline mt-1"
                     @click="forceAddStream"
                   >
-                    Finish anyway
+                    Add anyway
                   </button>
                 </div>
               </div>
@@ -367,32 +331,95 @@
             You can add more audio sources later in Settings.
           </p>
 
+          <!-- Back / Next buttons -->
+          <div class="flex gap-3">
+            <button
+              :disabled="testingStream"
+              class="flex-1 bg-gray-200 hover:bg-gray-300 disabled:bg-gray-100 disabled:cursor-not-allowed text-gray-700 font-semibold py-2 px-4 rounded-lg shadow transition-colors focus:outline-none focus:ring-2 focus:ring-gray-300"
+              @click="errorMessage = ''; step = 1"
+            >
+              Back
+            </button>
+            <button
+              :disabled="!canAdvanceFromStep2 || testingStream"
+              class="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-semibold py-2 px-4 rounded-lg shadow transition-colors focus:outline-none focus:ring-2 focus:ring-green-300"
+              @click="goToStep3"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+
+        <div v-if="step === 3">
+          <!-- Header -->
+          <div class="text-center mb-6">
+            <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-green-100 mb-4">
+              <svg
+                class="h-6 w-6 text-green-600"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke-width="1.5"
+                stroke="currentColor"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h10.5a2.25 2.25 0 002.25-2.25V6.75a2.25 2.25 0 00-2.25-2.25H6.75A2.25 2.25 0 004.5 6.75v10.5a2.25 2.25 0 002.25 2.25zm.75-12h9v9h-9v-9z"
+                />
+              </svg>
+            </div>
+            <h2 class="text-xl font-semibold text-gray-900">
+              Choose Your Detection Model
+            </h2>
+            <p class="mt-2 text-sm text-gray-600">
+              Which BirdNET model should analyze your audio?
+            </p>
+          </div>
+
+          <div class="space-y-3 mb-4">
+            <button
+              v-for="option in modelTypeOptions"
+              :key="option.value"
+              class="w-full text-left p-4 rounded-lg border-2 transition-colors"
+              :class="modelType === option.value
+                ? 'border-green-500 bg-green-50'
+                : 'border-gray-200 hover:border-gray-300'"
+              @click="modelType = option.value"
+            >
+              <div class="flex items-center gap-3">
+                <div
+                  class="flex-shrink-0 w-5 h-5 rounded-full border-2 flex items-center justify-center"
+                  :class="modelType === option.value ? 'border-green-500' : 'border-gray-300'"
+                >
+                  <div
+                    v-if="modelType === option.value"
+                    class="w-2.5 h-2.5 rounded-full bg-green-500"
+                  />
+                </div>
+                <div>
+                  <div class="font-medium text-gray-900">
+                    {{ option.title }}
+                  </div>
+                  <div class="text-sm text-gray-500">
+                    {{ option.description }}
+                  </div>
+                </div>
+              </div>
+            </button>
+          </div>
+
+          <!-- Footer hint -->
+          <p class="text-xs text-gray-400 text-center mb-4">
+            You can change this later in Settings.
+          </p>
+
           <!-- Restart message -->
           <div
             v-if="serviceRestart.restartMessage.value"
             class="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-md"
           >
             <div class="flex items-center gap-2 text-sm text-blue-800">
-              <svg
-                class="animate-spin h-4 w-4"
-                xmlns="http://www.w3.org/2000/svg"
-                fill="none"
-                viewBox="0 0 24 24"
-              >
-                <circle
-                  class="opacity-25"
-                  cx="12"
-                  cy="12"
-                  r="10"
-                  stroke="currentColor"
-                  stroke-width="4"
-                />
-                <path
-                  class="opacity-75"
-                  fill="currentColor"
-                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                />
-              </svg>
+              <Spinner class="h-4 w-4" />
               {{ serviceRestart.restartMessage.value }}
             </div>
           </div>
@@ -400,14 +427,14 @@
           <!-- Back / Finish buttons -->
           <div class="flex gap-3">
             <button
-              :disabled="saving || testingStream || serviceRestart.isRestarting.value"
+              :disabled="saving || serviceRestart.isRestarting.value"
               class="flex-1 bg-gray-200 hover:bg-gray-300 disabled:bg-gray-100 disabled:cursor-not-allowed text-gray-700 font-semibold py-2 px-4 rounded-lg shadow transition-colors focus:outline-none focus:ring-2 focus:ring-gray-300"
-              @click="errorMessage = ''; step = 1"
+              @click="errorMessage = ''; step = 2"
             >
               Back
             </button>
             <button
-              :disabled="!canFinish || saving || testingStream || serviceRestart.isRestarting.value"
+              :disabled="saving || serviceRestart.isRestarting.value"
               class="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-semibold py-2 px-4 rounded-lg shadow transition-colors focus:outline-none focus:ring-2 focus:ring-green-300"
               @click="finish"
             >
@@ -424,10 +451,14 @@
 import { ref, computed } from 'vue'
 import { requestRestart, useServiceRestart } from '@/composables/useServiceRestart'
 import { limitDecimals, sanitizeLabel } from '@/utils/inputHelpers'
+import { FILTER_DEFAULTS, MODEL_TYPES, modelTypeOptions } from '@/utils/modelDefaults'
+import { WELCOME_PENDING_KEY } from '@/utils/storageKeys'
+import Spinner from '@/components/Spinner.vue'
 import api from '@/services/api'
 
 export default {
   name: 'SetupWizard',
+  components: { Spinner },
   props: {
     isVisible: {
       type: Boolean,
@@ -457,6 +488,8 @@ export default {
     const rtspValidated = ref(false)
     const saving = ref(false)
 
+    const modelType = ref(MODEL_TYPES.V2)
+
     const isValidLocation = computed(() => {
       return latitude.value !== null &&
              longitude.value !== null &&
@@ -464,7 +497,7 @@ export default {
              longitude.value >= -180 && longitude.value <= 180
     })
 
-    const canFinish = computed(() => {
+    const canAdvanceFromStep2 = computed(() => {
       if (audioType.value === 'pulseaudio') return true
       return !!rtspUrl.value.trim()
     })
@@ -539,13 +572,12 @@ export default {
       rtspError.value = ''
       canForceAdd.value = false
       rtspValidated.value = true
-      finish()
+      step.value = 3
     }
 
-    const finish = async () => {
+    const goToStep3 = async () => {
       errorMessage.value = ''
 
-      // Auto-test RTSP stream if not already validated
       if (audioType.value === 'rtsp' && !rtspValidated.value) {
         clearRtspError()
         const validatedUrl = validateRtspUrl()
@@ -572,6 +604,11 @@ export default {
         }
       }
 
+      step.value = 3
+    }
+
+    const finish = async () => {
+      errorMessage.value = ''
       saving.value = true
 
       try {
@@ -584,6 +621,12 @@ export default {
           latitude: latitude.value,
           longitude: longitude.value,
           configured: true
+        }
+
+        settings.model = { ...settings.model, type: modelType.value }
+        settings.detection = {
+          ...settings.detection,
+          species_filter_threshold: FILTER_DEFAULTS[modelType.value]
         }
 
         // Apply audio source based on user's choice
@@ -651,6 +694,8 @@ export default {
           return
         }
 
+        sessionStorage.setItem(WELCOME_PENDING_KEY, '1')
+
         // Trigger restart
         await requestRestart()
         await serviceRestart.waitForRestart({
@@ -683,12 +728,15 @@ export default {
       testingStream,
       rtspError,
       canForceAdd,
-      canFinish,
+      canAdvanceFromStep2,
       clearRtspError,
       sanitizeRtspLabel,
       forceAddStream,
       saving,
+      goToStep3,
       finish,
+      modelType,
+      modelTypeOptions,
       serviceRestart
     }
   }

@@ -48,6 +48,7 @@ DEFAULT_SETTINGS = {
         "trigger_percent": 85,
         "target_percent": 80,
         "keep_per_species": 60,
+        "keep_recent_per_species": 16,
         "check_interval_minutes": 30
     },
     "updates": {
@@ -59,7 +60,10 @@ DEFAULT_SETTINGS = {
     "display": {
         "use_metric_units": True,
         "bird_name_language": "en",
-        "station_name": ""
+        "station_name": "",
+        # null = no explicit choice yet, frontend detects from browser locale.
+        # Once the user flips the toggle, this is persisted as "12h" or "24h".
+        "time_format": None
     },
     "birdweather": {
         "id": None  # Station token from birdweather.com
@@ -72,7 +76,8 @@ DEFAULT_SETTINGS = {
         "new_species": False,
         "rare_species": False,
         "rare_threshold": 3,
-        "rare_window_days": 7
+        "rare_window_days": 7,
+        "audio_status": False
     },
     "access": {
         "charts_public": False,
@@ -312,6 +317,7 @@ NOTIFICATIONS_FIRST_OF_DAY = user_settings['notifications']['first_of_day']
 NOTIFICATIONS_RARE_SPECIES = user_settings['notifications']['rare_species']
 NOTIFICATIONS_RARE_THRESHOLD = user_settings['notifications']['rare_threshold']
 NOTIFICATIONS_RARE_WINDOW_DAYS = user_settings['notifications']['rare_window_days']
+NOTIFICATIONS_AUDIO_STATUS = user_settings['notifications']['audio_status']
 
 # ── Spectrogram ───────────────────────────────────────────────────────────────
 

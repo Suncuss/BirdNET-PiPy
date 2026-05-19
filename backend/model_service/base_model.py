@@ -7,7 +7,7 @@ import numpy as np
 
 from config.constants import DEFAULT_SPECIES_FILTER_THRESHOLD
 
-from .label_utils import get_ebird_code as _lookup_ebird_code
+from .ebird_codes_lookup import get_ebird_code as _lookup_ebird_code
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,9 +25,6 @@ class BirdDetectionModel(ABC):
     All bird detection models must implement this interface to be usable
     by the inference server.
     """
-
-    def __init__(self, ebird_codes_path: str | None = None):
-        self.ebird_codes_path = ebird_codes_path
 
     @property
     @abstractmethod

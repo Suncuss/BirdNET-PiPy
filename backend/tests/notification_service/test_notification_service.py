@@ -280,20 +280,25 @@ class TestNotificationService:
             mock_apprise_instance.notify.return_value = True
 
             with patch('apprise.Apprise', return_value=mock_apprise_instance) as MockApprise:
+                import apprise
                 service._send("Test Title", "Test Body")
                 MockApprise.assert_called_once()
                 assert mock_apprise_instance.add.call_count == 2
                 mock_apprise_instance.add.assert_any_call('tgram://bot/chat')
                 mock_apprise_instance.add.assert_any_call('discord://webhook')
                 mock_apprise_instance.notify.assert_called_once_with(
-                    title="Test Title", body="Test Body")
+                    title="Test Title",
+                    body="Test Body",
+                    body_format=apprise.NotifyFormat.HTML)
         finally:
             patcher.stop()
 
     def test_build_title_new_species(self, notification_service):
         """Title shows 'New species' for new_species trigger (highest priority)."""
         service, _ = notification_service
-        detection = make_detection(common_name='Snowy Owl')
+        # Empty scientific_name pins the test to common_name formatting only;
+        # localization is exercised separately below.
+        detection = make_detection(common_name='Snowy Owl', scientific_name='')
         title = service._build_title(detection, ['new_species', 'first_of_day'])
         assert 'New species' in title
         assert 'Snowy Owl' in title
@@ -301,7 +306,7 @@ class TestNotificationService:
     def test_build_title_first_of_day(self, notification_service):
         """Title shows 'First sighting today' for first_of_day trigger."""
         service, _ = notification_service
-        detection = make_detection(common_name='Robin')
+        detection = make_detection(common_name='Robin', scientific_name='')
         title = service._build_title(detection, ['first_of_day', 'every_detection'])
         assert 'First sighting today' in title
         assert 'Robin' in title
@@ -309,7 +314,7 @@ class TestNotificationService:
     def test_build_title_rare_species(self, notification_service):
         """Title shows 'Rare species' for rare_species trigger."""
         service, _ = notification_service
-        detection = make_detection(common_name='Warbler')
+        detection = make_detection(common_name='Warbler', scientific_name='')
         title = service._build_title(detection, ['rare_species'])
         assert 'Rare species' in title
         assert 'Warbler' in title
@@ -317,7 +322,7 @@ class TestNotificationService:
     def test_build_title_every_detection(self, notification_service):
         """Title shows 'Bird detected' for every_detection trigger only."""
         service, _ = notification_service
-        detection = make_detection(common_name='Sparrow')
+        detection = make_detection(common_name='Sparrow', scientific_name='')
         title = service._build_title(detection, ['every_detection'])
         assert 'Bird detected' in title
         assert 'Sparrow' in title
@@ -335,7 +340,23 @@ class TestNotificationService:
         assert 'Robin' in message
         assert 'Turdus migratorius' in message
         assert '92%' in message
-        assert '14:30:00' in message
+        assert '2024-06-15 14:30:00' in message  # defaults to 24h
+
+    def test_build_message_respects_12h_time_format(self, notification_service):
+        """Message time follows display.time_format = '12h'."""
+        service, set_settings = notification_service
+        set_settings(display={'time_format': '12h'})
+        detection = make_detection(timestamp='2024-06-15T14:30:05')
+        message = service._build_message(detection, ['every_detection'])
+        assert '2024-06-15 2:30:05 PM' in message
+
+    def test_build_message_respects_24h_time_format(self, notification_service):
+        """Message time follows display.time_format = '24h'."""
+        service, set_settings = notification_service
+        set_settings(display={'time_format': '24h'})
+        detection = make_detection(timestamp='2024-06-15T14:30:05')
+        message = service._build_message(detection, ['every_detection'])
+        assert '2024-06-15 14:30:05' in message
 
     def test_process_detection_returns_early_when_no_urls(self):
         """_process_detection returns early when apprise_urls is empty."""
@@ -477,3 +498,230 @@ class TestNotificationServiceFactory:
 
         result = _extract_apprise_error('MQTT Connection Error received from 127.0.0.1:9999')
         assert result == 'MQTT Connection Error received from 127.0.0.1:9999'
+
+
+class TestNotificationStationName:
+    """Title prefix and body line include display.station_name when set."""
+
+    def test_title_has_station_prefix_when_set(self, notification_service):
+        service, set_settings = notification_service
+        set_settings(display={'station_name': 'Backyard'})
+
+        detection = make_detection(common_name='Robin', scientific_name='')
+        title = service._build_title(detection, ['new_species'])
+        assert title.startswith('[Backyard] ')
+        assert 'New species' in title
+
+    def test_title_has_no_prefix_when_station_name_empty(self, notification_service):
+        service, _set_settings = notification_service
+        # Default fixture leaves station_name unset.
+        detection = make_detection(common_name='Robin', scientific_name='')
+        title = service._build_title(detection, ['new_species'])
+        assert not title.startswith('[')
+
+    def test_title_ignores_whitespace_only_station_name(self, notification_service):
+        service, set_settings = notification_service
+        set_settings(display={'station_name': '   '})
+
+        detection = make_detection(common_name='Robin', scientific_name='')
+        title = service._build_title(detection, ['every_detection'])
+        assert not title.startswith('[')
+
+    def test_message_includes_station_line_when_set(self, notification_service):
+        service, set_settings = notification_service
+        set_settings(display={'station_name': 'Backyard'})
+
+        detection = make_detection()
+        message = service._build_message(detection, ['every_detection'])
+        assert 'Station: Backyard' in message
+
+    def test_message_omits_station_line_when_empty(self, notification_service):
+        service, _set_settings = notification_service
+        detection = make_detection()
+        message = service._build_message(detection, ['every_detection'])
+        assert 'Station:' not in message
+
+
+class TestNotificationHtmlSafety:
+    """The HTML body must escape user-controllable fields so a stray
+    ``&`` or ``<`` in a station/species name can't break the markup
+    (regression guard for the plain-text -> HTML body switch).
+    """
+
+    def test_station_name_is_html_escaped(self, notification_service):
+        service, set_settings = notification_service
+        set_settings(display={'station_name': "Tom & Jerry's <Yard>"})
+        detection = make_detection()
+        message = service._build_message(detection, ['every_detection'])
+        assert 'Tom &amp; Jerry&#x27;s &lt;Yard&gt;' in message
+        assert '<Yard>' not in message
+
+    def test_species_name_is_html_escaped(self, notification_service):
+        service, _set_settings = notification_service
+        detection = make_detection(
+            common_name='Fish & Chips <bird>', scientific_name='A & B')
+        message = service._build_message(detection, ['every_detection'])
+        assert 'Fish &amp; Chips &lt;bird&gt;' in message
+        assert 'A &amp; B' in message
+
+    def test_malformed_timestamp_falls_back_gracefully(self, notification_service):
+        service, _set_settings = notification_service
+        detection = make_detection(timestamp='not-a-timestamp')
+        message = service._build_message(detection, ['every_detection'])
+        # Best-effort fallback: no crash, raw value passed through.
+        assert 'not-a-timestamp' in message
+
+
+class TestNotificationLanguageLocalization:
+    """Notification body honors display.bird_name_language (regression for #47).
+
+    The notification path used to pull common_name straight off the detection
+    dict, ignoring the user's language preference. These tests pin the
+    localized behavior so that regression cannot recur.
+    """
+
+    def test_german_setting_localizes_title(self, notification_service):
+        service, set_settings = notification_service
+        set_settings(display={'bird_name_language': 'de'})
+
+        # Simulate a V2-emitted detection: common_name is the V2 English
+        # variant, scientific_name is the stable key.
+        detection = make_detection(
+            common_name='Eurasian Blackbird',
+            scientific_name='Turdus merula',
+        )
+        title = service._build_title(detection, ['new_species'])
+        assert 'Amsel' in title
+        assert 'Eurasian Blackbird' not in title
+
+    def test_german_setting_localizes_message_body(self, notification_service):
+        service, set_settings = notification_service
+        set_settings(display={'bird_name_language': 'de'})
+
+        detection = make_detection(
+            common_name='Eurasian Blackbird',
+            scientific_name='Turdus merula',
+            confidence=0.92,
+            timestamp='2024-06-15T14:30:00',
+        )
+        message = service._build_message(detection, ['every_detection'])
+        assert 'Amsel' in message
+        assert 'Turdus merula' in message  # scientific name still shown in parens
+
+    def test_english_setting_keeps_english_name(self, notification_service):
+        service, _set_settings = notification_service
+        # Default fixture is English; no override needed.
+        detection = make_detection(
+            common_name='Eurasian Blackbird',
+            scientific_name='Turdus merula',
+        )
+        title = service._build_title(detection, ['every_detection'])
+        # Under English we render the species table's canonical English
+        # ('Common Blackbird' for Turdus merula), not the V2 variant.
+        assert 'Common Blackbird' in title or 'Eurasian Blackbird' in title
+        assert 'Amsel' not in title
+
+    def test_unknown_species_falls_back_to_common_name(self, notification_service):
+        service, set_settings = notification_service
+        set_settings(display={'bird_name_language': 'de'})
+
+        detection = make_detection(
+            common_name='Some Custom Migrated Name',
+            scientific_name='Fakeus birdus',
+        )
+        title = service._build_title(detection, ['rare_species'])
+        # Resolver can't find this species; helper returns the input
+        # common_name. The notification still works.
+        assert 'Some Custom Migrated Name' in title
+
+
+class TestAudioStatusNotifications:
+    """Tests for the audio-pipeline status notification path."""
+
+    def test_audio_status_disabled_does_not_send(self):
+        service, patcher = _create_service(
+            notif_overrides={'audio_status': False})
+        try:
+            with patch.object(service, '_send') as mock_send:
+                service._process_audio_status({
+                    'state': 'degraded', 'previous_state': 'running',
+                    'problem_sources': [{'label': 'Cam', 'state': 'degraded',
+                                         'error': 'boom'}],
+                })
+                mock_send.assert_not_called()
+        finally:
+            patcher.stop()
+
+    def test_audio_status_enabled_sends_degraded(self):
+        service, patcher = _create_service(
+            notif_overrides={'audio_status': True})
+        try:
+            with patch.object(service, '_send') as mock_send:
+                service._process_audio_status({
+                    'state': 'degraded', 'previous_state': 'running',
+                    'problem_sources': [{'label': 'Backyard Cam',
+                                         'state': 'degraded',
+                                         'error': 'RTSP recording failed: timeout'}],
+                })
+                mock_send.assert_called_once()
+                title, body = mock_send.call_args.args
+                assert 'degraded' in title.lower()
+                assert 'Backyard Cam' in body
+                assert 'timeout' in body
+        finally:
+            patcher.stop()
+
+    def test_audio_status_recovery_message(self):
+        service, patcher = _create_service(
+            notif_overrides={'audio_status': True})
+        try:
+            with patch.object(service, '_send') as mock_send:
+                service._process_audio_status({
+                    'state': 'running', 'previous_state': 'degraded',
+                    'problem_sources': [],
+                })
+                title, body = mock_send.call_args.args
+                assert 'recovered' in title.lower()
+                assert 'recovered' in body.lower()
+        finally:
+            patcher.stop()
+
+    def test_audio_status_no_urls_does_not_send(self):
+        service, patcher = _create_service(
+            notif_overrides={'audio_status': True, 'apprise_urls': []})
+        try:
+            with patch.object(service, '_send') as mock_send:
+                service._process_audio_status({
+                    'state': 'stopped', 'previous_state': 'running',
+                    'problem_sources': [],
+                })
+                mock_send.assert_not_called()
+        finally:
+            patcher.stop()
+
+    def test_audio_status_envelope_is_distinct_from_detection(self):
+        from core.notification_service import _AudioStatusEvent
+        payload = {'state': 'stopped'}
+        ev = _AudioStatusEvent(payload)
+        assert ev.payload is payload
+        assert not isinstance(ev, dict)
+
+    def test_notify_audio_status_enqueues_and_worker_dispatches(self):
+        import time
+
+        service, patcher = _create_service(
+            notif_overrides={'audio_status': True})
+        try:
+            with patch.object(service, '_process_audio_status') as mock_proc:
+                payload = {'state': 'stopped', 'previous_state': 'running',
+                           'problem_sources': []}
+                service.notify_audio_status(payload)
+
+                # Background worker thread routes the envelope.
+                deadline = time.time() + 2
+                while time.time() < deadline and not mock_proc.called:
+                    time.sleep(0.01)
+
+                mock_proc.assert_called_once_with(payload)
+        finally:
+            patcher.stop()

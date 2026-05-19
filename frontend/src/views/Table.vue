@@ -25,6 +25,7 @@
               v-model="localStartDate"
               :max="todayDate"
               size="large"
+              fluid
               @change="applyFilters"
             />
           </div>
@@ -37,8 +38,59 @@
               :min="localStartDate || undefined"
               :max="todayDate"
               size="large"
+              fluid
               @change="applyFilters"
             />
+          </div>
+        </div>
+
+        <!-- Hour Filter (desktop only — the filter row is too tight on mobile) -->
+        <div
+          ref="hourDropdownRef"
+          class="hidden lg:block lg:flex-none lg:w-32 relative"
+        >
+          <label class="block text-xs font-medium text-gray-600 mb-1">Hour</label>
+          <div class="relative">
+            <button
+              type="button"
+              class="flex items-center w-full h-10 pl-3 pr-8 text-sm text-left border border-gray-300 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+              @click="showHourDropdown = !showHourDropdown"
+            >
+              {{ selectedHour === null ? '' : formatHour(selectedHour) }}
+            </button>
+            <button
+              v-if="selectedHour !== null"
+              class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              @click.stop="clearHourFilter"
+            >
+              <svg
+                class="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M6 18L18 6M6 6l12 12"
+                />
+              </svg>
+            </button>
+          </div>
+          <!-- Dropdown -->
+          <div
+            v-show="showHourDropdown"
+            class="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-y-auto"
+          >
+            <button
+              v-for="h in 24"
+              :key="h - 1"
+              class="w-full px-3 py-2 text-left text-sm hover:bg-gray-50 transition-colors"
+              @mousedown.prevent="selectHour(h - 1)"
+            >
+              {{ formatHour(h - 1) }}
+            </button>
           </div>
         </div>
 
@@ -111,7 +163,7 @@
         v-if="isLoading"
         class="flex items-center justify-center py-16"
       >
-        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600" />
+        <Spinner class="h-8 w-8 text-green-600" />
         <span class="ml-3 text-gray-600">Loading...</span>
       </div>
 
@@ -591,6 +643,7 @@
 
 	<script setup>
 	import { ref, onMounted, onUnmounted, computed } from 'vue'
+	import { useRoute, useRouter } from 'vue-router'
 	import { library } from '@fortawesome/fontawesome-svg-core'
 	import { faPlay, faPause, faCircleInfo, faTrashAlt, faDatabase } from '@fortawesome/free-solid-svg-icons'
 	
@@ -599,11 +652,14 @@
 	import { useTableData } from '@/composables/useTableData'
 	import { useAudioPlayer } from '@/composables/useAudioPlayer'
 	import { useAuth } from '@/composables/useAuth'
+	import { useTimeFormat } from '@/composables/useTimeFormat'
 	import { getDisplayCommonName, matchesBirdQuery } from '@/utils/birdNames'
+	import { normalizeHour } from '@/utils/inputHelpers'
 	import DetectionActions from '@/components/DetectionActions.vue'
 	import SpectrogramModal from '@/components/SpectrogramModal.vue'
 import DetectionInfoModal from '@/components/DetectionInfoModal.vue'
 import AppDatePicker from '@/components/AppDatePicker.vue'
+import Spinner from '@/components/Spinner.vue'
 
 // --- Icons Setup ---
 library.add(faPlay, faPause, faCircleInfo, faTrashAlt, faDatabase)
@@ -626,6 +682,7 @@ const {
   error,
   actionError,
   selectedSpecies,
+  selectedHour,
   hasActiveFilters,
   sortField,
   sortOrder,
@@ -658,6 +715,9 @@ const {
 
 const { isAuthenticated } = useAuth()
 
+const route = useRoute()
+const router = useRouter()
+
 // --- State ---
 
 // Filters
@@ -680,6 +740,8 @@ const { isAuthenticated } = useAuth()
 	const showSpeciesDropdown = ref(false)
 	const speciesList = ref([])
 	const speciesDropdownRef = ref(null)
+	const showHourDropdown = ref(false)
+	const hourDropdownRef = ref(null)
 	const filteredSpeciesList = computed(() => {
 	  const query = speciesSearchQuery.value.trim().toLowerCase()
 	  if (!query) return speciesList.value
@@ -722,12 +784,11 @@ const formatDate = (timestamp) => {
   })
 }
 
+const { formatTime: formatTimeOfDay, formatHour } = useTimeFormat()
+
 const formatTime = (timestamp) => {
   if (!timestamp) return ''
-  return new Date(timestamp).toLocaleTimeString(undefined, {
-    hour: '2-digit',
-    minute: '2-digit'
-  })
+  return formatTimeOfDay(timestamp)
 }
 
 const formatDateTime = (timestamp) => {
@@ -774,9 +835,24 @@ const selectSpecies = (species) => {
 	  applyFilters()
 	}
 
+const selectHour = (h) => {
+  selectedHour.value = h
+  showHourDropdown.value = false
+  applyFilters()
+}
+
+const clearHourFilter = () => {
+  selectedHour.value = null
+  showHourDropdown.value = false
+  applyFilters()
+}
+
 const handleClickOutside = (event) => {
   if (speciesDropdownRef.value && !speciesDropdownRef.value.contains(event.target)) {
     showSpeciesDropdown.value = false
+  }
+  if (hourDropdownRef.value && !hourDropdownRef.value.contains(event.target)) {
+    showHourDropdown.value = false
   }
 }
 
@@ -786,7 +862,8 @@ const applyFilters = () => {
   setFilters({
     startDate: localStartDate.value || null,
     endDate: localEndDate.value || null,
-    species: selectedSpecies.value
+    species: selectedSpecies.value,
+    hour: selectedHour.value
   })
 }
 
@@ -796,6 +873,17 @@ const handleClearFilters = () => {
   selectedSpecies.value = null
   speciesSearchQuery.value = ''
   clearFilters()
+
+  // Strip the deep-link params (seedFiltersFromQuery reads these on mount), or
+  // a later refresh / shared URL / back-forward resurrects the filters we just
+  // cleared. Guarded so a normal clear doesn't trigger a redundant navigation.
+  if ('date' in route.query || 'hour' in route.query || 'species' in route.query) {
+    const query = { ...route.query }
+    delete query.date
+    delete query.hour
+    delete query.species
+    router.replace({ query })
+  }
 }
 
 const togglePlayAudio = (detection) => {
@@ -868,8 +956,42 @@ const executeDelete = async () => {
 
 // --- Lifecycle & Watchers ---
 
+// Seed filters from the route query when arriving from a chart deep-link
+// ({ date: 'YYYY-MM-DD', hour: '0'-'23', species: <common_name> }) — the
+// heatmap hour labels send date+hour; a heatmap cell additionally sends
+// species. Returns true when at least one filter was applied, so the caller
+// can skip a redundant unfiltered fetch.
+const seedFiltersFromQuery = () => {
+  const { date, hour, species } = route.query
+  let applied = false
+
+  if (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    localStartDate.value = date
+    localEndDate.value = date
+    applied = true
+  }
+
+  const h = normalizeHour(hour)
+  if (h !== null) {
+    selectedHour.value = h
+    applied = true
+  }
+
+  const trimmedSpecies = typeof species === 'string' ? species.trim() : ''
+  if (trimmedSpecies) {
+    selectedSpecies.value = trimmedSpecies
+    applied = true
+  }
+
+  return applied
+}
+
 	onMounted(() => {
-	  fetchDetections()
+	  if (seedFiltersFromQuery()) {
+	    applyFilters()
+	  } else {
+	    fetchDetections()
+	  }
 	  fetchSpeciesList()
 	  document.addEventListener('click', handleClickOutside)
 	  window.addEventListener('scroll', handleScroll)

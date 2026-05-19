@@ -130,7 +130,8 @@ const mockSettings = {
   display: {
     station_name: '',
     bird_name_language: 'en',
-    use_metric_units: true
+    use_metric_units: true,
+    time_format: null
   },
   updates: {
     channel: 'release'
@@ -1157,6 +1158,25 @@ describe('Settings', () => {
       resolveRequest({ data: { success: true } })
       await firstCall
       expect(wrapper.vm.metricUnitsSaving).toBe(false)
+    })
+
+    it('toggleTimeFormat syncs settings.value so a later full save preserves it', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      // Force a known starting state so the toggle direction is deterministic
+      // (detection-based default varies by test runner locale).
+      wrapper.vm.timeFormatSettings.setTimeFormat('12h')
+      wrapper.vm.settings.display.time_format = '12h'
+      mockApi.put.mockResolvedValueOnce({ data: { success: true, time_format: '24h' } })
+
+      await wrapper.vm.toggleTimeFormat()
+      await flushPromises()
+
+      // The PUT to the dedicated endpoint happened with the new value
+      expect(mockApi.put).toHaveBeenCalledWith('/settings/time-format', { time_format: '24h' })
+      // settings.value is now in sync — a subsequent full PUT /settings sends '24h', not the stale '12h'
+      expect(wrapper.vm.settings.display.time_format).toBe('24h')
     })
   })
 

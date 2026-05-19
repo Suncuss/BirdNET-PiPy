@@ -7,7 +7,8 @@ records are preserved - only the associated files are deleted.
 Key features:
 - Triggers cleanup when disk usage exceeds trigger_percent (default: 80%)
 - Frees space until usage drops to target_percent (default: 70%)
-- Protects species with fewer than min_recordings_per_species (default: 60)
+- Protects the top N recordings per species by confidence (default: 60)
+- Protects the latest N recordings per species by timestamp (default: 16)
 - Deletes oldest files first
 - Preserves all database records
 """
@@ -39,6 +40,7 @@ def _get_storage_config() -> dict:
         'trigger_percent': storage.get('trigger_percent', 85),
         'target_percent': storage.get('target_percent', 80),
         'keep_per_species': storage.get('keep_per_species', 60),
+        'keep_recent_per_species': storage.get('keep_recent_per_species', 16),
         'check_interval_minutes': storage.get('check_interval_minutes', 1440),
     }
 
@@ -189,32 +191,38 @@ def delete_detection_files(detection):
     return result
 
 
-def estimate_deletable_size(db_manager, keep_per_species=None):
+def estimate_deletable_size(db_manager, keep_per_species=None, keep_recent_per_species=None):
     """Estimate total size of files that could be deleted.
 
     Args:
         db_manager: DatabaseManager instance
-        keep_per_species: Number of recordings to keep per species
+        keep_per_species: Top recordings to keep per species by confidence
+        keep_recent_per_species: Most recent recordings to keep per species
 
     Returns:
         Tuple of (estimated_bytes, candidate_count)
     """
+    config = _get_storage_config()
     if keep_per_species is None:
-        keep_per_species = _get_storage_config()['keep_per_species']
+        keep_per_species = config['keep_per_species']
+    if keep_recent_per_species is None:
+        keep_recent_per_species = config['keep_recent_per_species']
 
-    # Get candidates (without limit to count all)
-    candidates = db_manager.get_cleanup_candidates(keep_per_species=keep_per_species)
+    candidates = db_manager.get_cleanup_candidates(
+        keep_per_species=keep_per_species,
+        keep_recent_per_species=keep_recent_per_species,
+    )
 
     estimated_bytes = len(candidates) * ESTIMATED_SIZE_PER_DETECTION
     return estimated_bytes, len(candidates)
 
 
-def cleanup_storage(db_manager, target_percent=None, keep_per_species=None):
+def cleanup_storage(db_manager, target_percent=None, keep_per_species=None, keep_recent_per_species=None):
     """Run storage cleanup to free disk space.
 
     Deletes oldest audio and spectrogram files until disk usage drops
-    below target_percent. For each species, keeps the top N recordings
-    by confidence (protecting best recordings).
+    below target_percent. For each species, protects the union of the
+    top N by confidence and the latest N by timestamp.
 
     SAFETY: Will not delete files if the target is unachievable with
     available BirdNET data. This prevents mass deletion when disk is
@@ -223,7 +231,8 @@ def cleanup_storage(db_manager, target_percent=None, keep_per_species=None):
     Args:
         db_manager: DatabaseManager instance
         target_percent: Target disk usage percentage (default from settings)
-        keep_per_species: Recordings to keep per species (default from settings)
+        keep_per_species: Top recordings per species by confidence (default from settings)
+        keep_recent_per_species: Latest recordings per species (default from settings)
 
     Returns:
         dict with files_deleted, bytes_freed, target_achievable, etc.
@@ -233,6 +242,8 @@ def cleanup_storage(db_manager, target_percent=None, keep_per_species=None):
         target_percent = config['target_percent']
     if keep_per_species is None:
         keep_per_species = config['keep_per_species']
+    if keep_recent_per_species is None:
+        keep_recent_per_species = config['keep_recent_per_species']
 
     result = {
         'files_deleted': 0,
@@ -257,8 +268,10 @@ def cleanup_storage(db_manager, target_percent=None, keep_per_species=None):
     # Calculate how much we need to free
     bytes_to_free = usage['used_bytes'] - (usage['total_bytes'] * target_percent / 100)
 
-    # Fetch cleanup candidates once (oldest first, beyond top N per species)
-    candidates = db_manager.get_cleanup_candidates(keep_per_species=keep_per_species)
+    candidates = db_manager.get_cleanup_candidates(
+        keep_per_species=keep_per_species,
+        keep_recent_per_species=keep_recent_per_species,
+    )
     candidate_count = len(candidates)
 
     # SAFETY CHECK: Estimate if we can actually reach the target
@@ -281,12 +294,14 @@ def cleanup_storage(db_manager, target_percent=None, keep_per_species=None):
         'target_percent': target_percent,
         'bytes_to_free_gb': round(bytes_to_free / (1024**3), 2),
         'candidate_count': candidate_count,
-        'keep_per_species': keep_per_species
+        'keep_per_species': keep_per_species,
+        'keep_recent_per_species': keep_recent_per_species
     })
 
     if not candidates:
-        logger.info("No cleanup candidates found - all recordings within keep limit", extra={
-            'keep_per_species': keep_per_species
+        logger.info("No cleanup candidates found - all recordings within keep limits", extra={
+            'keep_per_species': keep_per_species,
+            'keep_recent_per_species': keep_recent_per_species
         })
         return result
 
@@ -369,7 +384,8 @@ def storage_monitor_loop(stop_flag, db_manager):
                     cleanup_storage(
                         db_manager,
                         target_percent=config['target_percent'],
-                        keep_per_species=config['keep_per_species']
+                        keep_per_species=config['keep_per_species'],
+                        keep_recent_per_species=config['keep_recent_per_species']
                     )
 
         except Exception as e:

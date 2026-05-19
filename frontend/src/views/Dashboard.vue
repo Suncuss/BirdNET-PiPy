@@ -12,6 +12,7 @@
             Bird Activity Overview
           </h2>
           <button
+            v-if="hasLoadedOnce && !isDataEmpty && !detailedBirdActivityError"
             class="hidden sm:inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 transition-colors"
             :disabled="isActivityUpdating"
             @click="toggleActivityOrder"
@@ -43,17 +44,35 @@
           v-else-if="!isDataEmpty && !detailedBirdActivityError"
           class="flex h-[calc(100%-2rem)]"
         >
-          <div class="w-full lg:w-1/3 lg:pr-2">
+          <div class="w-full lg:w-1/3 lg:pr-2 relative">
             <canvas
               ref="totalObservationsChart"
               class="h-full"
             />
+            <SpeciesAxisLinks
+              :ticks="speciesAxisLayout.ticks"
+              :axis-left="speciesAxisLayout.axisLeft"
+              :axis-width="speciesAxisLayout.axisWidth"
+              :row-height="speciesAxisLayout.rowHeight"
+            />
           </div>
           <div class="hidden lg:block lg:w-2/3 lg:pl-2 h-full">
-            <canvas
-              ref="hourlyActivityHeatmap"
-              class="h-full"
-            />
+            <!-- Inner wrapper is the positioning context: it has no padding,
+                 so the absolute overlay's origin matches the canvas origin
+                 (the chart's pixel coords are canvas-relative). -->
+            <div class="h-full relative">
+              <canvas
+                ref="hourlyActivityHeatmap"
+                class="h-full"
+              />
+              <TimeAxisLinks
+                :ticks="timeAxisLayout.ticks"
+                :axis-top="timeAxisLayout.axisTop"
+                :axis-height="timeAxisLayout.axisHeight"
+                :col-width="timeAxisLayout.colWidth"
+                :date="timeAxisLayout.date"
+              />
+            </div>
           </div>
         </div>
         <CenteredMessage
@@ -85,21 +104,21 @@
         </CenteredMessage>
         <div
           v-else-if="latestObservationData && !latestObservationError"
-          class="flex flex-col lg:flex-row items-center lg:items-stretch lg:space-x-2 w-full h-full"
+          class="flex flex-col lg:flex-row items-center lg:items-stretch lg:space-x-6 w-full h-full"
         >
           <!-- Bird Profile -->
           <div
-            class="flex flex-col items-center lg:items-start justify-center lg:justify-start space-y-1.5 lg:w-[180px] lg:pl-3 lg:h-full"
+            class="flex flex-col items-center lg:flex-row lg:items-center space-y-1.5 lg:space-y-0 lg:space-x-3 lg:w-[250px] lg:pl-1 lg:pr-3 lg:h-full lg:relative lg:after:content-[''] lg:after:absolute lg:after:right-0 lg:after:top-4 lg:after:bottom-4 lg:after:w-px lg:after:bg-gray-200"
           >
             <router-link
               :to="{ name: 'BirdDetails', params: { name: latestObservationData.common_name } }"
-              class="group"
+              class="group flex-shrink-0"
             >
               <div class="relative">
                 <img
                   :src="latestObservationimageUrl"
                   :alt="getDisplayCommonName(latestObservationData)"
-                  class="w-[68px] h-[68px] object-cover rounded-full group-hover:opacity-80 transition-opacity duration-300"
+                  class="w-[85px] h-[85px] object-cover rounded-full group-hover:opacity-80 transition-opacity duration-300"
                 >
                 <div
                   class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300"
@@ -111,25 +130,29 @@
                 </div>
               </div>
             </router-link>
-            <div class="flex flex-col items-center lg:items-start text-center lg:text-left">
+            <div class="flex flex-col items-center lg:items-stretch lg:flex-1 lg:min-w-0 text-center lg:text-left">
               <router-link
                 :to="{ name: 'BirdDetails', params: { name: latestObservationData.common_name } }"
-                class="group flex items-center hover:text-blue-600 transition-colors duration-300"
+                class="group block hover:text-blue-600 transition-colors duration-300"
               >
-                <h3 class="text-[15px] font-medium group-hover:underline lg:truncate lg:max-w-[160px]">
+                <h3 class="text-[15px] font-medium group-hover:underline lg:line-clamp-2">
                   {{ getDisplayCommonName(latestObservationData) }}
                 </h3>
-                <font-awesome-icon
-                  icon="fas fa-external-link-alt"
-                  class="ml-1 text-xs opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex-shrink-0 hidden lg:inline-block"
-                />
               </router-link>
-              <p class="text-[13px] text-gray-600 lg:truncate lg:max-w-[160px]">
-                {{ latestObservationData.scientific_name }}
-              </p>
-              <p class="text-xs text-gray-600">
-                {{ formatTimestamp(latestObservationData.timestamp) }}
-              </p>
+              <router-link
+                :to="{ name: 'BirdDetails', params: { name: latestObservationData.common_name } }"
+                class="group block transition-colors duration-300"
+              >
+                <p class="text-[13px] italic text-gray-600 group-hover:text-blue-600 group-hover:underline lg:line-clamp-2">
+                  {{ latestObservationData.scientific_name }}
+                </p>
+              </router-link>
+              <router-link
+                :to="{ name: 'Table' }"
+                class="text-[13px] text-gray-600 hover:text-blue-600 hover:underline transition-colors duration-300"
+              >
+                {{ formatTimestamp(latestObservationData.timestamp) }} {{ formatConfidence(latestObservationData.confidence) }}
+              </router-link>
             </div>
           </div>
           <!-- Call Player -->
@@ -153,11 +176,13 @@
                 </button>
               </div>
               <div
-                class="bg-gray-200 h-12 lg:h-24 w-full rounded-lg overflow-hidden flex items-center justify-center"
+                class="bg-gray-200 h-12 lg:h-[110px] w-full rounded-lg overflow-hidden flex items-center justify-center"
               >
                 <canvas
                   ref="spectrogramCanvas"
                   class="w-full h-full rounded-lg"
+                  :class="{ 'cursor-pointer': latestObservationIsPlaying }"
+                  @click="pauseLatestObservation"
                 />
               </div>
             </div>
@@ -376,23 +401,29 @@
 
 <script>
 import { ref, onMounted, onUnmounted, onActivated, onDeactivated, computed, watch, nextTick } from 'vue'
+import { useRouter } from 'vue-router'
 import Chart from 'chart.js/auto'
 import { MatrixController, MatrixElement } from 'chartjs-chart-matrix'
 
 import { library } from '@fortawesome/fontawesome-svg-core';
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome';
-import { faPlay, faPause, faCircleInfo, faExternalLinkAlt } from '@fortawesome/free-solid-svg-icons';
+import { faPlay, faPause, faCircleInfo } from '@fortawesome/free-solid-svg-icons';
 
 	import { useFetchBirdData } from '@/composables/useFetchBirdData';
 	import { useBirdCharts } from '@/composables/useBirdCharts';
+	import { useChartHelpers } from '@/composables/useChartHelpers';
 	import { useAudioPlayer } from '@/composables/useAudioPlayer';
 	import { useAppStatus } from '@/composables/useAppStatus';
+import { useTimeFormat } from '@/composables/useTimeFormat';
 import SpectrogramModal from '@/components/SpectrogramModal.vue';
 import CenteredMessage from '@/components/CenteredMessage.vue';
+import SpeciesAxisLinks from '@/components/SpeciesAxisLinks.vue';
+import TimeAxisLinks from '@/components/TimeAxisLinks.vue';
 import { getAudioUrl, getSpectrogramUrl } from '@/services/media'
 import { getDisplayCommonName } from '@/utils/birdNames'
+import { tableDetectionsLink } from '@/utils/detectionLinks'
 
-library.add(faPlay, faPause, faCircleInfo, faExternalLinkAlt);
+library.add(faPlay, faPause, faCircleInfo);
 Chart.register(MatrixController, MatrixElement)
 
 export default {
@@ -400,7 +431,9 @@ export default {
     components: {
         FontAwesomeIcon,
         SpectrogramModal,
-        CenteredMessage
+        CenteredMessage,
+        SpeciesAxisLinks,
+        TimeAxisLinks
     },
     setup() {
         const {
@@ -429,8 +462,46 @@ export default {
         } = useFetchBirdData();
 
         // Audio state
-        let audioCtx, audioAnalyser, source, frequencyDataArray, animationId;
+        let audioCtx, audioAnalyser, source, frequencyDataArray, prevFrequencyDataArray, animationId;
         let spectrogramCanvasCtx, canvasWidth, canvasHeight;
+        let rollingMaxDb = -Infinity; // Per-playback peak; mirrors PNG's normalize-to-clip-max
+        const SPECTROGRAM_SUPERSAMPLE = 2; // Render at 2x internal resolution; browser downscales for smoother edges
+        // Match backend PNG window — see backend/core/utils.py min_dbfs/max_dbfs defaults.
+        const SPEC_DB_FLOOR = -120;
+        const SPEC_DB_RANGE = 120;
+        // Gamma <1 brightens midtones without shifting the dark floor or white peak — keeps
+        // the Greens_r identity but lifts the bulk of typical bin values up the ramp.
+        const SPEC_BRIGHTNESS_GAMMA = 0.8;
+        // matplotlib Greens_r: ColorBrewer 9-class Greens reversed (dark → light) and linearly
+        // interpolated to 256 entries — same construction matplotlib uses for the saved spectrogram.
+        const SPECTROGRAM_COLOR_LUT = (() => {
+            const stops = [
+                [0x00, 0x44, 0x1b], [0x00, 0x6d, 0x2c], [0x23, 0x8b, 0x45],
+                [0x41, 0xab, 0x5d], [0x74, 0xc4, 0x76], [0xa1, 0xd9, 0x9b],
+                [0xc7, 0xe9, 0xc0], [0xe5, 0xf5, 0xe0], [0xf7, 0xfc, 0xf5],
+            ];
+            const segs = stops.length - 1;
+            return Array.from({ length: 256 }, (_, i) => {
+                const x = (i / 255) * segs;
+                const idx = Math.min(segs - 1, Math.floor(x));
+                const f = x - idx;
+                const a = stops[idx], b = stops[idx + 1];
+                const r = Math.round(a[0] + (b[0] - a[0]) * f);
+                const g = Math.round(a[1] + (b[1] - a[1]) * f);
+                const bl = Math.round(a[2] + (b[2] - a[2]) * f);
+                return `rgb(${r},${g},${bl})`;
+            });
+        })();
+        // Idle background — pale green for an inviting "ready to play" look. Once playback
+        // starts, the canvas scrolls fresh dark-green silence in from the right.
+        const SPECTROGRAM_BG_COLOR = '#E8F5E9';
+        const dbToLutIndex = (db, ref) => {
+            if (!Number.isFinite(db) || !Number.isFinite(ref)) return 0;
+            const t = (db - ref - SPEC_DB_FLOOR) / SPEC_DB_RANGE;
+            if (t <= 0) return 0;
+            if (t >= 1) return 255;
+            return Math.round(Math.pow(t, SPEC_BRIGHTNESS_GAMMA) * 255);
+        };
         let audioElement;
 
         // Polling state (Fix 1: single merged interval)
@@ -488,11 +559,26 @@ export default {
             freezeChart,
             createTotalObservationsChart: createTotalObsChart,
             createHourlyActivityHeatmap: createHeatmap,
-            createHourlyActivityChart: createHourlyChart
+            createHourlyActivityChart: createHourlyChart,
+            speciesAxisLayout,
+            timeAxisLayout
         } = useBirdCharts()
+        const { getLocalDateString } = useChartHelpers()
 
         // App status for coordinating with setup flow
         const { locationConfigured } = useAppStatus()
+
+        // User-configurable time-format helper
+        const { formatTime: formatTimeOfDay, formatHourLabel } = useTimeFormat()
+
+        const router = useRouter()
+
+        // Heatmap cell drill-down: open the Table view filtered to that
+        // species + hour (+ the heatmap's date). Shares the deep-link query
+        // contract with the TimeAxisLinks hour labels via tableDetectionsLink.
+        const goToCellDetections = ({ commonName, hour, date }) => {
+            router.push(tableDetectionsLink({ hour, date, species: commonName }))
+        }
 
         const currentOrder = () => showLeastCommon.value ? 'least' : 'most'
         const recentMode = () => showUniqueSpecies.value ? 'unique' : 'all'
@@ -556,7 +642,7 @@ export default {
             }
             if (!isDataEmpty.value) {
                 createTotalObsChart(totalObservationsChart, detailedBirdActivityData.value, { animate: initialLoad.value, title: null });
-                createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: initialLoad.value, title: null });
+                createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: initialLoad.value, title: null, date: getLocalDateString(), onCellClick: goToCellDetections });
             }
 
             // Initialize spectrogram canvas after DOM updates with new data
@@ -590,21 +676,14 @@ export default {
                 visibilityHandler = null
             }
 
-            // Cancel animation frame
-            if (animationId) {
-                cancelAnimationFrame(animationId)
-                animationId = null
-            }
+            pauseLatestObservation()
 
-            // Clean up audio context and related resources
             if (audioCtx) {
                 audioCtx.close()
                 audioCtx = null
             }
 
-            // Pause and clean up audio elements (for playLatestObservation with AudioContext)
             if (audioElement) {
-                audioElement.pause()
                 audioElement.src = ''
                 audioElement = null
             }
@@ -615,6 +694,8 @@ export default {
             source = null
             audioAnalyser = null
             frequencyDataArray = null
+            prevFrequencyDataArray = null
+            rollingMaxDb = -Infinity
         })
 
         onDeactivated(() => {
@@ -622,13 +703,7 @@ export default {
             isActive = false
             stopPolling()
 
-            // Stop any playing audio (latest observation AudioContext player)
-            if (audioElement) {
-                audioElement.pause()
-                cancelAnimationFrame(animationId)
-                animationId = null
-                latestObservationIsPlaying.value = false
-            }
+            pauseLatestObservation()
 
             // Suspend AudioContext to free browser resources while cached
             if (audioCtx && audioCtx.state === 'running') {
@@ -672,7 +747,10 @@ export default {
 
         const summaryEntries = computed(() => (
             Object.entries(currentPeriodSummary.value || {})
-                .filter(([key]) => !key.endsWith('Display'))
+                // Hide *Display variants (rendered separately via getSummaryBirdDisplay)
+                // and *ScientificName fields (backend-only stable key used by
+                // _localize_summary, not a user-visible summary entry).
+                .filter(([key]) => !key.endsWith('Display') && !key.endsWith('ScientificName'))
                 .map(([key, value]) => ({ key, value }))
         ))
 
@@ -683,68 +761,88 @@ export default {
 
         // Methods
         const drawSpectrogram = () => {
-            const sampleRate = audioCtx.sampleRate; // Get the sample rate of the audio context
-            const minFrequency = 2000; // 2kHz cutoff
-            const maxFrequency = 12000; // 12kHz cutoff
-            const fftSize = audioAnalyser.fftSize;
-            const frequencyResolution = sampleRate / fftSize; // Frequency resolution per bin
-            const minIndex = Math.floor(minFrequency / frequencyResolution); // Index corresponding to 2kHz
-            const maxIndex = Math.floor(maxFrequency / frequencyResolution); // Index corresponding to 12kHz
+            const frequencyResolution = audioCtx.sampleRate / audioAnalyser.fftSize;
+            const minIndex = 0;
+            const maxIndex = Math.min(
+                Math.floor(12000 / frequencyResolution),
+                audioAnalyser.frequencyBinCount - 1
+            );
+            const binSpan = maxIndex - minIndex;
 
-            const useLogScale = false; // Use log scale on mobile, linear scale on desktop
+            const stepXCss = 2; // CSS pixels per frame: wider = faster scroll, larger features
+            const stepX = stepXCss * SPECTROGRAM_SUPERSAMPLE;
 
             animationId = requestAnimationFrame(drawSpectrogram);
 
-            audioAnalyser.getByteFrequencyData(frequencyDataArray);
+            audioAnalyser.getFloatFrequencyData(frequencyDataArray);
 
-            let imageData = spectrogramCanvasCtx.getImageData(1, 0, canvasWidth - 1, canvasHeight);
+            // Update running peak across the visible band so the colormap gets normalized to the
+            // loudest bin observed so far — matches the PNG's `Sxx / max_power` step.
+            for (let i = minIndex; i <= maxIndex; i++) {
+                const v = frequencyDataArray[i];
+                if (v > rollingMaxDb) rollingMaxDb = v;
+            }
+
+            const imageData = spectrogramCanvasCtx.getImageData(stepX, 0, canvasWidth - stepX, canvasHeight);
             spectrogramCanvasCtx.putImageData(imageData, 0, 0);
 
-            const logScale = (value, max) => {
-                const maxLog = Math.log(max + 1);
-                return (Math.log(value + 1) / maxLog) * canvasHeight;
-            };
+            let index = 0;
+            for (let i = minIndex; i <= maxIndex; i++) {
+                const nextIndex = i < maxIndex
+                    ? Math.floor(((i + 1 - minIndex) / binSpan) * canvasHeight)
+                    : canvasHeight;
+                const binHeight = Math.max(1, nextIndex - index);
 
-            for (let i = minIndex; i <= maxIndex; i++) { // Only process frequencies between minIndex and maxIndex
-                let value = frequencyDataArray[i];
-                let ratio = value / 255;
-                let hue = Math.round((1 - ratio) * 120); // Green to blue hues
-                let sat = '60%';
-                let lit = 30 + (70 * ratio) + '%';
-                let index = useLogScale ? Math.floor(logScale(i, maxIndex)) : Math.floor(((i - minIndex) / (maxIndex - minIndex)) * canvasHeight);
+                // Horizontal gradient interpolates each row's color from the previous frame's
+                // intensity to the current — smooths the time axis without a post-process blur.
+                const grad = spectrogramCanvasCtx.createLinearGradient(canvasWidth - stepX, 0, canvasWidth, 0);
+                grad.addColorStop(0, SPECTROGRAM_COLOR_LUT[dbToLutIndex(prevFrequencyDataArray[i], rollingMaxDb)]);
+                grad.addColorStop(1, SPECTROGRAM_COLOR_LUT[dbToLutIndex(frequencyDataArray[i], rollingMaxDb)]);
+                spectrogramCanvasCtx.fillStyle = grad;
+                spectrogramCanvasCtx.fillRect(canvasWidth - stepX, canvasHeight - index - binHeight, stepX, binHeight);
 
-                spectrogramCanvasCtx.beginPath();
-                spectrogramCanvasCtx.strokeStyle = `hsl(${hue}, ${sat}, ${lit})`;
-                spectrogramCanvasCtx.moveTo(canvasWidth - 1, canvasHeight - index);
-                spectrogramCanvasCtx.lineTo(canvasWidth - 1, canvasHeight - index - 1);
-                spectrogramCanvasCtx.stroke();
+                index = nextIndex;
             }
+
+            prevFrequencyDataArray.set(frequencyDataArray);
         };
 
         const initializeCanvas = () => {
             const canvas = spectrogramCanvas.value;
             if (canvas) {
                 spectrogramCanvasCtx = canvas.getContext('2d', { willReadFrequently: true });
-                canvasWidth = canvas.width = canvas.offsetWidth;
-                canvasHeight = canvas.height = canvas.offsetHeight;
+                canvasWidth = canvas.width = canvas.offsetWidth * SPECTROGRAM_SUPERSAMPLE;
+                canvasHeight = canvas.height = canvas.offsetHeight * SPECTROGRAM_SUPERSAMPLE;
 
-                spectrogramCanvasCtx.fillStyle = '#E8F5E9';
+                spectrogramCanvasCtx.fillStyle = SPECTROGRAM_BG_COLOR;
                 spectrogramCanvasCtx.fillRect(0, 0, canvasWidth, canvasHeight);
             } else {
                 console.warn('Spectrogram canvas not found. Skipping canvas initialization.');
             }
         };
 
-        const playLatestObservation = () => {
-            // If already playing, stop and clean up
-            if (latestObservationIsPlaying.value && audioElement) {
-                audioElement.pause();
+        const pauseLatestObservation = () => {
+            if (!latestObservationIsPlaying.value || !audioElement) return;
+            audioElement.pause();
+            if (animationId) {
                 cancelAnimationFrame(animationId);
-                latestObservationIsPlaying.value = false;
+                animationId = null;
+            }
+            latestObservationIsPlaying.value = false;
+        };
+
+        const playLatestObservation = () => {
+            // Preserves position and rolling-max calibration vs. tearing down the audio element.
+            if (audioElement && audioElement.currentTime > 0 && !audioElement.ended) {
+                if (audioCtx?.state === 'suspended') audioCtx.resume();
+                audioElement.play().catch((err) => {
+                    console.warn('Failed to resume audio:', err);
+                });
+                drawSpectrogram();
+                latestObservationIsPlaying.value = true;
                 return;
             }
 
-            // Clean up previous audio element if exists
             if (audioElement) {
                 audioElement.pause();
                 audioElement.src = '';
@@ -761,8 +859,14 @@ export default {
             }
 
             audioAnalyser = audioCtx.createAnalyser();
-            audioAnalyser.fftSize = 2048;
-            frequencyDataArray = new Uint8Array(audioAnalyser.frequencyBinCount);
+            audioAnalyser.fftSize = 1024;
+            audioAnalyser.smoothingTimeConstant = 0.2; // Light temporal averaging — softens per-frame
+                                                       // grain while keeping transients responsive
+            frequencyDataArray = new Float32Array(audioAnalyser.frequencyBinCount);
+            prevFrequencyDataArray = new Float32Array(audioAnalyser.frequencyBinCount);
+            // Initialize prev far below the floor so the first frame's left edge starts dark.
+            prevFrequencyDataArray.fill(-200);
+            rollingMaxDb = -Infinity;
 	            const latestAudioUrl = getAudioUrl(latestObservationData.value?.bird_song_file_name)
 	            if (!latestAudioUrl) return
 	            audioElement = new Audio(latestAudioUrl);
@@ -771,10 +875,7 @@ export default {
             source.connect(audioAnalyser);
             audioAnalyser.connect(audioCtx.destination);
 
-            audioElement.addEventListener('ended', () => {
-                latestObservationIsPlaying.value = false;
-                cancelAnimationFrame(animationId);
-            });
+            audioElement.addEventListener('ended', pauseLatestObservation);
 
 	            audioElement.play().catch((err) => {
 	                console.warn('Failed to play audio:', err)
@@ -792,8 +893,7 @@ export default {
         };
 
         const formatTimestamp = (dateString) => {
-            const date = new Date(dateString);
-            return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            return formatTimeOfDay(dateString)
         }
 
         const formatConfidence = (confidence) => {
@@ -805,7 +905,10 @@ export default {
         }
 
         const formatSummaryValue = (key, value) => {
-            if (key === 'mostActiveHour') return value
+            if (key === 'mostActiveHour') {
+                // Backend returns "H:00" or "N/A" — let the helper reformat per preference
+                return value === 'N/A' ? value : formatHourLabel(value)
+            }
             return typeof value === 'number' ? value.toLocaleString() : value
         }
 
@@ -825,7 +928,7 @@ export default {
             try {
                 setActivityOrder(currentOrder())
                 await createTotalObsChart(totalObservationsChart, detailedBirdActivityData.value, { animate: true, title: null })
-                await createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: true, title: null })
+                await createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: true, title: null, date: getLocalDateString(), onCellClick: goToCellDetections })
             } finally {
                 isActivityUpdating.value = false
             }
@@ -835,7 +938,7 @@ export default {
         const redrawCharts = async (animate = false) => {
             initialLoad.value = false;
             await createTotalObsChart(totalObservationsChart, detailedBirdActivityData.value, { animate, title: null });
-            await createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate, title: null });
+            await createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate, title: null, date: getLocalDateString(), onCellClick: goToCellDetections });
             await createHourlyChart(hourlyActivityChart, hourlyBirdActivityData.value, { animate });
         };
 
@@ -859,11 +962,14 @@ export default {
             showSpectrogram,
             hourlyBirdActivityData,
             totalObservationsChart,
+            speciesAxisLayout,
+            timeAxisLayout,
             hourlyActivityHeatmap,
             isDataEmpty,
             latestObservationIsPlaying,
             spectrogramCanvas,
             playLatestObservation,
+            pauseLatestObservation,
             detailedBirdActivityError,
             latestObservationError,
             summaryError,

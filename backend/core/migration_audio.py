@@ -407,7 +407,7 @@ def check_disk_space(required_bytes):
     }
 
 
-def import_audio_files(db_manager, matched_files, import_id):
+def import_audio_files(db_manager, matched_files, import_id, yield_control=None):
     """Import audio files, renaming to BirdNET-PiPy format.
 
     Moves files from migration source to EXTRACTED_AUDIO_DIR with proper naming.
@@ -416,6 +416,8 @@ def import_audio_files(db_manager, matched_files, import_id):
         db_manager: DatabaseManager instance
         matched_files: List of (detection_id, source_path, size_bytes) tuples
         import_id: Unique identifier for progress tracking
+        yield_control: Optional no-arg callable invoked once per file so a
+            cooperative (e.g. gevent) caller can release the worker.
     """
     # Ensure destination directory exists
     os.makedirs(EXTRACTED_AUDIO_DIR, exist_ok=True)
@@ -441,6 +443,8 @@ def import_audio_files(db_manager, matched_files, import_id):
         update_progress('running')
 
         for detection_id, source_path, _size_bytes in matched_files:
+            if yield_control:
+                yield_control()
             try:
                 # Get detection record
                 detection = db_manager.get_detection_by_id(detection_id)
@@ -622,12 +626,14 @@ def _build_spectrogram_title_from_audio_filename(audio_filename: str) -> str:
     return base_name.replace('_', ' ')
 
 
-def generate_spectrograms_batch(audio_files, generation_id):
+def generate_spectrograms_batch(audio_files, generation_id, yield_control=None):
     """Generate spectrograms for a batch of audio files.
 
     Args:
         audio_files: List of audio filenames (in EXTRACTED_AUDIO_DIR)
         generation_id: Unique identifier for progress tracking
+        yield_control: Optional no-arg callable invoked once per file so a
+            cooperative (e.g. gevent) caller can release the worker.
     """
     # Ensure destination directory exists
     os.makedirs(SPECTROGRAM_DIR, exist_ok=True)
@@ -651,6 +657,8 @@ def generate_spectrograms_batch(audio_files, generation_id):
         update_progress('running')
 
         for audio_filename in audio_files:
+            if yield_control:
+                yield_control()
             audio_path = os.path.join(EXTRACTED_AUDIO_DIR, audio_filename)
             temp_wav = None
 

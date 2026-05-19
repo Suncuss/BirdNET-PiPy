@@ -233,7 +233,8 @@ class BirdNETPiMigrator:
 
         return preview
 
-    def migrate(self, source_path, skip_duplicates=True, temp_path=None, total_records=None):
+    def migrate(self, source_path, skip_duplicates=True, temp_path=None,
+                total_records=None, yield_control=None):
         """Migrate all records from source database to target.
 
         Args:
@@ -241,6 +242,8 @@ class BirdNETPiMigrator:
             skip_duplicates: If True, skip records that already exist in target
             temp_path: Path used as migration ID for progress tracking
             total_records: Optional total record count for progress calculation
+            yield_control: Optional no-arg callable invoked at batch boundaries
+                so a cooperative (e.g. gevent) caller can release the worker.
 
         Returns:
             dict: {
@@ -277,7 +280,7 @@ class BirdNETPiMigrator:
             # Pre-load existing records into memory for fast duplicate checking
             existing_keys = set()
             if skip_duplicates:
-                existing_keys = self._load_existing_keys()
+                existing_keys = self._load_existing_keys(yield_control)
                 logger.info("Loaded existing records for duplicate detection", extra={
                     'count': len(existing_keys)
                 })
@@ -318,6 +321,8 @@ class BirdNETPiMigrator:
                             # Update progress periodically even for skipped records
                             if (result['imported'] + result['skipped']) % progress_update_interval == 0:
                                 update_progress()
+                                if yield_control:
+                                    yield_control()
                             continue
                         # Add to set to prevent duplicates within the import
                         existing_keys.add(key)
@@ -331,12 +336,16 @@ class BirdNETPiMigrator:
                         result['errors'] += errors
                         batch = []
                         update_progress()
+                        if yield_control:
+                            yield_control()
 
                 # Insert remaining records
                 if batch:
                     imported, errors = self._insert_batch(batch)
                     result['imported'] += imported
                     result['errors'] += errors
+                    if yield_control:
+                        yield_control()
 
             # Final progress update
             update_progress('completed')
@@ -361,8 +370,13 @@ class BirdNETPiMigrator:
 
         return result
 
-    def _load_existing_keys(self):
+    def _load_existing_keys(self, yield_control=None):
         """Load all existing record keys into memory for fast duplicate checking.
+
+        Args:
+            yield_control: Optional no-arg callable invoked per fetched chunk so
+                a cooperative caller can release the worker while scanning a
+                large existing database.
 
         Returns:
             set: Set of (timestamp, scientific_name, confidence_rounded) tuples
@@ -375,10 +389,15 @@ class BirdNETPiMigrator:
                     SELECT timestamp, scientific_name, confidence
                     FROM detections
                 """)
-                for row in cursor.fetchall():
-                    # Round confidence to 4 decimal places for comparison
-                    key = (row[0], row[1], round(row[2], 4))
-                    keys.add(key)
+                while True:
+                    rows = cursor.fetchmany(5000)
+                    if not rows:
+                        break
+                    for row in rows:
+                        # Round confidence to 4 decimal places for comparison
+                        keys.add((row[0], row[1], round(row[2], 4)))
+                    if yield_control:
+                        yield_control()
         except Exception as e:
             logger.warning("Failed to load existing keys", extra={'error': str(e)})
         return keys

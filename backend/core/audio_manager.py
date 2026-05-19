@@ -17,6 +17,7 @@ import time
 from abc import ABC, abstractmethod
 
 from config.constants import VALID_RECORDING_MODES, RecordingMode
+from core.fd_diagnostics import log_fd_exhaustion_if_needed
 from core.timezone_service import local_now
 from core.utils import sanitize_url
 
@@ -233,6 +234,10 @@ class BaseRecorder(ABC):
             logger.warning("Recording timed out", extra={'temp_path': temp_path})
             self.last_error_message = "Recording timed out"
         except Exception as e:
+            log_fd_exhaustion_if_needed(e, logger, 'recording', extra={
+                'temp_path': temp_path,
+                'recorder': self.__class__.__name__,
+            })
             logger.warning(f"Recording failed: {e}", extra={'temp_path': temp_path})
             self.last_error_message = f"Recording failed: {e}"
         finally:

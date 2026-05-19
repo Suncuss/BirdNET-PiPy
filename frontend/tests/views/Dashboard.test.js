@@ -1,4 +1,4 @@
-import { mount, flushPromises } from '@vue/test-utils'
+import { mount, flushPromises, RouterLinkStub } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ref, defineComponent, nextTick } from 'vue'
 import Dashboard from '@/views/Dashboard.vue'
@@ -7,6 +7,7 @@ import { useAppStatus } from '@/composables/useAppStatus'
 import { useAudioPlayer } from '@/composables/useAudioPlayer'
 import { useBirdCharts } from '@/composables/useBirdCharts'
 import { useSystemUpdate } from '@/composables/useSystemUpdate'
+import { useTimeFormat } from '@/composables/useTimeFormat'
 
 vi.mock('@/composables/useFetchBirdData')
 vi.mock('@/composables/useAppStatus')
@@ -28,6 +29,13 @@ vi.mock('chart.js/auto', () => {
 vi.mock('chartjs-chart-matrix', () => ({
   MatrixController: {},
   MatrixElement: {}
+}))
+
+// Dashboard uses useRouter() to deep-link heatmap-cell clicks to the Table
+// view. router-link in the template is stubbed separately (global stubs).
+const mockRouter = vi.hoisted(() => ({ push: vi.fn() }))
+vi.mock('vue-router', () => ({
+  useRouter: () => mockRouter
 }))
 
 const baseState = () => ({
@@ -59,6 +67,7 @@ const mockCanvasContext = {
   moveTo: vi.fn(),
   lineTo: vi.fn(),
   clearRect: vi.fn(),
+  createLinearGradient: vi.fn(() => ({ addColorStop: vi.fn() })),
   save: vi.fn(),
   restore: vi.fn(),
   fillText: vi.fn()
@@ -74,12 +83,27 @@ const mountDashboard = () => mount(Dashboard, {
   }
 })
 
+const mountDashboardWithRouterLinks = () => mount(Dashboard, {
+  global: {
+    stubs: {
+      'font-awesome-icon': true,
+      'router-link': RouterLinkStub,
+      'CenteredMessage': false
+    }
+  }
+})
+
 describe('Dashboard', () => {
   let getContextSpy
   let mockStopAudio
 
   beforeEach(() => {
     vi.useFakeTimers()
+    Object.values(mockCanvasContext).forEach((mock) => {
+      if (vi.isMockFunction(mock)) mock.mockClear()
+    })
+    mockCanvasContext.getImageData.mockReturnValue({ data: [] })
+    mockCanvasContext.createLinearGradient.mockImplementation(() => ({ addColorStop: vi.fn() }))
     mockStopAudio = vi.fn()
     useFetchBirdData.mockReturnValue(baseState())
     useAppStatus.mockReturnValue({
@@ -102,7 +126,9 @@ describe('Dashboard', () => {
       freezeChart: vi.fn(),
       createTotalObservationsChart: vi.fn(),
       createHourlyActivityHeatmap: vi.fn(),
-      createHourlyActivityChart: vi.fn()
+      createHourlyActivityChart: vi.fn(),
+      speciesAxisLayout: ref({ ticks: [], axisLeft: 0, axisWidth: 0, rowHeight: 0 }),
+      timeAxisLayout: ref({ ticks: [], axisLeft: 0, axisTop: 0, axisHeight: 0, colWidth: 0, date: null })
     })
     useSystemUpdate.mockReturnValue({
       checkForUpdates: vi.fn().mockResolvedValue({}),
@@ -115,6 +141,7 @@ describe('Dashboard', () => {
     vi.clearAllTimers()
     vi.useRealTimers()
     vi.restoreAllMocks()
+    vi.unstubAllGlobals()
   })
 
   it('shows loading state before first fetch completes', async () => {
@@ -162,12 +189,19 @@ describe('Dashboard', () => {
   })
 
   it('formats summary keys and values', async () => {
+    // Force 24h so the most-active-hour assertion is locale-independent
+    useTimeFormat().setTimeFormat('24h')
     const wrapper = mountDashboard()
     await flushPromises()
 
     expect(wrapper.vm.formatSummaryKey('mostActiveHour')).toBe('Most Active Hour')
     expect(wrapper.vm.formatSummaryValue('totalDetections', 1234)).toBe('1,234')
     expect(wrapper.vm.formatSummaryValue('mostActiveHour', '09:00')).toBe('09:00')
+    expect(wrapper.vm.formatSummaryValue('mostActiveHour', 'N/A')).toBe('N/A')
+
+    // 12h mode formats the same value differently
+    useTimeFormat().setTimeFormat('12h')
+    expect(wrapper.vm.formatSummaryValue('mostActiveHour', '09:00')).toBe('9 AM')
   })
 
   it('shows error messages when set', async () => {
@@ -230,7 +264,7 @@ describe('Dashboard', () => {
     })
     useFetchBirdData.mockReturnValue(state)
 
-    const wrapper = mountDashboard()
+    mountDashboard()
     await flushPromises()
 
     // Canvas initialized once
@@ -247,6 +281,122 @@ describe('Dashboard', () => {
 
     // Canvas should NOT be reinitialized
     expect(getContextSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('clamps live spectrogram rendering to available analyser bins', async () => {
+    const state = baseState()
+    state.latestObservationData.value = {
+      common_name: 'Robin',
+      scientific_name: 'Turdus migratorius',
+      timestamp: '2024-01-01T12:00:00Z',
+      confidence: 0.91,
+      bird_song_file_name: 'low-rate.mp3'
+    }
+    useFetchBirdData.mockReturnValue(state)
+
+    const addColorStop = vi.fn((_, color) => {
+      if (typeof color !== 'string') {
+        throw new Error(`Invalid spectrogram color: ${String(color)}`)
+      }
+    })
+    mockCanvasContext.createLinearGradient.mockReturnValue({ addColorStop })
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    vi.stubGlobal('Audio', vi.fn().mockImplementation(function MockAudio(src) {
+      this.src = src
+      this.crossOrigin = ''
+      this.pause = vi.fn()
+      this.play = vi.fn().mockResolvedValue()
+      this.addEventListener = vi.fn()
+    }))
+
+    const analyser = {
+      fftSize: 1024,
+      frequencyBinCount: 512,
+      smoothingTimeConstant: 0.8,
+      minDecibels: -100,
+      maxDecibels: -30,
+      connect: vi.fn(),
+      getFloatFrequencyData: vi.fn((array) => {
+        for (let i = 0; i < array.length; i++) {
+          // Synthetic dB values spanning the full window so dbToLutIndex hits both clamps.
+          array[i] = -120 + (i % 121)
+        }
+      })
+    }
+    const sourceNode = { connect: vi.fn() }
+    vi.stubGlobal('AudioContext', vi.fn().mockImplementation(function MockAudioContext() {
+      this.sampleRate = 22050
+      this.state = 'running'
+      this.destination = {}
+      this.createAnalyser = vi.fn(() => analyser)
+      this.createMediaElementSource = vi.fn(() => sourceNode)
+      this.resume = vi.fn().mockResolvedValue()
+      this.close = vi.fn().mockResolvedValue()
+    }))
+
+    const wrapper = mountDashboard()
+    await flushPromises()
+
+    wrapper.vm.playLatestObservation()
+
+    expect(analyser.getFloatFrequencyData).toHaveBeenCalled()
+    // 12 kHz cap exceeds available bins at 22050 Hz / fftSize 1024, so loop clamps to 512 bins.
+    expect(mockCanvasContext.createLinearGradient).toHaveBeenCalledTimes(512)
+    expect(addColorStop).toHaveBeenCalledTimes(1024)
+
+    wrapper.unmount()
+  })
+
+  describe('Latest Observation card', () => {
+    const populatedState = () => {
+      const state = baseState()
+      state.latestObservationData.value = {
+        common_name: 'Blue Jay',
+        scientific_name: 'Cyanocitta cristata',
+        timestamp: '2024-01-01T12:30:00Z',
+        confidence: 0.93,
+        bird_song_file_name: 'jay.mp3'
+      }
+      return state
+    }
+
+    it('scientific name links to BirdDetails with the common name as param', async () => {
+      useFetchBirdData.mockReturnValue(populatedState())
+
+      const wrapper = mountDashboardWithRouterLinks()
+      await flushPromises()
+
+      const sciLink = wrapper.findAllComponents(RouterLinkStub)
+        .find(l => l.text().includes('Cyanocitta cristata'))
+      expect(sciLink).toBeTruthy()
+      expect(sciLink.props('to')).toEqual({
+        name: 'BirdDetails',
+        params: { name: 'Blue Jay' }
+      })
+    })
+
+    it('time/confidence row links to the Table view', async () => {
+      useFetchBirdData.mockReturnValue(populatedState())
+
+      const wrapper = mountDashboardWithRouterLinks()
+      await flushPromises()
+
+      const tableLink = wrapper.findAllComponents(RouterLinkStub)
+        .find(l => l.text().includes('93%'))
+      expect(tableLink).toBeTruthy()
+      expect(tableLink.props('to')).toEqual({ name: 'Table' })
+    })
+  })
+
+  it('hides the Bird Activity reverse toggle when data is empty', async () => {
+    const wrapper = mountDashboard()
+    await flushPromises()
+
+    // Default state: hasLoadedOnce=true, no detailed activity data => isDataEmpty=true
+    expect(wrapper.vm.isDataEmpty).toBe(true)
+    const reverseButton = wrapper.findAll('button').find(b => b.text().includes('Reverse'))
+    expect(reverseButton).toBeFalsy()
   })
 
   describe('unique species toggle', () => {

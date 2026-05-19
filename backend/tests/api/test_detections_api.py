@@ -195,6 +195,109 @@ class TestDetectionsAPI:
         assert data['pagination']['total_items'] == 3
         assert all(d['common_name'] == 'Robin' for d in data['detections'])
 
+    def test_get_detections_filter_by_hour(self, api_client, real_db_manager):
+        """Test filtering by hour of day."""
+        # 3 detections at 09:00, 5 at 14:00, 2 at 23:00
+        for hour, count in [(9, 3), (14, 5), (23, 2)]:
+            for i in range(count):
+                real_db_manager.insert_detection({
+                    'timestamp': f'2024-01-15T{hour:02d}:{i:02d}:00',
+                    'group_timestamp': f'2024-01-15T{hour:02d}:{i:02d}:00',
+                    'common_name': 'Robin',
+                    'scientific_name': 'Turdus migratorius',
+                    'confidence': 0.85,
+                    'latitude': 40.7128,
+                    'longitude': -74.0060,
+                    'cutoff': 0.5,
+                    'sensitivity': 0.75,
+                    'overlap': 0.25
+                })
+
+        response = api_client.get('/api/detections?hour=14')
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['pagination']['total_items'] == 5
+        assert all(d['timestamp'][11:13] == '14' for d in data['detections'])
+
+    def test_get_detections_filter_by_hour_zero(self, api_client, real_db_manager):
+        """Test that hour=0 (midnight) filters correctly despite 0 being falsy."""
+        for hour in (0, 1):
+            real_db_manager.insert_detection({
+                'timestamp': f'2024-01-15T{hour:02d}:30:00',
+                'group_timestamp': f'2024-01-15T{hour:02d}:30:00',
+                'common_name': 'Owl',
+                'scientific_name': 'Strix',
+                'confidence': 0.85,
+                'latitude': 40.7128,
+                'longitude': -74.0060,
+                'cutoff': 0.5,
+                'sensitivity': 0.75,
+                'overlap': 0.25
+            })
+
+        response = api_client.get('/api/detections?hour=0')
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['pagination']['total_items'] == 1
+        assert data['detections'][0]['timestamp'][11:13] == '00'
+
+    def test_get_detections_filter_by_hour_combined(self, api_client, real_db_manager):
+        """Test hour filter combined with date and species filters."""
+        for date in ['2024-01-10', '2024-01-15']:
+            for species in ['Robin', 'Jay']:
+                for hour in (10, 14):
+                    real_db_manager.insert_detection({
+                        'timestamp': f'{date}T{hour:02d}:00:00',
+                        'group_timestamp': f'{date}T{hour:02d}:00:00',
+                        'common_name': species,
+                        'scientific_name': f'{species} sci',
+                        'confidence': 0.85,
+                        'latitude': 40.7128,
+                        'longitude': -74.0060,
+                        'cutoff': 0.5,
+                        'sensitivity': 0.75,
+                        'overlap': 0.25
+                    })
+
+        response = api_client.get(
+            '/api/detections?species=Robin&start_date=2024-01-15'
+            '&end_date=2024-01-15&hour=14'
+        )
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['pagination']['total_items'] == 1
+        detection = data['detections'][0]
+        assert detection['common_name'] == 'Robin'
+        assert detection['timestamp'].startswith('2024-01-15T14')
+
+    def test_get_detections_invalid_hour(self, api_client, real_db_manager):
+        """Test that an out-of-range or non-integer hour returns 400."""
+        for bad in ('24', '-1', 'abc', '10.5'):
+            response = api_client.get(f'/api/detections?hour={bad}')
+            assert response.status_code == 400, f'hour={bad} should be rejected'
+            data = response.get_json()
+            assert 'error' in data
+            assert 'hour' in data['error'].lower()
+
+    def test_get_detections_empty_hour_ignored(self, api_client, real_db_manager):
+        """Test that an empty hour param is treated as no filter."""
+        real_db_manager.insert_detection({
+            'timestamp': '2024-01-15T10:30:00',
+            'group_timestamp': '2024-01-15T10:30:00',
+            'common_name': 'Robin',
+            'scientific_name': 'Turdus migratorius',
+            'confidence': 0.85,
+            'latitude': 40.7128,
+            'longitude': -74.0060,
+            'cutoff': 0.5,
+            'sensitivity': 0.75,
+            'overlap': 0.25
+        })
+
+        response = api_client.get('/api/detections?hour=')
+        assert response.status_code == 200
+        assert response.get_json()['pagination']['total_items'] == 1
+
     def test_get_detections_sort_by_timestamp(self, api_client, real_db_manager):
         """Test sorting by timestamp."""
         times = ['10:00:00', '12:00:00', '08:00:00', '14:00:00']
@@ -492,6 +595,31 @@ class TestDetectionsDatabaseMethods:
         # Should not raise an error, just use default
         detections, total = real_db_manager.get_paginated_detections(sort='invalid_field')
         assert total == 1
+
+    def test_get_paginated_detections_filter_by_hour(self, real_db_manager):
+        """Test the hour filter at the database method level."""
+        for hour, count in [(6, 2), (18, 4)]:
+            for i in range(count):
+                real_db_manager.insert_detection({
+                    'timestamp': f'2024-01-15T{hour:02d}:{i:02d}:00',
+                    'group_timestamp': f'2024-01-15T{hour:02d}:{i:02d}:00',
+                    'common_name': 'Robin',
+                    'scientific_name': 'Turdus migratorius',
+                    'confidence': 0.85,
+                    'latitude': 40.7128,
+                    'longitude': -74.0060,
+                    'cutoff': 0.5,
+                    'sensitivity': 0.75,
+                    'overlap': 0.25
+                })
+
+        detections, total = real_db_manager.get_paginated_detections(hour=18)
+        assert total == 4
+        assert all(d['timestamp'][11:13] == '18' for d in detections)
+
+        # No hour filter returns everything
+        _, total_all = real_db_manager.get_paginated_detections()
+        assert total_all == 6
 
     def test_get_detection_by_id(self, real_db_manager):
         """Test getting a single detection by ID."""

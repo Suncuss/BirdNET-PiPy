@@ -7,9 +7,10 @@ This directory contains all tests for the BirdNET-PiPy Vue.js frontend, organize
 ```
 tests/
 ├── App.test.js                           # Root App component tests (2 tests)
-├── components/                           # Reusable component tests (7 files)
+├── components/                           # Reusable component tests (8 files)
 │   ├── AddNotificationModal.test.js      # Notification modal (36 tests)
 │   ├── AlertBanner.test.js               # Alert banner component (11 tests)
+│   ├── AppDatePicker.test.js             # Date picker format/width/fluid (8 tests)
 │   ├── DetectionInfoModal.test.js        # Detection info modal (25 tests)
 │   ├── LoginModal.test.js                # Authentication modal (22 tests)
 │   ├── SetupWizard.test.js               # Setup wizard flow (17 tests)
@@ -127,6 +128,7 @@ Tests for reusable Vue components.
 |------|-------|-------------|
 | `AddNotificationModal.test.js` | 36 | Notification service picker, URL building, test and save |
 | `AlertBanner.test.js` | 11 | Alert display, dismiss, auto-hide |
+| `AppDatePicker.test.js` | 8 | Date format follows 12h/24h preference; width adapts; fluid mode |
 | `DetectionInfoModal.test.js` | 25 | Detection details display, audio playback, actions |
 | `LoginModal.test.js` | 22 | Login forms, setup flows, password validation, error handling |
 | `SetupWizard.test.js` | 17 | Location and audio source setup flow |
@@ -353,11 +355,11 @@ Coverage targets `src/**/*.{js,vue}` excluding `src/main.js`.
 | Category | Files | Tests |
 |----------|-------|-------|
 | App | 1 | 2 |
-| Components | 7 | 119 |
+| Components | 8 | 127 |
 | Composables | 12 | 270 |
 | Router | 1 | 24 |
 | Views | 10 | 154 |
-| **Total** | **31** | **569** |
+| **Total** | **32** | **577** |
 
 ## Common Issues
 

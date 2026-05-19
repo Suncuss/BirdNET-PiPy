@@ -4,6 +4,7 @@ import os
 import signal
 import threading
 import time
+from dataclasses import dataclass
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -30,6 +31,7 @@ from core.audio_manager import BaseRecorder, create_recorder
 from core.bird_name_utils import get_localized_common_name, get_spectrogram_common_name
 from core.birdweather_service import get_birdweather_service
 from core.db import DatabaseManager
+from core.fd_diagnostics import log_fd_exhaustion_if_needed
 from core.logging_config import get_logger, setup_logging
 from core.notification_service import get_notification_service
 from core.runtime_config import get_runtime_settings, resolve_source_label
@@ -58,6 +60,7 @@ RECORDING_THREAD_SHUTDOWN_TIMEOUT = 10  # Max wait for recording thread (seconds
 PROCESSING_THREAD_SHUTDOWN_TIMEOUT = 5  # Max wait for processing thread (seconds)
 DEGRADED_FAILURE_THRESHOLD = 3  # Consecutive failures before 'degraded' state
 STATUS_REFRESH_INTERVAL = 60   # Re-broadcast recorder status every N seconds
+AUDIO_STATUS_NOTIFY_COOLDOWN = 600  # Min seconds between repeat audio-degradation alerts
 
 # Setup logging
 setup_logging('main')
@@ -263,10 +266,123 @@ def broadcast_recorder_status(
         resp.raise_for_status()
         return True
     except Exception as e:
+        log_fd_exhaustion_if_needed(e, thread_logger, 'recorder_status_broadcast')
         thread_logger.debug("Failed to broadcast recorder status", extra={
             'error': str(e)
         })
         return False
+
+
+def _collect_problem_sources(
+    recorders: dict[str, BaseRecorder],
+    sources: list[dict],
+    health_cache: dict[str, bool],
+) -> list[dict]:
+    """List sources whose recorder is not in the running state.
+
+    Each entry carries the human label, current per-source state, and the
+    most recent error message — enough for a useful notification body.
+    """
+    problems = []
+    for source in sources:
+        sid = source.get('id', '')
+        label = source.get('label', sid)
+        recorder = recorders.get(sid)
+        if recorder is None:
+            problems.append({'label': label, 'state': RecorderState.STOPPED, 'error': ''})
+            continue
+        healthy = health_cache.get(sid, recorder.is_healthy())
+        state = _get_recorder_state(recorder, healthy)
+        if state != RecorderState.RUNNING:
+            problems.append({
+                'label': label,
+                'state': state,
+                'error': recorder.last_error_message,
+            })
+    return problems
+
+
+@dataclass
+class _AudioAlertTracker:
+    """Episode bookkeeping for audio-status notifications.
+
+    Lives for the recorder thread's lifetime. ``decide`` debounces flapping
+    so a persistently-broken stream alerts once (not every tick) while still
+    letting a degraded→stopped escalation through.
+    """
+
+    active: bool = False  # an unresolved problem alert was sent
+    problem_state: str | None = None
+    last_problem_time: float = 0.0
+
+    def decide(self, current_state: str, prev_state: str | None) -> str | None:
+        """Classify a state transition, mutating episode state when it
+        warrants an alert. Returns 'problem', 'recovery', or None.
+        """
+        if prev_state is None or current_state == prev_state:
+            return None
+
+        if current_state in (RecorderState.DEGRADED, RecorderState.STOPPED):
+            escalated = (
+                current_state == RecorderState.STOPPED
+                and self.problem_state == RecorderState.DEGRADED
+            )
+            new_episode = (
+                not self.active
+                and (time.time() - self.last_problem_time)
+                >= AUDIO_STATUS_NOTIFY_COOLDOWN
+            )
+            if not (escalated or new_episode):
+                return None
+            self.active = True
+            self.problem_state = current_state
+            self.last_problem_time = time.time()
+            return 'problem'
+
+        if self.active:
+            self.active = False
+            self.problem_state = None
+            return 'recovery'
+        return None
+
+
+def _maybe_notify_audio_status(
+    current_state: str,
+    prev_state: str | None,
+    recorders: dict[str, BaseRecorder],
+    sources: list[dict],
+    health_cache: dict[str, bool],
+    tracker: _AudioAlertTracker,
+    thread_logger,
+) -> None:
+    """Surface audio pipeline degradation/recovery via the notification service.
+
+    No-op unless the user has both notification URLs configured and the
+    ``audio_status`` toggle enabled (both enforced inside the service).
+    """
+    if prev_state is None or current_state == prev_state:
+        return
+
+    notif_service = get_notification_service(db_manager)
+    if notif_service is None:
+        return
+
+    kind = tracker.decide(current_state, prev_state)
+    if kind is None:
+        return
+
+    problem_sources = (
+        _collect_problem_sources(recorders, sources, health_cache)
+        if kind == 'problem' else []
+    )
+    notif_service.notify_audio_status({
+        'state': current_state,
+        'previous_state': prev_state,
+        'problem_sources': problem_sources,
+    })
+    thread_logger.info("Audio status alert queued", extra={
+        'kind': kind, 'state': current_state, 'previous_state': prev_state,
+    })
 
 
 def continuous_audio_recording(thread_logger):
@@ -279,6 +395,8 @@ def continuous_audio_recording(thread_logger):
     current_signature: tuple | None = None
     last_broadcast_state: str | None = None
     last_broadcast_time: float = 0.0
+    last_notify_state: str | None = None
+    audio_alert_tracker = _AudioAlertTracker()
 
     def _start_all(audio_settings, sig):
         nonlocal current_signature
@@ -309,6 +427,7 @@ def continuous_audio_recording(thread_logger):
             initial_audio_settings = _get_audio_settings()
             _start_all(initial_audio_settings, _get_recorder_signature(initial_audio_settings))
         except Exception as e:
+            log_fd_exhaustion_if_needed(e, thread_logger, 'recording_loop_init')
             thread_logger.error("Recording loop error", extra={'error': str(e)}, exc_info=True)
             time.sleep(1)
 
@@ -349,12 +468,22 @@ def continuous_audio_recording(thread_logger):
                         last_broadcast_state = current_state
                         last_broadcast_time = time.time()
 
+                # Runs even if the broadcast above failed, so a flaky API
+                # socket can't mask audio degradation.
+                _maybe_notify_audio_status(
+                    current_state, last_notify_state, recorders,
+                    enabled_sources, health_cache, audio_alert_tracker,
+                    thread_logger,
+                )
+                last_notify_state = current_state
+
                 time.sleep(FILE_SCAN_INTERVAL)
 
             except ValueError as e:
                 thread_logger.error("Recorder configuration invalid", extra={'error': str(e)})
                 time.sleep(2)
             except Exception as e:
+                log_fd_exhaustion_if_needed(e, thread_logger, 'recording_loop_main')
                 thread_logger.error("Recording loop error", extra={
                     'error': str(e)
                 }, exc_info=True)
@@ -471,6 +600,9 @@ def broadcast_detection(detection: dict[str, Any], thread_logger) -> None:
             'species': detection['common_name']
         })
     except Exception as e:
+        log_fd_exhaustion_if_needed(e, thread_logger, 'detection_broadcast', extra={
+            'species': detection['common_name'],
+        })
         thread_logger.warning("Failed to broadcast detection", extra={
             'species': detection['common_name'],
             'error': str(e)
@@ -570,11 +702,34 @@ def is_valid_recording(file_path: str, thread_logger) -> bool:
             return False
 
     except OSError as e:
+        log_fd_exhaustion_if_needed(e, thread_logger, 'validate_recording', extra={
+            'file': os.path.basename(file_path),
+        })
         thread_logger.error("Failed to validate file", extra={
             'file': os.path.basename(file_path),
             'error': str(e)
         })
         return False
+
+
+def remove_recording_from_queue(file_path: str, file_name: str, thread_logger) -> None:
+    """Remove a recording after it has been accepted for processing.
+
+    The recording directory is the processing queue. If post-analysis work
+    fails, leaving the same WAV in place causes an infinite retry loop.
+    """
+    try:
+        os.remove(file_path)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        log_fd_exhaustion_if_needed(e, thread_logger, 'remove_recording', extra={
+            'file': file_name,
+        })
+        thread_logger.warning("Failed to delete processed file", extra={
+            'file': file_name,
+            'error': str(e)
+        })
 
 
 def _collect_wav_files() -> list[tuple[str, str | None]]:
@@ -606,7 +761,8 @@ def process_audio_files():
     """Processing thread: scans directory for .wav files and processes them.
 
     The filesystem IS the queue - no in-memory queue needed.
-    Files are deleted after successful processing.
+    Files are deleted after they are accepted for processing so a failed
+    post-analysis step cannot retry the same WAV indefinitely.
     Collects from root dir (legacy) and per-source subdirs.
     """
     thread_logger = get_logger(f"{__name__}.processing")
@@ -635,53 +791,75 @@ def process_audio_files():
                     'audio_source': audio_source
                 })
 
-                # Process the audio file via BirdNet
-                detections = process_audio_file(file_path)
-                if detections:
-                    # Resolve and sanitize source label once per file
-                    source_label = ''
-                    if audio_source:
-                        raw_label = resolve_source_label(audio_source)
-                        source_label = sanitize_source_label(raw_label)
-
-                    for detection in detections:
-                        detection['audio_source'] = audio_source
-                        # Store source label in extra for filename reconstruction
-                        if source_label:
-                            extra = detection.get('extra', {})
-                            extra['source_label'] = source_label
-                            detection['extra'] = extra
-                        # Recompute filenames with source label suffix
-                        if audio_source:
-                            fnames = build_detection_filenames(
-                                detection['common_name'],
-                                detection['confidence'],
-                                detection['timestamp'],
-                                audio_extension='wav',
-                                audio_source=source_label or None
-                            )
-                            detection['bird_song_file_name'] = fnames['audio_filename']
-                            detection['spectrogram_file_name'] = fnames['spectrogram_filename']
-                        handle_detection(detection, file_path, thread_logger)
-
-                # Clean up processed file
-                thread_logger.debug("Audio file processed", extra={
-                    'file': file_name,
-                    'detections': len(detections) if detections else 0
-                })
+                detections = []
+                processing_failed = False
                 try:
-                    os.remove(file_path)
-                except OSError as e:
-                    thread_logger.warning("Failed to delete processed file", extra={
+                    # Process the audio file via BirdNet
+                    detections = process_audio_file(file_path)
+                    if detections:
+                        # Resolve and sanitize source label once per file
+                        source_label = ''
+                        if audio_source:
+                            raw_label = resolve_source_label(audio_source)
+                            source_label = sanitize_source_label(raw_label)
+
+                        for detection in detections:
+                            try:
+                                detection['audio_source'] = audio_source
+                                # Store source label in extra for filename reconstruction
+                                if source_label:
+                                    extra = detection.get('extra', {})
+                                    extra['source_label'] = source_label
+                                    detection['extra'] = extra
+                                # Recompute filenames with source label suffix
+                                if audio_source:
+                                    fnames = build_detection_filenames(
+                                        detection['common_name'],
+                                        detection['confidence'],
+                                        detection['timestamp'],
+                                        audio_extension='wav',
+                                        audio_source=source_label or None
+                                    )
+                                    detection['bird_song_file_name'] = fnames['audio_filename']
+                                    detection['spectrogram_file_name'] = fnames['spectrogram_filename']
+                                handle_detection(detection, file_path, thread_logger)
+                            except Exception as e:
+                                processing_failed = True
+                                log_fd_exhaustion_if_needed(e, thread_logger, 'detection_processing', extra={
+                                    'file': file_name,
+                                    'species': detection.get('common_name', 'unknown'),
+                                })
+                                thread_logger.error("Detection processing failed", extra={
+                                    'file': file_name,
+                                    'species': detection.get('common_name', 'unknown'),
+                                    'error': str(e)
+                                }, exc_info=True)
+
+                except Exception as e:
+                    processing_failed = True
+                    log_fd_exhaustion_if_needed(e, thread_logger, 'recording_processing', extra={
+                        'file': file_name,
+                    })
+                    thread_logger.error("Recording processing failed", extra={
                         'file': file_name,
                         'error': str(e)
+                    }, exc_info=True)
+                finally:
+                    # Clean up processed file. Even when post-analysis handling
+                    # fails, do not leave the same WAV queued for endless retries.
+                    thread_logger.debug("Audio file processed", extra={
+                        'file': file_name,
+                        'detections': len(detections) if detections else 0,
+                        'processing_failed': processing_failed
                     })
+                    remove_recording_from_queue(file_path, file_name, thread_logger)
 
             # Sleep before next scan (only if no files were found)
             if not candidates:
                 time.sleep(FILE_SCAN_INTERVAL)
 
         except Exception as e:
+            log_fd_exhaustion_if_needed(e, thread_logger, 'processing_loop')
             thread_logger.error("Processing error", extra={
                 'error': str(e)
             }, exc_info=True)
@@ -720,6 +898,9 @@ def process_audio_file(audio_file_path: str) -> list[dict[str, Any]]:
                 return []
 
         except requests.exceptions.ConnectionError as e:
+            log_fd_exhaustion_if_needed(e, logger, 'birdnet_request', extra={
+                'file': file_name,
+            })
             # Server not ready yet (still warming up) - retry with backoff
             if attempt < BIRDNET_MAX_RETRIES - 1:
                 wait_time = BIRDNET_RETRY_BASE_DELAY ** (attempt + 1)  # 2, 4, 8, 16, 32 seconds
@@ -739,6 +920,9 @@ def process_audio_file(audio_file_path: str) -> list[dict[str, Any]]:
                 return []
 
         except requests.exceptions.Timeout as e:
+            log_fd_exhaustion_if_needed(e, logger, 'birdnet_request', extra={
+                'file': file_name,
+            })
             # Request timed out - don't retry, server is likely overloaded
             logger.error("BirdNet service request timed out", extra={
                 'file': file_name,
@@ -748,6 +932,9 @@ def process_audio_file(audio_file_path: str) -> list[dict[str, Any]]:
             return []
 
         except requests.RequestException as e:
+            log_fd_exhaustion_if_needed(e, logger, 'birdnet_request', extra={
+                'file': file_name,
+            })
             logger.error("BirdNet service request failed", extra={
                 'file': file_name,
                 'error': str(e)
@@ -755,6 +942,9 @@ def process_audio_file(audio_file_path: str) -> list[dict[str, Any]]:
             return []
 
         except Exception as e:
+            log_fd_exhaustion_if_needed(e, logger, 'birdnet_request', extra={
+                'file': file_name,
+            })
             logger.error("Unexpected error calling BirdNet service", extra={
                 'file': file_name,
                 'error': str(e)

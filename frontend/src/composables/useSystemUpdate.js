@@ -196,7 +196,19 @@ export function useSystemUpdate() {
 
     logger.info('Triggering HA addon update...', { baselineVersion })
     longApi.post('/system/update').catch(err => {
-      logger.warn('HA update dispatch error suppressed (poll detects completion)', err)
+      // Backend returns 502 with {error: "..."} for known dispatch failures
+      // (slug lookup, entity not ready, HTTP error from HA Core). Surface
+      // those; for raw connection drops (Supervisor killed us), keep polling.
+      const backendError = err.response?.data?.error
+      if (backendError) {
+        logger.error('HA update dispatch failed', err)
+        stopHaPoll()
+        serviceRestart.reset()
+        updating.value = false
+        setStatus('error', `Update failed: ${backendError}`)
+      } else {
+        logger.warn('HA update dispatch connection lost (poll detects completion)', err)
+      }
     })
 
     stopHaPoll()

@@ -2,7 +2,7 @@
  * Tests for useBirdCharts composable
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { ref, nextTick } from 'vue'
+import { ref } from 'vue'
 import { useBirdCharts } from '@/composables/useBirdCharts'
 
 // Mock Chart.js
@@ -69,6 +69,8 @@ describe('useBirdCharts', () => {
       expect(charts).toHaveProperty('createTotalObservationsChart')
       expect(charts).toHaveProperty('createHourlyActivityHeatmap')
       expect(charts).toHaveProperty('createHourlyActivityChart')
+      expect(charts).toHaveProperty('speciesAxisLayout')
+      expect(charts).toHaveProperty('timeAxisLayout')
     })
 
     it('colorPalette has expected colors', () => {
@@ -184,9 +186,59 @@ describe('useBirdCharts', () => {
       await charts.createHourlyActivityHeatmap(canvasRef, mockData)
 
       const chartCall = Chart.mock.calls[0][1]
-      expect(chartCall.plugins).toHaveLength(2)
+      expect(chartCall.plugins).toHaveLength(3)
       expect(chartCall.plugins[0].id).toBe('customGrid')
       expect(chartCall.plugins[1].id).toBe('matrixLabels')
+      expect(chartCall.plugins[2].id).toBe('timeLayoutEmitter')
+    })
+
+    it('renders x-axis tick text transparent (overlay draws real labels)', async () => {
+      const canvasRef = ref(mockCanvas)
+      await charts.createHourlyActivityHeatmap(canvasRef, mockData)
+
+      const chartCall = Chart.mock.calls[0][1]
+      expect(chartCall.options.scales.x.ticks.color).toBe('transparent')
+      expect(chartCall.options.scales.x.labels).toHaveLength(24)
+      expect(chartCall.options.scales.x.labels[0]).toBe('00:00')
+    })
+
+    it('timeLayoutEmitter populates timeAxisLayout from the x scale', async () => {
+      const canvasRef = ref(mockCanvas)
+      await charts.createHourlyActivityHeatmap(canvasRef, mockData, { date: '2024-01-15' })
+
+      const chartCall = Chart.mock.calls[0][1]
+      const emitter = chartCall.plugins.find(p => p.id === 'timeLayoutEmitter')
+      expect(emitter).toBeTruthy()
+
+      // chartArea is the source the matrix cells tile from: 480px wide / 24
+      // = 20px columns starting at left=50; bottom (cells end) at y=200.
+      const fakeChart = {
+        chartArea: { left: 50, right: 530, top: 0, bottom: 200, width: 480 },
+        scales: { x: { height: 30 } }
+      }
+
+      emitter.afterLayout(fakeChart)
+
+      const layout = charts.timeAxisLayout.value
+      expect(layout.ticks).toHaveLength(24)
+      // Cell centers: left + (i + 0.5) * colWidth.
+      expect(layout.ticks[0]).toEqual({ x: 60, label: '00:00', hour: 0 })
+      expect(layout.ticks[23]).toEqual({ x: 520, label: '23:00', hour: 23 })
+      expect(layout.axisLeft).toBe(50)
+      expect(layout.axisTop).toBe(200)
+      expect(layout.axisHeight).toBe(30)
+      expect(layout.colWidth).toBe(20)
+      expect(layout.date).toBe('2024-01-15')
+    })
+
+    it('timeLayoutEmitter is a no-op when the x scale is missing', async () => {
+      const canvasRef = ref(mockCanvas)
+      await charts.createHourlyActivityHeatmap(canvasRef, mockData)
+
+      const emitter = Chart.mock.calls[0][1].plugins.find(p => p.id === 'timeLayoutEmitter')
+      const before = charts.timeAxisLayout.value
+      emitter.afterLayout({ scales: {} })
+      expect(charts.timeAxisLayout.value).toBe(before)
     })
 
     it('creates 24 x species count data points', async () => {
@@ -235,6 +287,71 @@ describe('useBirdCharts', () => {
           })
         })
       )
+    })
+
+    it('onClick deep-links a non-empty cell via onCellClick', async () => {
+      const onCellClick = vi.fn()
+      const canvasRef = ref(mockCanvas)
+      await charts.createHourlyActivityHeatmap(canvasRef, mockData, { date: '2024-01-15', onCellClick })
+
+      const { onClick } = Chart.mock.calls[0][1].options
+      onClick({}, [], {
+        getElementsAtEventForMode: vi.fn(() => [{ index: 0 }]),
+        data: { datasets: [{ data: [{ v: 62, hour: 14, commonName: 'American Robin' }] }] }
+      })
+
+      expect(onCellClick).toHaveBeenCalledWith({
+        commonName: 'American Robin',
+        hour: 14,
+        count: 62,
+        date: '2024-01-15'
+      })
+    })
+
+    it('onClick ignores an empty cell (v <= 0)', async () => {
+      const onCellClick = vi.fn()
+      const canvasRef = ref(mockCanvas)
+      await charts.createHourlyActivityHeatmap(canvasRef, mockData, { onCellClick })
+
+      const { onClick } = Chart.mock.calls[0][1].options
+      onClick({}, [], {
+        getElementsAtEventForMode: vi.fn(() => [{ index: 0 }]),
+        data: { datasets: [{ data: [{ v: 0, hour: 3, commonName: 'Robin' }] }] }
+      })
+
+      expect(onCellClick).not.toHaveBeenCalled()
+    })
+
+    it('onClick is inert when no onCellClick is provided', async () => {
+      const canvasRef = ref(mockCanvas)
+      await charts.createHourlyActivityHeatmap(canvasRef, mockData)
+
+      const { onClick } = Chart.mock.calls[0][1].options
+      expect(() => onClick({}, [], {
+        getElementsAtEventForMode: vi.fn(() => []),
+        data: { datasets: [{ data: [] }] }
+      })).not.toThrow()
+    })
+
+    it('onHover shows a pointer cursor only over a clickable cell', async () => {
+      const onCellClick = vi.fn()
+      const canvasRef = ref(mockCanvas)
+      await charts.createHourlyActivityHeatmap(canvasRef, mockData, { onCellClick })
+
+      const { onHover } = Chart.mock.calls[0][1].options
+      const target = { style: { cursor: '' } }
+
+      onHover({ native: { target } }, [], {
+        getElementsAtEventForMode: vi.fn(() => [{ index: 0 }]),
+        data: { datasets: [{ data: [{ v: 5 }] }] }
+      })
+      expect(target.style.cursor).toBe('pointer')
+
+      onHover({ native: { target } }, [], {
+        getElementsAtEventForMode: vi.fn(() => []),
+        data: { datasets: [{ data: [] }] }
+      })
+      expect(target.style.cursor).toBe('default')
     })
   })
 

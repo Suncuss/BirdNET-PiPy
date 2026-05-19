@@ -2,8 +2,61 @@
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-18
+
+- Added an "Audio Status" notification trigger (Settings → Notifications): when an Apprise URL is configured and the toggle is on, audio-pipeline degradation and recovery are pushed as notifications — one alert on degrade/stop (with the affected source and last ffmpeg error), an escalation if it worsens to fully stopped, and one recovery alert. Flapping streams are debounced (10-min cooldown) and startup never alerts. Off by default; the Notifications section subtitle is broadened to "Detection and system status alerts"
+- Made the Hourly Activity heatmap a drill-down into the Table: clicking an hour label filters the Table to that day/hour, clicking a cell also filters by species. Adds a desktop "Hour" dropdown and an `hour` (0–23) param on `/api/detections`. Clearing filters now also strips the `date`/`hour`/`species` URL params, so a shared "cleared" view stays cleared
+- Upgraded the frontend build to Vite 7 and `@vitejs/plugin-vue` 6, dropping the no-longer-needed `esbuild >=0.25.0` override
+- Replaced the Werkzeug dev server with gunicorn + a single gevent WebSocket worker for the API container, dropping the `allow_unsafe_werkzeug` override. The single worker is intentional: live detections fan out via in-process `socketio.emit` (no Redis queue), so extra workers would silently drop Live Feed broadcasts — heavy maintenance jobs now cooperatively yield to keep it responsive. Added an unauthenticated `/api/health` route with a docker-compose healthcheck, and raised the nginx `/socket.io/` proxy timeout to 3600s so idle Live Feed sockets aren't reaped. Local `python -m core.api` still uses the threading dev server
+
+## [0.6.10] - 2026-05-12
+
+- Fixed Hourly Activity bar chart and heatmap tooltips still showing raw 24-hour labels regardless of the time-format toggle — they now run through the same `formatHourLabel` helper the x-axes already use, so 12-hour users see "2 PM" and 24-hour users see "14:00" consistently between axis and hover (follow-up on #49)
+
+## [0.6.9] - 2026-05-12
+
+- Extended the time-format preference to the Charts and Table date pickers — 12-hour users still see MM/DD/YYYY, 24-hour users now see ISO YYYY-MM-DD instead of the hardcoded US layout. The Table's From/To row also stretches edge-to-edge on mobile so the To picker's right edge lines up with the Species input below instead of clumping left (follow-up on #49)
+- Added a "Use 24-hour Clock" toggle in Settings → Personalization that drives every time-of-day display across the app — Recent Detections list, Latest Observation timestamp, Table, Most Active Hour summary, and the Hourly Activity bar chart and heatmap x-axes. Defaults to the browser's locale on first run; the setting is only persisted once the user explicitly flips it, so existing installs aren't migrated and the toggle reflects what the OS already shows. Fixes #49, where the Hourly Activity bar chart hardcoded 12-hour AM/PM regardless of OS setting while sibling charts and lists deferred to the browser locale — producing a mix of 12h and 24h labels on the same Dashboard. Also fixes an `Intl.DateTimeFormat` quirk where `hour12: false` on `en-US` rendered midnight as "24:30" instead of "00:30" (now uses explicit `hourCycle: 'h23'`)
+- Fixed Apprise notifications ignoring the Bird Name Language setting — title and body always rendered the English string straight off the model output; they now follow the user's chosen language via the same scientific-name lookup the web UI uses (#47)
+- Fixed inconsistent Bird Name Language rendering across the web UI and duplicate-species rows on the Dashboard. ~17% of V2 species (e.g. "Eurasian Blackbird" for Turdus merula, vs the species table's canonical "Common Blackbird") missed the English-keyed translation and rendered in English on the Activity Overview, Charts, and Heatmap; the same species emitted under different English names by V2 vs V3 also appeared as two rows after a model switch — one translated, one not. Bird-name routes now resolve any known English variant (canonical, label_en, label_en_uk) to a stable scientific name at the API boundary, aggregations group by that key, and `/api/bird/<any-english-variant>` serves the combined V2+V3 history (#48)
+- Added a WebSocket handshake regression test that exercises the real Flask-SocketIO test client instead of mocking `socketio` — would have caught the 0.6.8 Live Feed outage where Flask-SocketIO 5.5.1 crashed on Flask 3.1.3's read-only `RequestContext.session` (b6b0f26)
+- Made species names on the Bird Activity Overview's Total Detections bar chart clickable — y-axis labels now link to each species's detail page on both the Dashboard and Charts views, and middle-click / "open in new tab" / keyboard focus all work as on any other text link. Implemented as an HTML overlay over the Chart.js canvas (canvas-rendered text can't be hyperlinks) with the overlay font matched to Chart.js's tick font so the labels don't render wider than they used to
+
+## [0.6.8] - 2026-05-08
+
+- Added a "customize image" modal on bird detail pages — pick a different Wikimedia thumbnail per species; the choice persists across redeploys as a sidecar and the gallery is live-patched on apply without a reload. Wikimedia rate-limits (429) now surface as a friendly retry-later message
+- Added click-to-pause on the live spectrogram canvas — clicking pauses playback (preserving position); a suspended AudioContext is also resumed on play, so backgrounded tabs no longer render silent visuals
+- Refined the Latest Observation live spectrogram to match the saved PNG — uses matplotlib's actual `Greens_r` ramp and per-playback rolling-peak dBFS normalization, with a midtone gamma lift and light analyser smoothing for a soft noise floor
+- Reduced backend memory usage by ~100 MB across the three Python processes — multi-language species table now uses columnar arrays with lazy per-language loading (active per-process footprint drops from ~21 MB to ~4 MB), shared strings are interned, and the inference server no longer reads the multi-language CSV
+- Fixed Live Feed breaking behind HTTPS-terminating reverse proxies and Cloudflare tunnels — inner nginx was overwriting `X-Forwarded-Proto` with `http`, causing Engine.IO to reject the browser's `https://` origin on `/socket.io/` POSTs; the header is now passed through verbatim
+- Fixed the dashboard's Latest Observation spectrogram axis starting above 0 Hz — live canvas and saved PNG now align at 0 Hz
+- Bumped Flask-SocketIO to 5.6.1 for Flask 3.1.3 compatibility
+- Bumped frontend dependencies to clear 25 Dependabot alerts
+
+## [0.6.7] - 2026-05-03
+
+- Fixed audio recordings getting stuck in an infinite reprocess loop when post-analysis steps (audio extraction, spectrogram generation, BirdWeather upload, etc.) raised — the same WAV would be re-collected on the next scan and retried forever, spamming logs with duplicate "Bird detected" lines and amplifying the FD pressure that caused the failure. The processing loop now isolates per-file and per-detection failures and always removes the WAV in a `finally` block (#46)
+- Added file descriptor exhaustion diagnostics — when an EMFILE/ENFILE error is detected anywhere in the recording or processing pipeline, the next log line dumps the FD limit, current FD count, a sample of open FDs with their `/proc/self/fd` targets, and active child PIDs (catches zombie ffmpeg/sox processes holding pipes via leaked refs). Rate-limited per stage. Errno detection walks `__cause__`/`__context__`/`args` plus urllib3-style `.reason`, so EMFILE buried inside a `requests.ConnectionError(MaxRetryError(...))` chain is caught
+- Added recency-based recording protection — the latest N recordings per species are now retained alongside the existing top-N-by-confidence rule via union, so frequent recent activity isn't lost when its confidences fall below the top-N cut
+- Hid the Bird Activity Overview reverse toggle on days with no detections, since reversing an empty list is a no-op
+- Replaced the camera icon on bird detail pages with an upload arrow that animates open on hover to reveal "Upload custom image"
+- Redesigned the dashboard's Latest Observation card — bird image and text stack now sit side-by-side instead of vertically; the scientific name is shown again as a link to the bird's detail page, and the timestamp and confidence link to the Table view; long species names wrap to a second line instead of being clipped mid-word; a thin vertical divider separates the bird identity area from the spectrogram, which sits visually centered between the divider and the card edge
+- Polished the Latest Observation live spectrogram rendering — palette now matches the static spectrogram's `Greens_r` style (light background, dark green peaks), the canvas renders at 2× internal resolution for sharper downsampled output, and each new column is drawn as a horizontal gradient from the previous frame's intensities so time-axis transitions are continuous rather than stepped
+
+## [0.6.6] - 2026-04-19
+
+- Added a model picker step to the setup wizard and a one-time welcome animation after setup completes
+- Fixed setup wizard silently reopening on existing installs and overwriting the chosen model and species filter threshold
+- Added a Home Assistant add-on pointer in the README (alexbelgium's hassio-addons repo)
+
+## [0.6.5] - 2026-04-18
+
+- Fixed Pi OS Lite boot failing when a stale PulseAudio socket was left behind after the daemon died — the service now probes the existing socket with `pactl info` and resets stale runtime files before starting system-wide PulseAudio, rather than booting containers that later crash in ffmpeg with "No such process" (#42)
+
+## [0.6.4] - 2026-04-17
+
 - Added in-app update support for the Home Assistant addon — the Settings update card now checks the addon repo for new versions and triggers Supervisor to install them, replacing the "go to the Add-on Store" instruction
-- Replaced the brittle "interpret dispatch errors" approach to detecting HA update completion with a fire-and-forget trigger plus 10-second polling of `/system/version`; the page auto-reloads once the new addon container reports its version, with a 10-minute fallback message
+- Replaced the brittle "interpret dispatch errors" approach to detecting HA update completion with a poll of `/system/version` every 10 seconds; the page auto-reloads once the new addon container reports its version, with a 10-minute fallback message. Real backend errors (slug lookup, entity not ready) are surfaced immediately instead of waiting out the timeout
 - Cleaned up Settings in HA mode: dropped the redundant "HA mode" badge and addon-repo link, kept the source-repo and addon-repo links side-by-side
 
 ## [0.6.3] - 2026-04-13

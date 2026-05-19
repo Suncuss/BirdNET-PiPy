@@ -72,10 +72,14 @@ export function useChartHelpers() {
 
   /**
    * Transform bird activity data into matrix chart format.
-   * Creates a flat array of data points with x (hour), y (species), v (value), and rowStats.
+   * Creates a flat array of data points with x (hour label), y (display
+   * species), v (value), and rowStats. Also carries `hour` (0-23 integer)
+   * and `commonName` (the untranslated species key, = d.species) so a cell
+   * click can deep-link the Table view to that species + hour without
+   * reverse-mapping the localized display name back to a filter key.
    * @param {Array<{species: string, displaySpecies?: string, hourlyActivity: number[]}>} data - Bird activity data
    * @param {Array<{min: number, max: number}>} rowStats - Pre-calculated row statistics
-   * @returns {Array<{x: string, y: string, v: number, rowStats: object}>} Matrix data points
+   * @returns {Array<{x: string, y: string, v: number, hour: number, commonName: string, rowStats: object}>} Matrix data points
    */
   const prepareDataForCategoryMatrix = (data, rowStats) => {
     const hours = generateHourLabels()
@@ -84,6 +88,8 @@ export function useChartHelpers() {
         x: hours[hourIndex],
         y: getDisplaySpeciesName(d),
         v: value,
+        hour: hourIndex,
+        commonName: d.species,
         rowStats: rowStats[index]
       }))
     )

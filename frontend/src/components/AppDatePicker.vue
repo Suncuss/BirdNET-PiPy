@@ -4,7 +4,7 @@
     :disabled="disabled"
     :min-date="minDateObj"
     :max-date="maxDateObj"
-    date-format="mm/dd/yy"
+    :date-format="dateFormat"
     show-icon
     icon-display="input"
     :pt="passThrough"
@@ -15,6 +15,13 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import DatePicker from 'primevue/datepicker'
+import { useTimeFormat } from '@/composables/useTimeFormat'
+
+const { hour12 } = useTimeFormat()
+
+// Match the date layout to the time-format preference: 12h users (typically US)
+// get MM/DD/YYYY; 24h users get ISO YYYY-MM-DD.
+const dateFormat = computed(() => (hour12.value ? 'mm/dd/yy' : 'yy-mm-dd'))
 
 const props = defineProps({
   modelValue: {
@@ -37,6 +44,13 @@ const props = defineProps({
     type: String,
     default: 'default',
     validator: (v) => ['default', 'large'].includes(v)
+  },
+  // When true, fills the parent on mobile (block + w-full) and falls back to the
+  // natural fixed width at the `sm` breakpoint. Used by Table.vue so the From/To
+  // pair stretches to the row edges instead of clumping left inside flex-1 cells.
+  fluid: {
+    type: Boolean,
+    default: false
   }
 })
 
@@ -88,10 +102,22 @@ const onDateSelect = (date) => {
 // Size classes
 const heightClass = computed(() => props.size === 'large' ? 'h-10' : 'h-9')
 
+// ISO YYYY-MM-DD renders wider than MM/DD/YYYY in the input — the leading 4-digit
+// year was clipping against the calendar-icon button at 140px. Listed as literal
+// class strings (not interpolated) so Tailwind's JIT can see them.
+const rootSizingClass = computed(() => {
+  if (props.fluid) {
+    return hour12.value
+      ? 'block w-full sm:inline-block sm:w-[140px]'
+      : 'block w-full sm:inline-block sm:w-[150px]'
+  }
+  return hour12.value ? 'inline-block w-[140px]' : 'inline-block w-[150px]'
+})
+
 // Custom styling to match existing Tailwind design
 const passThrough = computed(() => ({
   root: {
-    class: 'relative inline-block w-[140px] font-sans'
+    class: `relative ${rootSizingClass.value} font-sans`
   },
   pcInputText: {
     root: {

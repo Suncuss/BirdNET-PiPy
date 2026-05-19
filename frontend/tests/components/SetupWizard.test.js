@@ -65,6 +65,31 @@ describe('SetupWizard', () => {
     await nextButton.trigger('click')
   }
 
+  const goToStep3 = async (wrapper) => {
+    await goToStep2(wrapper)
+    const nextButton = wrapper.findAll('button').find(b => b.text() === 'Next')
+    await nextButton.trigger('click')
+    await flushPromises()
+  }
+
+  const setupSaveMocks = ({
+    initialAudio = { sources: [], next_source_id: 0 },
+    putResponse = { settings: { location: { configured: true, timezone: 'America/New_York' } }, changes: { full_restart_required: true } }
+  } = {}) => {
+    const captured = { settings: null }
+    mockApi.get.mockResolvedValueOnce({
+      data: {
+        location: { latitude: 0, longitude: 0, configured: false },
+        audio: initialAudio
+      }
+    })
+    mockApi.put.mockImplementationOnce((url, settings) => {
+      captured.settings = settings
+      return Promise.resolve({ data: putResponse })
+    })
+    return captured
+  }
+
   describe('Step 1: Location', () => {
     it('renders step 1 when visible', () => {
       const wrapper = mountWizard()
@@ -186,35 +211,50 @@ describe('SetupWizard', () => {
     })
   })
 
+  describe('Step 3: Model', () => {
+    it('shows both model options with preview/RAM note', async () => {
+      const wrapper = mountWizard()
+      await goToStep3(wrapper)
+
+      expect(wrapper.text()).toContain('Detection Model')
+      expect(wrapper.text()).toContain('BirdNET v2.4')
+      expect(wrapper.text()).toContain('BirdNET v3.0')
+      expect(wrapper.text()).toContain('Preview')
+      expect(wrapper.text()).toContain('more RAM')
+      expect(wrapper.text()).toContain('You can change this later in Settings')
+    })
+
+    it('defaults to v2.4 selection', async () => {
+      const wrapper = mountWizard()
+      await goToStep3(wrapper)
+
+      const v24Card = wrapper.findAll('button').find(b => b.text().includes('BirdNET v2.4'))
+      expect(v24Card.classes()).toContain('border-green-500')
+    })
+
+    it('navigates back to step 2 on Back click', async () => {
+      const wrapper = mountWizard()
+      await goToStep3(wrapper)
+
+      const backButton = wrapper.findAll('button').find(b => b.text() === 'Back')
+      await backButton.trigger('click')
+
+      expect(wrapper.text()).toContain('Audio Source')
+    })
+  })
+
   describe('Save Flow', () => {
     it('saves location and creates mic source on fresh install', async () => {
-      let savedSettings = null
-      mockApi.get.mockResolvedValueOnce({
-        data: {
-          location: { latitude: 0, longitude: 0, configured: false },
-          audio: {
-            sources: [],
-            next_source_id: 0
-          }
-        }
-      })
-      mockApi.put.mockImplementationOnce((url, settings) => {
-        savedSettings = settings
-        return Promise.resolve({
-          data: {
-            settings: { location: { configured: true, timezone: 'America/New_York' } },
-            changes: { full_restart_required: true }
-          }
-        })
-      })
+      const captured = setupSaveMocks()
 
       const wrapper = mountWizard()
-      await goToStep2(wrapper)
+      await goToStep3(wrapper)
 
       const finishButton = wrapper.findAll('button').find(b => b.text() === 'Finish')
       await finishButton.trigger('click')
       await flushPromises()
 
+      const savedSettings = captured.settings
       expect(savedSettings.location.latitude).toBe(42.47)
       expect(savedSettings.location.longitude).toBe(-76.45)
       expect(savedSettings.location.configured).toBe(true)
@@ -235,26 +275,8 @@ describe('SetupWizard', () => {
     })
 
     it('saves RTSP source only (no mic) on fresh install', async () => {
-      let savedSettings = null
-      mockApi.get.mockResolvedValueOnce({
-        data: {
-          location: { latitude: 0, longitude: 0, configured: false },
-          audio: {
-            sources: [],
-            next_source_id: 0
-          }
-        }
-      })
+      const captured = setupSaveMocks()
       mockApi.post.mockResolvedValueOnce({ data: { success: true } })
-      mockApi.put.mockImplementationOnce((url, settings) => {
-        savedSettings = settings
-        return Promise.resolve({
-          data: {
-            settings: { location: { configured: true, timezone: 'America/New_York' } },
-            changes: { full_restart_required: true }
-          }
-        })
-      })
 
       const wrapper = mountWizard()
       await goToStep2(wrapper)
@@ -264,10 +286,15 @@ describe('SetupWizard', () => {
 
       await wrapper.find('#rtsp-url').setValue('rtsp://192.168.1.100/stream')
 
+      const nextButton = wrapper.findAll('button').find(b => b.text() === 'Next')
+      await nextButton.trigger('click')
+      await flushPromises()
+
       const finishButton = wrapper.findAll('button').find(b => b.text() === 'Finish')
       await finishButton.trigger('click')
       await flushPromises()
 
+      const savedSettings = captured.settings
       expect(savedSettings.audio.sources).toHaveLength(1)
       const rtspSource = savedSettings.audio.sources[0]
       expect(rtspSource.type).toBe('rtsp')
@@ -278,29 +305,16 @@ describe('SetupWizard', () => {
     })
 
     it('re-enables existing RTSP source instead of duplicating on retry', async () => {
-      let savedSettings = null
-      mockApi.get.mockResolvedValueOnce({
-        data: {
-          location: { latitude: 0, longitude: 0, configured: false },
-          audio: {
-            sources: [
-              { id: 'source_0', type: 'pulseaudio', device: 'default', label: 'Local Mic', enabled: false },
-              { id: 'source_1', type: 'rtsp', url: 'rtsp://192.168.1.100/stream', label: 'Cam', enabled: false }
-            ],
-            next_source_id: 2
-          }
+      const captured = setupSaveMocks({
+        initialAudio: {
+          sources: [
+            { id: 'source_0', type: 'pulseaudio', device: 'default', label: 'Local Mic', enabled: false },
+            { id: 'source_1', type: 'rtsp', url: 'rtsp://192.168.1.100/stream', label: 'Cam', enabled: false }
+          ],
+          next_source_id: 2
         }
       })
       mockApi.post.mockResolvedValueOnce({ data: { success: true } })
-      mockApi.put.mockImplementationOnce((url, settings) => {
-        savedSettings = settings
-        return Promise.resolve({
-          data: {
-            settings: { location: { configured: true, timezone: 'America/New_York' } },
-            changes: { full_restart_required: true }
-          }
-        })
-      })
 
       const wrapper = mountWizard()
       await goToStep2(wrapper)
@@ -309,10 +323,15 @@ describe('SetupWizard', () => {
       await streamCard.trigger('click')
       await wrapper.find('#rtsp-url').setValue('rtsp://192.168.1.100/stream')
 
+      const nextButton = wrapper.findAll('button').find(b => b.text() === 'Next')
+      await nextButton.trigger('click')
+      await flushPromises()
+
       const finishButton = wrapper.findAll('button').find(b => b.text() === 'Finish')
       await finishButton.trigger('click')
       await flushPromises()
 
+      const savedSettings = captured.settings
       expect(savedSettings.audio.sources).toHaveLength(2)
 
       const rtspSource = savedSettings.audio.sources.find(s => s.type === 'rtsp')
@@ -322,25 +341,47 @@ describe('SetupWizard', () => {
       expect(savedSettings.audio.next_source_id).toBe(2)
     })
 
+    it('defaults model to birdnet v2.4 with matching filter threshold', async () => {
+      const captured = setupSaveMocks()
+
+      const wrapper = mountWizard()
+      await goToStep3(wrapper)
+
+      const finishButton = wrapper.findAll('button').find(b => b.text() === 'Finish')
+      await finishButton.trigger('click')
+      await flushPromises()
+
+      expect(captured.settings.model.type).toBe('birdnet')
+      expect(captured.settings.detection.species_filter_threshold).toBe(0.03)
+    })
+
+    it('saves v3.0 selection with matching filter threshold', async () => {
+      const captured = setupSaveMocks()
+
+      const wrapper = mountWizard()
+      await goToStep3(wrapper)
+
+      const v3Card = wrapper.findAll('button').find(b => b.text().includes('BirdNET v3.0'))
+      await v3Card.trigger('click')
+
+      const finishButton = wrapper.findAll('button').find(b => b.text() === 'Finish')
+      await finishButton.trigger('click')
+      await flushPromises()
+
+      expect(captured.settings.model.type).toBe('birdnet_v3')
+      expect(captured.settings.detection.species_filter_threshold).toBe(0.15)
+    })
+
     it('shows error and stays on wizard when timezone lookup fails', async () => {
-      mockApi.get.mockResolvedValueOnce({
-        data: {
-          location: { latitude: 0, longitude: 0, configured: false },
-          audio: {
-            sources: [],
-            next_source_id: 0
-          }
-        }
-      })
-      mockApi.put.mockResolvedValueOnce({
-        data: {
+      setupSaveMocks({
+        putResponse: {
           settings: { location: { configured: true } },
           changes: { full_restart_required: true }
         }
       })
 
       const wrapper = mountWizard()
-      await goToStep2(wrapper)
+      await goToStep3(wrapper)
 
       const finishButton = wrapper.findAll('button').find(b => b.text() === 'Finish')
       await finishButton.trigger('click')

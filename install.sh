@@ -748,6 +748,7 @@ $ACTUAL_USER ALL=(ALL) NOPASSWD: $(_bin mkdir) -p /run/pulse
 $ACTUAL_USER ALL=(ALL) NOPASSWD: $(_bin chown) pulse\:pulse-access /run/pulse
 $ACTUAL_USER ALL=(ALL) NOPASSWD: $(_bin chmod) 755 /run/pulse
 $ACTUAL_USER ALL=(ALL) NOPASSWD: $(_bin rm) -f /run/pulse/native
+$ACTUAL_USER ALL=(ALL) NOPASSWD: $(_bin rm) -f /run/pulse/pid
 
 # Enable swap (optional, only if /swapfile-birdnet-pipy exists)
 $ACTUAL_USER ALL=(ALL) NOPASSWD: $(_bin swapon) /swapfile-birdnet-pipy
