@@ -25,6 +25,14 @@ vi.mock('chart.js/auto', () => {
   return { default: ChartMock }
 })
 
+// useBirdCharts calls useRouter() so it can deep-link heatmap-cell clicks
+// to the filtered Table view. The router push is asserted in the heatmap
+// onClick tests below.
+const mockRouter = vi.hoisted(() => ({ push: vi.fn() }))
+vi.mock('vue-router', () => ({
+  useRouter: () => mockRouter
+}))
+
 describe('useBirdCharts', () => {
   let charts
   let mockCanvas
@@ -289,10 +297,9 @@ describe('useBirdCharts', () => {
       )
     })
 
-    it('onClick deep-links a non-empty cell via onCellClick', async () => {
-      const onCellClick = vi.fn()
+    it('onClick deep-links a non-empty cell to the filtered Table view', async () => {
       const canvasRef = ref(mockCanvas)
-      await charts.createHourlyActivityHeatmap(canvasRef, mockData, { date: '2024-01-15', onCellClick })
+      await charts.createHourlyActivityHeatmap(canvasRef, mockData, { date: '2024-01-15' })
 
       const { onClick } = Chart.mock.calls[0][1].options
       onClick({}, [], {
@@ -300,18 +307,15 @@ describe('useBirdCharts', () => {
         data: { datasets: [{ data: [{ v: 62, hour: 14, commonName: 'American Robin' }] }] }
       })
 
-      expect(onCellClick).toHaveBeenCalledWith({
-        commonName: 'American Robin',
-        hour: 14,
-        count: 62,
-        date: '2024-01-15'
+      expect(mockRouter.push).toHaveBeenCalledWith({
+        name: 'Table',
+        query: { hour: 14, date: '2024-01-15', species: 'American Robin' }
       })
     })
 
     it('onClick ignores an empty cell (v <= 0)', async () => {
-      const onCellClick = vi.fn()
       const canvasRef = ref(mockCanvas)
-      await charts.createHourlyActivityHeatmap(canvasRef, mockData, { onCellClick })
+      await charts.createHourlyActivityHeatmap(canvasRef, mockData)
 
       const { onClick } = Chart.mock.calls[0][1].options
       onClick({}, [], {
@@ -319,24 +323,12 @@ describe('useBirdCharts', () => {
         data: { datasets: [{ data: [{ v: 0, hour: 3, commonName: 'Robin' }] }] }
       })
 
-      expect(onCellClick).not.toHaveBeenCalled()
-    })
-
-    it('onClick is inert when no onCellClick is provided', async () => {
-      const canvasRef = ref(mockCanvas)
-      await charts.createHourlyActivityHeatmap(canvasRef, mockData)
-
-      const { onClick } = Chart.mock.calls[0][1].options
-      expect(() => onClick({}, [], {
-        getElementsAtEventForMode: vi.fn(() => []),
-        data: { datasets: [{ data: [] }] }
-      })).not.toThrow()
+      expect(mockRouter.push).not.toHaveBeenCalled()
     })
 
     it('onHover shows a pointer cursor only over a clickable cell', async () => {
-      const onCellClick = vi.fn()
       const canvasRef = ref(mockCanvas)
-      await charts.createHourlyActivityHeatmap(canvasRef, mockData, { onCellClick })
+      await charts.createHourlyActivityHeatmap(canvasRef, mockData)
 
       const { onHover } = Chart.mock.calls[0][1].options
       const target = { style: { cursor: '' } }

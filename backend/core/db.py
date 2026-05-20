@@ -69,8 +69,17 @@ class DatabaseManager:
 
     @contextmanager
     def get_db_connection(self):
-        conn = sqlite3.connect(self.db_path)
+        # busy_timeout: with WAL plus multiple connections (executor lane +
+        # main pipeline), readers and writers can momentarily contend. Wait
+        # up to 30s for the lock rather than failing fast with SQLITE_BUSY.
+        # synchronous=NORMAL: skip fsync per transaction; sqlite still
+        # syncs on WAL checkpoint. Cannot corrupt the DB, but a power loss
+        # can drop the last few committed detections. Acceptable for this
+        # app — detections are continuous and eventual-consistency-tolerant.
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row  # This line ensures we get dictionaries instead of tuples
+        conn.execute("PRAGMA busy_timeout = 30000")
+        conn.execute("PRAGMA synchronous = NORMAL")
         try:
             yield conn
         finally:
@@ -79,6 +88,15 @@ class DatabaseManager:
     def initialize_database(self):
         with self.get_db_connection() as conn:
             cursor = conn.cursor()
+            # journal_mode=WAL is a database-level property persisted into
+            # the DB file; setting it once at init is sufficient. WAL lets
+            # readers run concurrently with a writer (and with each other),
+            # which is the main reason we can safely move DB work onto a
+            # separate executor lane without serializing every read.
+            # synchronous and busy_timeout are per-connection, set in
+            # get_db_connection() — no value in setting them here on a
+            # connection that's about to be closed.
+            cursor.execute("PRAGMA journal_mode = WAL")
             cursor.executescript(DATABASE_SCHEMA)
 
             # Auto-migrate: add 'extra' column if missing (for existing databases)
@@ -135,6 +153,9 @@ class DatabaseManager:
             return cur.lastrowid
 
     def get_latest_detections(self, limit=15, unique=False):
+        if limit <= 0:
+            return []
+
         # Use window function to deduplicate detections.
         # unique=False (default): highest confidence per (group_timestamp, species_key)
         # unique=True: most recent detection per species (one row per species_key)
@@ -147,7 +168,7 @@ class DatabaseManager:
         # single bogus group.
         if unique:
             partition = f"PARTITION BY {_SPECIES_KEY}"
-            rank_order = "ORDER BY timestamp DESC"
+            rank_order = "ORDER BY timestamp DESC, id DESC"
         else:
             partition = f"PARTITION BY group_timestamp, {_SPECIES_KEY}, audio_source"
             rank_order = "ORDER BY confidence DESC"
@@ -158,11 +179,20 @@ class DatabaseManager:
 
         rows = self._fetch_deduplicated(partition, rank_order, pre_fetch, limit)
 
-        # Fallback: if unique query didn't find enough species in the
-        # pre-fetch window (e.g. one species dominates recent rows),
-        # retry without the row limit.
+        # For unique=True, a single noisy species can dominate the recent
+        # prefetch window. Expand bounded windows before falling back to an
+        # exact full-table grouping query; this keeps the common dashboard
+        # path in the millisecond range without sacrificing correctness.
         if unique and len(rows) < limit:
-            rows = self._fetch_deduplicated(partition, rank_order, None, limit)
+            for _ in range(5):
+                pre_fetch *= 2
+                rows = self._fetch_deduplicated(
+                    partition, rank_order, pre_fetch, limit,
+                )
+                if len(rows) >= limit:
+                    break
+            else:
+                rows = self._fetch_latest_unique_by_species(limit)
 
         detections = []
         for row in rows:
@@ -177,7 +207,7 @@ class DatabaseManager:
     def _fetch_deduplicated(self, partition, rank_order, pre_fetch, limit):
         """Run the windowed dedup query, optionally bounded by pre_fetch."""
         if pre_fetch is not None:
-            source = f"(SELECT * FROM detections ORDER BY timestamp DESC LIMIT {pre_fetch})"
+            source = f"(SELECT * FROM detections ORDER BY timestamp DESC, id DESC LIMIT {pre_fetch})"
         else:
             source = "detections"
 
@@ -207,7 +237,42 @@ class DatabaseManager:
                 FROM {source}
             ) WHERE rn = 1
         )
-        ORDER BY timestamp DESC
+        ORDER BY timestamp DESC, id DESC
+        LIMIT ?
+        """
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(query, (limit,))
+            return cur.fetchall()
+
+    def _fetch_latest_unique_by_species(self, limit):
+        """Exact fallback for unique latest detections without a full window sort."""
+        query = f"""
+        WITH species_latest AS (
+            SELECT {_SPECIES_KEY} AS species_key,
+                   MAX(timestamp || char(31) || printf('%020d', id)) AS latest_key
+            FROM detections
+            GROUP BY species_key
+        )
+        SELECT
+            d.id,
+            d.timestamp,
+            d.group_timestamp,
+            d.scientific_name,
+            d.common_name,
+            d.confidence,
+            d.latitude,
+            d.longitude,
+            d.cutoff,
+            d.sensitivity,
+            d.overlap,
+            d.week,
+            d.extra,
+            d.audio_source
+        FROM detections d
+        JOIN species_latest sl
+          ON (d.timestamp || char(31) || printf('%020d', d.id)) = sl.latest_key
+        ORDER BY d.timestamp DESC, d.id DESC
         LIMIT ?
         """
         with self.get_db_connection() as conn:
@@ -437,100 +502,202 @@ class DatabaseManager:
 
         return {'most': most, 'least': least}
 
-    def get_summary_stats(self, start_date=None):
-        if start_date is None:
-            start_date = datetime.min.isoformat()
-        else:
-            start_date = start_date.isoformat()
+    def get_summary_stats_all_periods(self, today_start, week_start, month_start):
+        """Compute today/week/month/allTime summary stats in one query.
 
-        end_date = local_now().isoformat()
+        Replaces what used to be 4 sequential per-period calls. Each per-period
+        bucket has the same 7-key shape: totalObservations, uniqueSpecies,
+        mostActiveHour, mostCommonBird, mostCommonBirdScientificName,
+        rarestBird, rarestBirdScientificName.
+
+        Species are grouped by the species key (scientific_name with a
+        common_name fallback for legacy rows) so V2/V3 English drift
+        collapses but unrelated blank-sci rows do not.
+
+        The `WHERE c_<period> > 0` filters in the species and hour selects
+        are load-bearing — without them a period with no detections would
+        return the all-time top species/hour (since the per-period count
+        would be 0 but the row still exists in species_counts/hourly_per_period).
+        """
+        now = local_now().isoformat()
+        params = {
+            'all_time_start': datetime.min.isoformat(),
+            'now': now,
+            'today_start': today_start.isoformat(),
+            'week_start': week_start.isoformat(),
+            'month_start': month_start.isoformat(),
+        }
 
         with self.get_db_connection() as conn:
             cur = conn.cursor()
 
-            logger.debug("Calculating summary statistics", extra={
-                'start_date': start_date[:10] if start_date else 'all_time',
-                'end_date': end_date[:10]
+            logger.debug("Calculating summary stats for all periods", extra={
+                'today_start': params['today_start'][:10],
+                'week_start': params['week_start'][:10],
+                'month_start': params['month_start'][:10],
+                'now': now[:10],
             })
 
-            # Single optimized query using CTEs (replaces 5 separate queries).
-            # Species are grouped by the species key (scientific_name with a
-            # common_name fallback for legacy rows that have blank sci) so
-            # V2/V3 English drift collapses but unrelated empty-sci rows do
-            # not.
             query = f"""
             WITH filtered_detections AS (
-                SELECT scientific_name, common_name, timestamp
+                SELECT id, scientific_name, common_name, timestamp
                 FROM detections
-                WHERE timestamp BETWEEN ? AND ?
+                WHERE timestamp BETWEEN :all_time_start AND :now
             ),
             counts AS (
                 SELECT
-                    COUNT(*) as total_observations,
-                    COUNT(DISTINCT {_SPECIES_KEY}) as unique_species
+                    COUNT(*) AS total_all,
+                    SUM(CASE WHEN timestamp >= :today_start THEN 1 ELSE 0 END) AS total_today,
+                    SUM(CASE WHEN timestamp >= :week_start  THEN 1 ELSE 0 END) AS total_week,
+                    SUM(CASE WHEN timestamp >= :month_start THEN 1 ELSE 0 END) AS total_month,
+                    COUNT(DISTINCT {_SPECIES_KEY}) AS unique_all,
+                    COUNT(DISTINCT CASE WHEN timestamp >= :today_start THEN {_SPECIES_KEY} END) AS unique_today,
+                    COUNT(DISTINCT CASE WHEN timestamp >= :week_start  THEN {_SPECIES_KEY} END) AS unique_week,
+                    COUNT(DISTINCT CASE WHEN timestamp >= :month_start THEN {_SPECIES_KEY} END) AS unique_month
                 FROM filtered_detections
             ),
-            hourly AS (
-                SELECT strftime('%H', timestamp) as hour, COUNT(*) as count
+            hourly_per_period AS (
+                SELECT strftime('%H', timestamp) AS hour,
+                       SUM(CASE WHEN timestamp >= :today_start THEN 1 ELSE 0 END) AS c_today,
+                       SUM(CASE WHEN timestamp >= :week_start  THEN 1 ELSE 0 END) AS c_week,
+                       SUM(CASE WHEN timestamp >= :month_start THEN 1 ELSE 0 END) AS c_month,
+                       COUNT(*) AS c_all
                 FROM filtered_detections
                 GROUP BY hour
-                ORDER BY count DESC
-                LIMIT 1
             ),
+            -- Secondary ORDER BY key makes ties deterministic. Without it,
+            -- two hours/species at the same count would flap call-to-call
+            -- depending on plan choices.
+            hour_today AS (SELECT hour FROM hourly_per_period WHERE c_today > 0 ORDER BY c_today DESC, hour ASC LIMIT 1),
+            hour_week  AS (SELECT hour FROM hourly_per_period WHERE c_week  > 0 ORDER BY c_week  DESC, hour ASC LIMIT 1),
+            hour_month AS (SELECT hour FROM hourly_per_period WHERE c_month > 0 ORDER BY c_month DESC, hour ASC LIMIT 1),
+            hour_all   AS (SELECT hour FROM hourly_per_period WHERE c_all   > 0 ORDER BY c_all   DESC, hour ASC LIMIT 1),
             species_counts AS (
                 SELECT {_SPECIES_KEY} AS species_key,
-                       MAX(scientific_name) AS scientific_name,
-                       MIN(common_name) AS common_name,
-                       COUNT(*) as count
+                       SUM(CASE WHEN timestamp >= :today_start THEN 1 ELSE 0 END) AS c_today,
+                       SUM(CASE WHEN timestamp >= :week_start  THEN 1 ELSE 0 END) AS c_week,
+                       SUM(CASE WHEN timestamp >= :month_start THEN 1 ELSE 0 END) AS c_month,
+                       COUNT(*) AS c_all
                 FROM filtered_detections
                 GROUP BY species_key
             ),
-            most_common AS (
-                SELECT scientific_name, common_name
-                FROM species_counts
-                ORDER BY count DESC
-                LIMIT 1
-            ),
-            rarest AS (
-                SELECT scientific_name, common_name
-                FROM species_counts
-                ORDER BY count ASC
-                LIMIT 1
-            )
+            most_today AS (SELECT species_key FROM species_counts WHERE c_today > 0 ORDER BY c_today DESC, species_key ASC LIMIT 1),
+            rare_today AS (SELECT species_key FROM species_counts WHERE c_today > 0 ORDER BY c_today ASC,  species_key ASC LIMIT 1),
+            most_week  AS (SELECT species_key FROM species_counts WHERE c_week  > 0 ORDER BY c_week  DESC, species_key ASC LIMIT 1),
+            rare_week  AS (SELECT species_key FROM species_counts WHERE c_week  > 0 ORDER BY c_week  ASC,  species_key ASC LIMIT 1),
+            most_month AS (SELECT species_key FROM species_counts WHERE c_month > 0 ORDER BY c_month DESC, species_key ASC LIMIT 1),
+            rare_month AS (SELECT species_key FROM species_counts WHERE c_month > 0 ORDER BY c_month ASC,  species_key ASC LIMIT 1),
+            most_all   AS (SELECT species_key FROM species_counts WHERE c_all   > 0 ORDER BY c_all   DESC, species_key ASC LIMIT 1),
+            rare_all   AS (SELECT species_key FROM species_counts WHERE c_all   > 0 ORDER BY c_all   ASC,  species_key ASC LIMIT 1)
             SELECT
-                (SELECT total_observations FROM counts) as totalObservations,
-                (SELECT unique_species FROM counts) as uniqueSpecies,
-                (SELECT hour FROM hourly) as mostActiveHour,
-                (SELECT common_name FROM most_common) as mostCommonBird,
-                (SELECT scientific_name FROM most_common) as mostCommonBirdScientificName,
-                (SELECT common_name FROM rarest) as rarestBird,
-                (SELECT scientific_name FROM rarest) as rarestBirdScientificName
+                (SELECT total_today  FROM counts) AS total_today,
+                (SELECT total_week   FROM counts) AS total_week,
+                (SELECT total_month  FROM counts) AS total_month,
+                (SELECT total_all    FROM counts) AS total_all,
+                (SELECT unique_today FROM counts) AS unique_today,
+                (SELECT unique_week  FROM counts) AS unique_week,
+                (SELECT unique_month FROM counts) AS unique_month,
+                (SELECT unique_all   FROM counts) AS unique_all,
+                (SELECT hour FROM hour_today) AS hour_today,
+                (SELECT hour FROM hour_week)  AS hour_week,
+                (SELECT hour FROM hour_month) AS hour_month,
+                (SELECT hour FROM hour_all)   AS hour_all,
+                (SELECT species_key FROM most_today) AS most_today_key,
+                (SELECT species_key FROM rare_today) AS rare_today_key,
+                (SELECT species_key FROM most_week)  AS most_week_key,
+                (SELECT species_key FROM rare_week)  AS rare_week_key,
+                (SELECT species_key FROM most_month) AS most_month_key,
+                (SELECT species_key FROM rare_month) AS rare_month_key,
+                (SELECT species_key FROM most_all)   AS most_all_key,
+                (SELECT species_key FROM rare_all)   AS rare_all_key
             """
 
-            cur.execute(query, (start_date, end_date))
-            result = cur.fetchone()
-
-            if result:
-                most_active_hour = f"{result['mostActiveHour']}:00" if result['mostActiveHour'] else "N/A"
-                return {
-                    'totalObservations': result['totalObservations'] or 0,
-                    'uniqueSpecies': result['uniqueSpecies'] or 0,
-                    'mostActiveHour': most_active_hour,
-                    'mostCommonBird': result['mostCommonBird'] or "N/A",
-                    'mostCommonBirdScientificName': result['mostCommonBirdScientificName'] or "",
-                    'rarestBird': result['rarestBird'] or "N/A",
-                    'rarestBirdScientificName': result['rarestBirdScientificName'] or "",
+            cur.execute(query, params)
+            row = cur.fetchone()
+            selected_species_names = {}
+            if row is not None:
+                selected_keys = {
+                    row[f'{kind}_{period}_key']
+                    for period in ('today', 'week', 'month', 'all')
+                    for kind in ('most', 'rare')
+                    if row[f'{kind}_{period}_key']
+                }
+                selected_species_names = {
+                    species_key: self._get_latest_species_name_for_key(
+                        cur,
+                        species_key,
+                        all_time_start=params['all_time_start'],
+                        now=params['now'],
+                    )
+                    for species_key in selected_keys
                 }
 
+        def _species_name(species_key):
+            if not species_key:
+                return "N/A", ""
+            return selected_species_names.get(species_key, ("N/A", ""))
+
+        def _bucket(total, unique, hour, most_key, rare_key):
+            mc_common, mc_sci = _species_name(most_key)
+            r_common, r_sci = _species_name(rare_key)
+            return {
+                'totalObservations': total or 0,
+                'uniqueSpecies': unique or 0,
+                'mostActiveHour': f"{hour}:00" if hour else "N/A",
+                'mostCommonBird': mc_common or "N/A",
+                'mostCommonBirdScientificName': mc_sci or "",
+                'rarestBird': r_common or "N/A",
+                'rarestBirdScientificName': r_sci or "",
+            }
+
+        if row is None:
+            empty = _bucket(0, 0, None, None, None)
+            return {key: dict(empty) for key in ('today', 'week', 'month', 'allTime')}
+
         return {
-            'totalObservations': 0,
-            'uniqueSpecies': 0,
-            'mostActiveHour': "N/A",
-            'mostCommonBird': "N/A",
-            'mostCommonBirdScientificName': "",
-            'rarestBird': "N/A",
-            'rarestBirdScientificName': "",
+            'today': _bucket(
+                row['total_today'], row['unique_today'], row['hour_today'],
+                row['most_today_key'], row['rare_today_key'],
+            ),
+            'week': _bucket(
+                row['total_week'], row['unique_week'], row['hour_week'],
+                row['most_week_key'], row['rare_week_key'],
+            ),
+            'month': _bucket(
+                row['total_month'], row['unique_month'], row['hour_month'],
+                row['most_month_key'], row['rare_month_key'],
+            ),
+            'allTime': _bucket(
+                row['total_all'], row['unique_all'], row['hour_all'],
+                row['most_all_key'], row['rare_all_key'],
+            ),
         }
+
+    def _get_latest_species_name_for_key(self, cur, species_key, *, all_time_start, now):
+        """Return the newest display name for a summary species key."""
+        query = """
+        SELECT common_name, scientific_name
+        FROM detections
+        WHERE timestamp BETWEEN :all_time_start AND :now
+          AND (
+              scientific_name = :species_key
+              OR (
+                  (scientific_name IS NULL OR scientific_name = '')
+                  AND common_name = :species_key
+              )
+          )
+        ORDER BY timestamp DESC, id DESC
+        LIMIT 1
+        """
+        cur.execute(query, {
+            'species_key': species_key,
+            'all_time_start': all_time_start,
+            'now': now,
+        })
+        row = cur.fetchone()
+        if row is None:
+            return "N/A", ""
+        return row['common_name'] or "N/A", row['scientific_name'] or ""
 
     def get_species_sightings(self, limit=10, most_frequent=True):
         # Group/join by the species key so V2/V3 English drift for the same

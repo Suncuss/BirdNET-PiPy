@@ -5,6 +5,7 @@
 import { mount, flushPromises, RouterLinkStub } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import BirdDetails from '@/views/BirdDetails.vue'
+import { deferred } from '../helpers/deferred'
 
 // Mock the api service
 const mockApi = vi.hoisted(() => ({
@@ -319,6 +320,170 @@ describe('BirdDetails Recordings Section', () => {
       /^[1-4]$/.test(btn.text())
     )
     expect(paginationButtons.length).toBe(0)
+  })
+})
+
+describe('BirdDetails Loading vs Empty States', () => {
+  // Wire api.get with per-endpoint overrides; any omitted endpoint falls back
+  // to the standard fixture.
+  const setupApi = ({ recordings, distribution, image } = {}) => {
+    mockApi.get.mockImplementation((url) => {
+      if (url.includes('/recordings')) {
+        return recordings ?? Promise.resolve({ data: mockRecordings })
+      }
+      if (url.includes('/detection_distribution')) {
+        return distribution ?? Promise.resolve({ data: mockDistribution })
+      }
+      if (url.includes('/wikimedia_image')) {
+        return image ?? Promise.resolve({ data: mockImageData })
+      }
+      if (url.includes('/bird/')) {
+        return Promise.resolve({ data: mockBirdDetails })
+      }
+      return Promise.resolve({ data: {} })
+    })
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('shows a recordings loader while the fetch is in flight, not the empty state', async () => {
+    const pending = deferred()
+    setupApi({ recordings: pending.promise.then(() => ({ data: mockRecordings })) })
+
+    const wrapper = mountComponent()
+    await flushPromises() // bird details resolve → page renders; recordings still pending
+
+    expect(wrapper.text()).toContain('Loading recordings...')
+    expect(wrapper.text()).not.toContain('No recordings available')
+
+    pending.resolve()
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('Loading recordings...')
+    expect(wrapper.findAll('audio').length).toBe(4)
+  })
+
+  it('shows the recordings empty state only once the fetch resolves empty', async () => {
+    const pending = deferred()
+    setupApi({ recordings: pending.promise.then(() => ({ data: [] })) })
+
+    const wrapper = mountComponent()
+    await flushPromises()
+
+    // Still loading: must NOT prematurely claim there are no recordings.
+    expect(wrapper.text()).not.toContain('No recordings available')
+
+    pending.resolve()
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('Loading recordings...')
+    expect(wrapper.text()).toContain('No recordings available')
+  })
+
+  it('shows a chart loader while the distribution fetch is in flight', async () => {
+    const pending = deferred()
+    setupApi({ distribution: pending.promise.then(() => ({ data: mockDistribution })) })
+
+    const wrapper = mountComponent()
+    await flushPromises() // page rendered; distribution still pending
+
+    expect(wrapper.text()).toContain('Loading data...')
+    expect(wrapper.text()).not.toContain('No detections in this period')
+
+    pending.resolve()
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('Loading data...')
+    expect(wrapper.text()).not.toContain('No detections in this period')
+  })
+
+  it('shows the chart empty state for a resolved period with no detections', async () => {
+    setupApi({ distribution: Promise.resolve({ data: { labels: [], data: [] } }) })
+
+    const wrapper = mountComponent()
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('Loading data...')
+    expect(wrapper.text()).toContain('No detections in this period')
+  })
+
+  it('treats an all-zero distribution as empty (no bar-less chart)', async () => {
+    setupApi({
+      distribution: Promise.resolve({ data: { labels: ['Jan', 'Feb'], data: [0, 0] } })
+    })
+
+    const wrapper = mountComponent()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('No detections in this period')
+  })
+
+  it('keeps the chart visible when the period has detections', async () => {
+    setupApi()
+
+    const wrapper = mountComponent()
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('Loading data...')
+    expect(wrapper.text()).not.toContain('No detections in this period')
+  })
+
+  it('shows an error message when the initial chart fetch fails', async () => {
+    const pending = deferred()
+    setupApi({ distribution: pending.promise })
+
+    const wrapper = mountComponent()
+    pending.reject(new Error('boom'))
+    await flushPromises()
+
+    // Critical: a fetch failure must NOT masquerade as an empty period.
+    expect(wrapper.text()).toContain("Couldn't load chart data")
+    expect(wrapper.text()).not.toContain('No detections in this period')
+    expect(wrapper.text()).not.toContain('Loading data...')
+  })
+
+  it('surfaces a re-fetch failure instead of leaving the prior chart visible', async () => {
+    setupApi() // initial success
+    const wrapper = mountComponent()
+    await flushPromises()
+    expect(wrapper.text()).not.toContain("Couldn't load chart data")
+
+    // Re-mock the next distribution call to reject; navigate to a different
+    // view to trigger updateChart.
+    const pending = deferred()
+    setupApi({ distribution: pending.promise })
+    const dayButton = wrapper.findAll('button').find(btn => btn.text() === 'Day')
+    expect(dayButton).toBeTruthy()
+    await dayButton.trigger('click')
+    pending.reject(new Error('boom'))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain("Couldn't load chart data")
+    expect(wrapper.text()).not.toContain('No detections in this period')
+  })
+
+  it('clears the chart error after a successful retry', async () => {
+    const pending = deferred()
+    setupApi({ distribution: pending.promise })
+    const wrapper = mountComponent()
+    pending.reject(new Error('boom'))
+    await flushPromises()
+    expect(wrapper.text()).toContain("Couldn't load chart data")
+
+    // Restore a successful mock and trigger a navigation.
+    setupApi()
+    const dayButton = wrapper.findAll('button').find(btn => btn.text() === 'Day')
+    await dayButton.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain("Couldn't load chart data")
+    expect(wrapper.text()).not.toContain('No detections in this period')
   })
 })
 

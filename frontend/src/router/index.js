@@ -51,24 +51,48 @@ const router = createRouter({
 })
 
 /**
- * Check authentication status from API
- * @returns {Promise<{authEnabled: boolean, authenticated: boolean, setupComplete: boolean, checkFailed: boolean}>}
+ * Cache for the auth status response. Without this, every click on a
+ * protected route fires a fresh /api/auth/status — a network roundtrip plus
+ * three disk reads and two deep-copies on the server — before the lazy
+ * route chunk even starts loading. Invalidated on login/logout/setup via
+ * the 'auth:invalidate-cache' window event dispatched from useAuth.
  */
-async function checkAuthStatus() {
+const AUTH_STATUS_TTL_MS = 30000
+let authStatusCache = { value: null, expiresAt: 0 }
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('auth:invalidate-cache', () => {
+    authStatusCache = { value: null, expiresAt: 0 }
+  })
+}
+
+/**
+ * Check authentication status from API, with a short TTL cache.
+ * @param {{force?: boolean}} [opts]
+ * @returns {Promise<{authEnabled: boolean, authenticated: boolean, setupComplete: boolean, publicFeatures: string[], checkFailed: boolean}>}
+ */
+async function checkAuthStatus({ force = false } = {}) {
+  const now = Date.now()
+  if (!force && authStatusCache.value && authStatusCache.expiresAt > now) {
+    return authStatusCache.value
+  }
   try {
     const { data } = await api.get('/auth/status')
-    return {
+    const status = {
       authEnabled: data.auth_enabled,
       setupComplete: data.setup_complete,
       authenticated: data.authenticated,
       publicFeatures: data.public_features || [],
       checkFailed: false
     }
+    authStatusCache = { value: status, expiresAt: now + AUTH_STATUS_TTL_MS }
+    return status
   } catch (error) {
     console.error('Failed to check auth status:', error)
   }
   // Fail-closed: assume auth is required and user is not authenticated
-  // This prevents unauthorized access when API is unreachable
+  // This prevents unauthorized access when API is unreachable. Do not
+  // cache failures — we want the next click to retry immediately.
   return { authEnabled: true, authenticated: false, setupComplete: true, publicFeatures: [], checkFailed: true }
 }
 

@@ -21,6 +21,16 @@ const error = ref('')
 const errorMessage = (err, serverFallback) =>
   err.response?.data?.error || (err.response ? serverFallback : 'Connection error')
 
+// The router caches /api/auth/status responses to avoid a roundtrip on every
+// protected-route click. Any mutation here must invalidate that cache so the
+// next navigation reflects the new state immediately rather than waiting for
+// the TTL to expire.
+const invalidateRouterAuthCache = () => {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('auth:invalidate-cache'))
+  }
+}
+
 /**
  * Composable for authentication state management.
  * Handles login, logout, setup, and auth status checking.
@@ -73,6 +83,7 @@ export function useAuth() {
     try {
       await api.post('/auth/login', { password })
       authStatus.value.authenticated = true
+      invalidateRouterAuthCache()
       logger.info('Login successful')
       return true
     } catch (err) {
@@ -91,6 +102,7 @@ export function useAuth() {
     try {
       await api.post('/auth/logout')
       authStatus.value.authenticated = false
+      invalidateRouterAuthCache()
       logger.info('Logged out')
     } catch (err) {
       logger.error('Logout error', err)
@@ -111,6 +123,7 @@ export function useAuth() {
       authStatus.value.authEnabled = true
       authStatus.value.setupComplete = true
       authStatus.value.authenticated = true
+      invalidateRouterAuthCache()
       logger.info('Password setup successful')
       return true
     } catch (err) {
@@ -134,6 +147,7 @@ export function useAuth() {
     try {
       const { data } = await api.post('/auth/toggle', { enabled })
       authStatus.value.authEnabled = data.auth_enabled
+      invalidateRouterAuthCache()
       logger.info('Auth toggled', { enabled: data.auth_enabled })
       return true
     } catch (err) {
@@ -180,6 +194,7 @@ export function useAuth() {
     try {
       await api.put('/settings/access', accessSettings)
       await checkAuthStatus()
+      invalidateRouterAuthCache()
       logger.info('Access settings saved', accessSettings)
       return true
     } catch (err) {

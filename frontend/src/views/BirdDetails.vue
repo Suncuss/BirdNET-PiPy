@@ -207,6 +207,31 @@
             ref="detectionChart"
             class="absolute inset-0 w-full h-full"
           />
+
+          <!-- Loading -->
+          <div
+            v-if="chartLoading"
+            class="absolute inset-0 flex items-center justify-center bg-white"
+          >
+            <Spinner class="h-8 w-8 text-green-600" />
+            <span class="ml-3 text-gray-600">Loading data...</span>
+          </div>
+
+          <!-- Error -->
+          <div
+            v-else-if="chartError"
+            class="absolute inset-0 flex items-center justify-center bg-white text-gray-500"
+          >
+            Couldn't load chart data.
+          </div>
+
+          <!-- Empty -->
+          <div
+            v-else-if="!chartHasData"
+            class="absolute inset-0 flex items-center justify-center bg-white text-gray-500"
+          >
+            No detections in this period.
+          </div>
         </div>
       </div>
 
@@ -235,9 +260,18 @@
           </div>
         </div>
 
+        <!-- Loading -->
+        <div
+          v-if="recordingsLoading"
+          class="flex items-center justify-center py-8"
+        >
+          <Spinner class="h-6 w-6 text-green-600" />
+          <span class="ml-3 text-gray-500">Loading recordings...</span>
+        </div>
+
         <!-- Recordings Grid (show 4 per page) -->
         <div
-          v-if="currentPageRecordings.length > 0"
+          v-else-if="currentPageRecordings.length > 0"
           class="grid grid-cols-1 md:grid-cols-2 gap-6"
         >
           <div
@@ -324,6 +358,7 @@ import { useRoute } from 'vue-router'
 import Chart from 'chart.js/auto'
 import SpectrogramModal from '@/components/SpectrogramModal.vue'
 import BirdImageModal from '@/components/BirdImageModal.vue'
+import Spinner from '@/components/Spinner.vue'
 import { useAuth } from '@/composables/useAuth'
 import { useDateNavigation } from '@/composables/useDateNavigation'
 import { useChartHelpers } from '@/composables/useChartHelpers'
@@ -342,7 +377,8 @@ export default {
   name: 'BirdDetails',
   components: {
     SpectrogramModal,
-    BirdImageModal
+    BirdImageModal,
+    Spinner
   },
   setup() {
     const route = useRoute()
@@ -353,6 +389,9 @@ export default {
     const lastDetected = ref(null)
     const detectionChart = ref(null)
     const detectionChartInstance = ref(null)
+    const chartHasData = ref(false)
+    const chartLoadedOnce = ref(false)
+    const chartError = ref(false)
     const averageConfidence = ref(0)
     const peakActivityTime = ref('')
     const seasonality = ref('')
@@ -361,7 +400,8 @@ export default {
     const recordingSort = ref('recent') // Default to most recent
     const currentPage = ref(1)
     const recordingsPerPage = 4
-    const isLoadingRecordings = ref(false)
+    // Starts true: mount kicks off a fetch immediately.
+    const isLoadingRecordings = ref(true)
     const selectedSpectrogramUrl = ref(null)
 
     const hasCustomImage = ref(false)
@@ -445,6 +485,15 @@ export default {
     // Inverted logic for template compatibility
     const isNextDisabled = computed(() => !canGoForward.value)
 
+    // Distinct from chartHasData (a resolved-but-empty period) so loading
+    // and empty never collapse together.
+    const chartLoading = computed(() => isUpdating.value || !chartLoadedOnce.value)
+    // Re-sorts keep the old grid visible (no flash); only show the loader
+    // when there's nothing to show yet.
+    const recordingsLoading = computed(
+      () => isLoadingRecordings.value && allRecordings.value.length === 0
+    )
+
     // Recordings pagination computed properties
     const totalPages = computed(() => Math.ceil(allRecordings.value.length / recordingsPerPage))
 
@@ -464,7 +513,17 @@ export default {
         averageConfidence.value = data.average_confidence
         peakActivityTime.value = data.peak_activity_time
         seasonality.value = data.seasonality
+      } catch (error) {
+        console.error('Error fetching bird details:', error)
+        return
+      }
 
+      // Independent of the wikimedia fetch below: a slow image lookup can't
+      // strand these loading states.
+      fetchRecordings()
+      updateChart()
+
+      try {
         const { data: imageData } = await api.get('/wikimedia_image', {
           params: { species: birdDetails.value.common_name }
         })
@@ -482,14 +541,8 @@ export default {
           // Calculate focal point for smart cropping
           await updateFocalPoint(imageData.imageUrl)
         }
-
-        // Fetch recordings
-        await fetchRecordings()
-
-        // Initial chart load
-        updateChart()
       } catch (error) {
-        console.error('Error fetching bird details:', error)
+        console.error('Error fetching bird image:', error)
       }
     }
 
@@ -532,6 +585,7 @@ export default {
       }
 
       isUpdating.value = true
+      chartError.value = false
 
       try {
         const localDateString = getLocalDateString(currentAnchorDate.value)
@@ -542,6 +596,10 @@ export default {
             date: localDateString
           }
         })
+
+        // All-zero counts count as empty (no flat, bar-less axis).
+        chartHasData.value = Array.isArray(chartData.data) &&
+          chartData.data.some((count) => Number(count) > 0)
 
         // Wait for Vue to update DOM
         await nextTick()
@@ -641,8 +699,16 @@ export default {
 
       } catch (error) {
         console.error('Error updating chart:', error)
+        chartError.value = true
+        // Drop any existing chart so a fresh date label doesn't annotate
+        // stale bars, AND so handleResize can't call .resize() on a
+        // destroyed instance (Chart.js destroy() nulls canvas/ctx). The
+        // error overlay covers the empty canvas.
+        destroyChart(detectionChart)
+        detectionChartInstance.value = null
       } finally {
         isUpdating.value = false
+        chartLoadedOnce.value = true
         
         // Process queued updates
         if (updateQueue.value.length > 0) {
@@ -830,10 +896,14 @@ export default {
       currentDateDisplay,
       isNextDisabled,
       isUpdating,
+      chartLoading,
+      chartHasData,
+      chartError,
       changeView,
       navigatePrevious,
       navigateNext,
       // Recordings section
+      recordingsLoading,
       recordingSort,
       recordingSortOptions,
       currentPage,

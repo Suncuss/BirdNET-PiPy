@@ -71,6 +71,7 @@ from core.bird_name_utils import (
     get_localized_common_name,
 )
 from core.db import DatabaseManager
+from core.db_executor import create_db_executor
 from core.ha_mode import get_runtime_mode, is_home_assistant_mode
 from core.logging_config import get_logger, log_api_request, setup_logging
 from core.migration import (
@@ -112,10 +113,29 @@ logger = get_logger(__name__)
 
 api = Blueprint('api', __name__)
 db_manager = DatabaseManager()
+db_executor = create_db_executor('threading')
 
 # Singleton TimezoneFinder (loads ~40MB shape data on first use)
 _timezone_finder: TimezoneFinder | None = None
 _tz_finder_lock = threading.Lock()
+
+
+# Timeout for a single DB job. Slightly below gunicorn's --timeout 120 so a
+# wedged query fails the calling request cleanly rather than triggering a
+# worker kill that drops every concurrent request with it. The job itself
+# is not cancelled (sqlite3 is blocking C code) — busy_timeout=30s caps
+# the worst case at the SQL level — but the caller stops waiting.
+_DB_JOB_TIMEOUT_SECONDS = 90
+
+
+def _run_db(func, *args, **kwargs):
+    return db_executor.submit(func, *args, **kwargs).result(
+        timeout=_DB_JOB_TIMEOUT_SECONDS,
+    )
+
+
+def _submit_db(func, *args, **kwargs):
+    return db_executor.submit(func, *args, **kwargs)
 
 
 def load_user_settings():
@@ -698,7 +718,7 @@ def delete_wikimedia_choice(species_name):
 @log_api_request
 @handle_api_errors
 def get_latest_observation():
-    observation = db_manager.get_latest_detections(1)
+    observation = _run_db(db_manager.get_latest_detections, 1)
     if observation:
         log_data_metrics('get_latest_observation', observation[0], {
             'species': observation[0].get('common_name'),
@@ -713,7 +733,7 @@ def get_latest_observation():
 @handle_api_errors
 def get_recent_observations():
     unique = request.args.get('unique', 'false').lower() == 'true'
-    observations = db_manager.get_latest_detections(7, unique=unique)
+    observations = _run_db(db_manager.get_latest_detections, 7, unique=unique)
     log_data_metrics('get_recent_observations', observations)
     return jsonify(observations)
 
@@ -723,20 +743,15 @@ def get_recent_observations():
 def get_observation_summary():
     now = local_now()
     settings = load_user_settings()
+    stats = _run_db(
+        db_manager.get_summary_stats_all_periods,
+        now.replace(hour=0, minute=0, second=0, microsecond=0),
+        now - timedelta(weeks=1),
+        now - timedelta(days=30),
+    )
     summary = {
-        'today': _localize_summary(
-            db_manager.get_summary_stats(now.replace(hour=0, minute=0, second=0, microsecond=0)),
-            settings=settings,
-        ),
-        'week': _localize_summary(
-            db_manager.get_summary_stats(now - timedelta(weeks=1)),
-            settings=settings,
-        ),
-        'month': _localize_summary(
-            db_manager.get_summary_stats(now - timedelta(days=30)),
-            settings=settings,
-        ),
-        'allTime': _localize_summary(db_manager.get_summary_stats(), settings=settings)
+        period: _localize_summary(stats[period], settings=settings)
+        for period in ('today', 'week', 'month', 'allTime')
     }
     log_data_metrics('get_observation_summary', summary, {
         'today_count': summary.get('today', {}).get('totalObservations', 0),
@@ -751,7 +766,7 @@ def get_observation_summary():
 @handle_api_errors
 def get_hourly_activity():
     date = request.args.get('date', default=local_now().strftime('%Y-%m-%d'))
-    activity = db_manager.get_hourly_activity(date)
+    activity = _run_db(db_manager.get_hourly_activity, date)
     log_data_metrics('get_hourly_activity', activity, {
         'date': date,
         'hours_with_activity': sum(1 for h in activity if h['count'] > 0)
@@ -769,7 +784,7 @@ def get_activity_overview():
     if order not in ('most', 'least'):
         order = 'most'
     settings = load_user_settings()
-    overview = db_manager.get_activity_overview(date, order=order)
+    overview = _run_db(db_manager.get_activity_overview, date, order=order)
     overview = _localize_activity_items(overview, settings=settings)
     log_data_metrics('get_activity_overview', overview, {
         'date': date,
@@ -777,11 +792,38 @@ def get_activity_overview():
     })
     return jsonify(overview)
 
-@api.route('/api/dashboard', methods=['GET'])
-@log_api_request
-@handle_api_errors
-def get_dashboard():
-    """Consolidated dashboard endpoint — all DB data in one request."""
+# Dashboard response cache. The endpoint runs ~8 SQLite queries that take
+# 4-5s on a Pi, and the single gevent worker blocks on each one (sqlite3 is
+# not gevent-patched). The frontend polls every 9s and re-fetches on every
+# keep-alive activation, so without this cache a single user navigating
+# Dashboard → other view → Dashboard stacks multiple 4.5s blocks back-to-back.
+# TTL slightly above the poll interval so consecutive polls hit the cache.
+_DASHBOARD_CACHE_TTL_SECONDS = 10
+_dashboard_cache_lock = threading.Lock()
+_dashboard_cache: dict = {
+    'payload': None,
+    'expires_at': 0.0,
+    'inflight': None,  # in-flight job, or None
+}
+
+
+def invalidate_dashboard_cache():
+    """Drop the cached dashboard payload so the next request recomputes.
+
+    Clearing 'inflight' here is what makes an invalidation race-safe: any
+    job in flight when invalidate fires loses its slot, so its post-compute
+    write block (which guards on `_dashboard_cache['inflight'] is job`)
+    sees a different value and skips, leaving the cache empty for the next
+    caller to refresh.
+    """
+    with _dashboard_cache_lock:
+        _dashboard_cache['payload'] = None
+        _dashboard_cache['expires_at'] = 0.0
+        _dashboard_cache['inflight'] = None
+
+
+def _build_dashboard_payload():
+    """Compute the full dashboard payload (8 DB queries, ~4.5s on a Pi)."""
     now = local_now()
     today = now.strftime('%Y-%m-%d')
     settings = load_user_settings()
@@ -792,20 +834,14 @@ def get_dashboard():
     recent_unique = _localize_detection_list(recent_unique, settings=settings)
     latest = recent_all[0] if recent_all else None
 
+    stats = db_manager.get_summary_stats_all_periods(
+        now.replace(hour=0, minute=0, second=0, microsecond=0),
+        now - timedelta(weeks=1),
+        now - timedelta(days=30),
+    )
     summary = {
-        'today': _localize_summary(
-            db_manager.get_summary_stats(now.replace(hour=0, minute=0, second=0, microsecond=0)),
-            settings=settings,
-        ),
-        'week': _localize_summary(
-            db_manager.get_summary_stats(now - timedelta(weeks=1)),
-            settings=settings,
-        ),
-        'month': _localize_summary(
-            db_manager.get_summary_stats(now - timedelta(days=30)),
-            settings=settings,
-        ),
-        'allTime': _localize_summary(db_manager.get_summary_stats(), settings=settings)
+        period: _localize_summary(stats[period], settings=settings)
+        for period in ('today', 'week', 'month', 'allTime')
     }
 
     hourly_activity = db_manager.get_hourly_activity(today)
@@ -814,13 +850,56 @@ def get_dashboard():
         settings=settings,
     )
 
-    return jsonify({
+    return {
         'latestObservation': latest,
         'recentObservations': {'all': recent_all, 'unique': recent_unique},
         'summary': summary,
         'hourlyActivity': hourly_activity,
         'activityOverview': activity_overview
-    })
+    }
+
+
+@api.route('/api/dashboard', methods=['GET'])
+@log_api_request
+@handle_api_errors
+def get_dashboard():
+    """Consolidated dashboard endpoint — all DB data in one request.
+
+    Result is cached for _DASHBOARD_CACHE_TTL_SECONDS. The lock serializes
+    concurrent misses into a single recompute (single-flight), so a thundering
+    herd of polls from multiple tabs costs one DB pass, not N.
+    """
+    with _dashboard_cache_lock:
+        cached = _dashboard_cache['payload']
+        if cached is not None and _dashboard_cache['expires_at'] > time.time():
+            return jsonify(cached)
+
+        job = _dashboard_cache['inflight']
+        if job is None:
+            job = _submit_db(_build_dashboard_payload)
+            _dashboard_cache['inflight'] = job
+
+    try:
+        payload = job.result(timeout=_DB_JOB_TIMEOUT_SECONDS)
+    except Exception:
+        with _dashboard_cache_lock:
+            if _dashboard_cache['inflight'] is job:
+                _dashboard_cache['inflight'] = None
+        raise
+
+    # Only the request whose job is still the inflight slot writes the
+    # cache. If invalidate_dashboard_cache() fired during compute, it
+    # cleared 'inflight' (and potentially a later request replaced it
+    # with a fresh job), so 'is job' returns False and we skip — current
+    # caller still gets their payload, but the cache is not poisoned.
+    with _dashboard_cache_lock:
+        if _dashboard_cache['inflight'] is job:
+            _dashboard_cache['payload'] = payload
+            _dashboard_cache['expires_at'] = time.time() + _DASHBOARD_CACHE_TTL_SECONDS
+            _dashboard_cache['inflight'] = None
+
+    return jsonify(payload)
+
 
 @api.route('/api/sightings/unique', methods=['GET'])
 @log_api_request
@@ -830,7 +909,12 @@ def get_unique_detections():
     date_str = request.args.get('date')
     settings = load_user_settings()
     # Get the unique detections from the database
-    unique_detections = db_manager.get_detections_by_date_range(date_str, date_str, unique=True)
+    unique_detections = _run_db(
+        db_manager.get_detections_by_date_range,
+        date_str,
+        date_str,
+        unique=True,
+    )
     unique_detections = _localize_detection_list(unique_detections, settings=settings)
     log_data_metrics('get_unique_detections', unique_detections, {
         'date': date_str,
@@ -853,9 +937,17 @@ def get_sightings():
 
     settings = load_user_settings()
     if sighting_type == 'frequent':
-        sightings = db_manager.get_species_sightings(limit=limit, most_frequent=True)
+        sightings = _run_db(
+            db_manager.get_species_sightings,
+            limit=limit,
+            most_frequent=True,
+        )
     elif sighting_type == 'rare':
-        sightings = db_manager.get_species_sightings(limit=limit, most_frequent=False)
+        sightings = _run_db(
+            db_manager.get_species_sightings,
+            limit=limit,
+            most_frequent=False,
+        )
     else:
         return jsonify({"error": "Invalid sighting type. Use 'frequent' or 'rare'"}), 400
 
@@ -876,7 +968,7 @@ def serve_spectrogram(filename):
 def get_bird_details(species_name):
     settings = load_user_settings()
     sci, common = _resolve_species_filter(species_name)
-    details = db_manager.get_bird_details(common, scientific_name=sci)
+    details = _run_db(db_manager.get_bird_details, common, scientific_name=sci)
     if details:
         details = _localize_detection(details, settings=settings)
         logger.debug("Bird details retrieved", extra={
@@ -967,7 +1059,13 @@ def get_bird_recordings(species_name):
     settings = load_user_settings()
     sci, common = _resolve_species_filter(species_name)
     recordings = _localize_detection_list(
-        db_manager.get_bird_recordings(common, sort, limit, scientific_name=sci),
+        _run_db(
+            db_manager.get_bird_recordings,
+            common,
+            sort,
+            limit,
+            scientific_name=sci,
+        ),
         settings=settings,
     )
     logger.debug("Bird recordings retrieved", extra={
@@ -986,7 +1084,8 @@ def get_detection_distribution(species_name):
     view = request.args.get('view', 'month')
     date = request.args.get('date', local_now().strftime('%Y-%m-%d'))
     sci, common = _resolve_species_filter(species_name)
-    distribution = db_manager.get_detection_distribution(
+    distribution = _run_db(
+        db_manager.get_detection_distribution,
         common, view, date, scientific_name=sci,
     )
     return jsonify(distribution)
@@ -997,7 +1096,7 @@ def get_detection_distribution(species_name):
 def get_all_species():
     """Get all unique bird species ever detected"""
     species_list = _localize_species_list(
-        db_manager.get_all_unique_species(),
+        _run_db(db_manager.get_all_unique_species),
         settings=load_user_settings(),
     )
     log_data_metrics('get_all_species', species_list)
@@ -1036,7 +1135,7 @@ def get_detection_trends():
     if start_date > end_date:
         return jsonify({'error': 'start_date must be before or equal to end_date'}), 400
 
-    trends = db_manager.get_daily_detection_counts(start_date, end_date)
+    trends = _run_db(db_manager.get_daily_detection_counts, start_date, end_date)
 
     log_data_metrics('get_detection_trends', trends, {
         'start_date': start_date,
@@ -1102,7 +1201,8 @@ def get_detections():
         # Sort the fully localized labels in memory so the rendered order matches
         # what the user sees, even across paginated results.
         detections = _localize_detection_list(
-            db_manager.get_all_detections(
+            _run_db(
+                db_manager.get_all_detections,
                 start_date=start_date,
                 end_date=end_date,
                 species=common,
@@ -1121,7 +1221,8 @@ def get_detections():
         offset = (page - 1) * per_page
         detections = detections[offset:offset + per_page]
     else:
-        detections, total_count = db_manager.get_paginated_detections(
+        detections, total_count = _run_db(
+            db_manager.get_paginated_detections,
             page=page,
             per_page=per_page,
             start_date=start_date,
@@ -1176,8 +1277,10 @@ def export_detections_csv():
                 return jsonify({'error': f'Invalid {date_param} format. Use YYYY-MM-DD'}), 400
 
     sci, common = _resolve_species_filter(species)
-    # Fetch all detections
-    detections = db_manager.get_all_detections_for_export(
+    # Full result is buffered into the CSV below before responding (not
+    # streamed), so this is safe to route through the executor lane.
+    detections = _run_db(
+        db_manager.get_all_detections_for_export,
         start_date=start_date,
         end_date=end_date,
         species=common,
@@ -1239,11 +1342,14 @@ def delete_detection(detection_id):
 
     Requires authentication.
     """
-    # Delete from database (returns detection info for file cleanup)
-    detection = db_manager.delete_detection(detection_id)
+    # delete_detection returns the detection row so we can clean up the
+    # associated audio + spectrogram files below.
+    detection = _run_db(db_manager.delete_detection, detection_id)
 
     if not detection:
         return jsonify({'error': 'Detection not found'}), 404
+
+    invalidate_dashboard_cache()
 
     # Clean up associated files using shared utility
     delete_result = delete_detection_files(detection)
@@ -1302,7 +1408,7 @@ def delete_detections_batch():
             failed.append({'id': detection_id, 'error': 'Invalid ID type'})
             continue
 
-        detection = db_manager.delete_detection(detection_id)
+        detection = _run_db(db_manager.delete_detection, detection_id)
         if not detection:
             failed.append({'id': detection_id, 'error': 'Not found'})
             continue
@@ -1311,6 +1417,9 @@ def delete_detections_batch():
         delete_detection_files(detection)
 
         deleted.append(detection_id)
+
+    if deleted:
+        invalidate_dashboard_cache()
 
     logger.info("Batch deletion completed", extra={
         'deleted_count': len(deleted),
@@ -2113,6 +2222,15 @@ def update_settings():
         # Save settings to JSON file and clear caches
         save_user_settings(new_settings)
         invalidate_runtime_settings_cache()
+        # display.* preferences feed _localize_* in the cached payload;
+        # location.* (lat/lon/timezone) feeds local_now() which sets the
+        # today/week/month boundaries and the hourly-activity date. Any
+        # other section (notifications, MQTT, audio sources, etc.) leaves
+        # the rendered payload unchanged, so dropping the cache then would
+        # force a needless 4.5s recompute.
+        _DASHBOARD_INVALIDATING_PREFIXES = ('display.', 'location.')
+        if any(path.startswith(_DASHBOARD_INVALIDATING_PREFIXES) for path in changed_paths):
+            invalidate_dashboard_cache()
         clear_bird_name_caches()
 
         logger.info("Settings updated", extra={
@@ -3013,6 +3131,9 @@ def _run_migration_background(temp_path, total_records, skip_duplicates):
             'errors': result['errors']
         })
 
+        if result.get('imported', 0) > 0:
+            invalidate_dashboard_cache()
+
     except Exception as e:
         logger.error("Migration import error", extra={
             'migration_id': temp_path,
@@ -3512,7 +3633,18 @@ def _cooperative_yield():
 _recorder_status = {}
 
 def create_app(async_mode='threading'):
-    global socketio
+    # The 'threading' default is load-bearing, not cosmetic. requirements.txt
+    # ships gevent (for the gunicorn wsgi.py path), and Flask-SocketIO's
+    # auto-selection prefers gevent over threading. Any caller that omits
+    # async_mode — `python -m core.api` (local dev, tests, and the HA add-on's
+    # legacy entrypoint) — must stay on threading: that path does NOT run
+    # gevent's monkey.patch_all(), so an auto-selected gevent backend would
+    # block on unpatched socket/sleep calls. wsgi.py passes async_mode='gevent'
+    # explicitly (and patches first). Do not drop this default.
+    global socketio, db_executor
+    db_executor.shutdown(wait=False)
+    db_executor = create_db_executor(async_mode)
+
     app = Flask(__name__)
 
     # CORS is intentionally NOT enabled - all requests go through nginx proxy
@@ -3554,6 +3686,10 @@ def create_app(async_mode='threading'):
 def broadcast_detection(detection_data):
     """Function to broadcast detection to all connected clients"""
     global socketio
+    # A new detection invalidates every counter the dashboard caches:
+    # today/week/month/all-time summaries, hourly activity, and the
+    # recent-observations list.
+    invalidate_dashboard_cache()
     if socketio:
         detection_payload = _localize_detection(detection_data)
         socketio.emit('bird_detected', detection_payload)
