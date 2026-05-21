@@ -11,6 +11,8 @@ export function useFetchBirdData() {
   const latestObservationData = ref(null);
   const recentObservationsData = ref([]);
   const summaryData = ref({});
+  const summaryLoading = ref({});
+  const summaryErrors = ref({});
 
   const detailedBirdActivityError = ref(null);
   const hourlyBirdActivityError = ref(null);
@@ -86,6 +88,14 @@ export function useFetchBirdData() {
   let currentActivityOrder = 'most';
   let currentRecentObsMode = 'all';
 
+  const setSummaryLoading = (period, loading) => {
+    summaryLoading.value = { ...summaryLoading.value, [period]: loading };
+  };
+
+  const setSummaryError = (period, error) => {
+    summaryErrors.value = { ...summaryErrors.value, [period]: error };
+  };
+
   const applyDashboardSelections = () => {
     recentObservationsData.value = recentObservationsCache[currentRecentObsMode] || [];
     detailedBirdActivityData.value = activityOverviewCache[currentActivityOrder] || [];
@@ -130,7 +140,11 @@ export function useFetchBirdData() {
       recentObservationsCache = data.recentObservations || { all: [], unique: [] };
       recentObservationsError.value = null;
 
-      summaryData.value = data.summary;
+      summaryData.value = data.summary || {};
+      Object.keys(data.summary || {}).forEach((period) => {
+        setSummaryLoading(period, false);
+        setSummaryError(period, null);
+      });
       summaryError.value = null;
 
       hourlyBirdActivityData.value = data.hourlyActivity;
@@ -188,6 +202,8 @@ export function useFetchBirdData() {
       recentObservationsData.value = [];
       recentObservationsError.value = errMsg;
       summaryData.value = {};
+      summaryLoading.value = {};
+      summaryErrors.value = {};
       summaryError.value = errMsg;
       hourlyBirdActivityData.value = [];
       hourlyBirdActivityError.value = errMsg;
@@ -195,6 +211,44 @@ export function useFetchBirdData() {
       detailedBirdActivityData.value = [];
       detailedBirdActivityError.value = errMsg;
       hasLoadedOnce.value = true;
+    }
+  };
+
+  const fetchSummaryData = async (period, { force = false } = {}) => {
+    if (!force && summaryData.value[period]) {
+      return summaryData.value[period];
+    }
+    if (summaryLoading.value[period]) {
+      return null;
+    }
+
+    // Spinner only on first load; a forced refresh keeps stale data visible.
+    const showLoading = !summaryData.value[period];
+    if (showLoading) {
+      setSummaryLoading(period, true);
+    }
+    setSummaryError(period, null);
+    summaryError.value = null;
+
+    try {
+      const response = await api.get('/dashboard/summary', {
+        params: { period }
+      });
+      logger.api('GET', '/dashboard/summary', { period }, response);
+
+      summaryData.value = {
+        ...summaryData.value,
+        [period]: response.data
+      };
+      return response.data;
+    } catch (error) {
+      logger.error('Failed to fetch summary data', error);
+      setSummaryError(period, 'Hmm, cannot reach the server');
+      return null;
+    } finally {
+      if (showLoading) {
+        setSummaryLoading(period, false);
+      }
     }
   };
 
@@ -235,11 +289,14 @@ export function useFetchBirdData() {
     latestObservationError,
     recentObservationsError,
     summaryError,
+    summaryLoading,
+    summaryErrors,
     trendsData,
     trendsError,
     latestObservationimageUrl,
     hasLoadedOnce,
     fetchDashboardData,
+    fetchSummaryData,
     setActivityOrder,
     setRecentObsMode,
     fetchChartsData,

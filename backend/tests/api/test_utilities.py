@@ -8,6 +8,7 @@ These tests focus on:
 """
 import json
 import time
+from datetime import datetime
 from unittest.mock import Mock, mock_open, patch
 
 
@@ -122,18 +123,22 @@ class TestFlagFileWriting:
         """Test writing flag files."""
         from core.api import write_flag
 
-        with patch('os.makedirs') as mock_makedirs:
-            with patch('builtins.open', mock_open()) as mock_file:
-                write_flag('test-flag')
+        # Pin local_now: write_flag's default timestamp resolves the timezone
+        # via local_now(), which can lazily open the settings file — leaving
+        # that stray open() as the "last" call would make the assertion flaky.
+        with patch('os.makedirs') as mock_makedirs, \
+             patch('core.api.local_now', return_value=datetime(2024, 1, 1, 12, 0, 0)), \
+             patch('builtins.open', mock_open()) as mock_file:
+            write_flag('test-flag')
 
-                # Should create flags directory
-                mock_makedirs.assert_called_once()
+            # Should create flags directory
+            mock_makedirs.assert_called_once()
 
-                # Should write timestamp to flag file
-                mock_file.assert_called()
-                written_path = mock_file.call_args[0][0]
-                assert 'test-flag' in written_path
-                assert written_path.endswith('test-flag')
+            # Should write timestamp to flag file
+            mock_file.assert_called()
+            written_path = mock_file.call_args[0][0]
+            assert 'test-flag' in written_path
+            assert written_path.endswith('test-flag')
 
 
 class TestBroadcastDetection:

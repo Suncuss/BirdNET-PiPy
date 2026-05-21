@@ -1,6 +1,7 @@
 """
 API-specific test fixtures and configuration.
 """
+import contextlib
 import os
 import sys
 import tempfile
@@ -39,15 +40,22 @@ def mock_db_manager():
     return mock
 
 
-@pytest.fixture
-def api_client(real_db_manager):
-    """Create a test client for the Flask API with REAL database integration."""
+@contextlib.contextmanager
+def _sandboxed_app(db_manager):
+    """Yield a Flask test client with the auth and user-settings file paths
+    redirected into a tempdir, so the suite never reads or writes the real
+    backend/data/ config files. USER_SETTINGS_PATH is patched in every module
+    that imported it by value."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Patch auth config paths to use temp directory (prevents writing to backend/data/)
+        settings_path = os.path.join(tmpdir, 'user_settings.json')
         with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
              patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
              patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
-             patch('core.api.db_manager', real_db_manager), \
+             patch('config.settings.USER_SETTINGS_PATH', settings_path), \
+             patch('core.runtime_config.USER_SETTINGS_PATH', settings_path), \
+             patch('core.timezone_service.USER_SETTINGS_PATH', settings_path), \
+             patch('core.api.USER_SETTINGS_PATH', settings_path), \
+             patch('core.api.db_manager', db_manager), \
              patch('core.api.socketio'):
             from core.api import create_app
             app, _ = create_app()
@@ -55,24 +63,20 @@ def api_client(real_db_manager):
 
             with app.test_client() as client:
                 yield client
+
+
+@pytest.fixture
+def api_client(real_db_manager):
+    """Create a test client for the Flask API with REAL database integration."""
+    with _sandboxed_app(real_db_manager) as client:
+        yield client
 
 
 @pytest.fixture
 def api_client_with_mock(mock_db_manager):
     """Create a test client with mocked database (for specific unit tests only)."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Patch auth config paths to use temp directory (prevents writing to backend/data/)
-        with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
-             patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
-             patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
-             patch('core.api.db_manager', mock_db_manager), \
-             patch('core.api.socketio'):
-            from core.api import create_app
-            app, _ = create_app()
-            app.config['TESTING'] = True
-
-            with app.test_client() as client:
-                yield client
+    with _sandboxed_app(mock_db_manager) as client:
+        yield client
 
 
 @pytest.fixture

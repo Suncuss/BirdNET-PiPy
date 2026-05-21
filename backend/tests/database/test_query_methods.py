@@ -180,6 +180,30 @@ class TestDatabaseQueryMethods:
         assert rarest[0]['common_name'] == 'Hooded Warbler'
         assert rarest[1]['common_name'] == 'Northern Cardinal'
 
+    def test_get_species_sightings_one_row_per_species_on_tied_timestamp(
+        self, test_db_manager
+    ):
+        """Two detections of one species sharing the latest timestamp must
+        still yield exactly one sighting row."""
+        for _ in range(2):
+            test_db_manager.insert_detection({
+                'timestamp': '2024-01-15T10:00:00',
+                'group_timestamp': '2024-01-15T10:00:00',
+                'scientific_name': 'Turdus migratorius',
+                'common_name': 'American Robin',
+                'confidence': 0.8,
+                'latitude': 40.7128,
+                'longitude': -74.0060,
+                'cutoff': 0.5,
+                'sensitivity': 0.75,
+                'overlap': 0.25,
+            })
+
+        result = test_db_manager.get_species_sightings(limit=10, most_frequent=True)
+
+        robins = [r for r in result if r['common_name'] == 'American Robin']
+        assert len(robins) == 1
+
     def test_get_detection_distribution_week_view(self, test_db_manager):
         """Test get_detection_distribution() for week view."""
         # Use Jan 14, 2024 (Sunday) as anchor - this is the start of the week
@@ -609,6 +633,49 @@ class TestDatabaseQueryMethods:
         # Hours 08 and 10 both have count=1. The hour ASC tiebreaker means
         # the earlier hour (08) wins.
         assert all_stats['today']['mostActiveHour'] == '08:00'
+
+    def test_single_period_summary_matches_all_periods_contract(
+        self, test_db_manager, frozen_db_now
+    ):
+        """The lazy Summary endpoint must preserve the all-period contract."""
+        now = frozen_db_now
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_start = now - timedelta(weeks=1)
+        month_start = now - timedelta(days=30)
+
+        rows = [
+            (today_start.replace(hour=9), 'Alpha species', 'Alpha Bird'),
+            (now - timedelta(days=3), 'Beta species', 'Beta Bird'),
+            (now - timedelta(days=20), 'Gamma species', 'Gamma Bird'),
+            (now - timedelta(days=200), 'Delta species', 'Delta Bird'),
+        ]
+        for timestamp, scientific_name, common_name in rows:
+            test_db_manager.insert_detection({
+                'timestamp': timestamp.isoformat(),
+                'group_timestamp': timestamp.isoformat(),
+                'scientific_name': scientific_name,
+                'common_name': common_name,
+                'confidence': 0.8,
+                'latitude': 40.7128, 'longitude': -74.0060,
+                'cutoff': 0.5, 'sensitivity': 0.75, 'overlap': 0.25,
+            })
+
+        all_stats = test_db_manager.get_summary_stats_all_periods(
+            today_start, week_start, month_start,
+        )
+
+        assert test_db_manager.get_summary_stats_for_period(
+            today_start, now=now,
+        ) == all_stats['today']
+        assert test_db_manager.get_summary_stats_for_period(
+            week_start, now=now,
+        ) == all_stats['week']
+        assert test_db_manager.get_summary_stats_for_period(
+            month_start, now=now,
+        ) == all_stats['month']
+        assert test_db_manager.get_summary_stats_for_period(
+            datetime.min, now=now,
+        ) == all_stats['allTime']
 
     def test_get_latest_detections_same_species_same_group(self, test_db_manager):
         """Test get_latest_detections with multiple detections of same species in same group_timestamp.

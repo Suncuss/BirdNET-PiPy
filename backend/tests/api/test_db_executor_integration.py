@@ -129,13 +129,17 @@ def test_species_all_runs_db_call_through_executor(
     import core.api as api_module
 
     _insert_detection(real_db_manager)
+    api_module.invalidate_gallery_cache()
     recorder = RecordingExecutor()
     monkeypatch.setattr(api_module, 'db_executor', recorder)
 
-    response = api_client.get('/api/species/all')
+    try:
+        response = api_client.get('/api/species/all')
 
-    assert response.status_code == 200
-    assert ('submit', 'get_all_unique_species') in recorder.calls
+        assert response.status_code == 200
+        assert ('submit', '_build_species_all_payload') in recorder.calls
+    finally:
+        api_module.invalidate_gallery_cache()
 
 
 def test_dashboard_payload_is_submitted_to_executor(
@@ -153,6 +157,25 @@ def test_dashboard_payload_is_submitted_to_executor(
 
         assert response.status_code == 200
         assert ('submit', '_build_dashboard_payload') in recorder.calls
+    finally:
+        api_module.invalidate_dashboard_cache()
+
+
+def test_dashboard_summary_is_submitted_to_executor(
+    api_client, real_db_manager, monkeypatch
+):
+    import core.api as api_module
+
+    _insert_detection(real_db_manager)
+    api_module.invalidate_dashboard_cache()
+    recorder = RecordingExecutor()
+    monkeypatch.setattr(api_module, 'db_executor', recorder)
+
+    try:
+        response = api_client.get('/api/dashboard/summary?period=week')
+
+        assert response.status_code == 200
+        assert ('submit', '_build_summary_period_payload') in recorder.calls
     finally:
         api_module.invalidate_dashboard_cache()
 
@@ -333,6 +356,9 @@ def test_broadcast_detection_invalidates_cache(api_client, real_db_manager):
 
     _insert_detection(real_db_manager)
     _prime_dashboard_cache(api_client)
+    resp = api_client.get('/api/dashboard/summary?period=week')
+    assert resp.status_code == 200
+    assert api_module._summary_cache['week']['payload'] is not None
 
     api_module.broadcast_detection({
         'common_name': 'Northern Cardinal',
@@ -342,6 +368,7 @@ def test_broadcast_detection_invalidates_cache(api_client, real_db_manager):
     })
 
     assert api_module._dashboard_cache['payload'] is None
+    assert api_module._summary_cache['week']['payload'] is None
 
 
 def test_delete_detection_invalidates_cache(api_client, real_db_manager):
@@ -537,3 +564,121 @@ def test_migration_import_preserves_cache_when_nothing_imported(
         )
 
     assert api_module._dashboard_cache['payload'] is cached_payload
+
+
+# -----------------------------------------------------------------------------
+# Bird Gallery cache: /api/sightings + /api/species/all, separate from the
+# dashboard cache and — critically — not cleared by broadcast_detection().
+# -----------------------------------------------------------------------------
+
+def test_sightings_payload_is_submitted_to_executor(
+    api_client, real_db_manager, monkeypatch
+):
+    import core.api as api_module
+
+    _insert_detection(real_db_manager)
+    api_module.invalidate_gallery_cache()
+    recorder = RecordingExecutor()
+    monkeypatch.setattr(api_module, 'db_executor', recorder)
+
+    try:
+        response = api_client.get('/api/sightings?type=frequent')
+
+        assert response.status_code == 200
+        assert ('submit', '_build_sightings_payload') in recorder.calls
+    finally:
+        api_module.invalidate_gallery_cache()
+
+
+def test_gallery_cache_serves_repeat_request(
+    api_client, real_db_manager, monkeypatch
+):
+    """A second request within the TTL is served from the gallery cache —
+    no second executor submit."""
+    import core.api as api_module
+
+    _insert_detection(real_db_manager)
+    api_module.invalidate_gallery_cache()
+
+    # First request populates the cache through the real executor.
+    first = api_client.get('/api/species/all')
+    assert first.status_code == 200
+    assert api_module._gallery_cache['species:all']['payload'] is not None
+
+    # Second request must not touch the executor at all.
+    recorder = RecordingExecutor()
+    monkeypatch.setattr(api_module, 'db_executor', recorder)
+    try:
+        second = api_client.get('/api/species/all')
+        assert second.status_code == 200
+        assert second.get_json() == first.get_json()
+        assert recorder.calls == []
+    finally:
+        api_module.invalidate_gallery_cache()
+
+
+def test_broadcast_detection_preserves_gallery_cache(api_client, real_db_manager):
+    """broadcast_detection() fires on every new detection and clears the
+    dashboard cache — but must leave the gallery cache intact, or the gallery
+    (opened on demand, not polled) would never get a warm cache."""
+    import core.api as api_module
+
+    _insert_detection(real_db_manager)
+    api_module.invalidate_gallery_cache()
+    api_module.invalidate_dashboard_cache()
+
+    assert api_client.get('/api/species/all').status_code == 200
+    assert api_client.get('/api/dashboard').status_code == 200
+    gallery_payload = api_module._gallery_cache['species:all']['payload']
+    assert gallery_payload is not None
+    assert api_module._dashboard_cache['payload'] is not None
+
+    api_module.broadcast_detection({
+        'common_name': 'Northern Cardinal',
+        'scientific_name': 'Cardinalis cardinalis',
+        'confidence': 0.92,
+        'timestamp': '2026-05-19T10:00:00',
+    })
+
+    # Dashboard cache cleared; gallery cache untouched.
+    assert api_module._dashboard_cache['payload'] is None
+    assert api_module._gallery_cache['species:all']['payload'] is gallery_payload
+
+
+def test_delete_detection_invalidates_gallery_cache(api_client, real_db_manager):
+    import core.api as api_module
+
+    detection_id = _insert_detection(real_db_manager)
+    api_module.invalidate_gallery_cache()
+
+    assert api_client.get('/api/species/all').status_code == 200
+    assert api_module._gallery_cache['species:all']['payload'] is not None
+
+    with patch('core.auth.is_authenticated', return_value=True):
+        resp = api_client.delete(f'/api/detections/{detection_id}')
+
+    assert resp.status_code == 200
+    assert api_module._gallery_cache['species:all']['payload'] is None
+
+
+def test_update_settings_invalidates_gallery_cache_on_display_change(
+    api_client, real_db_manager
+):
+    """A display.* change alters the localized names baked into the cached
+    gallery payload, so the cache must be dropped."""
+    import core.api as api_module
+
+    _insert_detection(real_db_manager)
+    api_module.invalidate_gallery_cache()
+
+    assert api_client.get('/api/species/all').status_code == 200
+    assert api_module._gallery_cache['species:all']['payload'] is not None
+
+    with patch('core.auth.is_authenticated', return_value=True):
+        resp = api_client.put(
+            '/api/settings',
+            json={'display': {'station_name': f'TestStation-{uuid.uuid4().hex[:8]}'}},
+        )
+
+    assert resp.status_code == 200
+    assert api_module._gallery_cache['species:all']['payload'] is None

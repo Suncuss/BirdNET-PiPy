@@ -215,7 +215,10 @@
         >
           Fetching the latest data...
         </CenteredMessage>
-        <div v-else-if="!summaryError">
+        <div
+          v-else
+          class="flex flex-col flex-1"
+        >
           <div class="mb-3">
             <nav
               class="flex space-x-1"
@@ -230,14 +233,21 @@
                     ? 'bg-blue-100 text-blue-700'
                     : 'text-gray-500 hover:text-gray-700'
                 ]"
-                @click="currentSummaryPeriod = tab.value"
+                @click="selectSummaryPeriod(tab.value)"
               >
                 {{ tab.label }}
               </button>
             </nav>
           </div>
+          <CenteredMessage
+            v-if="currentSummaryLoading"
+            variant="loading"
+            container-class="flex-1"
+          >
+            Fetching the latest data...
+          </CenteredMessage>
           <ul
-            v-if="summaryEntries.length"
+            v-else-if="!currentSummaryError && summaryEntries.length"
             class="space-y-1 text-sm"
           >
             <li
@@ -256,19 +266,19 @@
             </li>
           </ul>
           <p
-            v-else
+            v-else-if="!currentSummaryError"
             class="text-gray-500"
           >
             No summary data available for this period.
           </p>
+          <CenteredMessage
+            v-else
+            variant="error"
+            container-class="flex-1"
+          >
+            {{ currentSummaryError }}
+          </CenteredMessage>
         </div>
-        <CenteredMessage
-          v-else
-          variant="error"
-          container-class="flex-1"
-        >
-          {{ summaryError }}
-        </CenteredMessage>
       </div>
 
       <!-- Recent Observations -->
@@ -449,12 +459,15 @@ export default {
             latestObservationError,
             recentObservationsError,
             summaryError,
+            summaryLoading,
+            summaryErrors,
 
             // Loading state
             hasLoadedOnce,
 
             // Methods
             fetchDashboardData,
+            fetchSummaryData,
             setActivityOrder,
             setRecentObsMode
         } = useFetchBirdData();
@@ -579,13 +592,34 @@ export default {
             setRecentObsMode(recentMode())
         }
 
+        const refreshDashboardData = async () => {
+            // fetchDashboardData drops non-today summary periods; re-seed the
+            // visible one so its tab keeps showing data through the refetch.
+            const period = currentSummaryPeriod.value
+            const staleSummary = period !== 'today' ? summaryData.value?.[period] : undefined
+            await fetchDashboardData(currentOrder(), { recentMode: recentMode() })
+            if (period !== 'today') {
+                if (staleSummary) {
+                    summaryData.value = { ...summaryData.value, [period]: staleSummary }
+                }
+                await fetchSummaryData(period, { force: true })
+            }
+        }
+
+        const selectSummaryPeriod = async (period) => {
+            currentSummaryPeriod.value = period
+            if (!summaryData.value?.[period]) {
+                await fetchSummaryData(period)
+            }
+        }
+
         // Single-in-flight poll loop: waits for the current fetch to
         // finish before scheduling the next one, so slow responses never
         // pile up and get discarded by the race guard.
         const startPolling = () => {
             if (pollInterval) return
             const poll = async () => {
-                await fetchDashboardData(currentOrder(), { recentMode: recentMode() })
+                await refreshDashboardData()
                 if (!isActive) return
                 redrawCharts()
                 pollInterval = setTimeout(poll, POLL_INTERVAL)
@@ -610,7 +644,7 @@ export default {
                     if (document.hidden) {
                         stopPolling()
                     } else {
-                        await fetchDashboardData(currentOrder(), { recentMode: recentMode() })
+                        await refreshDashboardData()
                         if (!isActive) return
                         redrawCharts()
                         startPolling()
@@ -619,7 +653,7 @@ export default {
                 document.addEventListener('visibilitychange', visibilityHandler)
             }
 
-            await fetchDashboardData(currentOrder(), { recentMode: recentMode() });
+            await refreshDashboardData();
             if (!isActive) return  // Deactivated while fetching — bail out
             startPolling()
 
@@ -719,7 +753,7 @@ export default {
                 await redrawCharts(true)
 
                 // Fetch new data in background, then silently update.
-                await fetchDashboardData(currentOrder(), { recentMode: recentMode() })
+                await refreshDashboardData()
                 if (!isActive || myActivation !== activationId) return
                 startPolling()
                 await nextTick()
@@ -733,6 +767,14 @@ export default {
                 ? summaryData.value[currentSummaryPeriod.value]
                 : {}
         })
+
+        const currentSummaryLoading = computed(() => (
+            !!summaryLoading.value?.[currentSummaryPeriod.value]
+        ))
+
+        const currentSummaryError = computed(() => (
+            summaryErrors.value?.[currentSummaryPeriod.value] || summaryError.value
+        ))
 
         const summaryEntries = computed(() => (
             Object.entries(currentPeriodSummary.value || {})
@@ -938,6 +980,8 @@ export default {
             currentSummaryPeriod,
             summaryPeriods,
             currentPeriodSummary,
+            currentSummaryLoading,
+            currentSummaryError,
             summaryEntries,
             hourlyActivityChart,
             isSpectrogramModalVisible,
@@ -973,7 +1017,8 @@ export default {
             hasLoadedOnce,
             showUniqueSpecies,
             recentObsFilterOptions,
-            toggleRecentObsFilter
+            toggleRecentObsFilter,
+            selectSummaryPeriod
         }
     }
 }

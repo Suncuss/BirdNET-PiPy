@@ -134,10 +134,17 @@ export default {
       { value: 'all', label: 'Species Catalog', icon: '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M7 3a1 1 0 000 2h6a1 1 0 100-2H7zM4 7a1 1 0 011-1h10a1 1 0 110 2H5a1 1 0 01-1-1zM2 11a2 2 0 012-2h12a2 2 0 012 2v4a2 2 0 01-2 2H4a2 2 0 01-2-2v-4z" /></svg>' },
     ]
 
-    // Keep-alive staleness tracking
-    let lastFetchTime = 0
-    let hasBeenDeactivated = false
+    // Per-tab cache of already-loaded bird lists. Switching back to a visited
+    // tab renders instantly; an entry older than STALE_THRESHOLD is shown at
+    // once and then refreshed in the background.
+    const tabCache = {}
     const STALE_THRESHOLD = 2 * 60 * 1000  // 2 minutes
+    let hasBeenDeactivated = false
+
+    // Bumped on every tab switch so background image work from a previous tab
+    // can detect it is stale and stop mutating cards the user no longer sees.
+    let imageLoadVersion = 0
+    const IMAGE_CONCURRENCY = 4
 
     // TODO, fix bird id for non-unique birds
 
@@ -186,127 +193,133 @@ export default {
     const fetchAllSpecies = async () => {
       try {
         const { data: speciesList } = await api.get('/species/all')
-        // For all species, we need to fetch additional details for each one
-        const speciesWithDetails = await Promise.all(
-          speciesList.map(async (species) => {
-            try {
-              // Fetch bird details to get last detected date
-              const { data: details } = await api.get(`/bird/${species.common_name}`)
-              return {
-                id: species.common_name,
-                commonName: species.common_name,
-                name: species.display_common_name || species.common_name,
-                scientificName: species.scientific_name,
-                lastDetected: details.last_detected ? new Date(details.last_detected) : null,
-                imageUrl: getDefaultBirdImageUrl(),
-                focalPointReady: true,  // Show placeholder immediately
-              }
-            } catch (_error) {
-              // If details fetch fails, still show the bird
-              return {
-                id: species.common_name,
-                commonName: species.common_name,
-                name: species.display_common_name || species.common_name,
-                scientificName: species.scientific_name,
-                lastDetected: null,
-                imageUrl: getDefaultBirdImageUrl(),
-                focalPointReady: true,  // Show placeholder immediately
-              }
-            }
-          })
-        )
-        return speciesWithDetails
+        // /species/all returns last_detected per species — no per-species fetch.
+        return speciesList.map(species => ({
+          id: species.common_name,
+          commonName: species.common_name,
+          name: species.display_common_name || species.common_name,
+          scientificName: species.scientific_name,
+          lastDetected: species.last_detected ? new Date(species.last_detected) : null,
+          imageUrl: getDefaultBirdImageUrl(),
+          focalPointReady: true,  // Show placeholder immediately
+        }))
       } catch (error) {
         console.error('Error fetching all species:', error)
         return []
       }
     }
 
-    const updateBirdImages = async (birds) => {
-      for (const bird of birds) {
-        // Keep showing placeholder while loading real image
+    // Apply resolved image fields to a card with a brief fade transition.
+    // Once started it always finishes — a hidden card is never left hidden.
+    const applyResolvedImage = async (bird, fields) => {
+      bird.focalPointReady = false  // hide to trigger the fade
+      bird.imageUrl = fields.imageUrl
+      bird.hasCustomImage = Boolean(fields.hasCustomImage)
+      bird.focalPoint = fields.focalPoint
+      if (!bird.hasCustomImage) {
+        bird.authorName = fields.authorName
+        bird.authorUrl = fields.authorUrl
+        bird.licenseType = fields.licenseType
+      }
+      // Let opacity-0 apply before fading the new image back in
+      await new Promise(r => requestAnimationFrame(r))
+      bird.focalPointReady = true
+    }
+
+    // Load one card's image. Skips cards already resolved on an earlier visit,
+    // so re-running this for a cached tab is cheap; bails if `version` goes
+    // stale across an await so a slow lookup never mutates a tab the user left.
+    const loadBirdImage = async (bird, version) => {
+      if (bird.imageUrl !== getDefaultBirdImageUrl()) return
+      try {
         const imageData = await fetchWikimediaImage(bird.commonName)
-        if (imageData) {
-          if (imageData.hasCustomImage) {
-            bird.focalPointReady = false
-            bird.imageUrl = getBirdImageUrl(bird.commonName)
-            bird.hasCustomImage = true
-            bird.focalPoint = '50% 50%'
-            await new Promise(r => requestAnimationFrame(r))
-            bird.focalPointReady = true
-          } else {
-            // Calculate focal point first (this preloads image into browser cache)
-            const newFocalPoint = await calculateFocalPoint(imageData.imageUrl)
+        if (version !== imageLoadVersion || !imageData) return
 
-            // Brief hide to trigger fade transition
-            bird.focalPointReady = false
-
-            // Update all image data
-            bird.imageUrl = imageData.imageUrl
-            bird.authorName = imageData.authorName
-            bird.authorUrl = imageData.authorUrl
-            bird.licenseType = imageData.licenseType
-            bird.focalPoint = newFocalPoint
-
-            // Small delay to ensure opacity-0 is applied before fading in
-            await new Promise(r => requestAnimationFrame(r))
-
-            // Fade in the new image
-            bird.focalPointReady = true
+        let fields
+        if (imageData.hasCustomImage) {
+          fields = {
+            imageUrl: getBirdImageUrl(bird.commonName),
+            hasCustomImage: true,
+            focalPoint: '50% 50%',
           }
+        } else {
+          // Calculate the focal point first — this also preloads the image
+          const focalPoint = await calculateFocalPoint(imageData.imageUrl)
+          if (version !== imageLoadVersion) return
+          fields = { ...imageData, focalPoint }
+        }
+        await applyResolvedImage(bird, fields)
+      } catch (error) {
+        console.error(`Error loading image for ${bird.commonName}:`, error)
+      }
+    }
+
+    // Fill in card images in the background with bounded concurrency, so one
+    // slow Wikimedia lookup cannot stall the rest of the grid or the tab
+    // switch. Fire-and-forget: never awaited by selectTab().
+    const updateBirdImages = async (birdList, version) => {
+      let next = 0
+      const worker = async () => {
+        while (next < birdList.length && version === imageLoadVersion) {
+          await loadBirdImage(birdList[next++], version)
         }
       }
+      const poolSize = Math.min(IMAGE_CONCURRENCY, birdList.length)
+      await Promise.all(Array.from({ length: poolSize }, worker))
+    }
+
+    const loadTab = (tab) => {
+      if (tab === 'recent') return fetchUniqueBirds()
+      if (tab === 'all') return fetchAllSpecies()
+      return fetchSightings(tab)
     }
 
     const selectTab = async (tab) => {
       selectedTab.value = tab
-      if (tab === 'recent') {
-        birds.value = await fetchUniqueBirds()
-        //TODO ERROR MESSAGE WHEN NO BIRDS
-      } else if (tab === 'all') {
-        birds.value = await fetchAllSpecies()
-      } else if (tab === 'frequent' || tab === 'rare') {
-        birds.value = await fetchSightings(tab)
+      // New version stamp: in-flight work from the previous tab compares
+      // against it, detects it is stale, and stops overwriting this tab.
+      const version = ++imageLoadVersion
+
+      const cached = tabCache[tab]
+      if (cached) {
+        birds.value = cached.birds  // render the visited tab instantly
+        if (Date.now() - cached.at <= STALE_THRESHOLD) {
+          // Resume image loads for any cards a prior interrupted visit left
+          // on a placeholder (resolved cards are skipped — see loadBirdImage).
+          updateBirdImages(birds.value, version)
+          return
+        }
+        // Stale: fall through and refresh in the background.
       }
-      lastFetchTime = Date.now()
-      await updateBirdImages(birds.value)
+
+      const loaded = await loadTab(tab)
+      // Drop the result if another tab switch started while data was loading.
+      if (version !== imageLoadVersion) return
+      tabCache[tab] = { birds: loaded, at: Date.now() }
+      birds.value = loaded
+      // Fire-and-forget: image work must not block the tab switch.
+      updateBirdImages(birds.value, version)
     }
 
-    // Patch a single card in place when the customize-image modal applies a change.
-    // Mirrors updateBirdImages() per-bird logic without re-fetching the API.
+    // Patch a single card in place when the customize-image modal applies a
+    // change, without re-fetching the API.
     const applyImageChange = async (detail) => {
       if (!detail?.species || !detail.imageUrl) return
       const bird = birds.value.find(b => b.commonName === detail.species)
       if (!bird) return
-      bird.focalPointReady = false
-      if (detail.hasCustomImage) {
-        bird.imageUrl = detail.imageUrl
-        bird.hasCustomImage = true
-        bird.focalPoint = '50% 50%'
-      } else {
-        const fp = await calculateFocalPoint(detail.imageUrl)
-        bird.imageUrl = detail.imageUrl
-        bird.authorName = detail.authorName
-        bird.authorUrl = detail.authorUrl
-        bird.licenseType = detail.licenseType
-        bird.hasCustomImage = false
-        bird.focalPoint = fp
-      }
-      await new Promise(r => requestAnimationFrame(r))
-      bird.focalPointReady = true
+      const focalPoint = detail.hasCustomImage
+        ? '50% 50%'
+        : await calculateFocalPoint(detail.imageUrl)
+      await applyResolvedImage(bird, { ...detail, focalPoint })
     }
 
     const onBirdImageChanged = (event) => {
       applyImageChange(event.detail)
     }
 
-    onMounted(async () => {
+    onMounted(() => {
       window.addEventListener('bird-image:changed', onBirdImageChanged)
-      if (selectedTab.value === 'recent') {
-        birds.value = await fetchUniqueBirds()
-        lastFetchTime = Date.now()
-        await updateBirdImages(birds.value)
-      }
+      selectTab(selectedTab.value)
     })
 
     onUnmounted(() => {
@@ -317,10 +330,9 @@ export default {
       hasBeenDeactivated = true
     })
 
-    onActivated(async () => {
-      if (hasBeenDeactivated && Date.now() - lastFetchTime > STALE_THRESHOLD) {
-        await selectTab(selectedTab.value)
-      }
+    onActivated(() => {
+      // selectTab() shows the cached tab instantly and refreshes it if stale.
+      if (hasBeenDeactivated) selectTab(selectedTab.value)
     })
 
     const displayedBirds = computed(() => {

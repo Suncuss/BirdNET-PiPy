@@ -37,6 +37,7 @@ from config.settings import (
     EXTRACTED_AUDIO_DIR,
     MODEL_TYPE,
     SPECTROGRAM_DIR,
+    USER_SETTINGS_PATH,
     get_default_settings,
 )
 from core.api_utils import (
@@ -792,12 +793,10 @@ def get_activity_overview():
     })
     return jsonify(overview)
 
-# Dashboard response cache. The endpoint runs ~8 SQLite queries that take
-# 4-5s on a Pi, and the single gevent worker blocks on each one (sqlite3 is
-# not gevent-patched). The frontend polls every 9s and re-fetches on every
-# keep-alive activation, so without this cache a single user navigating
-# Dashboard → other view → Dashboard stacks multiple 4.5s blocks back-to-back.
-# TTL slightly above the poll interval so consecutive polls hit the cache.
+# Dashboard response cache. Dashboard only includes the initially visible
+# summary period (today); hidden summary tabs lazy-load through
+# /api/dashboard/summary. TTL slightly above the poll interval so consecutive
+# polls hit the cache.
 _DASHBOARD_CACHE_TTL_SECONDS = 10
 _dashboard_cache_lock = threading.Lock()
 _dashboard_cache: dict = {
@@ -806,24 +805,158 @@ _dashboard_cache: dict = {
     'inflight': None,  # in-flight job, or None
 }
 
+_SUMMARY_PERIODS = ('today', 'week', 'month', 'allTime')
+_SUMMARY_CACHE_TTL_SECONDS = 10
+_summary_cache_lock = threading.Lock()
+_summary_cache: dict = {
+    period: {
+        'payload': None,
+        'expires_at': 0.0,
+        'inflight': None,
+    }
+    for period in _SUMMARY_PERIODS
+}
+
+# Bird Gallery response cache. The Most/Least Frequent and Species Catalog
+# tabs run multi-second GROUP BY scans over the whole detections table. The
+# gallery is opened on demand, not polled — so unlike the dashboard cache this
+# one is deliberately NOT cleared by broadcast_detection(): doing that on every
+# new detection would keep it permanently cold. New detections age out via the
+# TTL; bulk changes clear it explicitly (see invalidate_gallery_cache).
+_GALLERY_SIGHTINGS_LIMIT = 12
+_GALLERY_CACHE_TTL_SECONDS = 90
+_GALLERY_KEY_FREQUENT = 'sightings:frequent'
+_GALLERY_KEY_RARE = 'sightings:rare'
+_GALLERY_KEY_SPECIES = 'species:all'
+_gallery_cache_lock = threading.Lock()
+_gallery_cache: dict = {
+    key: {'payload': None, 'expires_at': 0.0, 'inflight': None}
+    for key in (_GALLERY_KEY_FREQUENT, _GALLERY_KEY_RARE, _GALLERY_KEY_SPECIES)
+}
+
+
+def _summary_period_start(period, now):
+    if period == 'today':
+        return now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if period == 'week':
+        return now - timedelta(weeks=1)
+    if period == 'month':
+        return now - timedelta(days=30)
+    if period == 'allTime':
+        return datetime.min
+    raise ValueError(f"invalid summary period: {period}")
+
+
+def _reset_cache_entry(entry):
+    """Clear a single-flight cache entry's payload, TTL, and in-flight job."""
+    entry['payload'] = None
+    entry['expires_at'] = 0.0
+    entry['inflight'] = None
+
+
+def invalidate_summary_cache():
+    """Drop cached lazy summary-tab payloads."""
+    with _summary_cache_lock:
+        for entry in _summary_cache.values():
+            _reset_cache_entry(entry)
+
 
 def invalidate_dashboard_cache():
     """Drop the cached dashboard payload so the next request recomputes.
 
     Clearing 'inflight' here is what makes an invalidation race-safe: any
-    job in flight when invalidate fires loses its slot, so its post-compute
-    write block (which guards on `_dashboard_cache['inflight'] is job`)
-    sees a different value and skips, leaving the cache empty for the next
-    caller to refresh.
+    job in flight when invalidate fires loses its slot, so the single-flight
+    write (guarded on `inflight is job`) skips, leaving the cache empty for
+    the next caller to refresh.
     """
     with _dashboard_cache_lock:
-        _dashboard_cache['payload'] = None
-        _dashboard_cache['expires_at'] = 0.0
-        _dashboard_cache['inflight'] = None
+        _reset_cache_entry(_dashboard_cache)
+    invalidate_summary_cache()
+
+
+def invalidate_gallery_cache():
+    """Drop cached Bird Gallery payloads (Most/Least Frequent + Species Catalog).
+
+    Called when detections change in bulk (delete, migration import) or when a
+    settings change alters localization — but never from broadcast_detection();
+    see the _gallery_cache comment for that rationale.
+    """
+    with _gallery_cache_lock:
+        for entry in _gallery_cache.values():
+            _reset_cache_entry(entry)
+
+
+def _serve_single_flight(entry, lock, ttl, builder, *args):
+    """Serve a cached payload from `entry`, recomputing via `builder` under a
+    single-flight guard so concurrent misses share one DB job.
+
+    `entry` is a dict with 'payload'/'expires_at'/'inflight'. Only the caller
+    whose job is still the 'inflight' slot writes the cache: if an invalidation
+    cleared 'inflight' mid-compute, the `is job` guard fails and the write is
+    skipped, so a job racing an invalidation cannot poison the cache.
+    """
+    with lock:
+        cached = entry['payload']
+        if cached is not None and entry['expires_at'] > time.time():
+            return cached
+
+        job = entry['inflight']
+        if job is None:
+            job = _submit_db(builder, *args)
+            entry['inflight'] = job
+
+    try:
+        payload = job.result(timeout=_DB_JOB_TIMEOUT_SECONDS)
+    except Exception:
+        with lock:
+            if entry['inflight'] is job:
+                entry['inflight'] = None
+        raise
+
+    with lock:
+        if entry['inflight'] is job:
+            entry['payload'] = payload
+            entry['expires_at'] = time.time() + ttl
+            entry['inflight'] = None
+
+    return payload
+
+
+def _build_summary_period_payload(period, *, settings=None, now=None):
+    now = now or local_now()
+    settings = settings or load_user_settings()
+    summary = db_manager.get_summary_stats_for_period(
+        _summary_period_start(period, now),
+        now=now,
+    )
+    return _localize_summary(summary, settings=settings)
+
+
+def _get_summary_period_payload(period):
+    return _serve_single_flight(
+        _summary_cache[period], _summary_cache_lock,
+        _SUMMARY_CACHE_TTL_SECONDS, _build_summary_period_payload, period,
+    )
+
+
+def _build_sightings_payload(most_frequent):
+    """Build a localized Most/Least Frequent payload for the gallery cache."""
+    settings = load_user_settings()
+    sightings = db_manager.get_species_sightings(
+        limit=_GALLERY_SIGHTINGS_LIMIT, most_frequent=most_frequent,
+    )
+    return _localize_detection_list(sightings, settings=settings)
+
+
+def _build_species_all_payload():
+    """Build the localized Species Catalog payload for the gallery cache."""
+    settings = load_user_settings()
+    species = db_manager.get_all_unique_species()
+    return _localize_species_list(species, settings=settings)
 
 
 def _build_dashboard_payload():
-    """Compute the full dashboard payload (8 DB queries, ~4.5s on a Pi)."""
+    """Compute the dashboard payload with only the visible summary period."""
     now = local_now()
     today = now.strftime('%Y-%m-%d')
     settings = load_user_settings()
@@ -834,14 +967,8 @@ def _build_dashboard_payload():
     recent_unique = _localize_detection_list(recent_unique, settings=settings)
     latest = recent_all[0] if recent_all else None
 
-    stats = db_manager.get_summary_stats_all_periods(
-        now.replace(hour=0, minute=0, second=0, microsecond=0),
-        now - timedelta(weeks=1),
-        now - timedelta(days=30),
-    )
     summary = {
-        period: _localize_summary(stats[period], settings=settings)
-        for period in ('today', 'week', 'month', 'allTime')
+        'today': _build_summary_period_payload('today', settings=settings, now=now)
     }
 
     hourly_activity = db_manager.get_hourly_activity(today)
@@ -865,40 +992,34 @@ def _build_dashboard_payload():
 def get_dashboard():
     """Consolidated dashboard endpoint — all DB data in one request.
 
-    Result is cached for _DASHBOARD_CACHE_TTL_SECONDS. The lock serializes
-    concurrent misses into a single recompute (single-flight), so a thundering
-    herd of polls from multiple tabs costs one DB pass, not N.
+    Cached for _DASHBOARD_CACHE_TTL_SECONDS via _serve_single_flight, so a
+    thundering herd of polls from multiple tabs costs one DB pass, not N.
     """
-    with _dashboard_cache_lock:
-        cached = _dashboard_cache['payload']
-        if cached is not None and _dashboard_cache['expires_at'] > time.time():
-            return jsonify(cached)
-
-        job = _dashboard_cache['inflight']
-        if job is None:
-            job = _submit_db(_build_dashboard_payload)
-            _dashboard_cache['inflight'] = job
-
-    try:
-        payload = job.result(timeout=_DB_JOB_TIMEOUT_SECONDS)
-    except Exception:
-        with _dashboard_cache_lock:
-            if _dashboard_cache['inflight'] is job:
-                _dashboard_cache['inflight'] = None
-        raise
-
-    # Only the request whose job is still the inflight slot writes the
-    # cache. If invalidate_dashboard_cache() fired during compute, it
-    # cleared 'inflight' (and potentially a later request replaced it
-    # with a fresh job), so 'is job' returns False and we skip — current
-    # caller still gets their payload, but the cache is not poisoned.
-    with _dashboard_cache_lock:
-        if _dashboard_cache['inflight'] is job:
-            _dashboard_cache['payload'] = payload
-            _dashboard_cache['expires_at'] = time.time() + _DASHBOARD_CACHE_TTL_SECONDS
-            _dashboard_cache['inflight'] = None
-
+    payload = _serve_single_flight(
+        _dashboard_cache, _dashboard_cache_lock,
+        _DASHBOARD_CACHE_TTL_SECONDS, _build_dashboard_payload,
+    )
     return jsonify(payload)
+
+
+@api.route('/api/dashboard/summary', methods=['GET'])
+@log_api_request
+@handle_api_errors
+def get_dashboard_summary():
+    """Return one dashboard summary period for lazy-loaded Summary tabs."""
+    period = request.args.get('period', default='today')
+    if period not in _SUMMARY_PERIODS:
+        return jsonify({
+            'error': f'Invalid period. Must be one of: {", ".join(_SUMMARY_PERIODS)}'
+        }), 400
+
+    summary = _get_summary_period_payload(period)
+    log_data_metrics('get_dashboard_summary', summary, {
+        'period': period,
+        'total_observations': summary.get('totalObservations', 0),
+        'unique_species': summary.get('uniqueSpecies', 0),
+    })
+    return jsonify(summary)
 
 
 @api.route('/api/sightings/unique', methods=['GET'])
@@ -923,7 +1044,7 @@ def get_unique_detections():
     return jsonify(unique_detections)
 
 @api.route('/api/sightings', methods=['GET'])
-@validate_limit_param(default=12)
+@validate_limit_param(default=_GALLERY_SIGHTINGS_LIMIT)
 @handle_api_errors
 def get_sightings():
     """Consolidated endpoint for different types of sightings
@@ -933,26 +1054,24 @@ def get_sightings():
     - limit: number of results (default: 12)
     """
     sighting_type = request.args.get('type', 'frequent')
-    limit = request.args.get('limit', default=12, type=int)
+    limit = request.args.get('limit', default=_GALLERY_SIGHTINGS_LIMIT, type=int)
+
+    if sighting_type not in ('frequent', 'rare'):
+        return jsonify({"error": "Invalid sighting type. Use 'frequent' or 'rare'"}), 400
+    most_frequent = sighting_type == 'frequent'
+
+    if limit == _GALLERY_SIGHTINGS_LIMIT:
+        key = _GALLERY_KEY_FREQUENT if most_frequent else _GALLERY_KEY_RARE
+        return jsonify(_serve_single_flight(
+            _gallery_cache[key], _gallery_cache_lock,
+            _GALLERY_CACHE_TTL_SECONDS, _build_sightings_payload, most_frequent,
+        ))
 
     settings = load_user_settings()
-    if sighting_type == 'frequent':
-        sightings = _run_db(
-            db_manager.get_species_sightings,
-            limit=limit,
-            most_frequent=True,
-        )
-    elif sighting_type == 'rare':
-        sightings = _run_db(
-            db_manager.get_species_sightings,
-            limit=limit,
-            most_frequent=False,
-        )
-    else:
-        return jsonify({"error": "Invalid sighting type. Use 'frequent' or 'rare'"}), 400
-
-    sightings = _localize_detection_list(sightings, settings=settings)
-    return jsonify(sightings)
+    sightings = _run_db(
+        db_manager.get_species_sightings, limit=limit, most_frequent=most_frequent,
+    )
+    return jsonify(_localize_detection_list(sightings, settings=settings))
 
 
 @api.route('/api/audio/<filename>')
@@ -1094,10 +1213,14 @@ def get_detection_distribution(species_name):
 @log_api_request
 @handle_api_errors
 def get_all_species():
-    """Get all unique bird species ever detected"""
-    species_list = _localize_species_list(
-        _run_db(db_manager.get_all_unique_species),
-        settings=load_user_settings(),
+    """Get all unique bird species ever detected (Species Catalog).
+
+    Served from the single-flight gallery cache; each species carries
+    ``last_detected`` so the frontend needs no per-species detail fetch.
+    """
+    species_list = _serve_single_flight(
+        _gallery_cache[_GALLERY_KEY_SPECIES], _gallery_cache_lock,
+        _GALLERY_CACHE_TTL_SECONDS, _build_species_all_payload,
     )
     log_data_metrics('get_all_species', species_list)
     return jsonify(species_list)
@@ -1350,6 +1473,7 @@ def delete_detection(detection_id):
         return jsonify({'error': 'Detection not found'}), 404
 
     invalidate_dashboard_cache()
+    invalidate_gallery_cache()
 
     # Clean up associated files using shared utility
     delete_result = delete_detection_files(detection)
@@ -1420,6 +1544,7 @@ def delete_detections_batch():
 
     if deleted:
         invalidate_dashboard_cache()
+        invalidate_gallery_cache()
 
     logger.info("Batch deletion completed", extra={
         'deleted_count': len(deleted),
@@ -1891,7 +2016,7 @@ def _validate_notification_settings(notif):
 
 def save_user_settings(settings_dict):
     """Save settings to JSON file atomically"""
-    json_path = os.path.join(BASE_DIR, 'data', 'config', 'user_settings.json')
+    json_path = USER_SETTINGS_PATH
     temp_file = json_path + '.tmp'
 
     os.makedirs(os.path.dirname(json_path), exist_ok=True)
@@ -2231,6 +2356,7 @@ def update_settings():
         _DASHBOARD_INVALIDATING_PREFIXES = ('display.', 'location.')
         if any(path.startswith(_DASHBOARD_INVALIDATING_PREFIXES) for path in changed_paths):
             invalidate_dashboard_cache()
+            invalidate_gallery_cache()
         clear_bird_name_caches()
 
         logger.info("Settings updated", extra={
@@ -3133,6 +3259,7 @@ def _run_migration_background(temp_path, total_records, skip_duplicates):
 
         if result.get('imported', 0) > 0:
             invalidate_dashboard_cache()
+            invalidate_gallery_cache()
 
     except Exception as e:
         logger.error("Migration import error", extra={
@@ -3644,6 +3771,8 @@ def create_app(async_mode='threading'):
     global socketio, db_executor
     db_executor.shutdown(wait=False)
     db_executor = create_db_executor(async_mode)
+    invalidate_dashboard_cache()
+    invalidate_gallery_cache()
 
     app = Flask(__name__)
 

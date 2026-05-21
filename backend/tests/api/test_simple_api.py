@@ -152,10 +152,12 @@ class TestSimpleAPI:
         assert response.status_code == 200
         species = response.get_json()
         assert len(species) == 3
-        # API returns list of dicts with common_name and scientific_name
+        # API returns dicts with common_name, scientific_name, last_detected
         species_names = [s['common_name'] for s in species]
         assert 'American Robin' in species_names
         assert 'Blue Jay' in species_names
+        # last_detected is returned directly so the catalog needs no N+1 fetch
+        assert all(s.get('last_detected') for s in species)
 
         # Test bird details
         response = api_client.get('/api/bird/American%20Robin')
@@ -939,8 +941,10 @@ class TestSimpleAPI:
     def test_dashboard_endpoint(self, api_client, real_db_manager):
         """Test /api/dashboard consolidated endpoint with data."""
         from datetime import timedelta
+
+        from core.timezone_service import local_now
         # Use today so activityOverview is populated
-        now = datetime.now()
+        now = local_now()
         base_time = now.replace(hour=10, minute=0, second=0, microsecond=0)
 
         for i in range(5):
@@ -993,11 +997,9 @@ class TestSimpleAPI:
         assert len(recent['all']) >= 2
         assert len(recent['unique']) >= 2
 
-        # Summary periods
-        assert 'today' in data['summary']
-        assert 'week' in data['summary']
-        assert 'month' in data['summary']
-        assert 'allTime' in data['summary']
+        # Dashboard only ships the visible Summary tab. Other periods
+        # lazy-load through /api/dashboard/summary when their tab is clicked.
+        assert set(data['summary']) == {'today'}
 
         # Hourly activity (24 hours)
         assert len(data['hourlyActivity']) == 24
@@ -1024,9 +1026,40 @@ class TestSimpleAPI:
 
         assert data['latestObservation'] is None
         assert data['recentObservations'] == {'all': [], 'unique': []}
-        assert 'today' in data['summary']
+        assert set(data['summary']) == {'today'}
         assert len(data['hourlyActivity']) == 24
         assert data['activityOverview'] == {'most': [], 'least': []}
+
+    def test_dashboard_summary_endpoint_returns_requested_period(self, api_client, real_db_manager):
+        """Test lazy-loaded dashboard summary periods."""
+        from datetime import timedelta
+
+        now = datetime.now()
+        real_db_manager.insert_detection({
+            'timestamp': (now - timedelta(days=3)).isoformat(),
+            'group_timestamp': (now - timedelta(days=3)).isoformat(),
+            'common_name': 'American Robin',
+            'scientific_name': 'Turdus migratorius',
+            'confidence': 0.85,
+            'latitude': 40.7128,
+            'longitude': -74.0060,
+            'cutoff': 0.5,
+            'sensitivity': 0.75,
+            'overlap': 0.25
+        })
+
+        response = api_client.get('/api/dashboard/summary?period=week')
+        assert response.status_code == 200
+        data = response.get_json()
+
+        assert data['totalObservations'] == 1
+        assert data['uniqueSpecies'] == 1
+        assert data['mostCommonBird'] == 'American Robin'
+
+    def test_dashboard_summary_endpoint_rejects_invalid_period(self, api_client):
+        response = api_client.get('/api/dashboard/summary?period=year')
+        assert response.status_code == 400
+        assert 'Invalid period' in response.get_json()['error']
 
     def test_settings_invalid_model_type(self):
         """Test PUT /api/settings rejects invalid model type."""

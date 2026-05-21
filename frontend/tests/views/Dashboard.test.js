@@ -42,9 +42,12 @@ const baseState = () => ({
   latestObservationError: ref(null),
   recentObservationsError: ref(null),
   summaryError: ref(null),
+  summaryLoading: ref({}),
+  summaryErrors: ref({}),
   latestObservationimageUrl: ref('default_bird.webp'),
   hasLoadedOnce: ref(true),
   fetchDashboardData: vi.fn(),
+  fetchSummaryData: vi.fn(),
   setActivityOrder: vi.fn(),
   setRecentObsMode: vi.fn(),
   fetchChartsData: vi.fn()
@@ -195,6 +198,60 @@ describe('Dashboard', () => {
     // 12h mode formats the same value differently
     useTimeFormat().setTimeFormat('12h')
     expect(wrapper.vm.formatSummaryValue('mostActiveHour', '09:00')).toBe('9 AM')
+  })
+
+  it('lazy-loads a summary tab when its period has not been fetched', async () => {
+    const state = baseState()
+    state.summaryData.value = {
+      today: { totalObservations: 12 }
+    }
+    useFetchBirdData.mockReturnValue(state)
+
+    const wrapper = mountDashboard()
+    await flushPromises()
+
+    const weekButton = wrapper.findAll('button').find(b => b.text() === '7-Day')
+    expect(weekButton).toBeTruthy()
+
+    await weekButton.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.vm.currentSummaryPeriod).toBe('week')
+    expect(state.fetchSummaryData).toHaveBeenCalledWith('week')
+  })
+
+  it('reuses an already-loaded summary tab without another request', async () => {
+    const state = baseState()
+    state.summaryData.value = {
+      today: { totalObservations: 12 },
+      week: { totalObservations: 34 }
+    }
+    useFetchBirdData.mockReturnValue(state)
+
+    const wrapper = mountDashboard()
+    await flushPromises()
+
+    const weekButton = wrapper.findAll('button').find(b => b.text() === '7-Day')
+    await weekButton.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.vm.currentSummaryPeriod).toBe('week')
+    expect(state.fetchSummaryData).not.toHaveBeenCalled()
+  })
+
+  it('shows the existing loading treatment for a lazy summary tab', async () => {
+    const state = baseState()
+    state.summaryLoading.value = { week: true }
+    useFetchBirdData.mockReturnValue(state)
+
+    const wrapper = mountDashboard()
+    await flushPromises()
+
+    const weekButton = wrapper.findAll('button').find(b => b.text() === '7-Day')
+    await weekButton.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Fetching the latest data...')
   })
 
   it('shows error messages when set', async () => {

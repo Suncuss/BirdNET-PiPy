@@ -112,6 +112,167 @@ describe('BirdGallery', () => {
     expect(wrapper.text()).not.toContain('Detection info available in details')
   })
 
+  it('loads species catalog without per-species detail fan-out', async () => {
+    mockApi.get.mockImplementation((url) => {
+      if (url === '/sightings/unique') {
+        return Promise.resolve({ data: [] })
+      }
+      if (url === '/species/all') {
+        return Promise.resolve({
+          data: [
+            {
+              common_name: 'Blue Jay',
+              scientific_name: 'Cyanocitta cristata',
+              last_detected: '2024-08-02T10:00:00Z'
+            }
+          ]
+        })
+      }
+      if (url === '/wikimedia_image') {
+        return Promise.resolve({
+          data: { imageUrl: '/bird.jpg', authorName: 'Photographer', authorUrl: '#', licenseType: 'CC' }
+        })
+      }
+      return Promise.resolve({ data: [] })
+    })
+
+    const wrapper = mountGallery()
+    await flushPromises()
+
+    await wrapper.vm.selectTab('all')
+    await flushPromises()
+
+    expect(mockApi.get).toHaveBeenCalledWith('/species/all')
+    // N+1 collapsed: last_detected comes from /species/all, no /bird/<name> calls
+    const birdDetailCalls = mockApi.get.mock.calls.filter(c => c[0].startsWith('/bird/'))
+    expect(birdDetailCalls).toHaveLength(0)
+    expect(wrapper.text()).toContain('Blue Jay')
+    expect(wrapper.text()).not.toContain('Detection info available in details')
+  })
+
+  it('ignores a slow tab response when the user switches away mid-load', async () => {
+    let resolveAll
+    mockApi.get.mockImplementation((url) => {
+      if (url === '/species/all') {
+        return new Promise(resolve => {
+          resolveAll = () => resolve({
+            data: [{ common_name: 'Slow Species', scientific_name: 'Tardus', last_detected: null }]
+          })
+        })
+      }
+      if (url === '/sightings') {
+        return Promise.resolve({
+          data: [
+            { id: 1, common_name: 'Fast Bird', scientific_name: 'Rapidus', timestamp: '2024-08-02T10:00:00Z' }
+          ]
+        })
+      }
+      if (url === '/wikimedia_image') {
+        return Promise.resolve({
+          data: { imageUrl: '/bird.jpg', authorName: 'P', authorUrl: '#', licenseType: 'CC' }
+        })
+      }
+      return Promise.resolve({ data: [] })
+    })
+
+    const wrapper = mountGallery()
+    await flushPromises()
+
+    // Start the slow 'all' tab, then switch to 'frequent' before it resolves.
+    wrapper.vm.selectTab('all')
+    await wrapper.vm.selectTab('frequent')
+    await flushPromises()
+
+    // The 'all' response arrives late — its stale version must be discarded.
+    resolveAll()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Fast Bird')
+    expect(wrapper.text()).not.toContain('Slow Species')
+  })
+
+  it('serves a revisited tab from cache without refetching', async () => {
+    mockApi.get.mockImplementation((url, config) => {
+      if (url === '/sightings/unique') {
+        return Promise.resolve({
+          data: [{ id: 1, common_name: 'Sparrow', scientific_name: 'Passer domesticus', timestamp: '2024-08-01T12:00:00Z' }]
+        })
+      }
+      if (url === '/sightings' && config?.params?.type === 'frequent') {
+        return Promise.resolve({
+          data: [{ id: 2, common_name: 'Blue Jay', scientific_name: 'Cyanocitta cristata', timestamp: '2024-08-02T10:00:00Z' }]
+        })
+      }
+      if (url === '/wikimedia_image') {
+        return Promise.resolve({ data: { imageUrl: '/bird.jpg', authorName: 'P', authorUrl: '#', licenseType: 'CC' } })
+      }
+      return Promise.resolve({ data: [] })
+    })
+
+    const wrapper = mountGallery()
+    await flushPromises()
+
+    await wrapper.vm.selectTab('frequent')
+    await flushPromises()
+    const callsAfterFirstVisit = mockApi.get.mock.calls.filter(c => c[0] === '/sightings').length
+
+    // Switch away and back — the cached 'frequent' tab must not refetch.
+    await wrapper.vm.selectTab('recent')
+    await flushPromises()
+    await wrapper.vm.selectTab('frequent')
+    await flushPromises()
+
+    expect(mockApi.get.mock.calls.filter(c => c[0] === '/sightings').length).toBe(callsAfterFirstVisit)
+    expect(wrapper.text()).toContain('Blue Jay')
+  })
+
+  it('resumes image loading when returning to a tab abandoned mid-load', async () => {
+    const wikimediaResolvers = []
+    mockApi.get.mockImplementation((url, config) => {
+      if (url === '/sightings/unique') {
+        return Promise.resolve({ data: [] })
+      }
+      if (url === '/sightings' && config?.params?.type === 'frequent') {
+        return Promise.resolve({
+          data: [{ id: 1, common_name: 'Blue Jay', scientific_name: 'Cyanocitta cristata', timestamp: '2024-08-02T10:00:00Z' }]
+        })
+      }
+      if (url === '/wikimedia_image') {
+        // Hand the test control over when each image lookup resolves.
+        return new Promise(resolve => { wikimediaResolvers.push(resolve) })
+      }
+      return Promise.resolve({ data: [] })
+    })
+
+    const wrapper = mountGallery()
+    await flushPromises()
+
+    // Visit 'frequent' — its image lookup is now pending.
+    await wrapper.vm.selectTab('frequent')
+    await flushPromises()
+    expect(wikimediaResolvers).toHaveLength(1)
+
+    // Switch away, then let the now-stale lookup resolve — it must be discarded.
+    await wrapper.vm.selectTab('recent')
+    await flushPromises()
+    wikimediaResolvers[0]({
+      data: { imageUrl: '/jay.jpg', authorName: 'StalePhotographer', authorUrl: '#', licenseType: 'CC' }
+    })
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('StalePhotographer')
+
+    // Return to the cached tab — image loading must resume for the placeholder card.
+    await wrapper.vm.selectTab('frequent')
+    await flushPromises()
+    expect(wikimediaResolvers).toHaveLength(2)
+    wikimediaResolvers[1]({
+      data: { imageUrl: '/jay.jpg', authorName: 'FreshPhotographer', authorUrl: '#', licenseType: 'CC' }
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('FreshPhotographer')
+  })
+
   it('shows empty state when no birds are returned', async () => {
     mockApi.get.mockImplementation((url) => {
       if (url === '/sightings/unique') {

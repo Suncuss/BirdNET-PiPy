@@ -360,3 +360,7 @@ class TestDatabaseBasicOperations:
         # Check alphabetical order
         names = [s['common_name'] for s in result]
         assert names == sorted(names)
+
+        # Each species carries its latest detection timestamp so the Species
+        # Catalog needs no per-species detail fetch.
+        assert all(s['last_detected'] == '2024-01-15T12:00:00' for s in result)
