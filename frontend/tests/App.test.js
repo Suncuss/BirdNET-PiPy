@@ -21,6 +21,7 @@ vi.mock('@/composables/useAuth', () => ({
     loading: ref(false),
     error: ref(''),
     checkAuthStatus: vi.fn().mockResolvedValue(undefined),
+    ensureAuthLoaded: vi.fn().mockResolvedValue(undefined),
     logout: vi.fn().mockResolvedValue(undefined),
     clearError: vi.fn()
   })

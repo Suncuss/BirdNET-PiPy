@@ -87,20 +87,6 @@ export function useTimeFormat() {
   }
 
   /**
-   * Load the explicit preference from the API. Tolerates legacy/invalid values
-   * (including the historical "auto") by treating them as "no choice", which
-   * causes the browser-detected format to take effect.
-   */
-  const loadTimeFormat = async () => {
-    try {
-      const { data } = await api.get('/settings')
-      explicitFormat.value = sanitize(data.display?.time_format)
-    } catch (err) {
-      console.error('Failed to load time format setting:', err)
-    }
-  }
-
-  /**
    * Save an explicit user choice to the backend. Only '12h' and '24h' are accepted.
    */
   const saveTimeFormat = async (value) => {
@@ -148,7 +134,6 @@ export function useTimeFormat() {
     formatTime,
     formatHour,
     formatHourLabel,
-    loadTimeFormat,
     saveTimeFormat,
     setTimeFormat,
     resetState

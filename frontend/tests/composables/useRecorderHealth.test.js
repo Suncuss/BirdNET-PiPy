@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { useRecorderHealth } from '@/composables/useRecorderHealth'
+import { RECORDER_DISMISSED_UNTIL_KEY } from '@/utils/storageKeys'
 
 // Mock the api service
 const mockApi = vi.hoisted(() => ({
@@ -168,7 +169,7 @@ describe('useRecorderHealth', () => {
       dismissWarning()
 
       expect(localStorage.setItem).toHaveBeenCalledWith(
-        'birdnet_recorder_dismissed_until',
+        RECORDER_DISMISSED_UNTIL_KEY,
         expect.any(String)
       )
     })

@@ -450,6 +450,7 @@
 <script>
 import { ref, computed } from 'vue'
 import { requestRestart, useServiceRestart } from '@/composables/useServiceRestart'
+import { useSettings } from '@/composables/useSettings'
 import { limitDecimals, sanitizeLabel } from '@/utils/inputHelpers'
 import { FILTER_DEFAULTS, MODEL_TYPES, modelTypeOptions } from '@/utils/modelDefaults'
 import { WELCOME_PENDING_KEY } from '@/utils/storageKeys'
@@ -468,6 +469,7 @@ export default {
   setup() {
     // Composables
     const serviceRestart = useServiceRestart()
+    const settingsStore = useSettings()
 
     const step = ref(1)
 
@@ -612,8 +614,13 @@ export default {
       saving.value = true
 
       try {
-        // Get current settings
-        const { data: settings } = await api.get('/settings')
+        // Load current settings, then take an editable copy — finish()
+        // mutates this draft, so it must not share useSettings' reference.
+        await settingsStore.ensureLoaded()
+        if (!settingsStore.settings.value) {
+          throw new Error('Settings not loaded')
+        }
+        const settings = JSON.parse(JSON.stringify(settingsStore.settings.value))
 
         // Apply location
         settings.location = {

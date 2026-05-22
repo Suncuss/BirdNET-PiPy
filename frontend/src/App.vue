@@ -177,8 +177,7 @@ import { ref, nextTick, watchEffect, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useLogger } from '@/composables/useLogger'
 import { useAuth } from '@/composables/useAuth'
-import { useUnitSettings } from '@/composables/useUnitSettings'
-import { useTimeFormat } from '@/composables/useTimeFormat'
+import { useSettings } from '@/composables/useSettings'
 import { useAppStatus } from '@/composables/useAppStatus'
 import { useSystemUpdate } from '@/composables/useSystemUpdate'
 import { useRecorderHealth } from '@/composables/useRecorderHealth'
@@ -187,7 +186,6 @@ import SetupWizard from '@/components/SetupWizard.vue'
 import LoginModal from '@/components/LoginModal.vue'
 import WelcomeOverlay from '@/components/WelcomeOverlay.vue'
 import { WELCOME_PENDING_KEY } from '@/utils/storageKeys'
-import api from '@/services/api'
 
 export default {
   name: 'App',
@@ -201,8 +199,7 @@ export default {
     const route = useRoute()
     const router = useRouter()
     const auth = useAuth()
-    const unitSettings = useUnitSettings()
-    const timeFormat = useTimeFormat()
+    const appSettings = useSettings()
     const { stationName, setStationName, setLocationConfigured } = useAppStatus()
     const systemUpdate = useSystemUpdate()
     const recorderHealth = useRecorderHealth()
@@ -220,23 +217,25 @@ export default {
     })
 
     const checkLocationSetup = async () => {
-      try {
-        const { data: settings } = await api.get('/settings')
-        // Sync display preferences from settings
-        unitSettings.setUseMetricUnits(settings.display?.use_metric_units ?? true)
-        timeFormat.setTimeFormat(settings.display?.time_format)
-        setStationName(settings.display?.station_name)
-        // Show setup modal if location has not been configured
-        if (!settings.location?.configured) {
-          logger.info('Location not configured, showing setup wizard')
-          setLocationConfigured(false)
-          showSetupWizard.value = true
-        } else {
-          setLocationConfigured(true)
-        }
-      } catch (error) {
-        logger.error('Failed to check location setup', { error: error.message })
+      // useSettings owns the fetch and syncs unit / time-format prefs.
+      const ok = await appSettings.ensureLoaded()
+      if (!ok) {
+        // A network error says nothing about whether location is configured.
+        // Don't downgrade locationConfigured — leave it; the dashboard
+        // renders and shows its own error state, and the next
+        // ensureLoaded() retries.
+        logger.error('Failed to check location setup')
+        return
+      }
+      const settings = appSettings.settings.value
+      setStationName(settings?.display?.station_name)
+      // Show setup modal if location has not been configured
+      if (!settings?.location?.configured) {
+        logger.info('Location not configured, showing setup wizard')
         setLocationConfigured(false)
+        showSetupWizard.value = true
+      } else {
+        setLocationConfigured(true)
       }
     }
 
@@ -300,8 +299,9 @@ export default {
       // Listen for auth required events from API interceptor
       window.addEventListener('auth:required', handleAuthRequired)
 
-      // Check auth status
-      await auth.checkAuthStatus()
+      // Ensure auth status is loaded (shares the one-time load with the
+      // router guard — see useAuth.ensureAuthLoaded)
+      await auth.ensureAuthLoaded()
 
       // Check if location setup is needed
       if (auth.needsLogin.value) {

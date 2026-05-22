@@ -1,5 +1,6 @@
 import { ref, computed } from 'vue'
 import api from '@/services/api'
+import { createCoalescedLoader } from '@/utils/coalescedLoader'
 import { useLogger } from './useLogger'
 
 /**
@@ -21,15 +22,8 @@ const error = ref('')
 const errorMessage = (err, serverFallback) =>
   err.response?.data?.error || (err.response ? serverFallback : 'Connection error')
 
-// The router caches /api/auth/status responses to avoid a roundtrip on every
-// protected-route click. Any mutation here must invalidate that cache so the
-// next navigation reflects the new state immediately rather than waiting for
-// the TTL to expire.
-const invalidateRouterAuthCache = () => {
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new Event('auth:invalidate-cache'))
-  }
-}
+// Coalesces the one-time /auth/status load — see ensureAuthLoaded().
+const authLoad = createCoalescedLoader()
 
 /**
  * Composable for authentication state management.
@@ -53,7 +47,8 @@ export function useAuth() {
    */
   const checkAuthStatus = async () => {
     try {
-      const { data } = await api.get('/auth/status')
+      // Tiny endpoint — fail fast so a degraded backend can't stall the guard.
+      const { data } = await api.get('/auth/status', { timeout: 4000 })
       authStatus.value = {
         authEnabled: data.auth_enabled,
         setupComplete: data.setup_complete,
@@ -72,6 +67,14 @@ export function useAuth() {
   }
 
   /**
+   * Ensure auth status has loaded at least once (coalesced; a failed load
+   * retries on the next call). The authStatus singleton is then kept
+   * current by the mutations below.
+   * @returns {Promise<boolean>}
+   */
+  const ensureAuthLoaded = () => authLoad.ensure(checkAuthStatus)
+
+  /**
    * Login with password
    * @param {string} password - The password to authenticate with
    * @returns {Promise<boolean>} - True if login successful
@@ -83,7 +86,6 @@ export function useAuth() {
     try {
       await api.post('/auth/login', { password })
       authStatus.value.authenticated = true
-      invalidateRouterAuthCache()
       logger.info('Login successful')
       return true
     } catch (err) {
@@ -102,7 +104,6 @@ export function useAuth() {
     try {
       await api.post('/auth/logout')
       authStatus.value.authenticated = false
-      invalidateRouterAuthCache()
       logger.info('Logged out')
     } catch (err) {
       logger.error('Logout error', err)
@@ -123,7 +124,6 @@ export function useAuth() {
       authStatus.value.authEnabled = true
       authStatus.value.setupComplete = true
       authStatus.value.authenticated = true
-      invalidateRouterAuthCache()
       logger.info('Password setup successful')
       return true
     } catch (err) {
@@ -147,7 +147,6 @@ export function useAuth() {
     try {
       const { data } = await api.post('/auth/toggle', { enabled })
       authStatus.value.authEnabled = data.auth_enabled
-      invalidateRouterAuthCache()
       logger.info('Auth toggled', { enabled: data.auth_enabled })
       return true
     } catch (err) {
@@ -194,7 +193,6 @@ export function useAuth() {
     try {
       await api.put('/settings/access', accessSettings)
       await checkAuthStatus()
-      invalidateRouterAuthCache()
       logger.info('Access settings saved', accessSettings)
       return true
     } catch (err) {
@@ -224,6 +222,7 @@ export function useAuth() {
     }
     loading.value = false
     error.value = ''
+    authLoad.reset()
   }
 
   return {
@@ -238,6 +237,7 @@ export function useAuth() {
 
     // Methods
     checkAuthStatus,
+    ensureAuthLoaded,
     login,
     logout,
     setup,

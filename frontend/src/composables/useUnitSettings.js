@@ -82,19 +82,6 @@ export function useUnitSettings() {
   }
 
   /**
-   * Load unit setting from API settings
-   */
-  const loadUnitSetting = async () => {
-    try {
-      const { data } = await api.get('/settings')
-      useMetricUnits.value = data.display?.use_metric_units ?? true
-    } catch (err) {
-      console.error('Failed to load unit settings:', err)
-      // Keep default (metric) on error
-    }
-  }
-
-  /**
    * Toggle and save unit preference (no restart needed)
    * @returns {Promise<boolean>} - True if save was successful
    */
@@ -158,7 +145,6 @@ export function useUnitSettings() {
     pressureUnit,
 
     // Methods
-    loadUnitSetting,
     toggleUnits,
     setUseMetricUnits,
     resetState

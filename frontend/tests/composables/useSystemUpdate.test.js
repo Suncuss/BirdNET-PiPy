@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { useSystemUpdate } from '@/composables/useSystemUpdate'
+import { UPDATE_DISMISSED_UNTIL_KEY } from '@/utils/storageKeys'
 
 // Mock the api service
 const mockApi = vi.hoisted(() => ({
@@ -280,7 +281,7 @@ describe('useSystemUpdate', () => {
 
   it('showUpdateIndicator is true when update available and not dismissed', async () => {
     // Clear any stored dismissal
-    localStorage.removeItem('birdnet_update_dismissed_until')
+    localStorage.removeItem(UPDATE_DISMISSED_UNTIL_KEY)
 
     mockApi.get.mockResolvedValueOnce({
       data: {
@@ -299,7 +300,7 @@ describe('useSystemUpdate', () => {
 
   it('dismissUpdate hides the update indicator', async () => {
     // Clear any stored dismissal
-    localStorage.removeItem('birdnet_update_dismissed_until')
+    localStorage.removeItem(UPDATE_DISMISSED_UNTIL_KEY)
 
     mockApi.get.mockResolvedValueOnce({
       data: {
@@ -349,7 +350,7 @@ describe('useSystemUpdate', () => {
   })
 
   it('showUpdateIndicator is false when auth enabled and user not logged in', async () => {
-    localStorage.removeItem('birdnet_update_dismissed_until')
+    localStorage.removeItem(UPDATE_DISMISSED_UNTIL_KEY)
     mockIsAuthenticated.value = false
 
     mockApi.get.mockResolvedValueOnce({
@@ -368,7 +369,7 @@ describe('useSystemUpdate', () => {
   })
 
   it('showUpdateIndicator is true when auth enabled and user is logged in', async () => {
-    localStorage.removeItem('birdnet_update_dismissed_until')
+    localStorage.removeItem(UPDATE_DISMISSED_UNTIL_KEY)
     mockIsAuthenticated.value = true
     // Advance past any dismiss duration from previous tests (7 days + buffer)
     vi.advanceTimersByTime(8 * 24 * 60 * 60 * 1000)

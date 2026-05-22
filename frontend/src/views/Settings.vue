@@ -1403,6 +1403,7 @@ import { useAuth } from '@/composables/useAuth'
 import { useUnitSettings } from '@/composables/useUnitSettings'
 import { useTimeFormat } from '@/composables/useTimeFormat'
 import { useAppStatus } from '@/composables/useAppStatus'
+import { useSettings } from '@/composables/useSettings'
 import { limitDecimals } from '@/utils/inputHelpers'
 import { FILTER_DEFAULTS, modelTypeOptions } from '@/utils/modelDefaults'
 import { RECORDER_STATES } from '@/utils/recorderStates'
@@ -1447,6 +1448,7 @@ export default {
     const unitSettings = useUnitSettings()
     const timeFormatSettings = useTimeFormat()
     const appStatus = useAppStatus()
+    const settingsStore = useSettings()
 
     // Dropdown options (static configuration)
     const recordingLengthOptions = [
@@ -1892,11 +1894,15 @@ export default {
     const loadSettings = async (retryCount = 0) => {
       try {
         loading.value = true
-        const { data } = await api.get('/settings')
+        // useSettings owns the /settings fetch and syncs display prefs.
+        // Take an independent deep copy — the form mutates this draft.
+        const ok = await settingsStore.refresh()
+        if (!ok || !settingsStore.settings.value) {
+          throw new Error('settings unavailable')
+        }
+        const data = JSON.parse(JSON.stringify(settingsStore.settings.value))
         normalizeSettingsData(data)
         settings.value = data
-        unitSettings.setUseMetricUnits(settings.value.display.use_metric_units ?? true)
-        timeFormatSettings.setTimeFormat(settings.value.display.time_format)
         if (saveStatus.value?.type === 'error') {
           saveStatus.value = null
         }
@@ -1944,6 +1950,8 @@ export default {
         // Apply server-computed fields (e.g. timezone from coordinates)
         if (data.settings) {
           settings.value = data.settings
+          // Keep the shared store in sync with the just-saved state.
+          settingsStore.setSettings(data.settings)
         }
         // Update snapshot after successful save
         takeSnapshot()
@@ -2555,7 +2563,7 @@ export default {
       loadRecorderStatus()
       loadSpeciesList()
       systemUpdate.loadVersionInfo()
-      auth.checkAuthStatus()
+      auth.ensureAuthLoaded()
       initSettingsSocket()
       window.addEventListener('beforeunload', handleBeforeUnload)
     })

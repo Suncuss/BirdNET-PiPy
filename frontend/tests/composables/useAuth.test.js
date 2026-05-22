@@ -165,7 +165,7 @@ describe('useAuth', () => {
       const auth = useAuth()
       await auth.checkAuthStatus()
 
-      expect(mockApi.get).toHaveBeenCalledWith('/auth/status')
+      expect(mockApi.get).toHaveBeenCalledWith('/auth/status', { timeout: 4000 })
       expect(auth.authStatus.value).toEqual({
         authEnabled: true,
         setupComplete: true,

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Fixed the dashboard breaking on slow devices such as the Raspberry Pi Zero, where API requests routinely exceed the frontend's request timeout because the API server shares a core with model inference and recording. A failed `/settings` request no longer clears `locationConfigured` and hides the entire dashboard; a failed dashboard refresh keeps the last-good data on screen instead of swapping in an error; request timeouts are now sized per endpoint (45s for the heavy `/dashboard` aggregation, 4s for the small `/auth/status`); and a stale per-period summary error no longer lingers over good data after the dashboard recovers. Navigation also no longer blocks on an `/auth/status` roundtrip — the router guard decides synchronously from a shared auth singleton and fails open, with the backend still enforcing auth on every protected endpoint
+- Fixed the metric/imperial unit toggle in Settings silently failing to apply when the settings store had not loaded — for example after the settings fetch exhausted its retries and fell back to defaults. The unit and time-format toggles now propagate their change directly instead of routing it through the settings store
+- Consolidated frontend settings handling — `/settings` is now fetched once into a shared `useSettings` store that feeds the unit and time-format composables, replacing several independent fetch sites and the hand-copied app-shell state. Single-flight loading, the localStorage "dismissed until" timer, and storage-key constants are factored into reusable helpers (`coalescedLoader`, `useDismissible`, `storageKeys`)
+
 ## [0.7.1] - 2026-05-21
 
 - Sped up Bird Gallery tab loading — the Species Catalog drops its per-species `/api/bird/<name>` fan-out (`/api/species/all` now returns `last_detected` directly), `get_species_sightings()` is rewritten as one GROUP BY pass instead of three full table scans, `/api/sightings` and `/api/species/all` gain a single-flight cache, card images load in a bounded background pool that no longer blocks the tab switch, and visited tabs are cached

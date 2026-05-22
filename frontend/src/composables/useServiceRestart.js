@@ -88,7 +88,10 @@ export function useServiceRestart() {
         }
 
         try {
-          // Axios doesn't use browser cache by default
+          // Reachability probe — detects when the API is back after a
+          // restart. Deliberately a raw request: routing it through
+          // useSettings would let its coalescing return stale cached data
+          // and never detect the reconnect.
           await api.get('/settings')
 
           // If we get here, the request succeeded

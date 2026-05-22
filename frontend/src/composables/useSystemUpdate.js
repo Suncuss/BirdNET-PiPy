@@ -1,8 +1,10 @@
 import { ref, computed } from 'vue'
 import api, { createLongRequest } from '@/services/api'
+import { UPDATE_DISMISSED_UNTIL_KEY } from '@/utils/storageKeys'
 import { useLogger } from './useLogger'
 import { useServiceRestart } from './useServiceRestart'
 import { useAuth } from './useAuth'
+import { useDismissible } from './useDismissible'
 
 // Module-level state (shared across all components - singleton)
 const versionInfo = ref(null)
@@ -13,9 +15,8 @@ const updating = ref(false)
 const statusMessage = ref(null)
 const statusType = ref(null) // 'success', 'error', 'info'
 
-// Dismissal state - stores expiry timestamp (when to show again)
-const DISMISS_STORAGE_KEY = 'birdnet_update_dismissed_until'
-const DISMISS_DURATION_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
+// Update banner is snoozable for 7 days.
+const dismissal = useDismissible(UPDATE_DISMISSED_UNTIL_KEY, 7 * 24 * 60 * 60 * 1000)
 
 const HA_POLL_INTERVAL_MS = 10_000
 const HA_POLL_TIMEOUT_MS = 10 * 60 * 1000
@@ -28,17 +29,6 @@ function stopHaPoll() {
   }
 }
 
-function loadDismissedUntil() {
-  try {
-    const stored = localStorage.getItem(DISMISS_STORAGE_KEY)
-    return stored ? parseInt(stored, 10) : null
-  } catch {
-    return null
-  }
-}
-
-const dismissedUntil = ref(loadDismissedUntil())
-
 export function useSystemUpdate() {
   const logger = useLogger('useSystemUpdate')
   const serviceRestart = useServiceRestart()
@@ -49,14 +39,8 @@ export function useSystemUpdate() {
   const showUpdateIndicator = computed(() => {
     if (!updateAvailable.value) return false
     if (!isAuthenticated.value) return false
-    return !dismissedUntil.value || Date.now() >= dismissedUntil.value
+    return !dismissal.isDismissed()
   })
-
-  const dismissUpdate = () => {
-    const expiry = Date.now() + DISMISS_DURATION_MS
-    dismissedUntil.value = expiry
-    localStorage.setItem(DISMISS_STORAGE_KEY, String(expiry))
-  }
 
   /**
    * Load current version information
@@ -269,7 +253,7 @@ export function useSystemUpdate() {
     statusType,
     // New
     showUpdateIndicator,
-    dismissUpdate,
+    dismissUpdate: dismissal.dismiss,
     // Expose service restart state for UI
     restartMessage: serviceRestart.restartMessage,
     restartError: serviceRestart.restartError,
