@@ -2,16 +2,22 @@
  * Tests for BirdDetails.vue recordings section
  */
 
-import { mount, flushPromises, RouterLinkStub } from '@vue/test-utils'
+import { mount, flushPromises, RouterLinkStub, enableAutoUnmount } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import BirdDetails from '@/views/BirdDetails.vue'
 import { deferred } from '../helpers/deferred'
+
+enableAutoUnmount(afterEach)
 
 // Mock the api service
 const mockApi = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
   delete: vi.fn()
+}))
+
+const chartMockState = vi.hoisted(() => ({
+  instances: []
 }))
 
 vi.mock('@/services/api', () => ({
@@ -28,11 +34,23 @@ vi.mock('vue-router', () => ({
 // Mock Chart.js
 vi.mock('chart.js/auto', () => ({
   default: class MockChart {
-    constructor() {}
-    destroy() {}
-    update() {}
-    resize() {}
-    static getChart() { return null }
+    constructor(canvas, config) {
+      this.canvas = canvas
+      this.config = config
+      this.data = config.data
+      this.options = config.options
+      this.destroyed = false
+      this.destroy = vi.fn(() => {
+        this.destroyed = true
+      })
+      this.update = vi.fn()
+      this.resize = vi.fn()
+      chartMockState.instances.push(this)
+    }
+
+    static getChart(canvas) {
+      return chartMockState.instances.find(chart => chart.canvas === canvas && !chart.destroyed) || null
+    }
   }
 }))
 
@@ -104,6 +122,10 @@ const mountComponent = () => {
   })
 }
 
+beforeEach(() => {
+  chartMockState.instances.length = 0
+})
+
 describe('BirdDetails Recordings Section', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -131,7 +153,7 @@ describe('BirdDetails Recordings Section', () => {
   })
 
   it('loads most recent recordings by default', async () => {
-    const wrapper = mountComponent()
+    mountComponent()
     await flushPromises()
 
     // Verify API call with sort=recent (default)
@@ -144,7 +166,7 @@ describe('BirdDetails Recordings Section', () => {
   })
 
   it('fetches with limit=16', async () => {
-    const wrapper = mountComponent()
+    mountComponent()
     await flushPromises()
 
     const recordingsCall = mockApi.get.mock.calls.find(call =>
@@ -484,6 +506,71 @@ describe('BirdDetails Loading vs Empty States', () => {
 
     expect(wrapper.text()).not.toContain("Couldn't load chart data")
     expect(wrapper.text()).not.toContain('No detections in this period')
+  })
+})
+
+describe('BirdDetails Chart Resize', () => {
+  const setupApi = () => {
+    mockApi.get.mockImplementation((url) => {
+      if (url.includes('/recordings')) {
+        return Promise.resolve({ data: mockRecordings })
+      }
+      if (url.includes('/detection_distribution')) {
+        return Promise.resolve({ data: mockDistribution })
+      }
+      if (url.includes('/wikimedia_image')) {
+        return Promise.resolve({ data: mockImageData })
+      }
+      if (url.includes('/bird/')) {
+        return Promise.resolve({ data: mockBirdDetails })
+      }
+      return Promise.resolve({ data: {} })
+    })
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.clearAllMocks()
+    window.innerWidth = 390
+    window.innerHeight = 844
+    setupApi()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    window.innerWidth = 1024
+    window.innerHeight = 768
+    vi.restoreAllMocks()
+  })
+
+  it('updates tick density in place on resize without refetching or rebuilding the chart', async () => {
+    const wrapper = mountComponent()
+    await flushPromises()
+
+    const chart = chartMockState.instances.at(-1)
+    const initialDistributionCalls = mockApi.get.mock.calls.filter(call =>
+      call[0].includes('/detection_distribution')
+    ).length
+    const initialChartCount = chartMockState.instances.length
+
+    expect(chart.options.scales.x.ticks.maxTicksLimit).toBe(10)
+
+    window.innerWidth = 900
+    window.innerHeight = 600
+    window.dispatchEvent(new Event('resize'))
+    vi.advanceTimersByTime(250)
+
+    const distributionCalls = mockApi.get.mock.calls.filter(call =>
+      call[0].includes('/detection_distribution')
+    ).length
+
+    expect(chart.options.scales.x.ticks.maxTicksLimit).toBe(31)
+    expect(chart.update).toHaveBeenCalledWith('none')
+    expect(chart.resize).not.toHaveBeenCalled()
+    expect(distributionCalls).toBe(initialDistributionCalls)
+    expect(chartMockState.instances.length).toBe(initialChartCount)
+
+    wrapper.unmount()
   })
 })
 

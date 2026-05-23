@@ -253,16 +253,21 @@
             <li
               v-for="entry in summaryEntries"
               :key="entry.key"
+              class="flex items-baseline"
             >
-              <span class="font-medium">{{ formatSummaryKey(entry.key) }}: </span> 
+              <span class="font-medium whitespace-nowrap mr-1">{{ formatSummaryKey(entry.key) }}:</span>
               <router-link
                 v-if="(entry.key === 'mostCommonBird' || entry.key === 'rarestBird') && entry.value !== 'N/A'"
                 :to="{ name: 'BirdDetails', params: { name: entry.value } }"
-                class="font-medium hover:text-blue-600 hover:underline transition-colors duration-300"
+                :title="getSummaryBirdDisplay(currentPeriodSummary, entry.key)"
+                class="font-medium hover:text-blue-600 hover:underline transition-colors duration-300 truncate min-w-0"
               >
                 {{ getSummaryBirdDisplay(currentPeriodSummary, entry.key) }}
               </router-link>
-              <span v-else>{{ formatSummaryValue(entry.key, entry.value) }}</span>
+              <span
+                v-else
+                class="truncate min-w-0"
+              >{{ formatSummaryValue(entry.key, entry.value) }}</span>
             </li>
           </ul>
           <p

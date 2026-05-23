@@ -144,7 +144,10 @@ export default {
     // Bumped on every tab switch so background image work from a previous tab
     // can detect it is stale and stop mutating cards the user no longer sees.
     let imageLoadVersion = 0
-    const IMAGE_CONCURRENCY = 4
+    // Serial: Wikimedia rate-limits aggressively on burst, and the
+    // /api/wikimedia_image proxy has no upstream cache, so each card costs
+    // ~2 unauthenticated Wikimedia API hits from the Pi's single IP.
+    const IMAGE_CONCURRENCY = 1
 
     // TODO, fix bird id for non-unique birds
 

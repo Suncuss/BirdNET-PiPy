@@ -471,6 +471,26 @@ export default {
       }
     }
 
+    let resizeTimeout
+    let currentMaxTicksLimit = null
+
+    const syncChartTickDensity = () => {
+      const chart = detectionChartInstance.value
+      if (!chart) return
+
+      const nextMaxTicksLimit = getMaxTicksLimit(selectedView.value)
+      if (nextMaxTicksLimit === currentMaxTicksLimit) return
+
+      currentMaxTicksLimit = nextMaxTicksLimit
+      chart.options.scales.x.ticks.maxTicksLimit = nextMaxTicksLimit
+      chart.update('none')
+    }
+
+    const handleResize = () => {
+      clearTimeout(resizeTimeout)
+      resizeTimeout = setTimeout(syncChartTickDensity, 250)
+    }
+
     // Update queue for chart updates
     const updateQueue = ref([])
 
@@ -613,6 +633,8 @@ export default {
         // Destroy existing chart using composable helper
         destroyChart(detectionChart)
 
+        currentMaxTicksLimit = getMaxTicksLimit(selectedView.value)
+
         // Create new chart
         detectionChartInstance.value = new Chart(detectionChart.value, {
           type: 'bar',
@@ -629,11 +651,6 @@ export default {
           options: {
             responsive: true,
             maintainAspectRatio: false,
-            // Explicitly handle resize for Safari
-            onResize: (chart, _size) => {
-              // Force redraw on resize
-              chart.update('none')
-            },
             animation: {
               duration: 300
             },
@@ -682,7 +699,7 @@ export default {
                   maxRotation: 45,
                   minRotation: 45,
                   autoSkip: true,
-                  maxTicksLimit: getMaxTicksLimit(selectedView.value),
+                  maxTicksLimit: currentMaxTicksLimit,
                   padding: 2
                 },
                 grid: {
@@ -701,9 +718,7 @@ export default {
         console.error('Error updating chart:', error)
         chartError.value = true
         // Drop any existing chart so a fresh date label doesn't annotate
-        // stale bars, AND so handleResize can't call .resize() on a
-        // destroyed instance (Chart.js destroy() nulls canvas/ctx). The
-        // error overlay covers the empty canvas.
+        // stale bars. The error overlay covers the empty canvas.
         destroyChart(detectionChart)
         detectionChartInstance.value = null
       } finally {
@@ -834,36 +849,14 @@ export default {
       return date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
     }
 
-    // Handle window resize for Safari and orientation changes
-    let resizeTimeout
-    let lastWidth = typeof window !== 'undefined' ? window.innerWidth : 0
-    const handleResize = () => {
-      clearTimeout(resizeTimeout)
-      resizeTimeout = setTimeout(() => {
-        const currentWidth = window.innerWidth
-        const widthChanged = Math.abs(currentWidth - lastWidth) > 100
-
-        if (detectionChartInstance.value) {
-          // If significant width change (orientation change), rebuild chart for new tick density
-          if (widthChanged) {
-            lastWidth = currentWidth
-            updateChart()
-          } else {
-            detectionChartInstance.value.resize()
-          }
-        }
-      }, 250)
-    }
-
     onMounted(() => {
       fetchBirdDetails()
       window.addEventListener('resize', handleResize)
     })
-    
+
     onUnmounted(() => {
       window.removeEventListener('resize', handleResize)
-
-      // Clean up chart using composable helper
+      clearTimeout(resizeTimeout)
       destroyChart(detectionChart)
     })
 
