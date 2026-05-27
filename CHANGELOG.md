@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-05-27
+
+- Fixed RTSP audio recordings being choppy from well-behaved producers such as mediamtx restreaming a local capture — the `aresample=async=1:first_pts=0` ffmpeg filter, added previously to harden recording against IP cameras with non-monotonic RTP timestamps, was injecting silence on startup and stretching/compressing samples in response to ordinary network jitter once input PTS came from `-use_wallclock_as_timestamps`. The filter was removed from both the recorder and the Icecast live-streaming command; the remaining `+genpts+discardcorrupt` flags continue to handle the original non-monotonic-DTS case the filter was added for
+
 ## [0.7.2] - 2026-05-23
 
 - Improved dashboard resilience on slow devices such as the Raspberry Pi Zero, where API requests routinely exceed the frontend's request timeout because the API server shares a core with model inference and recording. A failed `/settings` request no longer clears `locationConfigured` and hides the entire dashboard; a failed dashboard refresh keeps the last-good data on screen instead of swapping in an error; request timeouts are now sized per endpoint (45s for the heavy `/dashboard` aggregation, 4s for the small `/auth/status`); and a stale per-period summary error no longer lingers over good data after the dashboard recovers. Navigation also no longer blocks on an `/auth/status` roundtrip — the router guard decides synchronously from a shared auth singleton and fails open, with the backend still enforcing auth on every protected endpoint

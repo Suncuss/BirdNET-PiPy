@@ -456,8 +456,8 @@ class TestRtspRecorderRecordChunk:
             assert 'rtsp://192.168.1.100:554/stream' in cmd
             assert '-map' in cmd
             assert '0:a:0' in cmd
-            assert '-af' in cmd
-            assert 'aresample=async=1:first_pts=0' in cmd
+            assert '-af' not in cmd
+            assert 'aresample=async=1:first_pts=0' not in cmd
             assert '-t' in cmd
             assert '3.0' in cmd
             assert '-ar' in cmd

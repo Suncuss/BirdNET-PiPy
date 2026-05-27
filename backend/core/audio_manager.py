@@ -365,8 +365,8 @@ class RtspRecorder(BaseRecorder):
         Build RTSP ffmpeg arguments for unstable camera streams.
 
         Restricting the demuxer to audio avoids unnecessary video parsing
-        errors, while regenerating/smoothing timestamps prevents broken
-        output when cameras emit non-monotonic RTP timing.
+        errors, while regenerating timestamps prevents broken output when
+        cameras emit non-monotonic RTP timing.
         """
         return [
             '-rtsp_transport', 'tcp',
@@ -376,7 +376,6 @@ class RtspRecorder(BaseRecorder):
             '-use_wallclock_as_timestamps', '1',
             '-i', self.rtsp_url,
             '-map', '0:a:0',
-            '-af', 'aresample=async=1:first_pts=0',
         ]
 
     def _execute_recording(self, temp_path: str) -> bool:
