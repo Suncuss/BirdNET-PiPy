@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Fixed RTSP audio sources (e.g. some IP cameras) timing out when added or recorded even though the stream plays in VLC — ffmpeg now prefers TCP with UDP fallback (`-rtsp_flags prefer_tcp`) instead of forcing TCP, and the connection-test timeouts were lengthened to tolerate slow handshakes. Applied to the stream probe, the recorder, and the Icecast live-streaming command
+- Fixed Bird Gallery thumbnails intermittently not appearing. The gallery now serves Wikimedia's 400 px thumbnail (~50 KB) instead of the multi-MB original, and resolves card images lazily via an IntersectionObserver so only cards near the viewport cost a lookup — opening the Species Catalog no longer fans out a lookup for all ~200 species at once. A failed image falls back to the placeholder, and image work is torn down when the gallery is hidden and resumed when it returns
+- Fixed saved "customize image" choices still loading the full-resolution original in the gallery — a choice now stores and serves a thumbnail; choices saved before this change fall back to the full image until re-saved
+- Hardened the Wikimedia image proxy against rate limiting: a 429 is surfaced with the upstream `Retry-After` header instead of collapsing into a 500, concurrent cache-misses for the same species share a single upstream fetch (single-flight), and display-only gallery lookups skip Wikimedia for species that already have a custom image
+- Added a contact URL to the Wikimedia API `User-Agent` per Wikimedia's policy, keeping the app in the 200 req/min identified tier rather than the 10 req/min "unidentified" tier
+
 ## [0.7.3] - 2026-05-27
 
 - Fixed RTSP audio recordings being choppy from well-behaved producers such as mediamtx restreaming a local capture — the `aresample=async=1:first_pts=0` ffmpeg filter, added previously to harden recording against IP cameras with non-monotonic RTP timestamps, was injecting silence on startup and stretching/compressing samples in response to ordinary network jitter once input PTS came from `-use_wallclock_as_timestamps`. The filter was removed from both the recorder and the Icecast live-streaming command; the remaining `+genpts+discardcorrupt` flags continue to handle the original non-monotonic-DTS case the filter was added for

@@ -145,7 +145,7 @@ run_stream_loop() {
         local display_url
         display_url=$(echo "$rtsp_url" | sed 's/:[^:@]*@/:***@/')
         log_msg "  [$source_id] RTSP source: $display_url → $mount_point"
-        audio_args=(-rtsp_transport tcp -timeout 10000000 -allowed_media_types audio -fflags +genpts+discardcorrupt -use_wallclock_as_timestamps 1 -i "$rtsp_url" -map 0:a:0)
+        audio_args=(-rtsp_flags prefer_tcp -timeout 10000000 -allowed_media_types audio -fflags +genpts+discardcorrupt -use_wallclock_as_timestamps 1 -i "$rtsp_url" -map 0:a:0)
         retry_delay=2
     elif [ "$source_type" = "pulseaudio" ]; then
         local device="${3:-default}"

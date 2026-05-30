@@ -532,6 +532,7 @@ export default {
       kind,
       hasCustomImage: false,
       imageUrl: source?.imageUrl,
+      thumbUrl: source?.thumbUrl,
       pageUrl: source?.pageUrl,
       authorName: source?.authorName,
       authorUrl: source?.authorUrl,
@@ -551,6 +552,7 @@ export default {
           await api.put(`/bird/${encodeURIComponent(props.speciesName)}/wikimedia_choice`, {
             fileTitle: candidate.fileTitle,
             imageUrl: candidate.imageUrl,
+            thumbUrl: candidate.thumbUrl,
             pageUrl: candidate.pageUrl,
             authorName: candidate.authorName,
             authorUrl: candidate.authorUrl,

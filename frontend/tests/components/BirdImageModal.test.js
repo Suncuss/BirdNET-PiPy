@@ -117,7 +117,10 @@ describe('BirdImageModal', () => {
 
     expect(mockApi.put).toHaveBeenCalledWith(
       '/bird/American%20Robin/wikimedia_choice',
-      expect.objectContaining({ fileTitle: 'File:B.jpg' })
+      expect.objectContaining({
+        fileTitle: 'File:B.jpg',
+        thumbUrl: 'https://upload.wikimedia.org/thumb/B_400.jpg'
+      })
     )
     // No custom image existed → no DELETE /image call.
     expect(mockApi.delete).not.toHaveBeenCalled()
@@ -234,7 +237,8 @@ describe('BirdImageModal', () => {
         kind: 'wikimedia',
         hasCustomImage: false,
         fileTitle: 'File:B.jpg',
-        imageUrl: 'https://upload.wikimedia.org/B.jpg'
+        imageUrl: 'https://upload.wikimedia.org/B.jpg',
+        thumbUrl: 'https://upload.wikimedia.org/thumb/B_400.jpg'
       })
     } finally {
       window.removeEventListener('bird-image:changed', listener)

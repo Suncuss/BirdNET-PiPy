@@ -213,6 +213,16 @@ _image_cache_lock = threading.Lock()
 CACHE_EXPIRATION = 172800  # Cache expiration time in seconds (48 hours)
 MAX_CACHE_SIZE = 1000  # Maximum number of cached entries
 
+# Single-flight coordination for Wikimedia lookups. These deliberately do NOT
+# go through db_executor: that is a single SQLite lane, and a slow external
+# HTTP call there would block unrelated database work. The HTTP runs inline in
+# the request greenlet (under gevent, socket waits yield the event loop); this
+# map only dedups concurrent cache-misses for the same (species, limit) so they
+# share one upstream fetch instead of each hammering Wikimedia.
+_wikimedia_inflight = {}
+_wikimedia_inflight_lock = threading.Lock()
+_WIKIMEDIA_FETCH_TIMEOUT = 30  # waiter cap; the leader does up to 10s+15s of HTTP
+
 # Update check cache (only cache successful responses)
 _update_check_cache = {
     'result': None,
@@ -491,20 +501,46 @@ def _parse_wikimedia_imageinfo(file_title, image_info):
     return candidate
 
 
-def fetch_wikimedia_candidates(species_name, limit=8):
-    """Fetch up to `limit` Wikimedia image candidates for a species.
+def _wikimedia_error(message, status, retry_after=None):
+    """Structured failure for a Wikimedia lookup so callers can map it to an
+    HTTP status (and surface Retry-After on 429) instead of guessing from a
+    free-text string."""
+    return {'message': message, 'status': status, 'retry_after': retry_after}
 
-    Returns (candidates_list, error_or_None). The candidates list preserves
-    Wikimedia search order (top-of-search first) and is empty on any failure.
+
+def _wikimedia_error_response(payload, error):
+    """Build (response, status) for a Wikimedia failure, echoing the upstream
+    Retry-After on a 429 so the client can back off instead of retrying blind."""
+    resp = jsonify(payload)
+    if error.get('status') == 429 and error.get('retry_after'):
+        resp.headers['Retry-After'] = str(int(error['retry_after']))
+    return resp, error.get('status', 502)
+
+
+def _parse_retry_after(response):
+    """Return Retry-After seconds as a float, or None if absent/unparseable."""
+    raw = response.headers.get('Retry-After') if response is not None else None
+    if raw and raw.strip().isdigit():
+        return float(raw.strip())
+    return None
+
+
+def _do_fetch_wikimedia_candidates(species_name, limit):
+    """Perform the actual two-step Wikimedia lookup (search + imageinfo).
+
+    Returns (candidates_list, error_or_None) where error is a dict from
+    _wikimedia_error(). Never raises — all failures become an error dict.
     """
-    cached = get_cached_image(species_name, limit=limit)
-    if cached is not None:
-        return cached, None
-
-    # User-Agent header required by Wikimedia API (enforced since 2024)
+    # Wikimedia requires a meaningful User-Agent with contact info (enforced
+    # since 2024). The contact URL keeps us in the 200 req/min tier instead of
+    # the 10 req/min "unidentified" tier.
     # Per Wikimedia policy: https://foundation.wikimedia.org/wiki/Policy:Wikimedia_Foundation_User-Agent_Policy
     headers = {
-        'User-Agent': f'{DISPLAY_NAME}/{__version__} (Bird detection system; educational/personal use)'
+        'User-Agent': (
+            f'{DISPLAY_NAME}/{__version__} '
+            f'(+https://github.com/Suncuss/BirdNET-PiPy) '
+            f'python-requests/{requests.__version__}'
+        )
     }
     api_url = "https://commons.wikimedia.org/w/api.php"
 
@@ -526,7 +562,7 @@ def fetch_wikimedia_candidates(species_name, limit=8):
         search_results = search_response.json().get('query', {}).get('search', [])
 
         if not search_results:
-            return [], 'No results found'
+            return [], _wikimedia_error('No results found', 404)
 
         # Server-side `-egg -skeleton` is best-effort; filter titles too.
         ordered_titles = [
@@ -534,7 +570,7 @@ def fetch_wikimedia_candidates(species_name, limit=8):
             if not WIKIMEDIA_TITLE_BLOCKLIST.search(hit['title'])
         ]
         if not ordered_titles:
-            return [], 'No results found'
+            return [], _wikimedia_error('No results found', 404)
 
         info_response = requests.get(
             api_url,
@@ -567,13 +603,68 @@ def fetch_wikimedia_candidates(species_name, limit=8):
             candidates.append(_parse_wikimedia_imageinfo(title, info))
 
         if not candidates:
-            return [], 'No image info found'
+            return [], _wikimedia_error('No image info found', 502)
 
-        set_cached_image(species_name, candidates, limit=limit)
         return candidates, None
 
+    except requests.HTTPError as e:
+        status = e.response.status_code if e.response is not None else 502
+        if status == 429:
+            return [], _wikimedia_error(
+                'Rate limited by Wikimedia', 429, _parse_retry_after(e.response)
+            )
+        return [], _wikimedia_error(f'Wikimedia returned HTTP {status}', 502)
     except requests.RequestException as e:
-        return [], f'Error fetching Wikimedia image: {str(e)}'
+        # Includes JSONDecodeError (subclass of RequestException) from the
+        # empty-body responses Wikimedia serves during a rate-limit cooldown.
+        return [], _wikimedia_error(f'Error fetching Wikimedia image: {e}', 502)
+
+
+def fetch_wikimedia_candidates(species_name, limit=8):
+    """Fetch up to `limit` Wikimedia image candidates for a species.
+
+    Returns (candidates_list, error_or_None); error is a _wikimedia_error()
+    dict. The candidates list preserves Wikimedia search order (top-of-search
+    first) and is empty on any failure. Concurrent misses for the same
+    (species, limit) share a single upstream fetch (see _wikimedia_inflight).
+    """
+    cached = get_cached_image(species_name, limit=limit)
+    if cached is not None:
+        return cached, None
+
+    key = (species_name, limit)
+    with _wikimedia_inflight_lock:
+        # Re-check under the lock: a flight that finished between our miss and
+        # acquiring the lock may have just populated the cache.
+        cached = get_cached_image(species_name, limit=limit)
+        if cached is not None:
+            return cached, None
+        entry = _wikimedia_inflight.get(key)
+        is_leader = entry is None
+        if is_leader:
+            entry = {'event': threading.Event(), 'result': None}
+            _wikimedia_inflight[key] = entry
+
+    if not is_leader:
+        # Follower: wait for the leader's result rather than firing our own hit.
+        if not entry['event'].wait(timeout=_WIKIMEDIA_FETCH_TIMEOUT):
+            return [], _wikimedia_error('Wikimedia lookup timed out', 504)
+        return entry['result'] or ([], _wikimedia_error('Wikimedia lookup failed', 502))
+
+    # Leader: do the fetch, cache on success, then wake followers — always, so a
+    # crash can't strand them waiting until the timeout.
+    try:
+        result = _do_fetch_wikimedia_candidates(species_name, limit)
+    except Exception as e:  # defensive: _do_fetch shouldn't raise, but never hang followers
+        result = ([], _wikimedia_error(f'Wikimedia lookup failed: {e}', 502))
+    candidates, _ = result
+    if candidates:
+        set_cached_image(species_name, candidates, limit=limit)
+    with _wikimedia_inflight_lock:
+        entry['result'] = result
+        _wikimedia_inflight.pop(key, None)
+    entry['event'].set()
+    return result
 
 
 def fetch_wikimedia_image(species_name):
@@ -597,6 +688,10 @@ def get_wikimedia_image():
     if sidecar:
         return jsonify({
             'imageUrl': sidecar['imageUrl'],
+            # Legacy sidecars (schemaVersion 1) have no thumbUrl — fall back to
+            # the full imageUrl so the gallery still renders, just heavier. New
+            # saves carry a thumbUrl; re-saving a legacy choice upgrades it.
+            'thumbUrl': sidecar.get('thumbUrl') or sidecar['imageUrl'],
             'pageUrl': sidecar['pageUrl'],
             'authorName': sidecar.get('authorName', 'Unknown Author'),
             'authorUrl': sidecar.get('authorUrl'),
@@ -606,12 +701,20 @@ def get_wikimedia_image():
             'source': 'sidecar',
         })
 
+    # The gallery passes for_display_only=1: it renders the local custom image
+    # when one exists and ignores the Wikimedia metadata, so skip the upstream
+    # lookup for custom-upload species (a sidecar would have returned above).
+    # BirdDetails omits the flag because it still wants the revert-fallback data.
+    display_only = request.args.get('for_display_only', '').lower() in ('1', 'true', 'yes')
+    if display_only and has_custom:
+        return jsonify({'hasCustomImage': True}), 200
+
     image_data, error = fetch_wikimedia_image(species_name)
 
     if error:
         if has_custom:
             return jsonify({'hasCustomImage': True}), 200
-        return jsonify({'error': error}), 404 if 'No results found' in error else 500
+        return _wikimedia_error_response({'error': error['message']}, error)
 
     image_data['hasCustomImage'] = has_custom
     image_data['source'] = 'wikimedia-search'
@@ -653,9 +756,8 @@ def get_wikimedia_image_candidates():
         'hasCustomImage': has_custom,
     }
     if error and not candidates:
-        payload['error'] = error
-        status = 404 if 'No results found' in error else 502
-        return jsonify(payload), status
+        payload['error'] = error['message']
+        return _wikimedia_error_response(payload, error)
     return jsonify(payload)
 
 
@@ -687,11 +789,19 @@ def put_wikimedia_choice(species_name):
     if author_url is not None and not isinstance(author_url, str):
         return jsonify({'error': 'authorUrl must be a string or null'}), 400
 
+    # thumbUrl is optional (older clients omit it). Validate it when present;
+    # otherwise store the full imageUrl so the sidecar always has a usable
+    # thumbnail field for the gallery to display.
+    thumb_url = payload.get('thumbUrl')
+    if thumb_url is not None and (not isinstance(thumb_url, str) or not _is_wikimedia_url(thumb_url)):
+        return jsonify({'error': 'thumbUrl must be a wikimedia.org https URL'}), 400
+
     sidecar = {
-        'schemaVersion': 1,
+        'schemaVersion': 2,
         'source': 'wikimedia',
         'fileTitle': payload['fileTitle'],
         'imageUrl': payload['imageUrl'],
+        'thumbUrl': thumb_url or payload['imageUrl'],
         'pageUrl': payload['pageUrl'],
         'authorName': payload['authorName'],
         'authorUrl': author_url,

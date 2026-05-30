@@ -41,6 +41,7 @@
         <div
           v-for="bird in displayedBirds"
           :key="bird.id"
+          :ref="el => registerCard(el, bird)"
           class="bird-card bg-white rounded-lg shadow-md overflow-hidden transition-all duration-300 hover:shadow-lg"
         >
           <!-- Wrap the image and related content inside the router-link -->
@@ -56,6 +57,7 @@
                 :class="{ 'opacity-0': !bird.focalPointReady, 'opacity-100': bird.focalPointReady }"
                 :style="{ objectPosition: bird.focalPoint || '50% 50%' }"
                 loading="lazy"
+                @error="onImageError(bird)"
               >
               <div
                 class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300"
@@ -144,10 +146,18 @@ export default {
     // Bumped on every tab switch so background image work from a previous tab
     // can detect it is stale and stop mutating cards the user no longer sees.
     let imageLoadVersion = 0
-    // Serial: Wikimedia rate-limits aggressively on burst, and the
-    // /api/wikimedia_image proxy has no upstream cache, so each card costs
-    // ~2 unauthenticated Wikimedia API hits from the Pi's single IP.
-    const IMAGE_CONCURRENCY = 1
+
+    // Card images load lazily, gated by an IntersectionObserver so only cards
+    // in (or near) the viewport cost a Wikimedia lookup — Species Catalog can
+    // hold 200+ cards but only ~12 are ever on screen. Intersecting cards are
+    // pushed onto a serial queue rather than loaded in parallel: Wikimedia
+    // rate-limits aggressively on burst, and the initial viewport alone can
+    // intersect a dozen cards at once.
+    const cardBirds = new WeakMap()  // card element -> bird (no ad-hoc DOM props)
+    const loadQueue = []
+    let queueRunning = false
+    let imageObserver = null
+    const ioSupported = typeof IntersectionObserver !== 'undefined'
 
     // TODO, fix bird id for non-unique birds
 
@@ -217,6 +227,10 @@ export default {
     const applyResolvedImage = async (bird, fields) => {
       bird.focalPointReady = false  // hide to trigger the fade
       bird.imageUrl = fields.imageUrl
+      // Clear any prior error here — atomically with the new imageUrl — so the
+      // card never sits in (imageError=false, imageUrl=placeholder), which would
+      // let registerCard re-observe and reload it out from under this apply.
+      bird.imageError = false
       bird.hasCustomImage = Boolean(fields.hasCustomImage)
       bird.focalPoint = fields.focalPoint
       if (!bird.hasCustomImage) {
@@ -233,6 +247,7 @@ export default {
     // so re-running this for a cached tab is cheap; bails if `version` goes
     // stale across an await so a slow lookup never mutates a tab the user left.
     const loadBirdImage = async (bird, version) => {
+      if (bird.imageError) return  // errored card is terminal — don't refetch
       if (bird.imageUrl !== getDefaultBirdImageUrl()) return
       try {
         const imageData = await fetchWikimediaImage(bird.commonName)
@@ -246,10 +261,14 @@ export default {
             focalPoint: '50% 50%',
           }
         } else {
+          // Display the 400px CDN thumbnail, not the multi-MB original: the
+          // backend already returns thumbUrl, and full-size upload.wikimedia.org
+          // URLs are the ones most prone to 429s (see investigation doc).
+          const displayUrl = imageData.thumbUrl || imageData.imageUrl
           // Calculate the focal point first — this also preloads the image
-          const focalPoint = await calculateFocalPoint(imageData.imageUrl)
+          const focalPoint = await calculateFocalPoint(displayUrl)
           if (version !== imageLoadVersion) return
-          fields = { ...imageData, focalPoint }
+          fields = { ...imageData, imageUrl: displayUrl, focalPoint }
         }
         await applyResolvedImage(bird, fields)
       } catch (error) {
@@ -257,18 +276,90 @@ export default {
       }
     }
 
-    // Fill in card images in the background with bounded concurrency, so one
-    // slow Wikimedia lookup cannot stall the rest of the grid or the tab
-    // switch. Fire-and-forget: never awaited by selectTab().
-    const updateBirdImages = async (birdList, version) => {
-      let next = 0
-      const worker = async () => {
-        while (next < birdList.length && version === imageLoadVersion) {
-          await loadBirdImage(birdList[next++], version)
+    // Drain the load queue one card at a time. Serial by design (see cardBirds
+    // comment); the version guard drops cards queued for a tab the user left.
+    const drainQueue = async () => {
+      queueRunning = true
+      try {
+        while (loadQueue.length) {
+          const { bird, version } = loadQueue.shift()
+          if (version !== imageLoadVersion) continue
+          await loadBirdImage(bird, version)
         }
+      } finally {
+        queueRunning = false
       }
-      const poolSize = Math.min(IMAGE_CONCURRENCY, birdList.length)
-      await Promise.all(Array.from({ length: poolSize }, worker))
+    }
+
+    const enqueueLoad = (bird, version) => {
+      loadQueue.push({ bird, version })
+      if (!queueRunning) drainQueue()
+    }
+
+    const teardownImageObserver = () => {
+      if (imageObserver) {
+        imageObserver.disconnect()
+        imageObserver = null
+      }
+    }
+
+    // Drop pending image work. Bumping the version makes any in-flight
+    // loadBirdImage bail at its next version check; clearing the queue drops
+    // anything not yet started. Used when the view goes off-screen/unmounts.
+    const cancelPendingImageLoads = () => {
+      imageLoadVersion++
+      loadQueue.length = 0
+    }
+
+    // (Re)create the observer for the current tab. `version` is captured so a
+    // late intersection from a previous tab is dropped by drainQueue's guard.
+    // Use the callback's own `observer` arg (not the outer `imageObserver`,
+    // which may already be null or a newer observer when a late callback fires).
+    const setupImageObserver = (version) => {
+      teardownImageObserver()
+      if (!ioSupported) return
+      imageObserver = new IntersectionObserver((entries, observer) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue
+          const bird = cardBirds.get(entry.target)
+          observer.unobserve(entry.target)
+          if (bird) enqueueLoad(bird, version)
+        }
+      }, { rootMargin: '300px 0px' })  // start loading ~one card-row ahead
+    }
+
+    // Function ref on each card. Observes cards still on the placeholder;
+    // resolved cards (cached from an earlier visit) are skipped. With no
+    // observer (fallback env) the card loads immediately, ungated by viewport.
+    const registerCard = (el, bird) => {
+      if (!el || !bird) return
+      // An errored card resets imageUrl to the placeholder; without this guard
+      // the function-ref re-fire would re-observe it and reload the bad image.
+      if (bird.imageError) return
+      if (bird.imageUrl !== getDefaultBirdImageUrl()) return
+      cardBirds.set(el, bird)
+      if (imageObserver) {
+        imageObserver.observe(el)
+      } else if (!ioSupported) {
+        // No IntersectionObserver in this env — load ungated by viewport.
+        enqueueLoad(bird, imageLoadVersion)
+      }
+      // else: observer not yet (re)created for the current tab — this is a
+      // stale render of the *outgoing* tab (the selectedTab change re-renders
+      // the old list while loadTab is still pending). Ignore it; the observer
+      // is set up only after birds.value is replaced, so the live tab's cards
+      // register against the live observer.
+    }
+
+    // <img @error>: a thumbnail/original that fails to load (404, network,
+    // upstream 429 on the image CDN) must not strand the card on a broken
+    // image. Fall back to the placeholder once; never retry the failed URL.
+    const onImageError = (bird) => {
+      if (bird.imageError) return  // also guards the default image itself failing
+      bird.imageError = true
+      bird.imageUrl = getDefaultBirdImageUrl()
+      bird.focalPoint = '50% 50%'
+      bird.focalPointReady = true
     }
 
     const loadTab = (tab) => {
@@ -282,17 +373,28 @@ export default {
       // New version stamp: in-flight work from the previous tab compares
       // against it, detects it is stale, and stops overwriting this tab.
       const version = ++imageLoadVersion
+      // Stop the previous tab's observer NOW, and leave it null across the
+      // await below. The selectedTab change above triggers a re-render of the
+      // *outgoing* list; with no observer in place, registerCard ignores those
+      // stale cards instead of loading them under the new version. The observer
+      // is (re)created only after birds.value holds the tab we are switching to.
+      teardownImageObserver()
 
       const cached = tabCache[tab]
       if (cached) {
-        birds.value = cached.birds  // render the visited tab instantly
-        if (Date.now() - cached.at <= STALE_THRESHOLD) {
-          // Resume image loads for any cards a prior interrupted visit left
-          // on a placeholder (resolved cards are skipped — see loadBirdImage).
-          updateBirdImages(birds.value, version)
+        const fresh = Date.now() - cached.at <= STALE_THRESHOLD
+        // Assign a fresh array (same bird objects) so the v-for re-renders and
+        // the card function refs re-fire. On keep-alive reactivation birds.value
+        // is already === cached.birds; assigning it verbatim would be a no-op,
+        // so registerCard would never run and placeholders would never resume.
+        birds.value = cached.birds.slice()  // render the visited tab instantly
+        if (fresh) {
+          // Observe the cached cards: any a prior interrupted visit left on a
+          // placeholder load as they scroll in; resolved cards are skipped.
+          setupImageObserver(version)
           return
         }
-        // Stale: fall through and refresh in the background.
+        // Stale: show cached instantly but don't observe — about to refresh.
       }
 
       const loaded = await loadTab(tab)
@@ -300,8 +402,8 @@ export default {
       if (version !== imageLoadVersion) return
       tabCache[tab] = { birds: loaded, at: Date.now() }
       birds.value = loaded
-      // Fire-and-forget: image work must not block the tab switch.
-      updateBirdImages(birds.value, version)
+      // Observer created after the swap, so only the live tab's cards register.
+      setupImageObserver(version)
     }
 
     // Patch a single card in place when the customize-image modal applies a
@@ -310,10 +412,13 @@ export default {
       if (!detail?.species || !detail.imageUrl) return
       const bird = birds.value.find(b => b.commonName === detail.species)
       if (!bird) return
+      // Match the grid: display the thumbnail when the change is a Wikimedia
+      // choice (uploads carry no thumbUrl and fall back to their own URL).
+      const displayUrl = detail.thumbUrl || detail.imageUrl
       const focalPoint = detail.hasCustomImage
         ? '50% 50%'
-        : await calculateFocalPoint(detail.imageUrl)
-      await applyResolvedImage(bird, { ...detail, focalPoint })
+        : await calculateFocalPoint(displayUrl)
+      await applyResolvedImage(bird, { ...detail, imageUrl: displayUrl, focalPoint })
     }
 
     const onBirdImageChanged = (event) => {
@@ -327,10 +432,17 @@ export default {
 
     onUnmounted(() => {
       window.removeEventListener('bird-image:changed', onBirdImageChanged)
+      teardownImageObserver()
+      cancelPendingImageLoads()
     })
 
     onDeactivated(() => {
       hasBeenDeactivated = true
+      // Stop all image work while the keep-alive'd view is off-screen:
+      // disconnect the observer, drop the queue, and invalidate in-flight
+      // loads. onActivated re-runs selectTab, which rebuilds everything.
+      teardownImageObserver()
+      cancelPendingImageLoads()
     })
 
     onActivated(() => {
@@ -348,8 +460,10 @@ export default {
 
     const fetchWikimediaImage = async (speciesName) => {
       try {
+        // for_display_only: the gallery only needs hasCustomImage / image URLs,
+        // so the backend can skip the Wikimedia lookup for custom-upload species.
         const { data } = await api.get('/wikimedia_image', {
-          params: { species: speciesName }
+          params: { species: speciesName, for_display_only: 1 }
         })
         return data
       } catch (error) {
@@ -364,6 +478,8 @@ export default {
       displayedBirds,
       formatDate,
       selectTab,
+      registerCard,
+      onImageError,
     }
   }
 }
