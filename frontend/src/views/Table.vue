@@ -560,26 +560,7 @@
     </div>
 
     <!-- Scroll to Top FAB -->
-    <button
-      v-show="showScrollTop"
-      class="fixed bottom-4 right-4 w-10 h-10 bg-green-600 hover:bg-green-700 text-white rounded-full shadow-lg flex items-center justify-center z-50 transition-colors"
-      title="Scroll to top"
-      @click="scrollToTop"
-    >
-      <svg
-        class="w-5 h-5"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <path
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          stroke-width="2"
-          d="M5 15l7-7 7 7"
-        />
-      </svg>
-    </button>
+    <ScrollToTopButton />
 
     <!-- Spectrogram Modal -->
     <SpectrogramModal
@@ -660,6 +641,7 @@
 import DetectionInfoModal from '@/components/DetectionInfoModal.vue'
 import AppDatePicker from '@/components/AppDatePicker.vue'
 import Spinner from '@/components/Spinner.vue'
+import ScrollToTopButton from '@/components/ScrollToTopButton.vue'
 
 // --- Icons Setup ---
 library.add(faPlay, faPause, faCircleInfo, faTrashAlt, faDatabase)
@@ -753,15 +735,6 @@ const router = useRouter()
 	  const species = speciesList.value.find(item => item.common_name === selectedSpecies.value)
 	  return getDisplayCommonName(species) || selectedSpecies.value
 	})
-
-// Scroll to top
-const showScrollTop = ref(false)
-const handleScroll = () => {
-  showScrollTop.value = window.scrollY > 300
-}
-const scrollToTop = () => {
-  window.scrollTo({ top: 0, behavior: 'smooth' })
-}
 
 // Modals
 const isSpectrogramModalVisible = ref(false)
@@ -994,12 +967,10 @@ const seedFiltersFromQuery = () => {
 	  }
 	  fetchSpeciesList()
 	  document.addEventListener('click', handleClickOutside)
-	  window.addEventListener('scroll', handleScroll)
 	})
 
 	onUnmounted(() => {
 	  document.removeEventListener('click', handleClickOutside)
-	  window.removeEventListener('scroll', handleScroll)
 	  // Audio cleanup is handled automatically by useAudioPlayer composable
 	})
 	</script>

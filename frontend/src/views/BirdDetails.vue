@@ -88,7 +88,7 @@
           <p><span class="font-semibold text-gray-700">Total Detections:</span> {{ totalVisits }}</p>
           <p><span class="font-semibold text-gray-700">First Detected:</span> {{ formatDate(firstDetected) }}</p>
           <p><span class="font-semibold text-gray-700">Last Detected:</span> {{ formatDate(lastDetected) }}</p>
-          <p><span class="font-semibold text-gray-700">Most Activity Time:</span> {{ peakActivityTime }}</p>
+          <p><span class="font-semibold text-gray-700">Most Activity Time:</span> {{ formatHourLabel(peakActivityTime) }}</p>
           <p v-if="birdDetails.ebird_code">
             <a
               :href="`https://ebird.org/species/${birdDetails.ebird_code}`"
@@ -364,6 +364,7 @@ import { useDateNavigation } from '@/composables/useDateNavigation'
 import { useChartHelpers } from '@/composables/useChartHelpers'
 import { useChartColors } from '@/composables/useChartColors'
 import { useSmartCrop } from '@/composables/useSmartCrop'
+import { useTimeFormat } from '@/composables/useTimeFormat'
 import api from '@/services/api'
 import {
   getAudioUrl,
@@ -442,6 +443,7 @@ export default {
     const { destroyChart } = useChartHelpers()
     const { colorPalette } = useChartColors()
     const { useFocalPoint } = useSmartCrop()
+    const { formatHourLabel } = useTimeFormat()
     const { focalPoint: imageFocalPoint, isReady: imageReady, updateFocalPoint } = useFocalPoint()
 
     // Detect mobile portrait mode and return appropriate tick limits
@@ -880,6 +882,7 @@ export default {
       peakActivityTime,
       seasonality,
       formatDate,
+      formatHourLabel,
 	      detectionChart,
 	      getAudioUrl,
 	      getSpectrogramUrl,

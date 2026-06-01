@@ -108,9 +108,10 @@
       </router-view>
     </main>
 
-    <!-- Status FAB — recorder warning takes priority over update; hidden on Settings -->
+    <!-- Status FAB — recorder warning takes priority over update; hidden on
+         Settings and while a page-level scroll-to-top button occupies the corner -->
     <router-link
-      v-if="recorderHealth.showRecorderWarning.value && $route.name !== 'Settings'"
+      v-if="recorderHealth.showRecorderWarning.value && statusFabAllowed"
       to="/settings"
       class="fixed bottom-4 right-4 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-full shadow-lg hidden md:flex items-center gap-2 z-50 transition-colors"
       title="Audio recording issues detected"
@@ -132,7 +133,7 @@
       <span class="text-sm font-medium">Audio Recording Issues</span>
     </router-link>
     <router-link
-      v-else-if="systemUpdate.showUpdateIndicator.value && $route.name !== 'Settings'"
+      v-else-if="systemUpdate.showUpdateIndicator.value && statusFabAllowed"
       to="/settings"
       class="fixed bottom-4 right-4 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-full shadow-lg hidden md:flex items-center gap-2 z-50 transition-colors"
       title="System update available"
@@ -173,7 +174,7 @@
 </template>
 
 <script>
-import { ref, nextTick, watchEffect, onMounted, onUnmounted } from 'vue'
+import { ref, computed, nextTick, watchEffect, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useLogger } from '@/composables/useLogger'
 import { useAuth } from '@/composables/useAuth'
@@ -181,6 +182,7 @@ import { useSettings } from '@/composables/useSettings'
 import { useAppStatus } from '@/composables/useAppStatus'
 import { useSystemUpdate } from '@/composables/useSystemUpdate'
 import { useRecorderHealth } from '@/composables/useRecorderHealth'
+import { useScrollToTop } from '@/composables/useScrollToTop'
 import { DISPLAY_NAME } from './version'
 import SetupWizard from '@/components/SetupWizard.vue'
 import LoginModal from '@/components/LoginModal.vue'
@@ -203,6 +205,13 @@ export default {
     const { stationName, setStationName, setLocationConfigured } = useAppStatus()
     const systemUpdate = useSystemUpdate()
     const recorderHealth = useRecorderHealth()
+    const scrollToTop = useScrollToTop()
+
+    // Whether the global status FABs may occupy the bottom-right corner: not on
+    // Settings, and not while a page-level scroll-to-top button claims it.
+    const statusFabAllowed = computed(
+      () => route.name !== 'Settings' && !scrollToTop.isVisible.value
+    )
 
     const showSetupWizard = ref(false)
     const showLoginModal = ref(false)
@@ -337,7 +346,8 @@ export default {
       auth,
       stationName,
       systemUpdate,
-      recorderHealth
+      recorderHealth,
+      statusFabAllowed
     }
   }
 }

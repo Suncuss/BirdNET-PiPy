@@ -5,9 +5,14 @@
 import { mount, flushPromises, RouterLinkStub, enableAutoUnmount } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import BirdDetails from '@/views/BirdDetails.vue'
+import { useTimeFormat } from '@/composables/useTimeFormat'
 import { deferred } from '../helpers/deferred'
 
 enableAutoUnmount(afterEach)
+
+// Real composable (not mocked): driving its singleton lets us assert the view
+// reformats the backend's 24h "HH:00" peak time per the user's preference.
+const { setTimeFormat } = useTimeFormat()
 
 // Mock the api service
 const mockApi = vi.hoisted(() => ({
@@ -695,5 +700,76 @@ describe('BirdDetails Custom Image', () => {
 
     // Should now show wikimedia attribution
     expect(wrapper.text()).toContain('Photo by')
+  })
+})
+
+describe('BirdDetails Most Activity Time formatting', () => {
+  // The backend always sends peak_activity_time as a 24-hour "HH:00" string.
+  // The view must run it through useTimeFormat so it honors the 12h/24h
+  // preference, exactly like Dashboard's "Most Active Hour".
+  const setupApi = (details = mockBirdDetails) => {
+    mockApi.get.mockImplementation((url) => {
+      if (url.includes('/recordings')) {
+        return Promise.resolve({ data: [] })
+      }
+      if (url.includes('/detection_distribution')) {
+        return Promise.resolve({ data: { labels: [], data: [] } })
+      }
+      if (url.includes('/wikimedia_image')) {
+        return Promise.resolve({ data: mockImageData })
+      }
+      if (url.includes('/bird/')) {
+        return Promise.resolve({ data: details })
+      }
+      return Promise.resolve({ data: {} })
+    })
+  }
+
+  // Scope assertions to the "Most Activity Time" line so other parts of the
+  // page can't accidentally satisfy (or break) the match.
+  const activityLineText = (wrapper) => {
+    const line = wrapper.findAll('p').find((p) => p.text().includes('Most Activity Time'))
+    return line ? line.text() : ''
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    setupApi()
+  })
+
+  afterEach(() => {
+    // Clear the shared explicit choice so the format never leaks across tests.
+    setTimeFormat(null)
+    vi.restoreAllMocks()
+  })
+
+  it('renders the peak hour in 24-hour form when that preference is set', async () => {
+    setTimeFormat('24h')
+    const wrapper = mountComponent()
+    await flushPromises()
+
+    expect(activityLineText(wrapper)).toContain('06:00')
+  })
+
+  it('reformats the peak hour to 12-hour form when that preference is set', async () => {
+    setTimeFormat('12h')
+    const wrapper = mountComponent()
+    await flushPromises()
+
+    // Regression guard: the raw 24h "06:00" must be converted, not echoed.
+    const text = activityLineText(wrapper)
+    expect(text).toContain('6 AM')
+    expect(text).not.toContain('06:00')
+  })
+
+  it('shows no time (never the literal "null") when the backend reports no peak hour', async () => {
+    setTimeFormat('24h')
+    setupApi({ ...mockBirdDetails, peak_activity_time: null })
+    const wrapper = mountComponent()
+    await flushPromises()
+
+    const text = activityLineText(wrapper)
+    expect(text).toContain('Most Activity Time:')
+    expect(text).not.toContain('null')
   })
 })

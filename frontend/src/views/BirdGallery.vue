@@ -25,9 +25,19 @@
     </div>
 
     <div>
+      <!-- Loading: show a spinner while an uncached tab's query runs, rather
+           than leaving the previous tab's cards on screen until it resolves. -->
+      <div
+        v-if="isLoading"
+        class="flex items-center justify-center py-16"
+      >
+        <Spinner class="h-8 w-8 text-green-600" />
+        <span class="ml-3 text-gray-600">Loading...</span>
+      </div>
+
       <!-- Conditional check for displayedBirds -->
       <div
-        v-if="displayedBirds.length === 0"
+        v-else-if="displayedBirds.length === 0"
         class="text-center text-gray-500 p-4"
       >
         No birds to display yet.
@@ -110,6 +120,9 @@
         </div>
       </div>
     </div>
+
+    <!-- Scroll to Top FAB -->
+    <ScrollToTopButton />
   </div>
 </template>
 
@@ -119,15 +132,21 @@ import api from '@/services/api'
 import { getBirdImageUrl, getDefaultBirdImageUrl } from '@/services/media'
 import { useSmartCrop } from '@/composables/useSmartCrop'
 import AppButton from '@/components/AppButton.vue'
+import ScrollToTopButton from '@/components/ScrollToTopButton.vue'
+import Spinner from '@/components/Spinner.vue'
 
 export default {
   name: 'BirdGallery',
   components: {
-    AppButton
+    AppButton,
+    ScrollToTopButton,
+    Spinner
   },
   setup() {
     const selectedTab = ref('recent')
     const birds = ref([])
+    // True only while an uncached tab's query is in flight — see selectTab.
+    const isLoading = ref(false)
     const { calculateFocalPoint } = useSmartCrop()
     const tabs = [
       { value: 'recent', label: 'Today\'s Detections', icon: '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z" clip-rule="evenodd" /></svg>' },
@@ -381,6 +400,12 @@ export default {
       teardownImageObserver()
 
       const cached = tabCache[tab]
+      // Spinner only when there's nothing cached to show: a cached tab (fresh or
+      // stale) renders its own cards immediately, so it never shows the spinner —
+      // a stale one refreshes underneath them. An uncached tab has nothing to
+      // display, so the spinner replaces the outgoing tab's cards while it loads.
+      isLoading.value = !cached
+
       if (cached) {
         const fresh = Date.now() - cached.at <= STALE_THRESHOLD
         // Assign a fresh array (same bird objects) so the v-for re-renders and
@@ -395,13 +420,17 @@ export default {
           return
         }
         // Stale: show cached instantly but don't observe — about to refresh.
+      } else {
+        birds.value = []  // clear outgoing tab's cards; the spinner shows instead
       }
 
       const loaded = await loadTab(tab)
-      // Drop the result if another tab switch started while data was loading.
+      // Drop the result if another tab switch started while data was loading;
+      // that superseding selectTab now owns isLoading / birds.
       if (version !== imageLoadVersion) return
       tabCache[tab] = { birds: loaded, at: Date.now() }
       birds.value = loaded
+      isLoading.value = false
       // Observer created after the swap, so only the live tab's cards register.
       setupImageObserver(version)
     }
@@ -474,6 +503,7 @@ export default {
 
     return {
       selectedTab,
+      isLoading,
       tabs,
       displayedBirds,
       formatDate,
