@@ -86,7 +86,7 @@
               <p>Uploaded by you</p>
             </template>
             <template v-else>
-              <p>
+              <p class="truncate">
                 Photo by <a
                   :href="bird.authorUrl"
                   target="_blank"

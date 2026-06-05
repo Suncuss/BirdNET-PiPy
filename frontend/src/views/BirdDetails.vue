@@ -73,14 +73,15 @@
             </div>
           </template>
           <template v-else>
-            <p>
-              Photo by <a
+            <p class="flex items-baseline">
+              <span class="shrink-0">Photo by&nbsp;</span>
+              <a
                 :href="birdImageData.authorUrl"
                 target="_blank"
                 rel="noopener noreferrer"
-                class="text-blue-600 underline"
-              >{{
-                birdImageData.authorName }}</a>, licensed under {{ birdImageData.licenseType }}
+                class="text-blue-600 underline truncate min-w-0"
+              >{{ birdImageData.authorName }}</a>
+              <span class="shrink-0">,&nbsp;licensed under {{ birdImageData.licenseType }}</span>
             </p>
           </template>
         </div>

@@ -28,7 +28,8 @@ DEFAULT_SETTINGS = {
     "detection": {"sensitivity": 0.75, "cutoff": 0.60, "species_filter_threshold": DEFAULT_SPECIES_FILTER_THRESHOLD},
     "species_filter": {
         "allowed_species": [],   # If non-empty, ONLY detect these (bypasses location filter)
-        "blocked_species": []    # Never detect these species
+        "blocked_species": [],   # Never detect these species
+        "included_species": []   # Always detect these, even if the location filter excludes them
     },
     "audio": {
         "sources": [],

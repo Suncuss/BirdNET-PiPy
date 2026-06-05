@@ -214,18 +214,21 @@
             <div class="mt-4 min-h-[2.5rem] text-sm text-gray-600">
               <p
                 v-if="attributionText"
-                class="leading-snug"
+                class="flex items-baseline leading-snug"
               >
-                {{ attributionText.prefix }}
+                <span class="shrink-0">{{ attributionText.prefix }}&nbsp;</span>
                 <a
                   v-if="attributionText.authorUrl"
                   :href="attributionText.authorUrl"
                   target="_blank"
                   rel="noopener noreferrer"
-                  class="text-blue-600 underline"
+                  class="text-blue-600 underline truncate min-w-0"
                 >{{ attributionText.authorName }}</a>
-                <span v-else>{{ attributionText.authorName }}</span>
-                {{ attributionText.suffix }}
+                <span
+                  v-else
+                  class="truncate min-w-0"
+                >{{ attributionText.authorName }}</span>
+                <span class="shrink-0">{{ attributionText.suffix }}</span>
               </p>
               <p
                 v-else-if="selectedKind === 'reset'"

@@ -247,7 +247,8 @@ class TestProcessAudioFileErrorHandling:
                 overlap=0.0,
                 recording_length=9.0,
                 allowed_species=[],
-                blocked_species=[]
+                blocked_species=[],
+                included_species=[]
             )
 
         assert results == []
@@ -256,3 +257,118 @@ class TestProcessAudioFileErrorHandling:
             "Skipping audio file due to model input shape mismatch" in record.message
             for record in caplog.records
         )
+
+
+class TestSpeciesFilterRules:
+    """Test the 3-tier species filter: blocked > allowed-whitelist > location+include.
+
+    The candidate species (a Scaly-breasted Munia) is acoustically detected but
+    excluded by the location filter — exactly the case the always-include list
+    is for. American Robin stands in for "what the location filter does allow".
+    """
+
+    MUNIA = "Lonchura punctulata_Scaly-breasted Munia"
+    MUNIA_SCI = "Lonchura punctulata"
+    ROBIN = "Turdus migratorius_American Robin"
+
+    def _detected_names(
+        self,
+        monkeypatch,
+        *,
+        allowed_species,
+        blocked_species,
+        included_species,
+        location_allows,
+        candidate_label=MUNIA,
+    ):
+        """Run process_audio_file with one detected candidate and return the
+        scientific names that survive filtering."""
+        from model_service import inference_server
+        from model_service.base_model import ChunkPrediction
+        from model_service.location_filter import LocationContext
+
+        model = MagicMock()
+        model.name = "birdnet"
+        model.version = "2.4"
+        model.sample_rate = 48000
+        model.chunk_length_seconds = 3.0
+        model.get_ebird_code.return_value = "lobmun"
+        model.predict_chunk.return_value = ChunkPrediction(
+            raw_top3=((candidate_label, 0.9),),
+            candidates=((candidate_label, 0.9),),
+        )
+
+        # Location filter is active but does NOT allow the candidate species.
+        location_filter = MagicMock()
+        location_filter.filter.return_value = LocationContext(
+            source="meta_model_v2.4",
+            threshold=0.03,
+            allowed_species=frozenset(location_allows),
+            probabilities={},
+        )
+
+        monkeypatch.setattr(
+            inference_server,
+            "split_audio",
+            lambda *args, **kwargs: [np.zeros(144000, dtype=np.float32)],
+        )
+
+        results = inference_server.process_audio_file(
+            model=model,
+            location_filter=location_filter,
+            audio_file_path="/tmp/20240615_103000.wav",
+            lat=29.76,
+            lon=-95.37,
+            sensitivity=0.75,
+            cutoff=0.60,
+            overlap=0.0,
+            recording_length=9.0,
+            allowed_species=allowed_species,
+            blocked_species=blocked_species,
+            included_species=included_species,
+        )
+        return [r["scientific_name"] for r in results]
+
+    def test_included_species_overrides_location_filter(self, monkeypatch):
+        """A species the location filter excludes is kept when always-included."""
+        names = self._detected_names(
+            monkeypatch,
+            allowed_species=[],
+            blocked_species=[],
+            included_species=[self.MUNIA_SCI],
+            location_allows={self.ROBIN},
+        )
+        assert names == [self.MUNIA_SCI]
+
+    def test_dropped_without_include(self, monkeypatch):
+        """Control: the same species is dropped when not always-included."""
+        names = self._detected_names(
+            monkeypatch,
+            allowed_species=[],
+            blocked_species=[],
+            included_species=[],
+            location_allows={self.ROBIN},
+        )
+        assert names == []
+
+    def test_blocked_beats_included(self, monkeypatch):
+        """Blocked always wins, even over the always-include list."""
+        names = self._detected_names(
+            monkeypatch,
+            allowed_species=[],
+            blocked_species=[self.MUNIA_SCI],
+            included_species=[self.MUNIA_SCI],
+            location_allows={self.ROBIN},
+        )
+        assert names == []
+
+    def test_included_is_noop_under_allowed_whitelist(self, monkeypatch):
+        """An active Allowed whitelist takes precedence; include is inert."""
+        names = self._detected_names(
+            monkeypatch,
+            allowed_species=["Turdus migratorius"],  # whitelist active; munia not on it
+            blocked_species=[],
+            included_species=[self.MUNIA_SCI],
+            location_allows={self.ROBIN},
+        )
+        assert names == []

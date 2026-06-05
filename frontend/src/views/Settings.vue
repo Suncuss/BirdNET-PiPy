@@ -548,7 +548,7 @@
       <!-- Species Filter (Collapsible) -->
       <CollapsibleSection
         title="Species Filter"
-        subtitle="Allowed and blocked species lists"
+        subtitle="Allowed, blocked, and always-include species lists"
       >
         <div class="space-y-3">
           <!-- Allowed Species -->
@@ -636,6 +636,56 @@
               class="text-xs text-gray-400 mt-2 italic"
             >
               No species blocked
+            </p>
+          </div>
+
+          <!-- Always Include Species -->
+          <div class="border border-gray-200 rounded-lg p-3">
+            <div class="flex items-center justify-between">
+              <div>
+                <h4 class="text-sm font-medium text-gray-700">
+                  Always Include Species
+                </h4>
+                <p class="text-xs text-gray-400">
+                  Always detect these, even if unlikely for your location
+                </p>
+              </div>
+              <button
+                class="px-3 py-1.5 text-xs bg-emerald-50 text-emerald-600 hover:bg-emerald-100 rounded-lg transition-colors"
+                @click="openFilterModal('included')"
+              >
+                Edit
+              </button>
+            </div>
+            <div
+              v-if="settings.species_filter?.included_species?.length"
+              class="flex flex-wrap gap-1.5 mt-2"
+            >
+              <span
+                v-for="species in settings.species_filter.included_species.slice(0, 5)"
+                :key="species"
+                class="px-2 py-0.5 text-xs bg-emerald-100 text-emerald-700 rounded-full"
+              >
+                {{ getCommonName(species) }}
+              </span>
+              <span
+                v-if="settings.species_filter.included_species.length > 5"
+                class="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded-full"
+              >
+                +{{ settings.species_filter.included_species.length - 5 }} more
+              </span>
+            </div>
+            <p
+              v-else
+              class="text-xs text-gray-400 mt-2 italic"
+            >
+              No always-include species
+            </p>
+            <p
+              v-if="settings.species_filter?.allowed_species?.length && settings.species_filter?.included_species?.length"
+              class="text-xs text-amber-600 mt-2"
+            >
+              Ignored while an Allowed Species list is set.
             </p>
           </div>
         </div>
@@ -1667,7 +1717,7 @@ export default {
     const settings = ref({
       location: {},
       detection: {},
-      species_filter: { allowed_species: [], blocked_species: [] },
+      species_filter: { allowed_species: [], blocked_species: [], included_species: [] },
       audio: {},
       spectrogram: {},
       storage: { auto_cleanup_enabled: true, trigger_percent: 85, target_percent: 80 },
@@ -1696,7 +1746,8 @@ export default {
       detection: { sensitivity: s.detection?.sensitivity, cutoff: s.detection?.cutoff, species_filter_threshold: s.detection?.species_filter_threshold },
       species_filter: {
         allowed_species: s.species_filter?.allowed_species || [],
-        blocked_species: s.species_filter?.blocked_species || []
+        blocked_species: s.species_filter?.blocked_species || [],
+        included_species: s.species_filter?.included_species || []
       },
       model: { type: s.model?.type },
       display: { bird_name_language: s.display?.bird_name_language || 'en', station_name: s.display?.station_name || '' },
@@ -2287,32 +2338,41 @@ export default {
       await systemUpdate.triggerUpdate(true)
     }
 
-    // Species filter modal handlers
-    const openFilterModal = (filterType) => {
-      currentFilterType.value = filterType
+    // Species filter modal handlers — single source of truth for each list's
+    // modal copy and its settings key (drives both open and save).
+    const speciesFilterConfigs = {
+      allowed: {
+        title: 'Allowed Species',
+        description: 'Only detect these species. Leave empty to detect all species for your location.',
+        listKey: 'allowed_species'
+      },
+      blocked: {
+        title: 'Blocked Species',
+        description: 'Never detect these species, even if they match your location.',
+        listKey: 'blocked_species'
+      },
+      included: {
+        title: 'Always Include Species',
+        description: 'Always detect these species, even when the location filter rates them unlikely. Has no effect while an Allowed Species list is set.',
+        listKey: 'included_species'
+      }
+    }
 
-      // Ensure species_filter exists
+    const ensureSpeciesFilter = () => {
       if (!settings.value.species_filter) {
         settings.value.species_filter = {
           allowed_species: [],
-          blocked_species: []
+          blocked_species: [],
+          included_species: []
         }
       }
+    }
 
-      const configs = {
-        allowed: {
-          title: 'Allowed Species',
-          description: 'Only detect these species. Leave empty to detect all species for your location.',
-          listKey: 'allowed_species'
-        },
-        blocked: {
-          title: 'Blocked Species',
-          description: 'Never detect these species, even if they match your location.',
-          listKey: 'blocked_species'
-        }
-      }
+    const openFilterModal = (filterType) => {
+      currentFilterType.value = filterType
+      ensureSpeciesFilter()
 
-      const config = configs[filterType]
+      const config = speciesFilterConfigs[filterType]
       speciesFilterModalConfig.value = {
         title: config.title,
         description: config.description,
@@ -2329,19 +2389,8 @@ export default {
     }
 
     const updateFilterList = (newList) => {
-      if (!settings.value.species_filter) {
-        settings.value.species_filter = {
-          allowed_species: [],
-          blocked_species: []
-        }
-      }
-
-      const listKeys = {
-        allowed: 'allowed_species',
-        blocked: 'blocked_species'
-      }
-
-      const listKey = listKeys[currentFilterType.value]
+      ensureSpeciesFilter()
+      const listKey = speciesFilterConfigs[currentFilterType.value]?.listKey
       if (listKey) {
         settings.value.species_filter[listKey] = newList
       }

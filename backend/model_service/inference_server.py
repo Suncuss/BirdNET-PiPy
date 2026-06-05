@@ -272,6 +272,7 @@ def process_audio_file(
     recording_length: float,
     allowed_species: list[str] | None,
     blocked_species: list[str] | None,
+    included_species: list[str] | None = None,
     species_filter_threshold: float = DEFAULT_SPECIES_FILTER_THRESHOLD
 ):
     """Process an audio file and return detected species.
@@ -283,6 +284,10 @@ def process_audio_file(
         lat, lon: Location coordinates for species filtering
         sensitivity: Confidence adjustment parameter
         cutoff: Minimum confidence threshold
+        allowed_species: If non-empty, detect ONLY these (bypasses location filter)
+        blocked_species: Never detect these (always wins)
+        included_species: Always detect these, even when the location filter
+            would exclude them (no effect while allowed_species is set)
 
     Returns:
         List of detection result dictionaries
@@ -349,6 +354,7 @@ def process_audio_file(
     # Normalize optional filter lists
     allowed_species = allowed_species or []
     blocked_species = blocked_species or []
+    included_species = included_species or []
 
     # Pre-compute loop-invariant values
     loc_active = location_context.source != 'disabled'
@@ -428,6 +434,10 @@ def process_audio_file(
                 # Model doesn't support location filtering, accept all
                 filtered_species_list.append(species_detection)
             elif species_label in location_context.allowed_species:
+                filtered_species_list.append(species_detection)
+            elif included_species and scientific_name in included_species:
+                # Always-include list: keep despite low local probability
+                logger.debug("Species force-included", extra={'species': scientific_name})
                 filtered_species_list.append(species_detection)
             else:
                 logger.debug("Species not in local species list", extra={'species': scientific_name})
@@ -533,6 +543,7 @@ def analyze_audio_file():
         recording_length = audio_settings.get('recording_length', 9)
         allowed_species = species_filter_settings.get('allowed_species') or []
         blocked_species = species_filter_settings.get('blocked_species') or []
+        included_species = species_filter_settings.get('included_species') or []
 
         requested_model_type = runtime_settings.get('model', {}).get('type', settings.MODEL_TYPE)
         if requested_model_type != settings.MODEL_TYPE:
@@ -564,6 +575,7 @@ def analyze_audio_file():
             recording_length,
             allowed_species,
             blocked_species,
+            included_species,
             species_filter_threshold
         )
 

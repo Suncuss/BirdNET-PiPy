@@ -609,6 +609,7 @@ class TestWikimediaCandidates:
     def test_candidates_surfaces_429_with_retry_after(self, candidates_client):
         """A 429 from Wikimedia becomes a structured error with status + Retry-After."""
         import requests as _requests
+
         from core import api as api_module
         api_module.image_cache.clear()
 
@@ -631,6 +632,7 @@ class TestWikimediaCandidates:
         """Single-flight: two concurrent cache-misses for the same key do one fetch."""
         import threading as _threading
         import time as _time
+
         from core import api as api_module
         api_module.image_cache.clear()
         api_module._wikimedia_inflight.clear()

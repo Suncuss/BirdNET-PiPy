@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Added an "Always Include Species" list (Settings → Species Filter) that reports the listed species even when the location filter rates them unlikely for your coordinates
+
 ## [0.7.4] - 2026-05-31
 
 - Bird Gallery tab switches now show a loading spinner while an uncached tab's query runs, instead of leaving the previous tab's cards on screen until the (sometimes slow) query resolves. Revisiting a recently viewed tab is still instant and shows its cached cards while refreshing in the background
