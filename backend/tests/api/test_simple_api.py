@@ -614,6 +614,66 @@ class TestSimpleAPI:
                 assert response.status_code == 400
                 mock_save.assert_not_called()
 
+    def test_update_playback_setting(self):
+        """Test update recording-normalization setting endpoint (no restart)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+                 patch('core.db.DatabaseManager') as MockDB, \
+                 patch('core.api.load_user_settings') as mock_load, \
+                 patch('core.api.save_user_settings') as mock_save, \
+                 patch('core.api.write_flag') as mock_flag:
+
+                mock_db_instance = Mock()
+                MockDB.return_value = mock_db_instance
+
+                from core.api import create_app
+                app, _ = create_app()
+                client = app.test_client()
+
+                mock_load.return_value = {
+                    'audio': {'samplerate': 48000}
+                }
+
+                # Test enabling normalization (creates the playback section)
+                response = client.put('/api/settings/playback',
+                                      data=json.dumps({'normalize': True}),
+                                      content_type='application/json')
+                assert response.status_code == 200
+                data = response.get_json()
+                assert data['normalize'] is True
+                mock_save.assert_called_once_with({
+                    'audio': {'samplerate': 48000},
+                    'playback': {'normalize': True}
+                })
+                mock_flag.assert_not_called()  # No restart needed
+
+                # Test disabling normalization
+                mock_save.reset_mock()
+                mock_load.return_value = {'playback': {'normalize': True}}
+                response = client.put('/api/settings/playback',
+                                      data=json.dumps({'normalize': False}),
+                                      content_type='application/json')
+                assert response.status_code == 200
+                assert response.get_json()['normalize'] is False
+
+                # Test invalid value (not boolean)
+                mock_save.reset_mock()
+                response = client.put('/api/settings/playback',
+                                      data=json.dumps({'normalize': 'invalid'}),
+                                      content_type='application/json')
+                assert response.status_code == 400
+                mock_save.assert_not_called()
+
+                # Test missing field
+                mock_save.reset_mock()
+                response = client.put('/api/settings/playback',
+                                      data=json.dumps({}),
+                                      content_type='application/json')
+                assert response.status_code == 400
+                mock_save.assert_not_called()
+
     def test_bird_detail_endpoints(self):
         """Test bird detail endpoints."""
         with tempfile.TemporaryDirectory() as tmpdir:

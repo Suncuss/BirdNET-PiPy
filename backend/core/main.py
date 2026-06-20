@@ -513,9 +513,17 @@ def extract_detection_audio(detection: dict[str, Any], input_file_path: str) -> 
     wav_path = os.path.join(EXTRACTED_AUDIO_DIR, detection['bird_song_file_name'])
     mp3_path = wav_path.replace('.wav', '.mp3')
 
+    normalize = get_runtime_settings().get('playback', {}).get('normalize', False)
     trim_audio(input_file_path, wav_path, start_time, end_time)
-    convert_wav_to_mp3(wav_path, mp3_path)
-    os.remove(wav_path)
+    try:
+        convert_wav_to_mp3(wav_path, mp3_path, normalize=normalize)
+    finally:
+        # Always drop the intermediate WAV — without this, a conversion failure
+        # would orphan it in EXTRACTED_AUDIO_DIR with no DB row to ever clean up.
+        try:
+            os.remove(wav_path)
+        except OSError:
+            pass
 
     return mp3_path
 

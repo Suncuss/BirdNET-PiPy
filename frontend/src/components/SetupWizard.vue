@@ -455,7 +455,11 @@ import { limitDecimals, sanitizeLabel } from '@/utils/inputHelpers'
 import { FILTER_DEFAULTS, MODEL_TYPES, modelTypeOptions } from '@/utils/modelDefaults'
 import { WELCOME_PENDING_KEY } from '@/utils/storageKeys'
 import Spinner from '@/components/Spinner.vue'
-import api from '@/services/api'
+import api, { createLongRequest } from '@/services/api'
+
+// RTSP probe can run ~20s (backend RTSP_PROBE_TIMEOUT_SECONDS); outlast it so the
+// backend's real message reaches the user instead of a generic abort (GH #56).
+const streamTestClient = createLongRequest(25000)
 
 export default {
   name: 'SetupWizard',
@@ -587,7 +591,7 @@ export default {
 
         testingStream.value = true
         try {
-          const { data } = await api.post('/stream/test', {
+          const { data } = await streamTestClient.post('/stream/test', {
             url: validatedUrl,
             type: 'rtsp',
           })
@@ -597,8 +601,10 @@ export default {
             return
           }
           rtspValidated.value = true
-        } catch {
-          rtspError.value = 'Test request failed'
+        } catch (err) {
+          rtspError.value = err.code === 'ECONNABORTED'
+            ? 'Test timed out — the stream may still work; try "Add anyway"'
+            : 'Test request failed'
           canForceAdd.value = true
           return
         } finally {

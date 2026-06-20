@@ -181,7 +181,12 @@
 <script>
 import { ref, computed, onMounted } from 'vue'
 import { sanitizeLabel } from '@/utils/inputHelpers'
-import api from '@/services/api'
+import { createLongRequest } from '@/services/api'
+
+// The RTSP probe runs synchronously for up to ~20s (backend RTSP_PROBE_TIMEOUT_SECONDS).
+// Use a client whose timeout outlasts it so the backend's real message reaches the user
+// instead of the default 15s client aborting into a generic failure (GH #56).
+const streamTestClient = createLongRequest(25000)
 import ToggleSwitch from '@/components/ToggleSwitch.vue'
 import Spinner from '@/components/Spinner.vue'
 
@@ -284,7 +289,7 @@ export default {
     const testStream = async (streamUrl) => {
       testing.value = true
       try {
-        const { data } = await api.post('/stream/test', {
+        const { data } = await streamTestClient.post('/stream/test', {
           url: streamUrl,
           type: 'rtsp',
         })
@@ -294,8 +299,10 @@ export default {
           return false
         }
         return true
-      } catch {
-        error.value = 'Test request failed'
+      } catch (err) {
+        error.value = err.code === 'ECONNABORTED'
+          ? 'Test timed out — the stream may still work; try "Add anyway"'
+          : 'Test request failed'
         canForceSubmit.value = true
         return false
       } finally {

@@ -125,6 +125,19 @@ export default {
     let socket
     const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent)
 
+    // Live-feed auto-reconnect (GH #56): an unstable RTSP source (e.g. a Wyze
+    // camera) can end its audio track every ~20s, which makes the Icecast mount
+    // briefly disappear. Without this the user had to press Start again after
+    // every drop. userWantsPlay tracks intent so reconnects only run while the
+    // user expects audio; the attempt counter resets on a successful resume.
+    let userWantsPlay = false
+    let reconnectTimer = null
+    let reconnectAttempts = 0
+    let errorClearTimer = null
+    const MAX_RECONNECT_ATTEMPTS = 6
+    const RECONNECT_BASE_MS = 2000
+    const RECONNECT_MAX_MS = 10000
+
     const initAudioContext = async () => {
       if (!audioContext) {
         audioContext = new (window.AudioContext || window.webkitAudioContext)({
@@ -144,8 +157,14 @@ export default {
     const showError = (message, duration = 4000) => {
       statusMessage.value = message
       hasError.value = true
-      setTimeout(() => {
+      // Track the clear timer so re-entry doesn't leak timers and onUnmounted
+      // can cancel a pending write to hasError after teardown.
+      if (errorClearTimer) {
+        clearTimeout(errorClearTimer)
+      }
+      errorClearTimer = setTimeout(() => {
         hasError.value = false
+        errorClearTimer = null
       }, duration)
     }
 
@@ -175,7 +194,10 @@ export default {
       }
     }
 
-    const startAudio = async () => {
+    // silent=true suppresses the hard error banner so background reconnect
+    // attempts don't flash "stream not available" on every try — scheduleReconnect
+    // owns the user-facing "reconnecting (N/6)" / give-up messaging instead.
+    const startAudio = async (silent = false) => {
       try {
         isLoading.value = true
         statusMessage.value = 'Initializing audio...'
@@ -194,12 +216,13 @@ export default {
         console.error(`[LiveFeed] Playback failed: ${error.name}: ${error.message}`)
         // Check if it might be an auth error (nginx returns 401 for unauthenticated requests)
         if (error.name === 'NotAllowedError' || error.message?.includes('401')) {
-          showError('Authentication required')
+          if (!silent) showError('Authentication required')
+          // Always surface auth so the login flow can run — retrying won't fix it.
           window.dispatchEvent(new Event('auth:required'))
         } else {
           // Probe the stream URL to diagnose why playback failed
           const userMessage = await probeStreamError()
-          showError(userMessage)
+          if (!silent) showError(userMessage)
           if (userMessage === 'Authentication required') {
             window.dispatchEvent(new Event('auth:required'))
           }
@@ -211,6 +234,9 @@ export default {
     }
 
     const stopAudio = async () => {
+      // Explicit stop: drop the intent and cancel any pending reconnect.
+      userWantsPlay = false
+      cancelReconnect()
       try {
         await audioElement.value.pause()
         statusMessage.value = 'Audio stopped'
@@ -221,8 +247,9 @@ export default {
     }
 
     const handleAudioError = (event) => {
-      // Ignore errors when not actively playing (e.g., empty src on page load)
-      if (!isPlaying.value && !isLoading.value) {
+      // Ignore errors when idle (e.g., empty src on page load). Keep handling them
+      // while a reconnect is pending (userWantsPlay) so a flapping mount recovers.
+      if (!isPlaying.value && !isLoading.value && !userWantsPlay) {
         return
       }
 
@@ -255,9 +282,15 @@ export default {
         }
       }
 
-      showError(errorMessage)
       isLoading.value = false
       stopPlayback()
+      // A drop while the user wants audio is usually a transient RTSP/Icecast flap
+      // (GH #56) — try to reconnect instead of giving up. Show the error otherwise.
+      if (userWantsPlay) {
+        scheduleReconnect()
+      } else {
+        showError(errorMessage)
+      }
     }
 
     const handleAudioBuffering = () => {
@@ -268,6 +301,19 @@ export default {
     }
 
     const handleAudioPlaying = () => {
+      // A successful resume — whether ours or a browser-driven recovery — clears
+      // any pending reconnect (so a stale timer can't tear down a stream that has
+      // already come back) and the consecutive-failure budget (so a stream that
+      // flaps every ~20s but recovers never exhausts its reconnect attempts).
+      cancelReconnect()
+      if (!isPlaying.value && userWantsPlay) {
+        // The element recovered on its own before our timer fired — reflect the
+        // live state and resume the spectrogram so the UI matches reality.
+        isPlaying.value = true
+        if (!isSafari && !animationId) {
+          drawSpectrogram()
+        }
+      }
       if (isPlaying.value) {
         statusMessage.value = 'Icecast stream connected'
       }
@@ -275,8 +321,12 @@ export default {
 
     const handleAudioEnded = () => {
       console.log('[LiveFeed] Audio stream ended')
-      statusMessage.value = 'Stream ended - click Start to reconnect'
       stopPlayback()
+      if (userWantsPlay) {
+        scheduleReconnect()
+      } else {
+        statusMessage.value = 'Stream ended - click Start to reconnect'
+      }
     }
 
     const drawSpectrogram = () => {
@@ -301,13 +351,62 @@ export default {
       }
     }
 
-    const startPlayback = async () => {
-      const success = await startAudio()
+    const cancelReconnect = () => {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer)
+        reconnectTimer = null
+      }
+      reconnectAttempts = 0
+    }
+
+    // Try to (re)connect playback. On success resume the spectrogram and mark playing.
+    const attemptPlay = async (silent = false) => {
+      const success = await startAudio(silent)
       if (success) {
-        if (!isSafari) {
+        reconnectAttempts = 0
+        if (!isSafari && !animationId) {
           drawSpectrogram()
         }
         isPlaying.value = true
+      }
+      return success
+    }
+
+    // Schedule a bounded, backed-off reconnect while the user still wants audio.
+    // Bridges the brief Icecast mount gap when an unstable RTSP source drops (GH #56).
+    const scheduleReconnect = () => {
+      if (!userWantsPlay || reconnectTimer) {
+        return
+      }
+      if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        userWantsPlay = false
+        stopPlayback()
+        showError('Audio source keeps dropping — click Start to retry', 6000)
+        return
+      }
+      reconnectAttempts += 1
+      const delay = Math.min(RECONNECT_BASE_MS * reconnectAttempts, RECONNECT_MAX_MS)
+      statusMessage.value = `Stream dropped — reconnecting (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`
+      reconnectTimer = setTimeout(async () => {
+        reconnectTimer = null
+        if (!userWantsPlay) {
+          return
+        }
+        const success = await attemptPlay(true)
+        if (!success) {
+          scheduleReconnect()
+        }
+      }, delay)
+    }
+
+    const startPlayback = async () => {
+      userWantsPlay = true
+      cancelReconnect()
+      // Silent even on the first try: a transient failure rolls straight into
+      // the bounded reconnect loop, which surfaces status (and any give-up error).
+      const success = await attemptPlay(true)
+      if (!success) {
+        scheduleReconnect()
       }
     }
 
@@ -419,6 +518,13 @@ export default {
     })
 
     onUnmounted(() => {
+      userWantsPlay = false
+      cancelReconnect()
+      if (errorClearTimer) {
+        clearTimeout(errorClearTimer)
+        errorClearTimer = null
+      }
+
       if (animationId) {
         cancelAnimationFrame(animationId)
         animationId = null

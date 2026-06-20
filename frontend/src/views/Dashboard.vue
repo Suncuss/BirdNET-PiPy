@@ -480,9 +480,12 @@ export default {
         // Audio state
         let audioCtx, audioAnalyser, source, frequencyDataArray, prevFrequencyDataArray, animationId;
         let spectrogramCanvasCtx, canvasWidth, canvasHeight;
-        let rollingMaxDb = -Infinity; // Per-playback peak; mirrors PNG's normalize-to-clip-max
+        let rollingMaxDb = -Infinity; // Per-playback peak: the live canvas auto-gains to the loudest recent bin (the saved PNG instead uses an absolute dBFS reference)
+        let audioClockRunning = false; // Tracks 'playing' vs 'waiting'/'pause' — gates scrolling on real playback progress
         const SPECTROGRAM_SUPERSAMPLE = 2; // Render at 2x internal resolution; browser downscales for smoother edges
-        // Match backend PNG window — see backend/core/utils.py min_dbfs/max_dbfs defaults.
+        // The live canvas uses its own relative window — a fixed span below the
+        // per-playback peak (rollingMaxDb) — deliberately independent of the
+        // backend PNG's absolute dBFS floor, so the two are not kept in sync.
         const SPEC_DB_FLOOR = -120;
         const SPEC_DB_RANGE = 120;
         // Gamma <1 brightens midtones without shifting the dark floor or white peak — keeps
@@ -724,6 +727,7 @@ export default {
             frequencyDataArray = null
             prevFrequencyDataArray = null
             rollingMaxDb = -Infinity
+            audioClockRunning = false
         })
 
         onDeactivated(() => {
@@ -797,6 +801,12 @@ export default {
 
         // Methods
         const drawSpectrogram = () => {
+            animationId = requestAnimationFrame(drawSpectrogram);
+
+            // Only draw while the media clock is running ('playing' → 'waiting'/'pause') —
+            // otherwise startup latency and buffering stalls scroll in blank (silent) columns.
+            if (!audioClockRunning) return;
+
             const frequencyResolution = audioCtx.sampleRate / audioAnalyser.fftSize;
             const minIndex = 0;
             const maxIndex = Math.min(
@@ -808,8 +818,6 @@ export default {
             const stepXCss = 2; // CSS pixels per frame: wider = faster scroll, larger features
             const stepX = stepXCss * SPECTROGRAM_SUPERSAMPLE;
 
-            animationId = requestAnimationFrame(drawSpectrogram);
-
             audioAnalyser.getFloatFrequencyData(frequencyDataArray);
 
             // Update running peak across the visible band so the colormap gets normalized to the
@@ -818,6 +826,11 @@ export default {
                 const v = frequencyDataArray[i];
                 if (v > rollingMaxDb) rollingMaxDb = v;
             }
+
+            // 'playing' fires on the media element slightly before decoded samples reach the
+            // analyser, which would scroll in a blank lead-in. Hold the scroll until the first
+            // real signal: rollingMaxDb stays -Infinity while every bin is still digital silence.
+            if (!Number.isFinite(rollingMaxDb)) return;
 
             const imageData = spectrogramCanvasCtx.getImageData(stepX, 0, canvasWidth - stepX, canvasHeight);
             spectrogramCanvasCtx.putImageData(imageData, 0, 0);
@@ -903,6 +916,7 @@ export default {
             // Initialize prev far below the floor so the first frame's left edge starts dark.
             prevFrequencyDataArray.fill(-200);
             rollingMaxDb = -Infinity;
+            audioClockRunning = false;
 	            const latestAudioUrl = getAudioUrl(latestObservationData.value?.bird_song_file_name)
 	            if (!latestAudioUrl) return
 	            audioElement = new Audio(latestAudioUrl);
@@ -912,6 +926,11 @@ export default {
             audioAnalyser.connect(audioCtx.destination);
 
             audioElement.addEventListener('ended', pauseLatestObservation);
+            // 'playing' fires once frames actually advance (initial start, post-buffer, resume);
+            // 'waiting'/'pause' mark buffering stalls and pauses. Covers resume latency too.
+            audioElement.addEventListener('playing', () => { audioClockRunning = true; });
+            audioElement.addEventListener('waiting', () => { audioClockRunning = false; });
+            audioElement.addEventListener('pause', () => { audioClockRunning = false; });
 
 	            audioElement.play().catch((err) => {
 	                console.warn('Failed to play audio:', err)

@@ -35,7 +35,8 @@ const mockApi = vi.hoisted(() => ({
 }))
 
 vi.mock('@/services/api', () => ({
-  default: mockApi
+  default: mockApi,
+  createLongRequest: () => mockApi
 }))
 
 // Mock vue-router

@@ -2,7 +2,16 @@
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-06-20
+
+- Fixed the Dashboard's live playback spectrogram scrolling through blank columns while audio is still loading or buffering — drawing is now gated on the media element's `playing`/`waiting`/`pause` events plus a first-signal latch, so the canvas only advances while the analyser is receiving real audio
+- Added an early installer check that stops on 32-bit OSes (`armhf`/`armel`/`i386`) with a clear "reflash with the 64-bit image" message — BirdNET-PiPy ships arm64-only Python wheels (`onnxruntime`, `tflite-runtime`) and can't run on 32-bit. Previously the install aborted partway through Docker setup (Docker publishes no apt repo for 32-bit Raspberry Pi OS "trixie"), leaving the Pi's web UI blank
+- Fixed the installer aborting when run from a directory other than the cloned repo, and restored the dev-branch "building locally" detection that a `--skip-build` shortcut had bypassed
+- Added an optional "Normalize Recording" toggle (Settings → Personalization) that loudness-normalizes saved detection clips (ffmpeg `loudnorm` at -18 LUFS) so faint or distant birds are easier to hear, addressing why clips can sound much quieter than other listening sites. The normalization is baked into the saved MP3, runs after BirdNET analysis so it never affects detection, and applies to new recordings only — existing clips are unchanged. Off by default; the toggle saves instantly (no Save click or service restart needed) and takes effect on the next recording (GH #54)
 - Added an "Always Include Species" list (Settings → Species Filter) that reports the listed species even when the location filter rates them unlikely for your coordinates
+- Fixed long photographer names wrapping the "Photo by …" image attribution onto a second line — the name now truncates with an ellipsis in gallery cards, bird detail pages, and the image picker
+- Fixed the Live Feed giving up at "Could not start audio playback" when a live audio source drops mid-playback, forcing a manual restart. Some RTSP cameras (e.g. certain Wyze custom-firmware streams) cleanly end their audio track every ~20s, briefly flapping the Icecast mount; the player now retries with backoff and self-heals across the gap, giving up only after several consecutive failures. Also fixed the "Test" button when adding a stream source aborting at the client's 15s timeout before the backend's (up to 20s) probe can answer — it now waits for the real result and shows a timeout-specific message instead of a generic "Test request failed" (GH #56)
+- Changed spectrograms to use an absolute full-scale dBFS reference instead of per-clip auto-gain, so loudness is comparable across recordings — quiet or distant detections render dim and loud ones bright, and quiet clips no longer have their noise floor pulled up (previously each clip was peak-normalized to its own maximum). The default display floor is -100 dBFS, lifting the noise floor from crushed black to a soft dark green
 
 ## [0.7.4] - 2026-05-31
 

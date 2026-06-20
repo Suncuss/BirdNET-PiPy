@@ -214,15 +214,29 @@ describe('LiveFeed', () => {
       expect(wrapper.vm.hasError).toBe(false)
     })
 
-    it('handleAudioError shows error and stops playback when playing', async () => {
+    it('handleAudioError schedules a reconnect when a drop happens mid-playback', async () => {
       const wrapper = mountLiveFeed()
       await flushPromises()
 
-      // Start playing first
+      // Start playing first (records the user's intent to play)
       await wrapper.vm.toggleAudio()
       expect(wrapper.vm.isPlaying).toBe(true)
 
-      // Simulate network error
+      // A network drop mid-playback is a transient RTSP/Icecast flap (GH #56):
+      // playback stops but we reconnect instead of surfacing a hard error.
+      wrapper.vm.handleAudioError({ target: { error: { code: 2 } } }) // MEDIA_ERR_NETWORK
+
+      expect(wrapper.vm.isPlaying).toBe(false)
+      expect(wrapper.vm.hasError).toBe(false)
+      expect(wrapper.vm.statusMessage).toContain('reconnecting')
+    })
+
+    it('handleAudioError surfaces an error when there is no play intent', async () => {
+      const wrapper = mountLiveFeed()
+      await flushPromises()
+
+      // isPlaying without going through Start (no reconnect intent) -> show the error.
+      wrapper.vm.isPlaying = true
       wrapper.vm.handleAudioError({ target: { error: { code: 2 } } }) // MEDIA_ERR_NETWORK
 
       expect(wrapper.vm.hasError).toBe(true)
@@ -230,7 +244,7 @@ describe('LiveFeed', () => {
       expect(wrapper.vm.isPlaying).toBe(false)
     })
 
-    it('handleAudioEnded updates status and stops playback', async () => {
+    it('handleAudioEnded schedules a reconnect when the user wants audio', async () => {
       const wrapper = mountLiveFeed()
       await flushPromises()
 
@@ -239,8 +253,18 @@ describe('LiveFeed', () => {
 
       wrapper.vm.handleAudioEnded()
 
-      expect(wrapper.vm.statusMessage).toBe('Stream ended - click Start to reconnect')
       expect(wrapper.vm.isPlaying).toBe(false)
+      expect(wrapper.vm.statusMessage).toContain('reconnecting')
+    })
+
+    it('handleAudioEnded prompts a manual restart when not playing', async () => {
+      const wrapper = mountLiveFeed()
+      await flushPromises()
+
+      // No Start -> no play intent -> the manual-restart prompt.
+      wrapper.vm.handleAudioEnded()
+
+      expect(wrapper.vm.statusMessage).toBe('Stream ended - click Start to reconnect')
     })
 
     it('handleAudioBuffering updates status only when playing', async () => {
@@ -272,7 +296,8 @@ describe('LiveFeed', () => {
       const wrapper = mountLiveFeed()
       await flushPromises()
 
-      await wrapper.vm.toggleAudio()
+      // Use the no-intent path so showError runs (the mid-playback path reconnects).
+      wrapper.vm.isPlaying = true
       wrapper.vm.handleAudioError({ target: { error: { code: 2 } } })
 
       expect(wrapper.vm.hasError).toBe(true)
@@ -283,7 +308,7 @@ describe('LiveFeed', () => {
       expect(wrapper.vm.hasError).toBe(false)
     })
 
-    it('toggleAudio does not set isPlaying when audio fails to start', async () => {
+    it('rolls a failed start into a silent reconnect instead of flashing an error', async () => {
       // Mock AudioContext.resume to reject
       vi.stubGlobal('AudioContext', vi.fn().mockImplementation(() => ({
         createAnalyser: () => ({
@@ -304,8 +329,29 @@ describe('LiveFeed', () => {
 
       await wrapper.vm.toggleAudio()
 
+      // No hard error banner — the bounded reconnect loop owns the messaging.
       expect(wrapper.vm.isPlaying).toBe(false)
-      expect(wrapper.vm.hasError).toBe(true)
+      expect(wrapper.vm.hasError).toBe(false)
+      expect(wrapper.vm.statusMessage).toContain('reconnecting')
+    })
+
+    it('handleAudioPlaying cancels a pending reconnect when the stream recovers on its own', async () => {
+      const wrapper = mountLiveFeed()
+      await flushPromises()
+
+      // Start, then drop mid-playback so a reconnect timer is armed.
+      await wrapper.vm.toggleAudio()
+      wrapper.vm.handleAudioError({ target: { error: { code: 2 } } })
+      expect(wrapper.vm.statusMessage).toContain('reconnecting')
+
+      // The element recovers by itself before the timer fires.
+      wrapper.vm.handleAudioPlaying()
+      expect(wrapper.vm.isPlaying).toBe(true)
+      expect(wrapper.vm.statusMessage).toBe('Icecast stream connected')
+
+      // The stale reconnect timer must not fire and tear the stream back down.
+      vi.advanceTimersByTime(15000)
+      expect(wrapper.vm.isPlaying).toBe(true)
     })
   })
 })

@@ -2140,6 +2140,22 @@ def save_user_settings(settings_dict):
         'path': json_path
     })
 
+
+def _persist_no_restart_setting(section, key, value):
+    """Persist one settings field and refresh the runtime cache (no restart).
+
+    Shared by the instant-save settings endpoints (units, time-format,
+    playback): the affected services read the value live from the settings
+    file, so writing it and invalidating the runtime-settings cache is enough.
+    """
+    current_settings = load_user_settings()
+    if section not in current_settings:
+        current_settings[section] = {}
+    current_settings[section][key] = value
+    save_user_settings(current_settings)
+    invalidate_runtime_settings_cache()
+
+
 @api.route('/api/settings', methods=['GET'])
 @log_api_request
 @require_auth
@@ -2234,13 +2250,7 @@ def update_units_setting():
         if not isinstance(use_metric, bool):
             return jsonify({'error': 'use_metric_units must be a boolean'}), 400
 
-        # Load current settings, update units, save
-        current_settings = load_user_settings()
-        if 'display' not in current_settings:
-            current_settings['display'] = {}
-        current_settings['display']['use_metric_units'] = use_metric
-        save_user_settings(current_settings)
-        invalidate_runtime_settings_cache()
+        _persist_no_restart_setting('display', 'use_metric_units', use_metric)
 
         logger.info("Display units changed", extra={'use_metric_units': use_metric})
 
@@ -2275,12 +2285,7 @@ def update_time_format_setting():
         if time_format not in ('12h', '24h'):
             return jsonify({'error': "time_format must be '12h' or '24h'"}), 400
 
-        current_settings = load_user_settings()
-        if 'display' not in current_settings:
-            current_settings['display'] = {}
-        current_settings['display']['time_format'] = time_format
-        save_user_settings(current_settings)
-        invalidate_runtime_settings_cache()
+        _persist_no_restart_setting('display', 'time_format', time_format)
 
         logger.info("Display time format changed", extra={'time_format': time_format})
 
@@ -2291,6 +2296,41 @@ def update_time_format_setting():
 
     except Exception as e:
         logger.error("Failed to update time format setting", extra={
+            'error': str(e)
+        }, exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@api.route('/api/settings/playback', methods=['PUT'])
+@log_api_request
+@require_auth
+def update_playback_setting():
+    """Update the recording-normalization setting without triggering a restart.
+
+    The main container reads playback.normalize from the settings file when it
+    saves each detection clip, so the change applies to the next recording with
+    no restart.
+    """
+    try:
+        data = request.json
+        if not data or 'normalize' not in data:
+            return jsonify({'error': 'normalize field required'}), 400
+
+        normalize = data['normalize']
+        if not isinstance(normalize, bool):
+            return jsonify({'error': 'normalize must be a boolean'}), 400
+
+        _persist_no_restart_setting('playback', 'normalize', normalize)
+
+        logger.info("Recording normalization changed", extra={'normalize': normalize})
+
+        return jsonify({
+            'success': True,
+            'normalize': normalize
+        }), 200
+
+    except Exception as e:
+        logger.error("Failed to update playback setting", extra={
             'error': str(e)
         }, exc_info=True)
         return jsonify({'error': str(e)}), 500

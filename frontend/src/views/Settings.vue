@@ -934,7 +934,7 @@
       <!-- Personalization (Collapsible) -->
       <CollapsibleSection
         title="Personalization"
-        subtitle="Units and display preferences"
+        subtitle="Units, display, and playback preferences"
         body-class="border-t border-gray-100 p-5 space-y-6"
       >
         <div>
@@ -1003,6 +1003,20 @@
             :model-value="!timeFormatSettings.hour12.value"
             :disabled="timeFormatSaving"
             @update:model-value="toggleTimeFormat"
+          />
+        </div>
+
+        <div class="pt-4 border-t border-gray-100 flex items-center justify-between">
+          <div>
+            <label class="text-sm text-gray-600">Normalize Recording</label>
+            <p class="text-xs text-gray-400">
+              Boost faint or distant birds so saved clips are easier to hear. Applies to new recordings; existing clips are unchanged.
+            </p>
+          </div>
+          <ToggleSwitch
+            :model-value="settings.playback?.normalize ?? false"
+            :disabled="playbackNormalizeSaving"
+            @update:model-value="togglePlaybackNormalize"
           />
         </div>
       </CollapsibleSection>
@@ -1712,6 +1726,7 @@ export default {
     const updateChannelSaving = ref(false)
     const metricUnitsSaving = ref(false)
     const timeFormatSaving = ref(false)
+    const playbackNormalizeSaving = ref(false)
 
     // Minimal settings skeleton - actual values loaded from API
     const settings = ref({
@@ -1720,6 +1735,7 @@ export default {
       species_filter: { allowed_species: [], blocked_species: [], included_species: [] },
       audio: {},
       spectrogram: {},
+      playback: { normalize: false },
       storage: { auto_cleanup_enabled: true, trigger_percent: 85, target_percent: 80 },
       updates: {},
       model: { type: 'birdnet' },
@@ -1764,6 +1780,25 @@ export default {
       if (!originalSettings.value) return false
       return JSON.stringify(getComparableSettings(settings.value)) !== JSON.stringify(originalSettings.value)
     })
+
+    // Recording normalization toggle — saves immediately, no restart needed.
+    // The main container reads playback.normalize when it saves each clip, so
+    // the change takes effect on the next recording.
+    const togglePlaybackNormalize = async (value) => {
+      if (playbackNormalizeSaving.value) return
+      try {
+        playbackNormalizeSaving.value = true
+        if (!settings.value.playback) settings.value.playback = {}
+        await api.put('/settings/playback', { normalize: value })
+        settings.value.playback.normalize = value
+        showStatus('success', 'Settings applied.')
+      } catch (error) {
+        console.error('Error saving normalization setting:', error)
+        showStatus('error', 'Failed to save normalization setting')
+      } finally {
+        playbackNormalizeSaving.value = false
+      }
+    }
 
     // System update composable
     const systemUpdate = useSystemUpdate()
@@ -1869,6 +1904,7 @@ export default {
       if (!data.model) data.model = { type: 'birdnet' }
       if (!data.notifications) data.notifications = {}
       if (!data.access) data.access = { charts_public: false, table_public: false, live_feed_public: false }
+      if (!data.playback) data.playback = { normalize: false }
       if (data.updates.channel === 'stable') data.updates.channel = 'release'
       if (!data.audio) data.audio = {}
 
@@ -2646,6 +2682,8 @@ export default {
       updateSubLabel,
       toggleMetricUnits,
       toggleTimeFormat,
+      togglePlaybackNormalize,
+      playbackNormalizeSaving,
       timeFormatSettings,
       showRecorderError,
       limitDecimals,

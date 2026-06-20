@@ -385,6 +385,67 @@ class TestConvertWavToMp3:
             call_kwargs = mock_run.call_args[1]
             assert call_kwargs.get('check') is True
 
+    def test_no_loudnorm_filter_by_default(self):
+        """Test that no audio filter is applied unless normalization is requested"""
+        from unittest.mock import patch
+
+        with patch('core.utils.subprocess.run') as mock_run:
+            from core.utils import convert_wav_to_mp3
+
+            convert_wav_to_mp3('/tmp/input.wav', '/tmp/output.mp3')
+
+            call_args = mock_run.call_args[0][0]
+            assert '-af' not in call_args
+            assert not any('loudnorm' in str(arg) for arg in call_args)
+
+    def test_normalize_adds_loudnorm_filter(self):
+        """Test that normalize=True inserts the loudnorm filter at the -18 LUFS target"""
+        from unittest.mock import patch
+
+        with patch('core.utils.subprocess.run') as mock_run:
+            from core.utils import convert_wav_to_mp3
+
+            convert_wav_to_mp3('/tmp/input.wav', '/tmp/output.mp3', normalize=True)
+
+            call_args = mock_run.call_args[0][0]
+            assert '-af' in call_args
+            af_index = call_args.index('-af')
+            assert call_args[af_index + 1] == 'loudnorm=I=-18:LRA=11:TP=-1.5'
+
+    def test_falls_back_to_unnormalized_when_loudnorm_fails(self):
+        """A failed loudnorm pass retries without the filter instead of raising."""
+        import subprocess as sp
+        from unittest.mock import patch
+
+        with patch('core.utils.subprocess.run') as mock_run:
+            from core.utils import convert_wav_to_mp3
+
+            # First call (with loudnorm) fails; second (no filter) succeeds.
+            mock_run.side_effect = [sp.CalledProcessError(1, 'ffmpeg'), None]
+
+            convert_wav_to_mp3('/tmp/input.wav', '/tmp/output.mp3', normalize=True)
+
+            assert mock_run.call_count == 2
+            first_cmd = mock_run.call_args_list[0][0][0]
+            second_cmd = mock_run.call_args_list[1][0][0]
+            assert any('loudnorm' in str(a) for a in first_cmd)
+            assert not any('loudnorm' in str(a) for a in second_cmd)
+
+    def test_genuine_ffmpeg_failure_still_propagates(self):
+        """If even the un-normalized conversion fails, the error is not swallowed."""
+        import subprocess as sp
+        from unittest.mock import patch
+
+        import pytest
+
+        with patch('core.utils.subprocess.run') as mock_run:
+            from core.utils import convert_wav_to_mp3
+
+            mock_run.side_effect = sp.CalledProcessError(1, 'ffmpeg')
+
+            with pytest.raises(sp.CalledProcessError):
+                convert_wav_to_mp3('/tmp/input.wav', '/tmp/output.mp3', normalize=True)
+
 
 class TestSanitizeUrl:
     """Tests for sanitize_url() function"""

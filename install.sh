@@ -167,6 +167,21 @@ detect_platform() {
         print_error "This script requires apt-get (Debian/Ubuntu/Raspberry Pi OS)"
         exit 1
     fi
+
+    # Require a 64-bit OS. BirdNET-PiPy ships arm64-only Python wheels
+    # (onnxruntime, tflite-runtime), so 32-bit Raspberry Pi OS cannot run it.
+    # Reject early with a clear message instead of failing deep in the build
+    # (or on the missing Docker repo for 'raspbian' codenames like trixie).
+    local arch
+    arch=$(dpkg --print-architecture)
+    case "$arch" in
+        armhf|armel|i386)
+            print_error "32-bit OS detected (architecture: $arch)"
+            print_info "BirdNET-PiPy requires a 64-bit OS (Raspberry Pi OS 64-bit, Bookworm+)."
+            print_info "Reflash with the 64-bit image and re-run the installer."
+            exit 1
+            ;;
+    esac
 }
 
 # Show usage
@@ -525,15 +540,10 @@ prune_docker_before_update() {
 # Try to pull pre-built images from GHCR, fall back to local build.
 # Skips pull for non-ARM64, non-release branches, and non-1000 UID systems.
 pull_or_build() {
-    if [ "$SKIP_BUILD" = true ]; then
-        build_application
-        return $?
-    fi
-
-    local commit
-    commit=$(git rev-parse HEAD)
+    # -C: fresh installs call this without cd-ing into the repo first, so don't
+    # rely on the caller's working directory for git context.
     local repo="Suncuss/BirdNET-PiPy"
-    local target_branch="${TARGET_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
+    local target_branch="${TARGET_BRANCH:-$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD)}"
     local can_pull=true
 
     case "$target_branch" in
@@ -544,6 +554,13 @@ pull_or_build() {
             can_pull=false
             ;;
     esac
+
+    # Short-circuit before any network checks, but after the branch handling so
+    # --skip-build still records BIRDNET_CHANNEL and reports the build fallback.
+    if [ "$SKIP_BUILD" = true ]; then
+        build_application
+        return $?
+    fi
 
     # Pre-built images are ARM64 only (Raspberry Pi target)
     local arch
@@ -564,7 +581,11 @@ pull_or_build() {
         return $?
     fi
 
-    # Check if the image build workflow completed for this commit
+    # Check if the image build workflow completed for this commit. Captured here
+    # (not at the top) so the skip-build / non-ARM / non-1000-UID fast paths above
+    # don't run an unused git call that set -e could trip on.
+    local commit
+    commit=$(git -C "$PROJECT_ROOT" rev-parse HEAD)
     local api_response
     api_response=$(curl -s --connect-timeout 3 --max-time 5 \
         "https://api.github.com/repos/$repo/actions/workflows/build-images.yml/runs?head_sha=$commit&status=completed&per_page=1" 2>/dev/null) || true

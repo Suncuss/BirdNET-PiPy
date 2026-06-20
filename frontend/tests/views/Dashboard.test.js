@@ -356,8 +356,14 @@ describe('Dashboard', () => {
       this.src = src
       this.crossOrigin = ''
       this.pause = vi.fn()
-      this.play = vi.fn().mockResolvedValue()
-      this.addEventListener = vi.fn()
+      const listeners = {}
+      this.addEventListener = vi.fn((type, cb) => { listeners[type] = cb })
+      // Fire 'playing' synchronously so the draw gate is open by the time the
+      // component's single synchronous drawSpectrogram frame runs.
+      this.play = vi.fn(() => {
+        listeners.playing?.()
+        return Promise.resolve()
+      })
     }))
 
     const analyser = {

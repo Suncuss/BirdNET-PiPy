@@ -2,7 +2,10 @@
 # Uses Docker-in-Docker (DinD) to test full installation flow including Docker setup
 #
 # Build: docker build -f Dockerfile.test -t birdnet-install-test .
-# Run:   docker run --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw birdnet-install-test
+# Run:   docker run --rm --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+#            -v birdnet-install-test-docker-manual:/var/lib/docker birdnet-install-test
+#        (--rm + the -docker- volume name let docker-test-install.sh's preflight
+#         sweep reclaim the leftover volume on the next run)
 
 FROM debian:bookworm
 
@@ -69,9 +72,17 @@ RUN rm -f /lib/systemd/system/multi-user.target.wants/* \
     # Re-enable Docker and containerd services
     systemctl enable docker.service containerd.service
 
-# Configure Docker to use vfs storage driver (required for DinD - overlay doesn't work)
+# Inner Docker storage must live on a real filesystem — the test runner mounts a
+# volume at /var/lib/docker — which lets the daemon use overlay2. Without that,
+# overlay2 can't layer on top of the outer container's overlayfs, and the old
+# vfs fallback copied the full filesystem per image layer, ballooning a test
+# run to 40GB+ and filling the host disk.
 RUN mkdir -p /etc/docker && \
-    echo '{"storage-driver": "vfs"}' > /etc/docker/daemon.json
+    echo '{"storage-driver": "overlay2"}' > /etc/docker/daemon.json
+
+# Safety net: if run without an explicit volume, Docker creates an anonymous one
+# here instead of writing nested image layers into this container's own layer.
+VOLUME /var/lib/docker
 
 # Create directories needed for container operation
 RUN mkdir -p /run/systemd/system
