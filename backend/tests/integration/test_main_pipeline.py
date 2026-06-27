@@ -1057,8 +1057,13 @@ class TestFullPipelineIntegration:
             assert detection['common_name'] == 'American Robin'
             assert detection['scientific_name'] == 'Turdus migratorius'
             assert detection['confidence'] == pytest.approx(0.95, abs=0.01)
-            assert detection['latitude'] == 40.7128
-            assert detection['longitude'] == -74.0060
+            # Coordinates are stripped from normalized detections (private-by-default),
+            # but must still be persisted to the row — verify via the export path.
+            assert 'latitude' not in detection
+            assert 'longitude' not in detection
+            export_rows = pipeline_db_manager.get_all_detections_for_export()
+            assert export_rows[0]['latitude'] == 40.7128
+            assert export_rows[0]['longitude'] == -74.0060
 
             # Verify source file deleted
             assert not os.path.exists(wav_file), "Source WAV file should be deleted after processing"
@@ -1308,9 +1313,13 @@ class TestFullPipelineIntegration:
             assert detection['scientific_name'] == 'Turdus migratorius'
             assert detection['confidence'] == pytest.approx(0.95, abs=0.01)
 
-            # Verify location fields
-            assert detection['latitude'] == 40.7128
-            assert detection['longitude'] == -74.0060
+            # Location is persisted to the row but stripped from normalized
+            # detections (private-by-default) — verify via the export path.
+            assert 'latitude' not in detection
+            assert 'longitude' not in detection
+            export_rows = pipeline_db_manager.get_all_detections_for_export()
+            assert export_rows[0]['latitude'] == 40.7128
+            assert export_rows[0]['longitude'] == -74.0060
 
             # Verify file references follow the expected naming pattern
             assert 'American_Robin' in detection['bird_song_file_name']

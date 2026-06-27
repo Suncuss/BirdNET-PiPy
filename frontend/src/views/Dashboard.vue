@@ -480,14 +480,14 @@ export default {
         // Audio state
         let audioCtx, audioAnalyser, source, frequencyDataArray, prevFrequencyDataArray, animationId;
         let spectrogramCanvasCtx, canvasWidth, canvasHeight;
-        let rollingMaxDb = -Infinity; // Per-playback peak: the live canvas auto-gains to the loudest recent bin (the saved PNG instead uses an absolute dBFS reference)
+        let signalStarted = false; // Latch: hold the scroll until the first non-silent frame (see drawSpectrogram)
         let audioClockRunning = false; // Tracks 'playing' vs 'waiting'/'pause' — gates scrolling on real playback progress
         const SPECTROGRAM_SUPERSAMPLE = 2; // Render at 2x internal resolution; browser downscales for smoother edges
-        // The live canvas uses its own relative window — a fixed span below the
-        // per-playback peak (rollingMaxDb) — deliberately independent of the
-        // backend PNG's absolute dBFS floor, so the two are not kept in sync.
-        const SPEC_DB_FLOOR = -120;
-        const SPEC_DB_RANGE = 120;
+        // Fixed dB window (not a per-playback peak), matching the Live Feed view:
+        // floor -110 dBFS up to -30 dBFS — an 80 dB span. Brightness stays stable
+        // instead of auto-gaining to the loudest recent bin.
+        const SPEC_DB_FLOOR = -110;
+        const SPEC_DB_RANGE = 80;
         // Gamma <1 brightens midtones without shifting the dark floor or white peak — keeps
         // the Greens_r identity but lifts the bulk of typical bin values up the ramp.
         const SPEC_BRIGHTNESS_GAMMA = 0.8;
@@ -514,9 +514,9 @@ export default {
         // Idle background — pale green for an inviting "ready to play" look. Once playback
         // starts, the canvas scrolls fresh dark-green silence in from the right.
         const SPECTROGRAM_BG_COLOR = '#E8F5E9';
-        const dbToLutIndex = (db, ref) => {
-            if (!Number.isFinite(db) || !Number.isFinite(ref)) return 0;
-            const t = (db - ref - SPEC_DB_FLOOR) / SPEC_DB_RANGE;
+        const dbToLutIndex = (db) => {
+            if (!Number.isFinite(db)) return 0;
+            const t = (db - SPEC_DB_FLOOR) / SPEC_DB_RANGE;
             if (t <= 0) return 0;
             if (t >= 1) return 255;
             return Math.round(Math.pow(t, SPEC_BRIGHTNESS_GAMMA) * 255);
@@ -726,7 +726,7 @@ export default {
             audioAnalyser = null
             frequencyDataArray = null
             prevFrequencyDataArray = null
-            rollingMaxDb = -Infinity
+            signalStarted = false
             audioClockRunning = false
         })
 
@@ -820,17 +820,16 @@ export default {
 
             audioAnalyser.getFloatFrequencyData(frequencyDataArray);
 
-            // Update running peak across the visible band so the colormap gets normalized to the
-            // loudest bin observed so far — matches the PNG's `Sxx / max_power` step.
-            for (let i = minIndex; i <= maxIndex; i++) {
-                const v = frequencyDataArray[i];
-                if (v > rollingMaxDb) rollingMaxDb = v;
-            }
-
             // 'playing' fires on the media element slightly before decoded samples reach the
             // analyser, which would scroll in a blank lead-in. Hold the scroll until the first
-            // real signal: rollingMaxDb stays -Infinity while every bin is still digital silence.
-            if (!Number.isFinite(rollingMaxDb)) return;
+            // real signal: getFloatFrequencyData reports -Infinity for every bin during the
+            // silent lead-in, so latch once the first finite bin appears.
+            if (!signalStarted) {
+                for (let i = minIndex; i <= maxIndex; i++) {
+                    if (Number.isFinite(frequencyDataArray[i])) { signalStarted = true; break; }
+                }
+                if (!signalStarted) return;
+            }
 
             const imageData = spectrogramCanvasCtx.getImageData(stepX, 0, canvasWidth - stepX, canvasHeight);
             spectrogramCanvasCtx.putImageData(imageData, 0, 0);
@@ -845,8 +844,8 @@ export default {
                 // Horizontal gradient interpolates each row's color from the previous frame's
                 // intensity to the current — smooths the time axis without a post-process blur.
                 const grad = spectrogramCanvasCtx.createLinearGradient(canvasWidth - stepX, 0, canvasWidth, 0);
-                grad.addColorStop(0, SPECTROGRAM_COLOR_LUT[dbToLutIndex(prevFrequencyDataArray[i], rollingMaxDb)]);
-                grad.addColorStop(1, SPECTROGRAM_COLOR_LUT[dbToLutIndex(frequencyDataArray[i], rollingMaxDb)]);
+                grad.addColorStop(0, SPECTROGRAM_COLOR_LUT[dbToLutIndex(prevFrequencyDataArray[i])]);
+                grad.addColorStop(1, SPECTROGRAM_COLOR_LUT[dbToLutIndex(frequencyDataArray[i])]);
                 spectrogramCanvasCtx.fillStyle = grad;
                 spectrogramCanvasCtx.fillRect(canvasWidth - stepX, canvasHeight - index - binHeight, stepX, binHeight);
 
@@ -915,7 +914,7 @@ export default {
             prevFrequencyDataArray = new Float32Array(audioAnalyser.frequencyBinCount);
             // Initialize prev far below the floor so the first frame's left edge starts dark.
             prevFrequencyDataArray.fill(-200);
-            rollingMaxDb = -Infinity;
+            signalStarted = false;
             audioClockRunning = false;
 	            const latestAudioUrl = getAudioUrl(latestObservationData.value?.bird_song_file_name)
 	            if (!latestAudioUrl) return

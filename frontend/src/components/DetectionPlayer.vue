@@ -157,7 +157,7 @@
       </div>
 
       <!-- Filter controls (live, non-destructive) -->
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4 mt-4 px-5 py-4 sm:px-[22px] bg-gray-50 rounded-xl">
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 mt-4 px-5 py-3 sm:px-[22px] bg-gray-50 rounded-xl">
         <!-- High-pass -->
         <div>
           <div class="flex justify-between items-center text-[13px] mb-2">

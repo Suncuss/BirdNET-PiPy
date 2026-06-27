@@ -13,7 +13,7 @@
             Live spectrogram not available in Safari
           </div>
           <div class="text-xs text-gray-400 mt-1">
-            Audio playback works normally
+            Audio plays normally, but live audio filters aren't available either
           </div>
         </div>
       </div>
@@ -73,6 +73,61 @@
           </div>
         </div>
       </div>
+
+      <!-- Audio filters (live, non-destructive) — same high-pass + gain controls
+           as the detection detail player. The high-pass also shapes the live
+           spectrogram; gain only changes what you hear. Hidden on Safari: it
+           doesn't route the live <audio> stream through Web Audio, so the filter
+           graph carries no signal (same reason the spectrogram is unavailable). -->
+      <div
+        v-if="streamUrl && !isSafari"
+        class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 mb-4 px-5 py-3 sm:px-[22px] bg-gray-50 rounded-xl"
+      >
+        <!-- High-pass -->
+        <div>
+          <div class="flex justify-between items-center text-[13px] mb-2">
+            <label
+              for="live-highpass"
+              class="text-gray-600"
+            >High-pass filter</label>
+            <span class="font-medium tabular-nums text-gray-800">{{ highpassLabel }}</span>
+          </div>
+          <input
+            id="live-highpass"
+            v-model.number="highpassHz"
+            type="range"
+            min="0"
+            max="6000"
+            step="50"
+            class="w-full cursor-pointer"
+            :style="{ '--fill': highpassFill }"
+            aria-label="High-pass cutoff frequency"
+          >
+        </div>
+
+        <!-- Gain -->
+        <div>
+          <div class="flex justify-between items-center text-[13px] mb-2">
+            <label
+              for="live-gain"
+              class="text-gray-600"
+            >Gain</label>
+            <span class="font-medium tabular-nums text-gray-800">{{ gainLabel }}</span>
+          </div>
+          <input
+            id="live-gain"
+            v-model.number="gainDb"
+            type="range"
+            min="-12"
+            max="24"
+            step="1"
+            class="w-full cursor-pointer"
+            :style="{ '--fill': gainFill }"
+            aria-label="Playback gain"
+          >
+        </div>
+      </div>
+
       <audio
         ref="audioElement"
         :src="streamUrl"
@@ -90,12 +145,13 @@
 </template>
 
 <script>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { io } from 'socket.io-client'
 import BirdDetectionList from './BirdDetectionList.vue'
 import Spinner from '@/components/Spinner.vue'
 import api from '@/services/api'
 import { SOCKET_PATH } from '@/services/baseUrl'
+import { spectrogramColor } from '@/utils/spectrogram'
 
 export default {
   name: 'LiveFeed',
@@ -114,14 +170,31 @@ export default {
     const streams = ref([])
     const selectedSourceId = ref('')
 
+    // Live, non-destructive processing controls (mirrors DetectionPlayer.vue).
+    const highpassHz = ref(0)
+    const gainDb = ref(0)
+    const highpassLabel = computed(() => (highpassHz.value > 0 ? `${highpassHz.value} Hz` : 'Off'))
+    const gainLabel = computed(() => `${gainDb.value > 0 ? '+' : ''}${gainDb.value} dB`)
+    // Fill fraction (0–100%) for the green portion of each slider track.
+    const highpassFill = computed(() => `${(highpassHz.value / 6000) * 100}%`)
+    const gainFill = computed(() => `${((gainDb.value + 12) / 36) * 100}%`)
+
     const currentSource = computed(() =>
       streams.value.find(s => s.source_id === selectedSourceId.value)
     )
     const streamUrl = computed(() => currentSource.value?.url || '')
     const streamDescription = computed(() => currentSource.value?.label || '')
 
-    let audioContext, analyser, source, dataArray, animationId
+    let audioContext, analyser, source, highpassNode, gainNode, dataArray, animationId
     let canvasCtx, canvasWidth, canvasHeight
+    // Number of low-frequency FFT bins actually drawn — capped to ~12 kHz so the
+    // live spectrogram's vertical range matches the detection-detail player.
+    let spectrogramBins
+
+    // Top of the displayed frequency range. Birds sit in the low end; the upper
+    // half of the full 0–22 kHz analyser range is mostly empty, so cap it here
+    // to match the detection-detail spectrogram (@/utils/spectrogram).
+    const SPECTROGRAM_MAX_HZ = 12000
     let socket
     const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent)
 
@@ -138,21 +211,62 @@ export default {
     const RECONNECT_BASE_MS = 2000
     const RECONNECT_MAX_MS = 10000
 
+    const dbToGain = (db) => Math.pow(10, db / 20)
+
+    const applyHighpass = () => {
+      if (!highpassNode) return
+      // A biquad at ~10 Hz is effectively a bypass; >0 engages the cutoff.
+      highpassNode.frequency.value = highpassHz.value > 0 ? highpassHz.value : 10
+    }
+
     const initAudioContext = async () => {
       if (!audioContext) {
         audioContext = new (window.AudioContext || window.webkitAudioContext)({
           sampleRate: 44100
         });
         analyser = audioContext.createAnalyser();
-        analyser.fftSize = 2048;
+        // Tuned to match the detection-detail spectrogram (@/utils/spectrogram):
+        // same 1024-pt FFT, light temporal smoothing for crispness without
+        // flicker, and an ~80 dB display window. The reference stays fixed
+        // (absolute dB) rather than per-clip peak — per-clip normalization is
+        // impossible on a live stream, and a fixed reference keeps brightness
+        // stable over time.
+        analyser.fftSize = 1024;
+        analyser.smoothingTimeConstant = 0.25;
+        // 80 dB window (matches the detail view's floorDb) positioned so a
+        // typical loud call (~-30 dBFS) reaches full brightness.
+        analyser.minDecibels = -110;
+        analyser.maxDecibels = -30;
         dataArray = new Uint8Array(analyser.frequencyBinCount);
+        const binHz = audioContext.sampleRate / analyser.fftSize;
+        spectrogramBins = Math.min(
+          analyser.frequencyBinCount,
+          Math.round(SPECTROGRAM_MAX_HZ / binHz)
+        );
         audioElement.value.crossOrigin = 'anonymous';
         source = audioContext.createMediaElementSource(audioElement.value);
-        source.connect(analyser);
-        analyser.connect(audioContext.destination);
 
+        // High-pass + gain inserted into the chain. The analyser is a transparent
+        // pass-through tapping the post-high-pass signal, so the live spectrogram
+        // reflects the filter but not gain (gain only changes what you hear):
+        //   source → highpass → analyser → gain → destination
+        highpassNode = audioContext.createBiquadFilter();
+        highpassNode.type = 'highpass';
+        applyHighpass();
+        gainNode = audioContext.createGain();
+        gainNode.gain.value = dbToGain(gainDb.value);
+
+        source.connect(highpassNode);
+        highpassNode.connect(analyser);
+        analyser.connect(gainNode);
+        gainNode.connect(audioContext.destination);
       }
     }
+
+    watch(highpassHz, applyHighpass)
+    watch(gainDb, (db) => {
+      if (gainNode) gainNode.gain.value = dbToGain(db)
+    })
 
     const showError = (message, duration = 4000) => {
       statusMessage.value = message
@@ -338,15 +452,17 @@ export default {
       canvasCtx.fillRect(0, 0, canvasWidth, canvasHeight)
       canvasCtx.putImageData(imageData, 0, 0)
 
-      for (let i = 0; i < dataArray.length; i++) {
-        let ratio = dataArray[i] / 255
-        let hue = Math.round((ratio * 220) + 280 % 360)
-        let sat = '100%'
-        let lit = 10 + (70 * ratio) + '%'
+      // Draw only the bins up to SPECTROGRAM_MAX_HZ, stretched across the full
+      // canvas height so the visible range is 0–12 kHz (matches the detail view).
+      const bins = spectrogramBins || dataArray.length
+      for (let i = 0; i < bins; i++) {
+        // Map the analyser's 0–255 intensity through the same green colormap as
+        // the detection-detail spectrogram so the two read as one instrument.
+        const [r, g, b] = spectrogramColor(dataArray[i] / 255)
         canvasCtx.beginPath()
-        canvasCtx.strokeStyle = `hsl(${hue}, ${sat}, ${lit})`
-        canvasCtx.moveTo(canvasWidth - 1, canvasHeight - (i * canvasHeight / dataArray.length))
-        canvasCtx.lineTo(canvasWidth - 1, canvasHeight - ((i + 1) * canvasHeight / dataArray.length))
+        canvasCtx.strokeStyle = `rgb(${r}, ${g}, ${b})`
+        canvasCtx.moveTo(canvasWidth - 1, canvasHeight - (i * canvasHeight / bins))
+        canvasCtx.lineTo(canvasWidth - 1, canvasHeight - ((i + 1) * canvasHeight / bins))
         canvasCtx.stroke()
       }
     }
@@ -507,7 +623,12 @@ export default {
         canvasWidth = canvas.width = canvas.offsetWidth
         canvasHeight = canvas.height = canvas.offsetHeight
 
-        canvasCtx.fillStyle = 'hsl(280, 100%, 10%)'
+        // Idle background before playback: a near-floor green pulled from the
+        // bottom of the spectrogram colormap, so the empty canvas matches how a
+        // quiet stream renders (was a leftover dark purple from the old rainbow
+        // map). Tune the 0.06 if it reads too bright/dark.
+        const [ir, ig, ib] = spectrogramColor(0.06)
+        canvasCtx.fillStyle = `rgb(${ir}, ${ig}, ${ib})`
         canvasCtx.fillRect(0, 0, canvasWidth, canvasHeight)
       }
 
@@ -533,6 +654,14 @@ export default {
       if (source) {
         source.disconnect()
         source = null
+      }
+      if (highpassNode) {
+        highpassNode.disconnect()
+        highpassNode = null
+      }
+      if (gainNode) {
+        gainNode.disconnect()
+        gainNode = null
       }
       if (analyser) {
         analyser.disconnect()
@@ -574,6 +703,12 @@ export default {
       selectedSourceId,
       streamUrl,
       streamDescription,
+      highpassHz,
+      gainDb,
+      highpassLabel,
+      gainLabel,
+      highpassFill,
+      gainFill,
       isSafari,
       selectSourceById,
       handleAudioError,
@@ -597,5 +732,71 @@ export default {
   50% {
     opacity: 0.3;
   }
+}
+
+/* Range sliders — cross-browser so the track/thumb render the same on iOS Safari
+   and desktop. Thin 4px track with the app's green fill up to the thumb (--fill)
+   and a 16px green thumb with a white ring. Same primitive as DetectionPlayer.vue
+   and Settings.vue — if this needs to change in more than one place, promote it to
+   a shared <RangeSlider> component. */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+}
+
+/* WebKit has no progress pseudo-element, so paint the fill as a gradient;
+   Firefox uses ::-moz-range-progress. */
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    to right,
+    theme('colors.green.600') var(--fill, 0%),
+    theme('colors.gray.200') var(--fill, 0%)
+  );
+}
+
+input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 9999px;
+  background-color: theme('colors.gray.200');
+}
+
+input[type="range"]::-moz-range-progress {
+  height: 4px;
+  border-radius: 9999px;
+  background-color: theme('colors.green.600');
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  background-color: theme('colors.green.600');
+  cursor: pointer;
+  margin-top: -6px;
+  border: 2px solid white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  background-color: theme('colors.green.600');
+  cursor: pointer;
+  border: 2px solid white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+input[type="range"]:hover::-webkit-slider-thumb {
+  background-color: theme('colors.green.700');
+}
+
+input[type="range"]:hover::-moz-range-thumb {
+  background-color: theme('colors.green.700');
 }
 </style>

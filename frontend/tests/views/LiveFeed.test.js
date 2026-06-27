@@ -73,6 +73,15 @@ describe('LiveFeed', () => {
       createMediaElementSource: () => ({
         connect: vi.fn()
       }),
+      createBiquadFilter: () => ({
+        type: '',
+        frequency: { value: 0 },
+        connect: vi.fn()
+      }),
+      createGain: () => ({
+        gain: { value: 0 },
+        connect: vi.fn()
+      }),
       destination: {},
       resume
     })))
@@ -202,6 +211,72 @@ describe('LiveFeed', () => {
     })
   })
 
+  describe('audio filters (high-pass + gain)', () => {
+    it('renders the high-pass and gain sliders once a stream is configured', async () => {
+      const wrapper = mountLiveFeed()
+      await flushPromises()
+
+      expect(wrapper.find('#live-highpass').exists()).toBe(true)
+      expect(wrapper.find('#live-gain').exists()).toBe(true)
+    })
+
+    it('hides the filter panel when no stream is configured', async () => {
+      mockApi.get.mockResolvedValueOnce({ data: { streams: [] } })
+      const wrapper = mountLiveFeed()
+      await flushPromises()
+
+      expect(wrapper.find('#live-highpass').exists()).toBe(false)
+      expect(wrapper.find('#live-gain').exists()).toBe(false)
+    })
+
+    it('hides the filter panel in Safari (Web Audio graph carries no signal there)', async () => {
+      // Safari doesn't route the live <audio> stream through Web Audio, so the
+      // filter graph (and the spectrogram analyser) get no signal — the controls
+      // would be silently dead, so they're hidden like the spectrogram.
+      const originalUA = navigator.userAgent
+      Object.defineProperty(navigator, 'userAgent', {
+        value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Safari/605.1.15',
+        configurable: true
+      })
+      try {
+        const wrapper = mountLiveFeed()
+        await flushPromises()
+
+        expect(wrapper.vm.isSafari).toBe(true)
+        expect(wrapper.find('#live-highpass').exists()).toBe(false)
+        expect(wrapper.find('#live-gain').exists()).toBe(false)
+      } finally {
+        Object.defineProperty(navigator, 'userAgent', {
+          value: originalUA,
+          configurable: true
+        })
+      }
+    })
+
+    it('formats the high-pass label (Off at 0, Hz otherwise)', async () => {
+      const wrapper = mountLiveFeed()
+      await flushPromises()
+
+      expect(wrapper.vm.highpassLabel).toBe('Off')
+      wrapper.vm.highpassHz = 1500
+      await flushPromises()
+      expect(wrapper.vm.highpassLabel).toBe('1500 Hz')
+    })
+
+    it('formats the gain label with a sign', async () => {
+      const wrapper = mountLiveFeed()
+      await flushPromises()
+
+      expect(wrapper.vm.gainLabel).toBe('0 dB')
+      wrapper.vm.gainDb = 6
+      await flushPromises()
+      expect(wrapper.vm.gainLabel).toBe('+6 dB')
+      wrapper.vm.gainDb = -6
+      await flushPromises()
+      expect(wrapper.vm.gainLabel).toBe('-6 dB')
+    })
+  })
+
   describe('error handling', () => {
     it('handleAudioError ignores errors when not playing or loading', async () => {
       const wrapper = mountLiveFeed()
@@ -318,6 +393,15 @@ describe('LiveFeed', () => {
           connect: vi.fn()
         }),
         createMediaElementSource: () => ({
+          connect: vi.fn()
+        }),
+        createBiquadFilter: () => ({
+          type: '',
+          frequency: { value: 0 },
+          connect: vi.fn()
+        }),
+        createGain: () => ({
+          gain: { value: 0 },
           connect: vi.fn()
         }),
         destination: {},

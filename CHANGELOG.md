@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-06-27
+
 - Fixed the public detection/observation/recording API responses leaking the station's exact coordinates — latitude/longitude are now stripped at the data layer so these endpoints stay private-by-default while share permalinks keep working without login. The authenticated CSV export still includes coordinates
 - Changed `/api/settings/defaults` to require authentication, since it carries the default station coordinates and is only used as an authenticated-load fallback
 - Added shareable permalinks to individual recordings — a "Share" button copies a deep link that opens a dedicated player page (spectrogram, audio player, download), so you can point others at a specific detection instead of just the species
@@ -11,6 +13,10 @@
 - Changed the Detections table's per-row info button to open the full detection player in an in-place modal instead of a small info modal, so you keep your place in the table; ⌘/Ctrl/middle-click still opens it in a new tab
 - Added the current page, filters, and sort to the Detections table's URL, so a refresh, bookmark, or Back button restores the exact view instead of snapping back to page 1
 - Improved modal dismissal consistency — viewer, settings, confirmation, and workflow dialogs now close via the close button, backdrop, or Escape when safe, while saving/testing/processing states still block accidental dismissal
+- Added live high-pass filter and gain controls to the Live Feed, matching the detection player — filter out low-frequency rumble (which also clears from the live spectrogram) and boost quiet audio, all non-destructively while listening
+- Changed the Live Feed spectrogram to match the detection player's look — same green palette, 0–12 kHz range, and contrast — so the live and recorded views read as one instrument
+- Changed the Dashboard's Latest Observation spectrogram to a fixed brightness window (matching the Live Feed) instead of auto-gaining to the loudest sound, so brightness stays steady during playback rather than fluctuating
+- Fixed the Live Feed's high-pass and gain controls showing on Safari, where they had no effect — Safari doesn't route the live stream through Web Audio (the same reason the live spectrogram is unavailable there), so the controls are now hidden with a note that audio still plays
 - Updated frontend dependencies (form-data, ws, js-yaml) to clear three Dependabot security advisories
 
 ## [0.7.5] - 2026-06-20
