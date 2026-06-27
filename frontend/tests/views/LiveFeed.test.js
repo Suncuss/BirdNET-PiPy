@@ -30,6 +30,30 @@ vi.mock('@/views/BirdDetectionList.vue', () => ({
   }
 }))
 
+// Mock the Safari decoded-stream composable so tests never load the WASM decoder.
+// canDecode defaults to true (decoder available); individual tests override it.
+const icecastMock = vi.hoisted(() => ({
+  canDecode: vi.fn(),
+  start: vi.fn(),
+  stop: vi.fn(),
+  isActive: { value: false }
+}))
+vi.mock('@/composables/useIcecastStream', () => ({
+  useIcecastStream: vi.fn(() => icecastMock)
+}))
+
+// Mozilla UA string Safari matches (no "chrome"/"android"), shared by Safari tests.
+const SAFARI_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Safari/605.1.15'
+const withUserAgent = async (ua, fn) => {
+  const original = navigator.userAgent
+  Object.defineProperty(navigator, 'userAgent', { value: ua, configurable: true })
+  try {
+    await fn()
+  } finally {
+    Object.defineProperty(navigator, 'userAgent', { value: original, configurable: true })
+  }
+}
+
 describe('LiveFeed', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -46,6 +70,11 @@ describe('LiveFeed', () => {
       emit: emitMock,
       disconnect: disconnectMock
     }))
+
+    // Decoded-stream composable defaults: decoder available, connect succeeds.
+    icecastMock.canDecode.mockReset().mockResolvedValue(true)
+    icecastMock.start.mockReset().mockResolvedValue(true)
+    icecastMock.stop.mockReset()
 
     // Mock MediaError constants (not available in jsdom)
     vi.stubGlobal('MediaError', {
@@ -229,28 +258,54 @@ describe('LiveFeed', () => {
       expect(wrapper.find('#live-gain').exists()).toBe(false)
     })
 
-    it('hides the filter panel in Safari (Web Audio graph carries no signal there)', async () => {
-      // Safari doesn't route the live <audio> stream through Web Audio, so the
-      // filter graph (and the spectrogram analyser) get no signal — the controls
-      // would be silently dead, so they're hidden like the spectrogram.
-      const originalUA = navigator.userAgent
-      Object.defineProperty(navigator, 'userAgent', {
-        value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Safari/605.1.15',
-        configurable: true
-      })
-      try {
+    it('shows the spectrogram + filters in Safari when the decoder is available', async () => {
+      // Safari now decodes the stream itself into Web Audio (useIcecastStream),
+      // so the analyser-backed spectrogram and the filter graph carry signal —
+      // the controls are live, not dead, and the fallback card is gone.
+      await withUserAgent(SAFARI_UA, async () => {
         const wrapper = mountLiveFeed()
         await flushPromises()
 
         expect(wrapper.vm.isSafari).toBe(true)
+        expect(wrapper.vm.useDecodedStream).toBe(true)
+        expect(wrapper.find('canvas').exists()).toBe(true)
+        expect(wrapper.find('#live-highpass').exists()).toBe(true)
+        expect(wrapper.find('#live-gain').exists()).toBe(true)
+        expect(wrapper.text()).not.toContain('not available in Safari')
+      })
+    })
+
+    it('falls back to plain playback in Safari when the decoder cannot load', async () => {
+      // No usable WASM decoder: keep audio playing via the <audio> element but
+      // hide the (inert) spectrogram + filters, as Safari did before.
+      icecastMock.canDecode.mockResolvedValue(false)
+      await withUserAgent(SAFARI_UA, async () => {
+        const wrapper = mountLiveFeed()
+        await flushPromises()
+
+        expect(wrapper.vm.isSafari).toBe(true)
+        expect(wrapper.vm.useDecodedStream).toBe(false)
+        expect(wrapper.find('canvas').exists()).toBe(false)
         expect(wrapper.find('#live-highpass').exists()).toBe(false)
         expect(wrapper.find('#live-gain').exists()).toBe(false)
-      } finally {
-        Object.defineProperty(navigator, 'userAgent', {
-          value: originalUA,
-          configurable: true
-        })
-      }
+        expect(wrapper.text()).toContain('not available in Safari')
+      })
+    })
+
+    it('starts and stops the decoded stream in Safari via the composable', async () => {
+      await withUserAgent(SAFARI_UA, async () => {
+        const wrapper = mountLiveFeed()
+        await flushPromises()
+        expect(wrapper.vm.useDecodedStream).toBe(true)
+
+        await wrapper.vm.toggleAudio()
+        expect(icecastMock.start).toHaveBeenCalledWith('stream/source_0.mp3')
+        expect(wrapper.vm.isPlaying).toBe(true)
+
+        await wrapper.vm.toggleAudio()
+        expect(icecastMock.stop).toHaveBeenCalled()
+        expect(wrapper.vm.isPlaying).toBe(false)
+      })
     })
 
     it('formats the high-pass label (Off at 0, Hz otherwise)', async () => {

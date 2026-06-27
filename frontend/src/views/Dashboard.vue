@@ -434,6 +434,7 @@ import TimeAxisLinks from '@/components/TimeAxisLinks.vue';
 import { getAudioUrl, getSpectrogramUrl } from '@/services/media'
 import { getDisplayCommonName } from '@/utils/birdNames'
 import { formatConfidence } from '@/utils/format'
+import { createScrollPacer } from '@/utils/scrollPacer'
 
 library.add(faPlay, faPause, faCircleInfo);
 Chart.register(MatrixController, MatrixElement)
@@ -483,6 +484,15 @@ export default {
         let signalStarted = false; // Latch: hold the scroll until the first non-silent frame (see drawSpectrogram)
         let audioClockRunning = false; // Tracks 'playing' vs 'waiting'/'pause' — gates scrolling on real playback progress
         const SPECTROGRAM_SUPERSAMPLE = 2; // Render at 2x internal resolution; browser downscales for smoother edges
+        // Scroll speed in CSS px per second of wall-clock. 240 matches the look this
+        // view had on a 120 Hz display when it stepped a fixed 2 CSS px per animation
+        // frame — but now it's the same on every browser and refresh rate, instead of
+        // tracking the rAF cadence (2x faster at 120 Hz than 60 Hz, slower on frame
+        // drops), which made the same call render wider or narrower per display.
+        const SPECTROGRAM_SCROLL_PX_PER_SEC = 240;
+        // Wall-clock scroll pacing (see @/utils/scrollPacer). Paced in CSS px; the
+        // backing store is SPECTROGRAM_SUPERSAMPLE× denser, so multiply when drawing.
+        const scrollPacer = createScrollPacer(SPECTROGRAM_SCROLL_PX_PER_SEC);
         // Fixed dB window (not a per-playback peak), matching the Live Feed view:
         // floor -110 dBFS up to -30 dBFS — an 80 dB span. Brightness stays stable
         // instead of auto-gaining to the loudest recent bin.
@@ -800,12 +810,14 @@ export default {
         )
 
         // Methods
-        const drawSpectrogram = () => {
+        const drawSpectrogram = (nowMs) => {
             animationId = requestAnimationFrame(drawSpectrogram);
 
             // Only draw while the media clock is running ('playing' → 'waiting'/'pause') —
             // otherwise startup latency and buffering stalls scroll in blank (silent) columns.
-            if (!audioClockRunning) return;
+            // Reset the pacer while stopped so a resume starts fresh rather than jumping
+            // forward by the elapsed time.
+            if (!audioClockRunning) { scrollPacer.reset(); return; }
 
             const frequencyResolution = audioCtx.sampleRate / audioAnalyser.fftSize;
             const minIndex = 0;
@@ -814,9 +826,6 @@ export default {
                 audioAnalyser.frequencyBinCount - 1
             );
             const binSpan = maxIndex - minIndex;
-
-            const stepXCss = 2; // CSS pixels per frame: wider = faster scroll, larger features
-            const stepX = stepXCss * SPECTROGRAM_SUPERSAMPLE;
 
             audioAnalyser.getFloatFrequencyData(frequencyDataArray);
 
@@ -831,8 +840,19 @@ export default {
                 if (!signalStarted) return;
             }
 
-            const imageData = spectrogramCanvasCtx.getImageData(stepX, 0, canvasWidth - stepX, canvasHeight);
-            spectrogramCanvasCtx.putImageData(imageData, 0, 0);
+            // Columns (CSS px) to advance this frame from elapsed wall-clock time, scaled
+            // to the supersampled backing store. 0 until a full column is due, and 0 after
+            // a stall (e.g. a backgrounded tab) so we resume cleanly instead of smearing
+            // one spectrum across the missed gap.
+            const cols = scrollPacer.tick(nowMs);
+            if (cols < 1) return;
+            const stepX = cols * SPECTROGRAM_SUPERSAMPLE;
+
+            // Scroll left by stepX. (Guarded against a zero-width copy.)
+            if (stepX < canvasWidth) {
+                const imageData = spectrogramCanvasCtx.getImageData(stepX, 0, canvasWidth - stepX, canvasHeight);
+                spectrogramCanvasCtx.putImageData(imageData, 0, 0);
+            }
 
             let index = 0;
             for (let i = minIndex; i <= maxIndex; i++) {
@@ -886,7 +906,7 @@ export default {
                 audioElement.play().catch((err) => {
                     console.warn('Failed to resume audio:', err);
                 });
-                drawSpectrogram();
+                animationId = requestAnimationFrame(drawSpectrogram);
                 latestObservationIsPlaying.value = true;
                 return;
             }
@@ -935,7 +955,7 @@ export default {
 	                console.warn('Failed to play audio:', err)
 	                latestObservationIsPlaying.value = false
 	            });
-	            drawSpectrogram();
+	            animationId = requestAnimationFrame(drawSpectrogram);
 	            latestObservationIsPlaying.value = true;
 	        };
 

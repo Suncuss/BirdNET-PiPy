@@ -22,6 +22,7 @@
     "axios": "^1.13.5",
     "chart.js": "^4.4.3",
     "chartjs-chart-matrix": "^2.0.1",
+    "mpg123-decoder": "^1.0.3",
     "primevue": "^4.5.4",
     "smartcrop": "^2.0.5",
     "socket.io-client": "^4.7.5",

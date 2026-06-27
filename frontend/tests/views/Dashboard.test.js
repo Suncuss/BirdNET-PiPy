@@ -350,16 +350,23 @@ describe('Dashboard', () => {
       }
     })
     mockCanvasContext.createLinearGradient.mockReturnValue({ addColorStop })
-    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
+    // Capture the rAF callback so the test can drive draw frames with controlled
+    // timestamps (the spectrogram is paced by wall-clock time, not per-frame).
+    let drawFrame = null
+    vi.stubGlobal('requestAnimationFrame', vi.fn((cb) => { drawFrame = cb; return 1 }))
     vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    // happy-dom reports offsetWidth/Height 0 (no layout); give the canvas a real size
+    // so initializeCanvas computes a non-zero backing store and the scroll can advance.
+    vi.spyOn(HTMLCanvasElement.prototype, 'offsetWidth', 'get').mockReturnValue(600)
+    vi.spyOn(HTMLCanvasElement.prototype, 'offsetHeight', 'get').mockReturnValue(200)
     vi.stubGlobal('Audio', vi.fn().mockImplementation(function MockAudio(src) {
       this.src = src
       this.crossOrigin = ''
       this.pause = vi.fn()
       const listeners = {}
       this.addEventListener = vi.fn((type, cb) => { listeners[type] = cb })
-      // Fire 'playing' synchronously so the draw gate is open by the time the
-      // component's single synchronous drawSpectrogram frame runs.
+      // Fire 'playing' synchronously so the draw gate (audioClockRunning) is open
+      // by the time the test drives the rAF draw frames below.
       this.play = vi.fn(() => {
         listeners.playing?.()
         return Promise.resolve()
@@ -395,6 +402,12 @@ describe('Dashboard', () => {
     await flushPromises()
 
     wrapper.vm.playLatestObservation()
+
+    // Wall-clock pacing: the first frame only establishes the time baseline (draws
+    // nothing); the second, one normal frame later, paints one set of columns. (The
+    // gap must stay below the pacer's stall threshold, or it would be dropped.)
+    drawFrame(0)
+    drawFrame(1000 / 60)
 
     expect(analyser.getFloatFrequencyData).toHaveBeenCalled()
     // 12 kHz cap exceeds available bins at 22050 Hz / fftSize 1024, so loop clamps to 512 bins.

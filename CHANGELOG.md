@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Fixed the Live Feed and Dashboard playback spectrograms scrolling at different speeds across browsers and displays — they advanced a fixed step per animation frame, so speed tracked the refresh rate (e.g. Safari vs Chrome, or 60 Hz vs 120 Hz screens) and a given call rendered wider or narrower per screen. Both now scroll at a fixed rate in real time, so audio features keep a consistent size on any display
+- Added the live spectrogram and high-pass/gain filters to the Live Feed on Safari, which couldn't show them before — Safari can't tap a live stream through Web Audio the normal way, so the audio is now decoded in-browser and fed through the same graph (it falls back to plain playback if the decoder can't load)
+
 ## [0.8.0] - 2026-06-27
 
 - Fixed the public detection/observation/recording API responses leaking the station's exact coordinates — latitude/longitude are now stripped at the data layer so these endpoints stay private-by-default while share permalinks keep working without login. The authenticated CSV export still includes coordinates
