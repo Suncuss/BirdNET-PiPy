@@ -98,6 +98,10 @@ Three test suites cover backend, frontend, and install scripts. Each has its own
 
 Before syncing dev to staging or main, always run `./build.sh` first and confirm it passes.
 
+## Changelog
+
+Add user-facing changes as a bullet under `## [Unreleased]` in `CHANGELOG.md`. Keep each entry concise: lead with `Fixed`/`Added`/`Changed`/`Improved`, and state the change and (briefly) the why in one or two sentences. Prefer a single tight bullet over a paragraph — trim mechanism detail that belongs in the commit message, not the changelog. Don't reference GitHub issue numbers in changelog entries.
+
 ## Home Assistant Add-on
 
 A Home Assistant add-on packages this project for HA users (see

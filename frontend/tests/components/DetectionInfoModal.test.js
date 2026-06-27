@@ -1,10 +1,13 @@
 /**
  * Tests for DetectionInfoModal component
  */
-import { mount } from '@vue/test-utils'
-import { describe, it, expect, beforeEach } from 'vitest'
+import { mount, enableAutoUnmount } from '@vue/test-utils'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import DetectionInfoModal from '@/components/DetectionInfoModal.vue'
 import { useUnitSettings } from '@/composables/useUnitSettings'
+
+enableAutoUnmount(afterEach)
+afterEach(() => { document.body.style.overflow = '' })
 
 describe('DetectionInfoModal', () => {
   const mountModal = (props = {}) => mount(DetectionInfoModal, {
@@ -289,6 +292,16 @@ describe('DetectionInfoModal', () => {
       // Click on the backdrop (the outer div with bg-black/50)
       const backdrop = wrapper.find('.bg-black\\/50')
       await backdrop.trigger('click')
+
+      expect(wrapper.emitted('close')).toBeTruthy()
+    })
+
+    it('emits close event when Escape is pressed', async () => {
+      const detection = { common_name: 'Test', extra: {} }
+      const wrapper = mountModal({ detection })
+
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+      await wrapper.vm.$nextTick()
 
       expect(wrapper.emitted('close')).toBeTruthy()
     })

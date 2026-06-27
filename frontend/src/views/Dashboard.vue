@@ -351,10 +351,7 @@
                 class="text-green-600 hover:text-green-700"
                 @click="showSpectrogram(observation.spectrogram_file_name)"
               >
-                <font-awesome-icon
-                  :icon="['fas', 'circle-info']"
-                  class="h-4 w-4"
-                />
+                <SpectrogramIcon class="h-4 w-4" />
               </button>
             </div>
           </li>
@@ -430,11 +427,13 @@ import { faPlay, faPause, faCircleInfo } from '@fortawesome/free-solid-svg-icons
 	import { useAppStatus } from '@/composables/useAppStatus';
 import { useTimeFormat } from '@/composables/useTimeFormat';
 import SpectrogramModal from '@/components/SpectrogramModal.vue';
+import SpectrogramIcon from '@/components/icons/SpectrogramIcon.vue';
 import CenteredMessage from '@/components/CenteredMessage.vue';
 import SpeciesAxisLinks from '@/components/SpeciesAxisLinks.vue';
 import TimeAxisLinks from '@/components/TimeAxisLinks.vue';
 import { getAudioUrl, getSpectrogramUrl } from '@/services/media'
 import { getDisplayCommonName } from '@/utils/birdNames'
+import { formatConfidence } from '@/utils/format'
 
 library.add(faPlay, faPause, faCircleInfo);
 Chart.register(MatrixController, MatrixElement)
@@ -444,6 +443,7 @@ export default {
     components: {
         FontAwesomeIcon,
         SpectrogramModal,
+        SpectrogramIcon,
         CenteredMessage,
         SpeciesAxisLinks,
         TimeAxisLinks
@@ -949,10 +949,6 @@ export default {
 
         const formatTimestamp = (dateString) => {
             return formatTimeOfDay(dateString)
-        }
-
-        const formatConfidence = (confidence) => {
-            return `${Math.round(confidence * 100)}%`;
         }
 
         const formatSummaryKey = (key) => {

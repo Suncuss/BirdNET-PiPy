@@ -3,7 +3,7 @@
     <!-- Backdrop -->
     <div
       class="fixed inset-0 bg-black bg-opacity-50 transition-opacity"
-      @click="handleBackdropClick"
+      @click="requestDismiss"
     />
 
     <!-- Modal -->
@@ -13,21 +13,9 @@
         <button
           v-if="!testing"
           class="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
-          @click="$emit('close')"
+          @click="requestDismiss"
         >
-          <svg
-            class="w-5 h-5"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M6 18L18 6M6 6l12 12"
-            />
-          </svg>
+          <CloseIcon class="w-5 h-5" />
         </button>
 
         <!-- Service Picker View -->
@@ -164,6 +152,8 @@
 import { ref, computed } from 'vue'
 import { SERVICES, parseAppriseUrl } from '@/utils/notificationServices'
 import api from '@/services/api'
+import CloseIcon from '@/components/icons/CloseIcon.vue'
+import { useModalDismiss } from '@/composables/useModalDismiss'
 
 // SVG path data for each service icon (Heroicons outline)
 const SERVICE_ICONS = {
@@ -177,6 +167,7 @@ const SERVICE_ICONS = {
 
 export default {
   name: 'AddNotificationModal',
+  components: { CloseIcon },
   props: {
     editUrl: {
       type: String,
@@ -252,11 +243,11 @@ export default {
       }
     }
 
-    const handleBackdropClick = () => {
-      if (!testing.value) {
-        emit('close')
-      }
-    }
+    const { requestDismiss } = useModalDismiss(
+      () => true,
+      () => emit('close'),
+      { canDismiss: () => !testing.value }
+    )
 
     return {
       services,
@@ -271,7 +262,7 @@ export default {
       selectService,
       goBack,
       handleTestAndAdd,
-      handleBackdropClick
+      requestDismiss
     }
   }
 }

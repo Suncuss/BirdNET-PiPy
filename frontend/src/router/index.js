@@ -42,6 +42,15 @@ const routes = [
     path: '/bird/:name',
     name: 'BirdDetails',
     component: () => import('../views/BirdDetails.vue')
+  },
+  {
+    // Detection Detail — the deep-dive page a share link opens: an on-the-fly
+    // spectrogram (faithful playhead) plus live, non-destructive listening tools
+    // (high-pass, gain). Route name kept as 'BirdRecording' so existing
+    // permalinks/links are unaffected.
+    path: '/bird/:name/recording/:id',
+    name: 'BirdRecording',
+    component: () => import('../views/DetectionDetail.vue')
   }
 ]
 

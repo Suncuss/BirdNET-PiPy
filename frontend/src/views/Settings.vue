@@ -90,19 +90,7 @@
           aria-label="Dismiss update reminder"
           @click="systemUpdate.dismissUpdate()"
         >
-          <svg
-            class="w-4 h-4"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M6 18L18 6M6 6l12 12"
-            />
-          </svg>
+          <CloseIcon class="w-4 h-4" />
         </button>
       </div>
     </div>
@@ -173,7 +161,10 @@
         <hr class="my-3 border-gray-100">
 
         <!-- Audio sources -->
-        <label class="block text-sm text-gray-600 mb-1">Sources<span v-if="hasInactiveSource" class="text-xs text-gray-400 font-normal"> — highlighted sources are active</span></label>
+        <label class="block text-sm text-gray-600 mb-1">Sources<span
+          v-if="hasInactiveSource"
+          class="text-xs text-gray-400 font-normal"
+        > — highlighted sources are active</span></label>
         <div class="flex flex-wrap gap-2">
           <!-- Source pills (click to edit) -->
           <button
@@ -1214,11 +1205,19 @@
     >
       <div
         class="fixed inset-0 bg-black bg-opacity-50 transition-opacity"
-        @click="showChangePassword = false"
+        @click="requestChangePasswordDismiss"
       />
       <div class="flex min-h-full items-center justify-center p-4">
         <div class="relative bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
-          <h3 class="text-lg font-semibold text-gray-900 mb-4">
+          <button
+            v-if="!authLoading"
+            class="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
+            title="Close"
+            @click="requestChangePasswordDismiss"
+          >
+            <CloseIcon class="w-5 h-5" />
+          </button>
+          <h3 class="text-lg font-semibold text-gray-900 mb-4 pr-8">
             Change Password
           </h3>
 
@@ -1265,7 +1264,7 @@
               <button
                 type="button"
                 class="flex-1 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-                @click="showChangePassword = false"
+                @click="requestChangePasswordDismiss"
               >
                 Cancel
               </button>
@@ -1289,11 +1288,19 @@
     >
       <div
         class="fixed inset-0 bg-black bg-opacity-50 transition-opacity"
-        @click="showSetupPassword = false"
+        @click="requestSetupPasswordDismiss"
       />
       <div class="flex min-h-full items-center justify-center p-4">
         <div class="relative bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
-          <h3 class="text-lg font-semibold text-gray-900 mb-2">
+          <button
+            v-if="!authLoading"
+            class="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
+            title="Close"
+            @click="requestSetupPasswordDismiss"
+          >
+            <CloseIcon class="w-5 h-5" />
+          </button>
+          <h3 class="text-lg font-semibold text-gray-900 mb-2 pr-8">
             Set Up Authentication
           </h3>
           <p class="text-sm text-gray-600 mb-4">
@@ -1334,7 +1341,7 @@
               <button
                 type="button"
                 class="flex-1 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-                @click="showSetupPassword = false"
+                @click="requestSetupPasswordDismiss"
               >
                 Cancel
               </button>
@@ -1358,11 +1365,18 @@
     >
       <div
         class="fixed inset-0 bg-black bg-opacity-50 transition-opacity"
-        @click="showUpdateConfirm = false"
+        @click="requestUpdateConfirmDismiss"
       />
       <div class="flex min-h-full items-center justify-center p-4">
         <div class="relative bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
-          <h3 class="text-lg font-semibold text-gray-900 mb-2">
+          <button
+            class="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
+            title="Close"
+            @click="requestUpdateConfirmDismiss"
+          >
+            <CloseIcon class="w-5 h-5" />
+          </button>
+          <h3 class="text-lg font-semibold text-gray-900 mb-2 pr-8">
             Update System?
           </h3>
           <p class="text-sm text-gray-600 mb-4">
@@ -1383,7 +1397,7 @@
           <div class="flex gap-3">
             <button
               class="flex-1 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-              @click="showUpdateConfirm = false"
+              @click="requestUpdateConfirmDismiss"
             >
               Cancel
             </button>
@@ -1468,6 +1482,7 @@ import { useUnitSettings } from '@/composables/useUnitSettings'
 import { useTimeFormat } from '@/composables/useTimeFormat'
 import { useAppStatus } from '@/composables/useAppStatus'
 import { useSettings } from '@/composables/useSettings'
+import { useModalDismiss } from '@/composables/useModalDismiss'
 import { limitDecimals } from '@/utils/inputHelpers'
 import { FILTER_DEFAULTS, modelTypeOptions } from '@/utils/modelDefaults'
 import { RECORDER_STATES } from '@/utils/recorderStates'
@@ -1485,6 +1500,7 @@ import CollapsibleSection from '@/components/CollapsibleSection.vue'
 import ToggleSwitch from '@/components/ToggleSwitch.vue'
 import LogsModal from '@/components/LogsModal.vue'
 import Spinner from '@/components/Spinner.vue'
+import CloseIcon from '@/components/icons/CloseIcon.vue'
 import { SCHEME_TO_SERVICE_NAME } from '@/utils/notificationServices'
 
 const DEFAULT_REPOSITORY_URL = 'https://github.com/Suncuss/BirdNET-PiPy'
@@ -1503,7 +1519,8 @@ export default {
     CollapsibleSection,
     ToggleSwitch,
     LogsModal,
-    Spinner
+    Spinner,
+    CloseIcon
   },
   setup() {
     // Composables
@@ -1706,6 +1723,22 @@ export default {
     const confirmSetupPassword = ref('')
     const changePasswordError = ref('')
     const setupPasswordError = ref('')
+
+    // canDismiss already guards on authLoading, so the close callbacks just flip the flag.
+    const { requestDismiss: requestChangePasswordDismiss } = useModalDismiss(
+      showChangePassword,
+      () => { showChangePassword.value = false },
+      { canDismiss: () => !authLoading.value }
+    )
+    const { requestDismiss: requestSetupPasswordDismiss } = useModalDismiss(
+      showSetupPassword,
+      () => { showSetupPassword.value = false },
+      { canDismiss: () => !authLoading.value }
+    )
+    const { requestDismiss: requestUpdateConfirmDismiss } = useModalDismiss(
+      showUpdateConfirm,
+      () => { showUpdateConfirm.value = false }
+    )
 
     // Notification modal state
     const showAddNotificationModal = ref(false)
@@ -2708,6 +2741,9 @@ export default {
       confirmSetupPassword,
       changePasswordError,
       setupPasswordError,
+      requestChangePasswordDismiss,
+      requestSetupPasswordDismiss,
+      requestUpdateConfirmDismiss,
       handleAuthToggle,
       handleChangePassword,
       handleSetupPassword,

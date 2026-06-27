@@ -306,19 +306,10 @@
                   :disabled="isLoadingSpecies"
                   @click="toggleDropdown"
                 >
-                  <svg
+                  <ChevronIcon
+                    direction="down"
                     class="h-4 w-4"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      stroke-width="2"
-                      d="M19 9l-7 7-7-7"
-                    />
-                  </svg>
+                  />
                 </button>
                                 
                 <!-- Dropdown List -->
@@ -478,6 +469,7 @@ import AppDatePicker from '@/components/AppDatePicker.vue'
 import CenteredMessage from '@/components/CenteredMessage.vue'
 import SpeciesAxisLinks from '@/components/SpeciesAxisLinks.vue'
 import TimeAxisLinks from '@/components/TimeAxisLinks.vue'
+import ChevronIcon from '@/components/icons/ChevronIcon.vue'
 import { getDisplayCommonName, matchesBirdQuery } from '@/utils/birdNames'
 
 Chart.register(MatrixController, MatrixElement)
@@ -489,7 +481,8 @@ export default {
         AppDatePicker,
         CenteredMessage,
         SpeciesAxisLinks,
-        TimeAxisLinks
+        TimeAxisLinks,
+        ChevronIcon
     },
     setup() {
         const {

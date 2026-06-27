@@ -1,7 +1,7 @@
 /**
  * Tests for LoginModal component
  */
-import { mount, flushPromises } from '@vue/test-utils'
+import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import LoginModal from '@/components/LoginModal.vue'
 
@@ -17,6 +17,8 @@ vi.mock('@/composables/useAuth', () => ({
   useAuth: () => mockAuth
 }))
 
+enableAutoUnmount(afterEach)
+
 describe('LoginModal', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -27,6 +29,7 @@ describe('LoginModal', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+    document.body.style.overflow = ''
   })
 
   const mountModal = (props = {}) => mount(LoginModal, {
@@ -188,6 +191,26 @@ describe('LoginModal', () => {
       await backdrop.trigger('click')
 
       expect(wrapper.emitted('cancel')).toBeTruthy()
+    })
+
+    it('emits cancel event when Escape is pressed', async () => {
+      const wrapper = mountModal()
+
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.emitted('cancel')).toBeTruthy()
+    })
+
+    it('does not cancel from backdrop or Escape while loading', async () => {
+      mockAuth.loading.value = true
+      const wrapper = mountModal()
+
+      await wrapper.find('.bg-black.bg-opacity-50').trigger('click')
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.emitted('cancel')).toBeFalsy()
     })
 
     it('clears error on cancel', async () => {

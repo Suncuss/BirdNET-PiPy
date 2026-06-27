@@ -699,7 +699,7 @@ class TestSimpleAPI:
                 assert response.status_code == 200
                 assert response.get_json() == mock_distribution
 
-    def test_bird_recordings_endpoint(self, api_client, real_db_manager):
+    def test_bird_recordings_endpoint(self, api_client, real_db_manager, create_recording_files):
         """Test /api/bird/<species>/recordings endpoint with real database."""
         species = 'American Robin'
 
@@ -717,6 +717,10 @@ class TestSimpleAPI:
                 'sensitivity': 0.75,
                 'overlap': 0.25
             })
+
+        # The endpoint skips records whose media files are missing; this test
+        # exercises sort/limit semantics, so make every record's files present.
+        create_recording_files(real_db_manager, species_name=species)
 
         # Test default sort (recent)
         response = api_client.get(f'/api/bird/{species}/recordings')
@@ -757,6 +761,160 @@ class TestSimpleAPI:
         assert response.status_code == 200
         data = response.get_json()
         assert data == []
+
+    def test_bird_recordings_skips_missing_media(self, api_client, real_db_manager, create_recording_files):
+        """Records missing their audio OR spectrogram file are skipped; only
+        records with BOTH files present are returned."""
+        species = 'Blue Jay'
+        for i in range(4):
+            real_db_manager.insert_detection({
+                'timestamp': f'2024-02-1{i}T08:00:00',
+                'group_timestamp': f'2024-02-1{i}T08:00:00',
+                'common_name': species,
+                'scientific_name': 'Cyanocitta cristata',
+                'confidence': 0.80,
+                'latitude': 40.7128,
+                'longitude': -74.0060,
+                'cutoff': 0.5,
+                'sensitivity': 0.75,
+                'overlap': 0.25
+            })
+
+        # recent order: index 0 is newest (2024-02-13) ... index 3 oldest.
+        # Only index 0 gets both files; the others are missing one or both.
+        recordings = create_recording_files(
+            real_db_manager, species_name=species,
+            choices={0: 'both', 1: 'audio', 2: 'spectrogram', 3: 'none'},
+        )
+
+        response = api_client.get(f'/api/bird/{species}/recordings')
+        assert response.status_code == 200
+        data = response.get_json()
+
+        # Only the record with BOTH files present survives the filter.
+        assert len(data) == 1
+        assert data[0]['audio_filename'] == recordings[0]['audio_filename']
+
+    def test_bird_recordings_overfetch_fills_page(self, api_client, real_db_manager, create_recording_files):
+        """Over-fetch backfills the page from older records when the newest are
+        missing media, so a limit=16 request still returns a full page."""
+        species = 'House Finch'
+        for i in range(20):
+            real_db_manager.insert_detection({
+                'timestamp': f'2024-03-15T{i:02d}:00:00',
+                'group_timestamp': f'2024-03-15T{i:02d}:00:00',
+                'common_name': species,
+                'scientific_name': 'Haemorhous mexicanus',
+                'confidence': 0.80,
+                'latitude': 40.7128,
+                'longitude': -74.0060,
+                'cutoff': 0.5,
+                'sensitivity': 0.75,
+                'overlap': 0.25
+            })
+
+        # Drop media for the 4 newest (indices 0-3); the remaining 16 have both.
+        recordings = create_recording_files(
+            real_db_manager, species_name=species,
+            choices={i: 'none' for i in range(4)},
+        )
+
+        response = api_client.get(f'/api/bird/{species}/recordings?limit=16')
+        assert response.status_code == 200
+        data = response.get_json()
+
+        # Page stays full at 16 despite 4 of the newest being filtered out.
+        assert len(data) == 16
+        returned = {d['audio_filename'] for d in data}
+        for idx in range(4):
+            assert recordings[idx]['audio_filename'] not in returned
+
+    def test_bird_recording_permalink_endpoint(self, api_client, real_db_manager, create_recording_files):
+        """A single recording is resolvable by ID for share/deep-link permalinks,
+        regardless of the recent/best sort window."""
+        species = 'American Robin'
+        for i in range(3):
+            real_db_manager.insert_detection({
+                'timestamp': f'2024-01-15T{10+i:02d}:30:00',
+                'group_timestamp': f'2024-01-15T{10+i:02d}:30:00',
+                'common_name': species,
+                'scientific_name': 'Turdus migratorius',
+                'confidence': 0.80,
+                'latitude': 40.7128,
+                'longitude': -74.0060,
+                'cutoff': 0.5,
+                'sensitivity': 0.75,
+                'overlap': 0.25,
+            })
+        recordings = create_recording_files(real_db_manager, species_name=species)
+        target = recordings[0]
+
+        response = api_client.get(f'/api/bird/{species}/recording/{target["id"]}')
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['id'] == target['id']
+        assert data['audio_filename'] == target['audio_filename']
+        assert data['spectrogram_filename'] == target['spectrogram_filename']
+        assert data['has_media'] is True
+        # This endpoint is public (share permalinks work without login), so the
+        # user's exact station coordinates must never appear in the payload.
+        assert 'latitude' not in data
+        assert 'longitude' not in data
+
+    def test_bird_recording_permalink_not_found(self, api_client, real_db_manager):
+        """An unknown recording ID returns 404."""
+        response = api_client.get('/api/bird/American%20Robin/recording/999999')
+        assert response.status_code == 404
+
+    def test_bird_recording_permalink_species_mismatch(self, api_client, real_db_manager, create_recording_files):
+        """A valid recording ID under the wrong species URL returns 404, so
+        permalinks stay coherent."""
+        species = 'American Robin'
+        real_db_manager.insert_detection({
+            'timestamp': '2024-01-15T10:30:00',
+            'group_timestamp': '2024-01-15T10:30:00',
+            'common_name': species,
+            'scientific_name': 'Turdus migratorius',
+            'confidence': 0.80,
+            'latitude': 40.7128,
+            'longitude': -74.0060,
+            'cutoff': 0.5,
+            'sensitivity': 0.75,
+            'overlap': 0.25,
+        })
+        recordings = create_recording_files(real_db_manager, species_name=species)
+        target = recordings[0]
+
+        response = api_client.get(f'/api/bird/Blue%20Jay/recording/{target["id"]}')
+        assert response.status_code == 404
+
+    def test_bird_recording_permalink_media_gone(self, api_client, real_db_manager, create_recording_files):
+        """A recording whose media files were cleaned up still resolves, but
+        reports has_media=False so the client can degrade gracefully."""
+        species = 'American Robin'
+        real_db_manager.insert_detection({
+            'timestamp': '2024-01-15T10:30:00',
+            'group_timestamp': '2024-01-15T10:30:00',
+            'common_name': species,
+            'scientific_name': 'Turdus migratorius',
+            'confidence': 0.80,
+            'latitude': 40.7128,
+            'longitude': -74.0060,
+            'cutoff': 0.5,
+            'sensitivity': 0.75,
+            'overlap': 0.25,
+        })
+        # 'none' => create neither the audio nor the spectrogram file on disk.
+        recordings = create_recording_files(
+            real_db_manager, species_name=species, choices={0: 'none'},
+        )
+        target = recordings[0]
+
+        response = api_client.get(f'/api/bird/{species}/recording/{target["id"]}')
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['id'] == target['id']
+        assert data['has_media'] is False
 
     def test_broadcast_detection_endpoint(self):
         """Test detection broadcasting."""

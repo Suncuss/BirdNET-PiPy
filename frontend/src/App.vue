@@ -2,7 +2,7 @@
   <div class="min-h-screen bg-gray-100">
     <nav class="bg-green-700 text-white p-4">
       <div class="container mx-auto">
-        <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center justify-between mb-2">
           <router-link
             to="/"
             class="hover:text-green-200 flex items-baseline gap-2"
@@ -117,19 +117,7 @@
       title="Audio recording issues detected"
       @click="handleRecorderWarningClick"
     >
-      <svg
-        class="w-5 h-5"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <path
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          stroke-width="2"
-          d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-        />
-      </svg>
+      <WarningIcon class="w-5 h-5" />
       <span class="text-sm font-medium">Audio Recording Issues</span>
     </router-link>
     <router-link
@@ -187,6 +175,7 @@ import { DISPLAY_NAME } from './version'
 import SetupWizard from '@/components/SetupWizard.vue'
 import LoginModal from '@/components/LoginModal.vue'
 import WelcomeOverlay from '@/components/WelcomeOverlay.vue'
+import WarningIcon from '@/components/icons/WarningIcon.vue'
 import { WELCOME_PENDING_KEY } from '@/utils/storageKeys'
 
 export default {
@@ -194,7 +183,8 @@ export default {
   components: {
     SetupWizard,
     LoginModal,
-    WelcomeOverlay
+    WelcomeOverlay,
+    WarningIcon
   },
   setup() {
     const logger = useLogger('App')

@@ -3,12 +3,20 @@
     <!-- Backdrop (disabled while saving) -->
     <div
       class="fixed inset-0 bg-black bg-opacity-50 transition-opacity"
-      @click="!saving && $emit('cancel')"
+      @click="requestDismiss"
     />
 
     <!-- Modal -->
     <div class="flex min-h-full items-center justify-center p-4">
       <div class="relative bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
+        <button
+          v-if="!saving"
+          class="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
+          title="Close"
+          @click="requestDismiss"
+        >
+          <CloseIcon class="w-5 h-5" />
+        </button>
         <!-- Header -->
         <div class="text-center mb-6">
           <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-orange-100 mb-4">
@@ -71,10 +79,12 @@
 
 <script>
 import Spinner from '@/components/Spinner.vue'
+import CloseIcon from '@/components/icons/CloseIcon.vue'
+import { useModalDismiss } from '@/composables/useModalDismiss'
 
 export default {
   name: 'UnsavedChangesModal',
-  components: { Spinner },
+  components: { Spinner, CloseIcon },
   props: {
     saving: {
       type: Boolean,
@@ -85,6 +95,17 @@ export default {
       default: ''
     }
   },
-  emits: ['save', 'discard', 'cancel']
+  emits: ['save', 'discard', 'cancel'],
+  setup(props, { emit }) {
+    const { requestDismiss } = useModalDismiss(
+      () => true,
+      () => emit('cancel'),
+      { canDismiss: () => !props.saving }
+    )
+
+    return {
+      requestDismiss
+    }
+  }
 }
 </script>

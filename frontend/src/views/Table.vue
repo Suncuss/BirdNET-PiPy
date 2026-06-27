@@ -63,19 +63,7 @@
               class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
               @click.stop="clearHourFilter"
             >
-              <svg
-                class="w-4 h-4"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M6 18L18 6M6 6l12 12"
-                />
-              </svg>
+              <CloseIcon class="w-4 h-4" />
             </button>
           </div>
           <!-- Dropdown -->
@@ -113,19 +101,7 @@
               class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
               @click="clearSpeciesFilter"
             >
-              <svg
-                class="w-4 h-4"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M6 18L18 6M6 6l12 12"
-                />
-              </svg>
+              <CloseIcon class="w-4 h-4" />
             </button>
           </div>
           <!-- Dropdown -->
@@ -172,19 +148,7 @@
         v-else-if="error"
         class="flex flex-col items-center justify-center py-16 px-4"
       >
-        <svg
-          class="w-12 h-12 text-red-400 mb-4"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="2"
-            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-          />
-        </svg>
+        <WarningIcon class="w-12 h-12 text-red-400 mb-4" />
         <p class="text-gray-600 mb-4">
           {{ error }}
         </p>
@@ -285,19 +249,7 @@
             title="Dismiss"
             @click="clearActionError"
           >
-            <svg
-              class="w-4 h-4"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M6 18L18 6M6 6l12 12"
-              />
-            </svg>
+            <CloseIcon class="w-4 h-4" />
           </button>
         </div>
 
@@ -335,7 +287,7 @@
                 <div class="flex flex-col items-end gap-2">
                   <span
                     class="text-sm font-bold"
-                    :class="getConfidenceColor(detection.confidence)"
+                    :class="confidenceColorClass(detection.confidence)"
                   >
                     {{ formatConfidence(detection.confidence) }}
                   </span>
@@ -345,7 +297,7 @@
                     :hide-delete="!isAuthenticated"
                     @toggle-play="togglePlayAudio"
                     @spectrogram="showSpectrogram"
-                    @show-info="showDetectionInfo"
+                    @show-detail="showDetectionDetail"
                     @delete="confirmDelete"
                   />
                 </div>
@@ -426,7 +378,7 @@
                 <td class="px-6 py-4 whitespace-nowrap">
                   <span
                     class="text-sm font-bold"
-                    :class="getConfidenceColor(detection.confidence)"
+                    :class="confidenceColorClass(detection.confidence)"
                   >
                     {{ formatConfidence(detection.confidence) }}
                   </span>
@@ -439,7 +391,7 @@
                     container-class="justify-end w-full"
                     @toggle-play="togglePlayAudio"
                     @spectrogram="showSpectrogram"
-                    @show-info="showDetectionInfo"
+                    @show-detail="showDetectionDetail"
                     @delete="confirmDelete"
                   />
                 </td>
@@ -495,19 +447,10 @@
               :class="!hasPrevPage ? 'text-gray-300' : 'text-gray-600 hover:bg-gray-200'"
               @click="prevPage"
             >
-              <svg
+              <ChevronIcon
+                direction="left"
                 class="w-4 h-4"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M15 19l-7-7 7-7"
-                />
-              </svg>
+              />
             </button>
 
             <span class="px-3 py-1 text-sm text-gray-700">
@@ -520,19 +463,10 @@
               :class="!hasNextPage ? 'text-gray-300' : 'text-gray-600 hover:bg-gray-200'"
               @click="nextPage"
             >
-              <svg
+              <ChevronIcon
+                direction="right"
                 class="w-4 h-4"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M9 5l7 7-7 7"
-                />
-              </svg>
+              />
             </button>
             <button
               :disabled="currentPage === totalPages"
@@ -570,11 +504,13 @@
       @close="isSpectrogramModalVisible = false"
     />
 
-    <!-- Detection Info Modal -->
-    <DetectionInfoModal
-      :is-visible="isInfoModalVisible"
-      :detection="detectionForInfo"
-      @close="isInfoModalVisible = false"
+    <!-- Detection Detail Modal — the per-row info action opens the full player
+         here instead of navigating, so the table keeps its place. -->
+    <DetectionModal
+      :id="detailDetection?.id"
+      :is-visible="isDetailModalVisible"
+      :name="detailDetection?.common_name"
+      @close="isDetailModalVisible = false"
     />
 
     <!-- Delete Confirmation Modal -->
@@ -585,9 +521,17 @@
       >
         <div
           class="fixed inset-0 bg-black/50"
-          @click="handleDeleteBackdropClick"
+          @click="requestDeleteDismiss"
         />
         <div class="relative bg-white rounded-lg shadow-xl max-w-sm w-full p-6">
+          <button
+            v-if="!isDeleting"
+            class="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
+            title="Close"
+            @click="requestDeleteDismiss"
+          >
+            <CloseIcon class="w-5 h-5" />
+          </button>
           <h3 class="text-lg font-semibold text-gray-900 mb-2">
             {{ isBatchDelete ? 'Delete Detections' : 'Delete Detection' }}
           </h3>
@@ -623,10 +567,10 @@
 </template>
 
 	<script setup>
-	import { ref, onMounted, onUnmounted, computed } from 'vue'
+	import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 	import { useRoute, useRouter } from 'vue-router'
 	import { library } from '@fortawesome/fontawesome-svg-core'
-	import { faPlay, faPause, faCircleInfo, faTrashAlt, faDatabase } from '@fortawesome/free-solid-svg-icons'
+	import { faPlay, faPause, faCircleInfo, faTrashAlt } from '@fortawesome/free-solid-svg-icons'
 	
 	import api from '@/services/api'
 	import { getAudioUrl, getSpectrogramUrl } from '@/services/media'
@@ -634,17 +578,22 @@
 	import { useAudioPlayer } from '@/composables/useAudioPlayer'
 	import { useAuth } from '@/composables/useAuth'
 	import { useTimeFormat } from '@/composables/useTimeFormat'
+	import { useModalDismiss } from '@/composables/useModalDismiss'
 	import { getDisplayCommonName, matchesBirdQuery } from '@/utils/birdNames'
 	import { normalizeHour } from '@/utils/inputHelpers'
+	import { formatConfidence, confidenceColorClass } from '@/utils/format'
 	import DetectionActions from '@/components/DetectionActions.vue'
 	import SpectrogramModal from '@/components/SpectrogramModal.vue'
-import DetectionInfoModal from '@/components/DetectionInfoModal.vue'
+import DetectionModal from '@/components/DetectionModal.vue'
+import CloseIcon from '@/components/icons/CloseIcon.vue'
+import WarningIcon from '@/components/icons/WarningIcon.vue'
+import ChevronIcon from '@/components/icons/ChevronIcon.vue'
 import AppDatePicker from '@/components/AppDatePicker.vue'
 import Spinner from '@/components/Spinner.vue'
 import ScrollToTopButton from '@/components/ScrollToTopButton.vue'
 
 // --- Icons Setup ---
-library.add(faPlay, faPause, faCircleInfo, faTrashAlt, faDatabase)
+library.add(faPlay, faPause, faCircleInfo, faTrashAlt)
 
 	// --- Constants ---
 	const SORT_OPTIONS = [
@@ -663,6 +612,8 @@ const {
   isLoading,
   error,
   actionError,
+  startDate,
+  endDate,
   selectedSpecies,
   selectedHour,
   hasActiveFilters,
@@ -739,8 +690,11 @@ const router = useRouter()
 // Modals
 const isSpectrogramModalVisible = ref(false)
 const currentSpectrogramUrl = ref('')
-const isInfoModalVisible = ref(false)
-const detectionForInfo = ref(null)
+// Detection detail modal. detailDetection is kept (not nulled) on close so the
+// player props stay stable through the leave transition; only the visibility
+// flag toggles.
+const isDetailModalVisible = ref(false)
+const detailDetection = ref(null)
 const showDeleteModal = ref(false)
 const detectionToDelete = ref(null)
 const isDeleting = ref(false)
@@ -767,17 +721,6 @@ const formatTime = (timestamp) => {
 const formatDateTime = (timestamp) => {
   if (!timestamp) return ''
   return `${formatDate(timestamp)} at ${formatTime(timestamp)}`
-}
-
-const formatConfidence = (confidence) => {
-  return `${Math.round(confidence * 100)}%`
-}
-
-const getConfidenceColor = (confidence) => {
-  if (confidence >= 0.9) return 'text-green-600'
-  if (confidence >= 0.7) return 'text-green-500'
-  if (confidence >= 0.5) return 'text-yellow-600'
-  return 'text-orange-500'
 }
 
 // --- Helper Functions: Species Filter ---
@@ -843,20 +786,11 @@ const applyFilters = () => {
 const handleClearFilters = () => {
   localStartDate.value = ''
   localEndDate.value = ''
-  selectedSpecies.value = null
   speciesSearchQuery.value = ''
+  // Resets the composable filters + page; the query-sync watcher then strips the
+  // matching keys from the URL so a later refresh / back-forward doesn't
+  // resurrect the just-cleared filters.
   clearFilters()
-
-  // Strip the deep-link params (seedFiltersFromQuery reads these on mount), or
-  // a later refresh / shared URL / back-forward resurrects the filters we just
-  // cleared. Guarded so a normal clear doesn't trigger a redundant navigation.
-  if ('date' in route.query || 'hour' in route.query || 'species' in route.query) {
-    const query = { ...route.query }
-    delete query.date
-    delete query.hour
-    delete query.species
-    router.replace({ query })
-  }
 }
 
 const togglePlayAudio = (detection) => {
@@ -871,9 +805,9 @@ const showSpectrogram = (detection) => {
 	  isSpectrogramModalVisible.value = true
 	}
 
-const showDetectionInfo = (detection) => {
-  detectionForInfo.value = detection
-  isInfoModalVisible.value = true
+const showDetectionDetail = (detection) => {
+  detailDetection.value = detection
+  isDetailModalVisible.value = true
 }
 
 // --- Delete Logic ---
@@ -898,10 +832,11 @@ const cancelDelete = () => {
   isBatchDelete.value = false
 }
 
-const handleDeleteBackdropClick = () => {
-  if (isDeleting.value) return
-  cancelDelete()
-}
+const { requestDismiss: requestDeleteDismiss } = useModalDismiss(
+  showDeleteModal,
+  cancelDelete,
+  { canDismiss: () => !isDeleting.value }
+)
 
 const executeDelete = async () => {
   isDeleting.value = true
@@ -929,42 +864,98 @@ const executeDelete = async () => {
 
 // --- Lifecycle & Watchers ---
 
-// Seed filters from the route query when arriving from a chart deep-link
-// ({ date: 'YYYY-MM-DD', hour: '0'-'23', species: <common_name> }) — the
-// heatmap hour labels send date+hour; a heatmap cell additionally sends
-// species. Returns true when at least one filter was applied, so the caller
-// can skip a redundant unfiltered fetch.
-const seedFiltersFromQuery = () => {
-  const { date, hour, species } = route.query
-  let applied = false
+// Seed the full table view (filters + pagination + sort) from the route query so
+// a shared/bookmarked URL, a chart deep-link, or a back-navigation restores the
+// exact view. Chart deep-links send { date, hour, species }; this also reads the
+// page/sort/per_page that syncQueryToRoute writes back. Sets the composable state
+// directly rather than via setFilters() — which would reset the page to 1 — and
+// the caller fetches once afterwards.
+const isDateStr = (value) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
 
-  if (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    localStartDate.value = date
-    localEndDate.value = date
-    applied = true
+const seedStateFromQuery = () => {
+  const { date, start, end, hour, species, page, sort, order, per_page: perPageParam } = route.query
+
+  // `date` is the single-day form (chart deep-links, and how a single-day filter
+  // is written below); `start`/`end` carry an open-ended or multi-day range.
+  const startStr = isDateStr(start) ? start : (isDateStr(date) ? date : null)
+  const endStr = isDateStr(end) ? end : (isDateStr(date) ? date : null)
+  if (startStr) {
+    localStartDate.value = startStr
+    startDate.value = startStr
+  }
+  if (endStr) {
+    localEndDate.value = endStr
+    endDate.value = endStr
   }
 
   const h = normalizeHour(hour)
-  if (h !== null) {
-    selectedHour.value = h
-    applied = true
-  }
+  if (h !== null) selectedHour.value = h
 
   const trimmedSpecies = typeof species === 'string' ? species.trim() : ''
-  if (trimmedSpecies) {
-    selectedSpecies.value = trimmedSpecies
-    applied = true
+  if (trimmedSpecies) selectedSpecies.value = trimmedSpecies
+
+  const p = Number.parseInt(page, 10)
+  if (Number.isInteger(p) && p > 1) currentPage.value = p
+
+  if (typeof sort === 'string' && SORT_OPTIONS.some(o => o.field === sort)) {
+    sortField.value = sort
+    sortOrder.value = order === 'asc' ? 'asc' : 'desc'
   }
 
-  return applied
+  const pp = Number.parseInt(perPageParam, 10)
+  if ([25, 50, 100, 200].includes(pp)) perPage.value = pp
 }
 
+// Build the URL query from the current table state. Defaults (page 1, newest-first
+// sort, 25/page, empty filters) are omitted to keep the URL clean. A single day
+// (start === end) uses the compact `date` key — matching chart deep-links so they
+// aren't rewritten; any other range uses independent `start`/`end` keys so an
+// open-ended "from X onwards" filter round-trips without being narrowed.
+const buildTableQuery = () => {
+  const query = {}
+  if (startDate.value && startDate.value === endDate.value) {
+    query.date = startDate.value
+  } else {
+    if (startDate.value) query.start = startDate.value
+    if (endDate.value) query.end = endDate.value
+  }
+  if (selectedHour.value !== null) query.hour = selectedHour.value
+  if (selectedSpecies.value) query.species = selectedSpecies.value
+  if (currentPage.value > 1) query.page = currentPage.value
+  if (sortField.value !== 'timestamp' || sortOrder.value !== 'desc') {
+    query.sort = sortField.value
+    query.order = sortOrder.value
+  }
+  if (perPage.value !== 25) query.per_page = perPage.value
+  return query
+}
+
+// Compare two query objects by their stringified values (route.query values are
+// always strings; ours may be numbers), so we skip redundant navigations.
+const sameQuery = (a, b) => {
+  const ak = Object.keys(a)
+  const bk = Object.keys(b)
+  if (ak.length !== bk.length) return false
+  return ak.every(k => String(a[k]) === String(b[k]))
+}
+
+// Reflect table state into the URL (replace, not push, so paging/filtering does
+// not pollute the back stack). Wrapped in Promise.resolve so a redundant-navigation
+// rejection is swallowed and a non-promise (test mock) is tolerated.
+const syncQueryToRoute = () => {
+  const query = buildTableQuery()
+  if (sameQuery(query, route.query)) return
+  Promise.resolve(router.replace({ query })).catch(() => {})
+}
+
+watch(
+  [startDate, endDate, selectedHour, selectedSpecies, currentPage, sortField, sortOrder, perPage],
+  syncQueryToRoute
+)
+
 	onMounted(() => {
-	  if (seedFiltersFromQuery()) {
-	    applyFilters()
-	  } else {
-	    fetchDetections()
-	  }
+	  seedStateFromQuery()
+	  fetchDetections()
 	  fetchSpeciesList()
 	  document.addEventListener('click', handleClickOutside)
 	})

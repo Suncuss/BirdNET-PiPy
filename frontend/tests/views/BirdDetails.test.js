@@ -99,15 +99,17 @@ const mockImageData = {
   hasCustomImage: false
 }
 
+// Each recording carries common_name (the endpoint preserves it) — the per-card
+// player builds its detail-page link from it.
 const mockRecordings = [
-  { id: 1, timestamp: '2024-01-15T14:30:00', confidence: 0.95, audio_filename: 'robin1.mp3', spectrogram_filename: 'robin1.webp' },
-  { id: 2, timestamp: '2024-01-15T13:30:00', confidence: 0.92, audio_filename: 'robin2.mp3', spectrogram_filename: 'robin2.webp' },
-  { id: 3, timestamp: '2024-01-15T12:30:00', confidence: 0.88, audio_filename: 'robin3.mp3', spectrogram_filename: 'robin3.webp' },
-  { id: 4, timestamp: '2024-01-15T11:30:00', confidence: 0.85, audio_filename: 'robin4.mp3', spectrogram_filename: 'robin4.webp' },
-  { id: 5, timestamp: '2024-01-15T10:30:00', confidence: 0.82, audio_filename: 'robin5.mp3', spectrogram_filename: 'robin5.webp' },
-  { id: 6, timestamp: '2024-01-15T09:30:00', confidence: 0.80, audio_filename: 'robin6.mp3', spectrogram_filename: 'robin6.webp' },
-  { id: 7, timestamp: '2024-01-15T08:30:00', confidence: 0.78, audio_filename: 'robin7.mp3', spectrogram_filename: 'robin7.webp' },
-  { id: 8, timestamp: '2024-01-15T07:30:00', confidence: 0.75, audio_filename: 'robin8.mp3', spectrogram_filename: 'robin8.webp' }
+  { id: 1, common_name: 'American Robin', timestamp: '2024-01-15T14:30:00', confidence: 0.95, audio_filename: 'robin1.mp3', spectrogram_filename: 'robin1.webp' },
+  { id: 2, common_name: 'American Robin', timestamp: '2024-01-15T13:30:00', confidence: 0.92, audio_filename: 'robin2.mp3', spectrogram_filename: 'robin2.webp' },
+  { id: 3, common_name: 'American Robin', timestamp: '2024-01-15T12:30:00', confidence: 0.88, audio_filename: 'robin3.mp3', spectrogram_filename: 'robin3.webp' },
+  { id: 4, common_name: 'American Robin', timestamp: '2024-01-15T11:30:00', confidence: 0.85, audio_filename: 'robin4.mp3', spectrogram_filename: 'robin4.webp' },
+  { id: 5, common_name: 'American Robin', timestamp: '2024-01-15T10:30:00', confidence: 0.82, audio_filename: 'robin5.mp3', spectrogram_filename: 'robin5.webp' },
+  { id: 6, common_name: 'American Robin', timestamp: '2024-01-15T09:30:00', confidence: 0.80, audio_filename: 'robin6.mp3', spectrogram_filename: 'robin6.webp' },
+  { id: 7, common_name: 'American Robin', timestamp: '2024-01-15T08:30:00', confidence: 0.78, audio_filename: 'robin7.mp3', spectrogram_filename: 'robin7.webp' },
+  { id: 8, common_name: 'American Robin', timestamp: '2024-01-15T07:30:00', confidence: 0.75, audio_filename: 'robin8.mp3', spectrogram_filename: 'robin8.webp' }
 ]
 
 const mockDistribution = {

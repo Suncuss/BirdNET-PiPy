@@ -86,6 +86,40 @@ class TestNormalizeDetection:
         assert 'audio_filename' not in result
         assert 'spectrogram_filename' not in result
 
+    def test_normalize_detection_strips_coordinates(self, test_db_manager):
+        """Coordinates are private and must never survive normalization.
+
+        Exact lat/lon pinpoint the user's station, so the data layer drops them
+        here, making every detection payload private-by-default regardless of
+        which endpoint returns it.
+        """
+        detection = {
+            'timestamp': '2024-01-15T10:30:45',
+            'group_timestamp': '2024-01-15T10:30:00',
+            'scientific_name': 'Cyanocitta cristata',
+            'common_name': 'Blue Jay',
+            'confidence': 0.88,
+            'latitude': 40.7128,
+            'longitude': -74.0060,
+            'cutoff': 0.5,
+            'sensitivity': 0.75,
+            'overlap': 0.25,
+            'extra': json.dumps({'model': 'birdnet_v2'})
+        }
+        detection_id = test_db_manager.insert_detection(detection)
+
+        # Sanity check: the row really was stored with coordinates.
+        with test_db_manager.get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM detections WHERE id = ?", (detection_id,))
+            row = cur.fetchone()
+        assert row['latitude'] == 40.7128
+        assert row['longitude'] == -74.0060
+
+        result = test_db_manager._normalize_detection(row)
+        assert 'latitude' not in result
+        assert 'longitude' not in result
+
     def test_normalize_detection_handles_null_extra(self, test_db_manager):
         """Test that null extra field is handled correctly."""
         detection = {
@@ -177,6 +211,28 @@ class TestNormalizationConsistency:
         # Check filenames (legacy naming)
         assert 'bird_song_file_name' in result
         assert 'spectrogram_file_name' in result
+
+    def test_get_latest_detections_strips_coordinates(self, test_db_manager):
+        """get_latest_detections must not return lat/lon (feeds the public
+        /api/observations/* endpoints)."""
+        test_db_manager.insert_detection({
+            'timestamp': '2024-01-15T10:30:45',
+            'group_timestamp': '2024-01-15T10:30:00',
+            'scientific_name': 'Cyanocitta cristata',
+            'common_name': 'Blue Jay',
+            'confidence': 0.88,
+            'latitude': 40.7128,
+            'longitude': -74.0060,
+            'cutoff': 0.5,
+            'sensitivity': 0.75,
+            'overlap': 0.25,
+            'extra': json.dumps({'source': 'test'})
+        })
+
+        results = test_db_manager.get_latest_detections(1)
+        assert len(results) == 1
+        assert 'latitude' not in results[0]
+        assert 'longitude' not in results[0]
 
     def test_get_bird_recordings_uses_normalization(self, test_db_manager):
         """Test that get_bird_recordings uses normalized format."""

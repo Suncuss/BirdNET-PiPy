@@ -190,3 +190,50 @@ class TestServeFileWithFallback:
 
                     # Should serve the default file
                     mock_send.assert_called_with(tmpdir, 'default.mp3')
+
+
+@pytest.fixture
+def recording_dirs():
+    """A temp audio dir and spectrogram dir for recording_has_media() tests."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        audio_dir = os.path.join(tmpdir, 'audio')
+        spectrogram_dir = os.path.join(tmpdir, 'spectrograms')
+        os.makedirs(audio_dir)
+        os.makedirs(spectrogram_dir)
+        yield audio_dir, spectrogram_dir
+
+
+class TestRecordingHasMedia:
+    """Tests for recording_has_media()."""
+
+    def test_true_when_both_files_present(self, recording_dirs):
+        from core.api_utils import recording_has_media
+        audio_dir, spectrogram_dir = recording_dirs
+        open(os.path.join(audio_dir, 'a.mp3'), 'wb').close()
+        open(os.path.join(spectrogram_dir, 's.webp'), 'wb').close()
+        rec = {'audio_filename': 'a.mp3', 'spectrogram_filename': 's.webp'}
+        assert recording_has_media(rec, audio_dir, spectrogram_dir) is True
+
+    def test_false_when_audio_missing(self, recording_dirs):
+        from core.api_utils import recording_has_media
+        audio_dir, spectrogram_dir = recording_dirs
+        open(os.path.join(spectrogram_dir, 's.webp'), 'wb').close()
+        rec = {'audio_filename': 'a.mp3', 'spectrogram_filename': 's.webp'}
+        assert recording_has_media(rec, audio_dir, spectrogram_dir) is False
+
+    def test_false_when_spectrogram_missing(self, recording_dirs):
+        from core.api_utils import recording_has_media
+        audio_dir, spectrogram_dir = recording_dirs
+        open(os.path.join(audio_dir, 'a.mp3'), 'wb').close()
+        rec = {'audio_filename': 'a.mp3', 'spectrogram_filename': 's.webp'}
+        assert recording_has_media(rec, audio_dir, spectrogram_dir) is False
+
+    def test_false_when_filename_absent_from_record(self, recording_dirs):
+        from core.api_utils import recording_has_media
+        audio_dir, spectrogram_dir = recording_dirs
+        # No filenames in the record at all.
+        assert recording_has_media({}, audio_dir, spectrogram_dir) is False
+        # Audio name present but spectrogram name missing.
+        open(os.path.join(audio_dir, 'a.mp3'), 'wb').close()
+        rec = {'audio_filename': 'a.mp3'}
+        assert recording_has_media(rec, audio_dir, spectrogram_dir) is False

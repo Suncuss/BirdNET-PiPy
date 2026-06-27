@@ -28,6 +28,15 @@ def _species_key(alias: str = "") -> str:
 _SPECIES_KEY = _species_key()
 
 
+# Detection fields that must never reach a public JSON payload. Exact
+# coordinates pinpoint the user's station. _normalize_detection drops these so
+# detection dicts are private-by-default; the api layer imports this same tuple
+# for its endpoint-level guard, keeping a single source of truth. The
+# authenticated CSV export builds rows from its own query
+# (get_all_detections_for_export), not _normalize_detection, so it keeps coords.
+PRIVATE_DETECTION_FIELDS = ('latitude', 'longitude')
+
+
 # Width of the zero-padded id packed into a "latest key"; comfortably above
 # the 19 digits of a max int64, so the id stays fixed-width and recoverable.
 _LATEST_KEY_ID_WIDTH = 20
@@ -1756,6 +1765,11 @@ class DatabaseManager:
             dict: Normalized detection with parsed extra and optional filenames
         """
         detection = dict(row)
+        # Strip private coordinates here so detection dicts are private-by-default
+        # — an endpoint returning rows without the api-layer _localize_detection
+        # guard (e.g. /api/observations/latest) still can't leak the location.
+        for field in PRIVATE_DETECTION_FIELDS:
+            detection.pop(field, None)
         detection['extra'] = self._parse_extra(detection.get('extra'))
 
         if include_filenames:

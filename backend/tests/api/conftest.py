@@ -73,6 +73,49 @@ def api_client(real_db_manager):
 
 
 @pytest.fixture
+def media_dirs():
+    """Patch the audio/spectrogram directories to empty temp dirs.
+
+    The recordings endpoint skips records whose audio/spectrogram files are
+    absent from disk; tests use these dirs to make specific recordings'
+    files present (by creating them) or absent (by leaving them out)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        audio_dir = os.path.join(tmp, 'extracted_songs')
+        spectrogram_dir = os.path.join(tmp, 'spectrograms')
+        os.makedirs(audio_dir)
+        os.makedirs(spectrogram_dir)
+        with patch('core.api.EXTRACTED_AUDIO_DIR', audio_dir), \
+             patch('core.api.SPECTROGRAM_DIR', spectrogram_dir):
+            yield audio_dir, spectrogram_dir
+
+
+@pytest.fixture
+def create_recording_files(media_dirs):
+    """Factory that creates on-disk audio+spectrogram files for a species'
+    recordings, so the recordings endpoint's media filter treats them as present.
+
+    Call as ``create_recording_files(db_manager, species_name='...')`` or with
+    ``scientific_name='...'``. ``choices`` optionally maps a recent-sort index to
+    'both' (default), 'audio', 'spectrogram', or 'none'. Returns the recordings
+    list (recent sort) so callers can assert which records survive filtering."""
+    audio_dir, spectrogram_dir = media_dirs
+
+    def _create(db_manager, *, species_name=None, scientific_name=None, choices=None):
+        recordings = db_manager.get_bird_recordings(
+            species_name=species_name, scientific_name=scientific_name, sort='recent',
+        )
+        for index, recording in enumerate(recordings):
+            choice = choices.get(index, 'both') if choices else 'both'
+            if choice in ('both', 'audio'):
+                open(os.path.join(audio_dir, recording['audio_filename']), 'wb').close()
+            if choice in ('both', 'spectrogram'):
+                open(os.path.join(spectrogram_dir, recording['spectrogram_filename']), 'wb').close()
+        return recordings
+
+    return _create
+
+
+@pytest.fixture
 def api_client_with_mock(mock_db_manager):
     """Create a test client with mocked database (for specific unit tests only)."""
     with _sandboxed_app(mock_db_manager) as client:

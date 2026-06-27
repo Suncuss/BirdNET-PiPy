@@ -3,7 +3,7 @@
     <!-- Backdrop -->
     <div
       class="fixed inset-0 bg-black bg-opacity-50 transition-opacity"
-      @click="handleBackdropClick"
+      @click="requestDismiss"
     />
 
     <!-- Modal -->
@@ -13,21 +13,9 @@
         <button
           v-if="!testing"
           class="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
-          @click="$emit('close')"
+          @click="requestDismiss"
         >
-          <svg
-            class="w-5 h-5"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M6 18L18 6M6 6l12 12"
-            />
-          </svg>
+          <CloseIcon class="w-5 h-5" />
         </button>
 
         <h3 class="text-lg font-semibold text-gray-900 mb-4">
@@ -189,10 +177,12 @@ import { createLongRequest } from '@/services/api'
 const streamTestClient = createLongRequest(25000)
 import ToggleSwitch from '@/components/ToggleSwitch.vue'
 import Spinner from '@/components/Spinner.vue'
+import CloseIcon from '@/components/icons/CloseIcon.vue'
+import { useModalDismiss } from '@/composables/useModalDismiss'
 
 export default {
   name: 'StreamSourceModal',
-  components: { ToggleSwitch, Spinner },
+  components: { ToggleSwitch, Spinner, CloseIcon },
   props: {
     source: {
       type: Object,
@@ -381,11 +371,11 @@ export default {
       emit('delete', props.source.id)
     }
 
-    const handleBackdropClick = () => {
-      if (!testing.value) {
-        emit('close')
-      }
-    }
+    const { requestDismiss } = useModalDismiss(
+      () => true,
+      () => emit('close'),
+      { canDismiss: () => !testing.value }
+    )
 
     onMounted(() => {
       if (sourceType.value === 'rtsp' && urlInput.value) {
@@ -414,7 +404,7 @@ export default {
       handleSubmit,
       handleForceSubmit,
       handleDelete,
-      handleBackdropClick,
+      requestDismiss,
     }
   }
 }

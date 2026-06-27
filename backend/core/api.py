@@ -43,6 +43,7 @@ from config.settings import (
 from core.api_utils import (
     handle_api_errors,
     log_data_metrics,
+    recording_has_media,
     serve_file_with_fallback,
     validate_date_param,
     validate_limit_param,
@@ -71,7 +72,7 @@ from core.bird_name_utils import (
     get_bird_name_language,
     get_localized_common_name,
 )
-from core.db import DatabaseManager
+from core.db import PRIVATE_DETECTION_FIELDS, DatabaseManager
 from core.db_executor import create_db_executor
 from core.ha_mode import get_runtime_mode, is_home_assistant_mode
 from core.logging_config import get_logger, log_api_request, setup_logging
@@ -1269,6 +1270,11 @@ def delete_bird_image(species_name):
     return jsonify({'hasCustomImage': False})
 
 
+# Extra recordings fetched beyond the requested page so that filtering out rows
+# whose audio/spectrogram files are missing from disk still fills the page.
+RECORDINGS_MEDIA_OVERFETCH = 16
+
+
 @api.route('/api/bird/<species_name>/recordings', methods=['GET'])
 @log_api_request
 def get_bird_recordings(species_name):
@@ -1287,24 +1293,73 @@ def get_bird_recordings(species_name):
 
     settings = load_user_settings()
     sci, common = _resolve_species_filter(species_name)
-    recordings = _localize_detection_list(
-        _run_db(
-            db_manager.get_bird_recordings,
-            common,
-            sort,
-            limit,
-            scientific_name=sci,
-        ),
-        settings=settings,
+
+    # Skip recordings whose audio/spectrogram files are gone from disk (storage
+    # cleanup removes the files but keeps the row; spectrogram generation can
+    # also fail independently). Over-fetch a small constant beyond the requested
+    # page so dropping those doesn't leave the grid short — the displayed records
+    # normally sit inside cleanup's protected window, so few (if any) are dropped.
+    fetch_limit = limit + RECORDINGS_MEDIA_OVERFETCH if limit is not None else None
+    fetched = _run_db(
+        db_manager.get_bird_recordings,
+        common,
+        sort,
+        fetch_limit,
+        scientific_name=sci,
     )
+    present = [
+        r for r in fetched
+        if recording_has_media(r, EXTRACTED_AUDIO_DIR, SPECTROGRAM_DIR)
+    ]
+    # Trim to the requested page (present[:None] is a no-op for the unlimited
+    # case), then localize only the records we actually return.
+    recordings = _localize_detection_list(present[:limit], settings=settings)
+
     logger.debug("Bird recordings retrieved", extra={
         'species': species_name,
         'resolved_scientific': sci,
         'sort': sort,
         'limit': limit,
+        'fetched_count': len(fetched),
         'records_count': len(recordings)
     })
     return jsonify(recordings)
+
+@api.route('/api/bird/<species_name>/recording/<int:recording_id>', methods=['GET'])
+@log_api_request
+def get_bird_recording(species_name, recording_id):
+    """Get a single recording by ID for share / deep-link permalinks.
+
+    Unlike the paged ``/recordings`` endpoint, this resolves a recording by its
+    stable ID regardless of the recent/best sort window, so a shared link
+    works even when the detection isn't among the top results. The recording
+    must belong to the requested species (keeps permalinks coherent), else 404.
+
+    ``has_media`` reports whether the audio/spectrogram files still exist:
+    storage cleanup can delete them while keeping the row, so the client shows
+    a graceful "no longer available" notice instead of a dead player.
+    """
+    detection = _run_db(db_manager.get_detection_by_id, recording_id)
+    if detection is None:
+        return jsonify({"error": "Recording not found"}), 404
+
+    # Mirror the recordings list filter: by scientific_name when the route name
+    # resolves to a known species, otherwise by the legacy common_name.
+    sci, common = _resolve_species_filter(species_name)
+    belongs = (
+        detection.get('scientific_name') == sci if sci
+        else detection.get('common_name') == common
+    )
+    if not belongs:
+        return jsonify({"error": "Recording not found for this species"}), 404
+
+    settings = load_user_settings()
+    recording = _localize_detection(detection, settings=settings)
+    recording['has_media'] = recording_has_media(
+        recording, EXTRACTED_AUDIO_DIR, SPECTROGRAM_DIR,
+    )
+    return jsonify(recording)
+
 
 @api.route('/api/bird/<species_name>/detection_distribution', methods=['GET'])
 @validate_date_param()
@@ -1693,12 +1748,26 @@ def _resolve_species_filter(name):
     return (sci, None) if sci else (None, name)
 
 
+def _strip_private_fields(detection):
+    # Endpoint-level guard (defense in depth). The data layer already drops
+    # PRIVATE_DETECTION_FIELDS in DatabaseManager._normalize_detection; this also
+    # covers any path that builds a payload from coordinates obtained another
+    # way. Both layers share the same tuple (imported from core.db) so the
+    # private-field list has a single source of truth.
+    if isinstance(detection, dict):
+        for field in PRIVATE_DETECTION_FIELDS:
+            detection.pop(field, None)
+    return detection
+
+
 def _localize_detection(detection, settings=None):
-    return add_display_common_name(
+    # add_display_common_name returns a copy, so popping here never mutates the
+    # underlying DB row.
+    return _strip_private_fields(add_display_common_name(
         detection,
         language=get_bird_name_language(settings),
         settings=settings,
-    )
+    ))
 
 
 def _localize_detection_list(detections, settings=None):
@@ -2173,8 +2242,15 @@ def get_settings():
 
 @api.route('/api/settings/defaults', methods=['GET'])
 @log_api_request
+@require_auth
 def get_default_settings_endpoint():
-    """Get default settings (single source of truth for frontend reset)"""
+    """Get default settings (single source of truth for frontend reset).
+
+    Auth-gated: the only caller is the Settings page's fallback when the
+    authenticated GET /api/settings load fails, so an unauthenticated client
+    has no reason to read this — and the payload carries the default station
+    coordinates, which should not be exposed pre-auth.
+    """
     try:
         defaults = get_default_settings()
         # Set configured to true for reset (user is explicitly resetting)

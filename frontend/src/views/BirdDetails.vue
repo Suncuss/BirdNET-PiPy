@@ -155,19 +155,10 @@
             ]"
             @click="navigatePrevious"
           >
-            <svg
+            <ChevronIcon
+              direction="left"
               class="w-3 h-3 sm:w-4 sm:h-4 mr-1"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M15 19l-7-7 7-7"
-              />
-            </svg>
+            />
             <span class="hidden sm:inline">Previous</span>
             <span class="sm:hidden">Prev</span>
           </button>
@@ -186,19 +177,10 @@
           >
             <span class="hidden sm:inline">Next</span>
             <span class="sm:hidden">Next</span>
-            <svg
+            <ChevronIcon
+              direction="right"
               class="w-3 h-3 sm:w-4 sm:h-4 ml-1"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M9 5l7 7-7 7"
-              />
-            </svg>
+            />
           </button>
         </div>
         
@@ -237,7 +219,7 @@
       </div>
 
       <!-- Recordings Section -->
-      <div class="bg-white rounded-lg shadow p-6 lg:col-span-3">
+      <div class="bg-white rounded-lg shadow px-4 py-4 sm:px-6 lg:col-span-3">
         <!-- Header with Selector -->
         <div class="flex items-center justify-between mb-4">
           <h2 class="text-lg font-semibold">
@@ -275,30 +257,13 @@
           v-else-if="currentPageRecordings.length > 0"
           class="grid grid-cols-1 md:grid-cols-2 gap-6"
         >
-          <div
-            v-for="(recording, index) in currentPageRecordings"
+          <SpectrogramPlayer
+            v-for="recording in currentPageRecordings"
             :key="recording.id"
-            class="bg-gray-50 p-4 rounded-lg shadow-sm"
-          >
-            <div class="space-y-2">
-              <img
-                :src="getSpectrogramUrl(recording.spectrogram_filename)"
-                :alt="`Spectrogram ${index + 1}`"
-                class="w-full rounded-lg bg-gray-900 cursor-pointer hover:opacity-90 transition-opacity"
-                @click="openSpectrogram(recording.spectrogram_filename)"
-              >
-              <audio
-                controls
-                class="w-full rounded-lg shadow-sm"
-              >
-                <source
-                  :src="getAudioUrl(recording.audio_filename)"
-                  type="audio/mpeg"
-                >
-                Your browser does not support the audio element.
-              </audio>
-            </div>
-          </div>
+            :recording="recording"
+            class="rounded-lg border border-gray-200"
+            @expand="openSpectrogram(recording.spectrogram_filename)"
+          />
         </div>
 
         <!-- Empty state -->
@@ -312,7 +277,7 @@
         <!-- Pagination: 1 2 3 4 -->
         <div
           v-if="totalPages > 1"
-          class="flex justify-center items-center gap-2 mt-6"
+          class="flex justify-center items-center gap-2 mt-4"
         >
           <button
             v-for="page in totalPages"
@@ -358,8 +323,10 @@ import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import Chart from 'chart.js/auto'
 import SpectrogramModal from '@/components/SpectrogramModal.vue'
+import SpectrogramPlayer from '@/components/SpectrogramPlayer.vue'
 import BirdImageModal from '@/components/BirdImageModal.vue'
 import Spinner from '@/components/Spinner.vue'
+import ChevronIcon from '@/components/icons/ChevronIcon.vue'
 import { useAuth } from '@/composables/useAuth'
 import { useDateNavigation } from '@/composables/useDateNavigation'
 import { useChartHelpers } from '@/composables/useChartHelpers'
@@ -368,7 +335,6 @@ import { useSmartCrop } from '@/composables/useSmartCrop'
 import { useTimeFormat } from '@/composables/useTimeFormat'
 import api from '@/services/api'
 import {
-  getAudioUrl,
   getBirdImageUrl,
   getDefaultBirdImageUrl,
   getSpectrogramUrl,
@@ -379,8 +345,10 @@ export default {
   name: 'BirdDetails',
   components: {
     SpectrogramModal,
+    SpectrogramPlayer,
     BirdImageModal,
-    Spinner
+    Spinner,
+    ChevronIcon
   },
   setup() {
     const route = useRoute()
@@ -885,8 +853,6 @@ export default {
       formatDate,
       formatHourLabel,
 	      detectionChart,
-	      getAudioUrl,
-	      getSpectrogramUrl,
 	      selectedView,
       currentAnchorDate,
       viewOptions,

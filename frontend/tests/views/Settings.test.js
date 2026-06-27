@@ -1,5 +1,5 @@
-import { mount, flushPromises } from '@vue/test-utils'
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import Settings from '@/views/Settings.vue'
 import { RECORDER_STATES } from '@/utils/recorderStates'
 
@@ -67,6 +67,9 @@ const mockSystemUpdate = vi.hoisted(() => ({
 vi.mock('@/composables/useSystemUpdate', () => ({
   useSystemUpdate: () => mockSystemUpdate
 }))
+
+enableAutoUnmount(afterEach)
+afterEach(() => { document.body.style.overflow = '' })
 
 // Mock the useAuth composable to avoid extra fetch calls
 vi.mock('@/composables/useAuth', () => ({
