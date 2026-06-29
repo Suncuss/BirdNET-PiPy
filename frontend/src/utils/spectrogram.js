@@ -5,6 +5,12 @@
 // so its x-axis IS the audio timeline — the playhead and click-to-seek line up
 // exactly. No external dependency: a small radix-2 FFT does the work.
 
+// Shared spectrogram vocabulary so the live AnalyserNode feed (LiveFeed.vue) and
+// this offline STFT read as one instrument instead of drifting apart: both cap the
+// display at the same top frequency and show the same dynamic-range window.
+export const SPECTROGRAM_MAX_HZ = 12000
+export const SPECTROGRAM_FLOOR_DB = 80
+
 // In-place iterative radix-2 FFT. re/im are Float32Array of length n (power of 2).
 function fft(re, im) {
   const n = re.length
@@ -58,7 +64,7 @@ function fft(re, im) {
 export function computeSpectrogram(samples, sampleRate, opts = {}) {
   const fftSize = opts.fftSize || 1024
   const hop = opts.hop || fftSize >> 2
-  const maxFreqHz = opts.maxFreqHz || Math.min(sampleRate / 2, 12000)
+  const maxFreqHz = opts.maxFreqHz || Math.min(sampleRate / 2, SPECTROGRAM_MAX_HZ)
 
   const binHz = sampleRate / fftSize
   const bins = Math.max(1, Math.min(fftSize >> 1, Math.ceil(maxFreqHz / binHz)))
@@ -113,7 +119,7 @@ export function spectrogramColor(v) {
  * @param {number} [opts.floorDb=80] - dynamic range shown below the per-clip peak
  * @returns {{ data: Uint8ClampedArray, width: number, height: number }}
  */
-export function renderSpectrogramPixels(spec, { floorDb = 80 } = {}) {
+export function renderSpectrogramPixels(spec, { floorDb = SPECTROGRAM_FLOOR_DB } = {}) {
   const { mags, frames, bins, max } = spec
   const data = new Uint8ClampedArray(frames * bins * 4)
   const logMax = Math.log10(max)

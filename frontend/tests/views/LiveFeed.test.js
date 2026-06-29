@@ -271,7 +271,7 @@ describe('LiveFeed', () => {
         expect(wrapper.find('canvas').exists()).toBe(true)
         expect(wrapper.find('#live-highpass').exists()).toBe(true)
         expect(wrapper.find('#live-gain').exists()).toBe(true)
-        expect(wrapper.text()).not.toContain('not available in Safari')
+        expect(wrapper.text()).not.toContain('not available in this browser')
       })
     })
 
@@ -288,7 +288,7 @@ describe('LiveFeed', () => {
         expect(wrapper.find('canvas').exists()).toBe(false)
         expect(wrapper.find('#live-highpass').exists()).toBe(false)
         expect(wrapper.find('#live-gain').exists()).toBe(false)
-        expect(wrapper.text()).toContain('not available in Safari')
+        expect(wrapper.text()).toContain('not available in this browser')
       })
     })
 

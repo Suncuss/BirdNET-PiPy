@@ -2,8 +2,13 @@
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-06-28
+
 - Fixed the Live Feed and Dashboard playback spectrograms scrolling at different speeds across browsers and displays — they advanced a fixed step per animation frame, so speed tracked the refresh rate (e.g. Safari vs Chrome, or 60 Hz vs 120 Hz screens) and a given call rendered wider or narrower per screen. Both now scroll at a fixed rate in real time, so audio features keep a consistent size on any display
 - Added the live spectrogram and high-pass/gain filters to the Live Feed on Safari, which couldn't show them before — Safari can't tap a live stream through Web Audio the normal way, so the audio is now decoded in-browser and fed through the same graph (it falls back to plain playback if the decoder can't load)
+- Improved the high-pass and gain sliders for touch — the thumb and track are larger on phones and tablets so they're easier to grab and harder to miss, while the desktop slider is unchanged
+- Polished the high-pass/gain filter panels on the Live Feed and detection player — the sliders now sit vertically centered in the grey panel instead of low (the slider thumb was poking into the panel's bottom padding), and the Live Feed's live spectrogram is a bit shorter on small screens
+- Tightened the Live Feed layout on phones — smaller gaps, padding, and slider thumb plus a slightly shorter spectrogram, so the first detection shows without scrolling as far; desktop spacing is unchanged
 
 ## [0.8.0] - 2026-06-27
 

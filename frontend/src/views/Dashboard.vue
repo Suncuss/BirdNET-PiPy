@@ -435,6 +435,7 @@ import { getAudioUrl, getSpectrogramUrl } from '@/services/media'
 import { getDisplayCommonName } from '@/utils/birdNames'
 import { formatConfidence } from '@/utils/format'
 import { createScrollPacer } from '@/utils/scrollPacer'
+import { SPECTROGRAM_MAX_HZ } from '@/utils/spectrogram'
 
 library.add(faPlay, faPause, faCircleInfo);
 Chart.register(MatrixController, MatrixElement)
@@ -822,7 +823,7 @@ export default {
             const frequencyResolution = audioCtx.sampleRate / audioAnalyser.fftSize;
             const minIndex = 0;
             const maxIndex = Math.min(
-                Math.floor(12000 / frequencyResolution),
+                Math.floor(SPECTROGRAM_MAX_HZ / frequencyResolution),
                 audioAnalyser.frequencyBinCount - 1
             );
             const binSpan = maxIndex - minIndex;

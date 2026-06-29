@@ -158,49 +158,27 @@
 
       <!-- Filter controls (live, non-destructive) -->
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 mt-4 px-5 py-3 sm:px-[22px] bg-gray-50 rounded-xl">
-        <!-- High-pass -->
-        <div>
-          <div class="flex justify-between items-center text-[13px] mb-2">
-            <label
-              for="highpass"
-              class="text-gray-600"
-            >High-pass filter</label>
-            <span class="font-medium tabular-nums text-gray-800">{{ highpassLabel }}</span>
-          </div>
-          <input
-            id="highpass"
-            v-model.number="highpassHz"
-            type="range"
-            min="0"
-            max="6000"
-            step="50"
-            class="w-full cursor-pointer"
-            :style="{ '--fill': highpassFill }"
-            aria-label="High-pass cutoff frequency"
-          >
-        </div>
+        <RangeSlider
+          v-model="highpassHz"
+          :min="0"
+          :max="6000"
+          :step="50"
+          label="High-pass filter"
+          :display-value="highpassLabel"
+          input-id="highpass"
+          aria-label="High-pass cutoff frequency"
+        />
 
-        <!-- Gain -->
-        <div>
-          <div class="flex justify-between items-center text-[13px] mb-2">
-            <label
-              for="gain"
-              class="text-gray-600"
-            >Gain</label>
-            <span class="font-medium tabular-nums text-gray-800">{{ gainLabel }}</span>
-          </div>
-          <input
-            id="gain"
-            v-model.number="gainDb"
-            type="range"
-            min="-12"
-            max="24"
-            step="1"
-            class="w-full cursor-pointer"
-            :style="{ '--fill': gainFill }"
-            aria-label="Playback gain"
-          >
-        </div>
+        <RangeSlider
+          v-model="gainDb"
+          :min="-12"
+          :max="24"
+          :step="1"
+          label="Gain"
+          :display-value="gainLabel"
+          input-id="gain"
+          aria-label="Playback gain"
+        />
       </div>
     </template>
 
@@ -307,6 +285,7 @@ import { computeSpectrogram, renderSpectrogramPixels } from '@/utils/spectrogram
 import { confidenceColorClass, confidencePercent, formatMetadataKey, formatMetadataValue } from '@/utils/format'
 import { recordingShareUrl } from '@/utils/detectionLinks'
 import Spinner from '@/components/Spinner.vue'
+import RangeSlider from '@/components/RangeSlider.vue'
 
 library.add(faPlay, faPause, faDownload, faArrowUpFromBracket, faCheck)
 
@@ -447,11 +426,6 @@ const highpassHz = ref(0)
 const gainDb = ref(0)
 const highpassLabel = computed(() => (highpassHz.value > 0 ? `${highpassHz.value} Hz` : 'Off'))
 const gainLabel = computed(() => `${gainDb.value > 0 ? '+' : ''}${gainDb.value} dB`)
-
-// Fill fraction (0–100%) for the green portion of each slider track. Driven into
-// the track gradient so the filled look is identical across browsers/platforms.
-const highpassFill = computed(() => `${(highpassHz.value / 6000) * 100}%`)
-const gainFill = computed(() => `${((gainDb.value + 12) / 36) * 100}%`)
 
 const dbToGain = (db) => Math.pow(10, db / 20)
 
@@ -646,71 +620,3 @@ onUnmounted(() => {
   if (audioCtx && audioCtx.state !== 'closed') audioCtx.close()
 })
 </script>
-
-<style scoped>
-/* Range sliders — cross-browser so the track/thumb render the same on iOS Safari
-   and desktop. Thin 4px track with the app's green fill up to the thumb (--fill)
-   and a 16px green thumb with a white ring. Same base technique as Settings.vue;
-   intentionally duplicated for now — if a third view needs this, promote it to a
-   shared <RangeSlider> primitive. */
-input[type="range"] {
-  -webkit-appearance: none;
-  appearance: none;
-  background: transparent;
-}
-
-/* WebKit has no progress pseudo-element, so paint the fill as a gradient;
-   Firefox uses ::-moz-range-progress. */
-input[type="range"]::-webkit-slider-runnable-track {
-  height: 4px;
-  border-radius: 9999px;
-  background: linear-gradient(
-    to right,
-    theme('colors.green.600') var(--fill, 0%),
-    theme('colors.gray.200') var(--fill, 0%)
-  );
-}
-
-input[type="range"]::-moz-range-track {
-  height: 4px;
-  border-radius: 9999px;
-  background-color: theme('colors.gray.200');
-}
-
-input[type="range"]::-moz-range-progress {
-  height: 4px;
-  border-radius: 9999px;
-  background-color: theme('colors.green.600');
-}
-
-input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 16px;
-  height: 16px;
-  border-radius: 9999px;
-  background-color: theme('colors.green.600');
-  cursor: pointer;
-  margin-top: -6px;
-  border: 2px solid white;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-}
-
-input[type="range"]::-moz-range-thumb {
-  width: 16px;
-  height: 16px;
-  border-radius: 9999px;
-  background-color: theme('colors.green.600');
-  cursor: pointer;
-  border: 2px solid white;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-}
-
-input[type="range"]:hover::-webkit-slider-thumb {
-  background-color: theme('colors.green.700');
-}
-
-input[type="range"]:hover::-moz-range-thumb {
-  background-color: theme('colors.green.700');
-}
-</style>

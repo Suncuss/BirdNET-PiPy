@@ -1,4 +1,5 @@
 import csv
+import html
 import io
 import json
 import os
@@ -7,7 +8,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timedelta
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import requests
 from flask import (
@@ -1359,6 +1360,125 @@ def get_bird_recording(species_name, recording_id):
         recording, EXTRACTED_AUDIO_DIR, SPECTROGRAM_DIR,
     )
     return jsonify(recording)
+
+
+def _external_base_url():
+    """Best-effort external origin (``scheme://host``) for absolute share/OG URLs.
+
+    nginx forwards the externally requested scheme/host via X-Forwarded-Proto /
+    X-Forwarded-Host (see ``frontend/nginx.conf``); fall back to the request's
+    own scheme/host for direct access. Proxy chains can comma-join these, so we
+    take the first (outermost) hop.
+    """
+    proto = (request.headers.get('X-Forwarded-Proto', '').split(',')[0].strip()
+             or request.scheme)
+    host = (request.headers.get('X-Forwarded-Host', '').split(',')[0].strip()
+            or request.host)
+    return f"{proto}://{host}"
+
+
+def _format_og_timestamp(ts):
+    """Human-friendly detection time for the preview description. 24-hour clock
+    sidesteps platform-specific strftime padding flags; raw value if unparseable."""
+    if not ts:
+        return ''
+    try:
+        dt = datetime.fromisoformat(str(ts))
+    except ValueError:
+        return str(ts)
+    return dt.strftime('%b %d, %Y, %H:%M')
+
+
+def _format_og_description(recording):
+    """One-line ' · '-joined summary: species, confidence, time, and source."""
+    parts = []
+    sci = recording.get('scientific_name')
+    if sci:
+        parts.append(sci)
+    conf = recording.get('confidence')
+    if isinstance(conf, (int, float)):
+        parts.append(f"{round(conf * 100)}% confidence")
+    when = _format_og_timestamp(recording.get('timestamp'))
+    if when:
+        parts.append(when)
+    source = recording.get('audio_source')
+    if source:
+        parts.append(source)
+    return " · ".join(parts) or "Bird detection"
+
+
+def _render_og_card(*, title, description, url, site_name="BirdNET-PiPy"):
+    """Render a minimal HTML doc carrying Open Graph + Twitter Card meta tags for
+    link-unfurl crawlers (iMessage/LinkPresentation, Slack, Discord, …). Only
+    crawlers reach this (nginx routes them here); a canonical link + meta-refresh
+    send any stray human to the real SPA page. All values are attribute-escaped."""
+    e = lambda s: html.escape(str(s), quote=True)
+    t, d, u, s = e(title), e(description), e(url), e(site_name)
+    return (
+        "<!DOCTYPE html>\n"
+        '<html lang="en" prefix="og: https://ogp.me/ns#">\n'
+        "<head>\n"
+        '<meta charset="utf-8">\n'
+        f"<title>{t} · {s}</title>\n"
+        f'<link rel="canonical" href="{u}">\n'
+        f'<meta name="description" content="{d}">\n'
+        '<meta property="og:type" content="website">\n'
+        f'<meta property="og:site_name" content="{s}">\n'
+        f'<meta property="og:title" content="{t}">\n'
+        f'<meta property="og:description" content="{d}">\n'
+        f'<meta property="og:url" content="{u}">\n'
+        '<meta name="twitter:card" content="summary">\n'
+        f'<meta name="twitter:title" content="{t}">\n'
+        f'<meta name="twitter:description" content="{d}">\n'
+        f'<meta http-equiv="refresh" content="0; url={u}">\n'
+        "</head>\n"
+        f'<body><p>View this detection at <a href="{u}">{u}</a>.</p></body>\n'
+        "</html>\n"
+    )
+
+
+@api.route('/api/og/recording/<int:recording_id>', methods=['GET'])
+@log_api_request
+def get_recording_og_card(recording_id):
+    """Server-rendered Open Graph card for a detection permalink.
+
+    A shared link (``/bird/<name>/recording/<id>``) is a client-rendered SPA
+    route, so link-unfurl crawlers — which read ``<head>`` meta tags but never
+    run JS — get only the static ``index.html`` and preview the link as a bare
+    URL. nginx routes *only* known crawler user-agents here (humans still get
+    the SPA); this returns a tiny HTML doc whose ``<head>`` carries
+    per-detection OG/Twitter tags.
+
+    Resolution is by ID alone (the species segment is decorative) to avoid
+    URL-encoding pitfalls with species names containing spaces. A stale/deleted
+    detection falls back to a generic branded card so the link still previews.
+    No image is emitted (a ``summary`` card): the only per-detection raster is a
+    WebP spectrogram, which unfurlers don't render.
+    """
+    base = _external_base_url()
+
+    detection = _run_db(db_manager.get_detection_by_id, recording_id)
+    if detection is None:
+        return Response(_render_og_card(
+            title="Bird detections",
+            description="Live bird detections from a BirdNET listening station.",
+            url=f"{base}/",
+        ), mimetype='text/html')
+
+    settings = load_user_settings()
+    recording = _localize_detection(detection, settings=settings)
+
+    common = recording.get('common_name') or 'Unknown species'
+    display = recording.get('display_common_name') or common
+    # Canonical SPA permalink. Use common_name (which the SPA route resolves
+    # against) for the path segment, properly URL-encoded.
+    share_url = f"{base}/bird/{quote(common, safe='')}/recording/{recording_id}"
+
+    return Response(_render_og_card(
+        title=display,
+        description=_format_og_description(recording),
+        url=share_url,
+    ), mimetype='text/html')
 
 
 @api.route('/api/bird/<species_name>/detection_distribution', methods=['GET'])
