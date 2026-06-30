@@ -109,33 +109,103 @@ export function spectrogramColor(v) {
   return [r, g, b]
 }
 
+// 256-entry RGBA colormap LUT: maps a 0–255 brightness byte to its colour in a
+// single lookup, so re-colouring the spectrogram (e.g. as the high-pass slider
+// moves) costs an array read per pixel instead of three pow() calls. Same idea as
+// LiveFeed's SPECTROGRAM_RGB_LUT, packed as RGBA bytes ready for ImageData.
+export function buildSpectrogramRgbaLut() {
+  const lut = new Uint8ClampedArray(256 * 4)
+  for (let i = 0; i < 256; i++) {
+    const [r, g, b] = spectrogramColor(i / 255)
+    lut[i * 4] = r
+    lut[i * 4 + 1] = g
+    lut[i * 4 + 2] = b
+    lut[i * 4 + 3] = 255
+  }
+  return lut
+}
+
 /**
- * Paint a computeSpectrogram() result to RGBA pixels (row 0 = top = highest
- * frequency). Pure (no DOM): the heavy per-pixel pass runs once and stays
- * unit-testable; the view caches the result and only rescales / overlays it.
+ * Reduce a computeSpectrogram() result to per-pixel brightness bytes (0–255), laid
+ * out row-major with row 0 = top = highest frequency (the canvas orientation).
+ * This is the expensive log-domain pass (per-clip peak normalization over a
+ * `floorDb` window); it runs once, then colorizeBrightness turns these bytes —
+ * optionally dimmed by a filter — into pixels cheaply. Pure (no DOM).
  *
  * @param {{mags: Float32Array, frames: number, bins: number, max: number}} spec
  * @param {Object} [opts]
  * @param {number} [opts.floorDb=80] - dynamic range shown below the per-clip peak
- * @returns {{ data: Uint8ClampedArray, width: number, height: number }}
+ * @returns {{ baseBytes: Uint8Array, width: number, height: number }}
+ *   width = frames (time), height = bins (frequency)
  */
-export function renderSpectrogramPixels(spec, { floorDb = SPECTROGRAM_FLOOR_DB } = {}) {
+export function computeBaseBrightness(spec, { floorDb = SPECTROGRAM_FLOOR_DB } = {}) {
   const { mags, frames, bins, max } = spec
-  const data = new Uint8ClampedArray(frames * bins * 4)
+  const baseBytes = new Uint8Array(frames * bins)
   const logMax = Math.log10(max)
   for (let f = 0; f < frames; f++) {
-    const base = f * bins
+    const colBase = f * bins
     for (let r = 0; r < bins; r++) {
       const bin = bins - 1 - r // row 0 = top = high frequency
-      const db = 20 * (Math.log10(mags[base + bin] + 1e-12) - logMax) // ≤ 0, 0 at peak
-      const v = Math.max(0, 1 + db / floorDb)
-      const [cr, cg, cb] = spectrogramColor(v)
-      const idx = (r * frames + f) * 4
-      data[idx] = cr
-      data[idx + 1] = cg
-      data[idx + 2] = cb
-      data[idx + 3] = 255
+      const db = 20 * (Math.log10(mags[colBase + bin] + 1e-12) - logMax) // ≤ 0, 0 at peak
+      const v = Math.max(0, Math.min(1, 1 + db / floorDb))
+      baseBytes[r * frames + f] = Math.round(v * 255)
     }
   }
-  return { data, width: frames, height: bins }
+  return { baseBytes, width: frames, height: bins }
+}
+
+/**
+ * Convert a biquad magnitude response (linear |H(f)|, indexed by FFT bin, bin 0 =
+ * DC) into per-display-row brightness offsets for colorizeBrightness: each row's
+ * attenuation in dB (20·log10|H|), mapped into the shared dB window and scaled to
+ * 0–255 brightness units. Negative (a cut darkens the row); ~0 in the passband.
+ * This is what makes the high-pass read as "the signal is quieter here", at the
+ * same gentle ~15%-per-12 dB rate as LiveFeed's post-filter analyser, instead of
+ * opaque black. Row 0 = top = highest frequency, so bins are read back-to-front.
+ *
+ * @param {ArrayLike<number>} filterMag - linear magnitude per bin, length = bins
+ * @param {Int16Array} out - length = bins, written in place and returned
+ * @param {number} [floorDb=80]
+ */
+export function spectrogramFilterRowOffsets(filterMag, out, floorDb = SPECTROGRAM_FLOOR_DB) {
+  const bins = out.length
+  for (let r = 0; r < bins; r++) {
+    const mag = filterMag[bins - 1 - r] // row 0 = top = high frequency
+    const db = 20 * Math.log10(mag > 1e-6 ? mag : 1e-6) // ≤ 0; floor avoids -Infinity
+    out[r] = Math.round((db / floorDb) * 255)
+  }
+  return out
+}
+
+/**
+ * Colour the base brightness into an RGBA buffer, dimming each frequency row by
+ * `rowOffsets[row]` (≤ 0, in the same 0–255 brightness units). A high-pass filter
+ * supplies negative offsets for the rows it attenuates, so the spectrogram walks
+ * DOWN the green colormap exactly as far as the filter lowers the signal — the
+ * truthful "it's quieter here" look the live AnalyserNode gets for free — rather
+ * than having opaque black laid over it. All-zero offsets reproduce the raw clip.
+ *
+ * @param {{baseBytes: Uint8Array, width: number, height: number}} base
+ * @param {ArrayLike<number>} rowOffsets - length = height, values ≤ 0
+ * @param {Uint8ClampedArray} lut - from buildSpectrogramRgbaLut()
+ * @param {Uint8ClampedArray} out - length = width*height*4, written in place
+ */
+export function colorizeBrightness(base, rowOffsets, lut, out) {
+  const { baseBytes, width, height } = base
+  for (let r = 0; r < height; r++) {
+    const off = rowOffsets[r] // ≤ 0 for an attenuated row
+    const rowStart = r * width
+    for (let f = 0; f < width; f++) {
+      let idx = baseBytes[rowStart + f] + off
+      if (idx < 0) idx = 0
+      else if (idx > 255) idx = 255
+      const o = (rowStart + f) * 4
+      const l = idx * 4
+      out[o] = lut[l]
+      out[o + 1] = lut[l + 1]
+      out[o + 2] = lut[l + 2]
+      out[o + 3] = 255
+    }
+  }
+  return out
 }

@@ -1390,7 +1390,11 @@ def _format_og_timestamp(ts):
 
 
 def _format_og_description(recording):
-    """One-line ' · '-joined summary: species, confidence, time, and source."""
+    """One-line ' · '-joined summary: scientific name, confidence, and time.
+
+    The audio source is intentionally omitted — it's an internal label
+    (``source_0``, an RTSP name, …) that means nothing to someone receiving a
+    shared link."""
     parts = []
     sci = recording.get('scientific_name')
     if sci:
@@ -1401,25 +1405,70 @@ def _format_og_description(recording):
     when = _format_og_timestamp(recording.get('timestamp'))
     if when:
         parts.append(when)
-    source = recording.get('audio_source')
-    if source:
-        parts.append(source)
     return " · ".join(parts) or "Bird detection"
 
 
-def _render_og_card(*, title, description, url, site_name="BirdNET-PiPy"):
+def _indefinite_article(noun):
+    """'a' or 'an' for the leading sound of ``noun`` (a species name).
+
+    Heuristic, not perfect: vowel-initial → 'an', except the 'eu-' words that
+    read with a 'y' glide ('a European Starling', 'a Eurasian Wigeon'). Good
+    enough for the species names that appear in share-card titles."""
+    word = str(noun).strip().lower()
+    if not word:
+        return 'a'
+    if word.startswith('eu'):
+        return 'a'
+    return 'an' if word[0] in 'aeiou' else 'a'
+
+
+# A single static PNG (the app's branded bird illustration) backs every card.
+# It lives in the frontend's public/ dir, so nginx serves it at the web root —
+# the OG endpoint only needs to reference its absolute URL. PNG (not the WebP
+# original) because several unfurlers won't render WebP og:images.
+OG_CARD_IMAGE_PATH = "/default_bird.png"
+OG_CARD_IMAGE_SIZE = (1024, 1024)  # square — the full branded illustration
+
+
+def _render_og_card(*, title, description, url, image_url=None,
+                    image_size=None, site_name="BirdNET-PiPy"):
     """Render a minimal HTML doc carrying Open Graph + Twitter Card meta tags for
     link-unfurl crawlers (iMessage/LinkPresentation, Slack, Discord, …). Only
     crawlers reach this (nginx routes them here); a canonical link + meta-refresh
-    send any stray human to the real SPA page. All values are attribute-escaped."""
+    send any stray human to the real SPA page. All values are attribute-escaped.
+
+    Passing ``image_url`` upgrades the card from a compact ``summary`` to a
+    large-thumbnail ``summary_large_image`` and reveals the description on
+    iMessage (its no-image card shows only the title)."""
     e = lambda s: html.escape(str(s), quote=True)
     t, d, u, s = e(title), e(description), e(url), e(site_name)
+    # The <title> appends " · site" for branding, but skip it when the title
+    # already names the site (e.g. "BirdNET-PiPy overheard a Northern Cardinal")
+    # to avoid a redundant doubled brand.
+    page_title = t if site_name in title else f"{t} · {s}"
+    image_tags = ""
+    card_type = "summary"
+    if image_url:
+        card_type = "summary_large_image"
+        iu = e(image_url)
+        image_tags = (
+            f'<meta property="og:image" content="{iu}">\n'
+            f'<meta property="og:image:alt" content="{s}">\n'
+            '<meta property="og:image:type" content="image/png">\n'
+            f'<meta name="twitter:image" content="{iu}">\n'
+        )
+        if image_size:
+            w, h = image_size
+            image_tags = (
+                f'<meta property="og:image:width" content="{int(w)}">\n'
+                f'<meta property="og:image:height" content="{int(h)}">\n'
+            ) + image_tags
     return (
         "<!DOCTYPE html>\n"
         '<html lang="en" prefix="og: https://ogp.me/ns#">\n'
         "<head>\n"
         '<meta charset="utf-8">\n'
-        f"<title>{t} · {s}</title>\n"
+        f"<title>{page_title}</title>\n"
         f'<link rel="canonical" href="{u}">\n'
         f'<meta name="description" content="{d}">\n'
         '<meta property="og:type" content="website">\n'
@@ -1427,7 +1476,8 @@ def _render_og_card(*, title, description, url, site_name="BirdNET-PiPy"):
         f'<meta property="og:title" content="{t}">\n'
         f'<meta property="og:description" content="{d}">\n'
         f'<meta property="og:url" content="{u}">\n'
-        '<meta name="twitter:card" content="summary">\n'
+        + image_tags +
+        f'<meta name="twitter:card" content="{card_type}">\n'
         f'<meta name="twitter:title" content="{t}">\n'
         f'<meta name="twitter:description" content="{d}">\n'
         f'<meta http-equiv="refresh" content="0; url={u}">\n'
@@ -1452,10 +1502,13 @@ def get_recording_og_card(recording_id):
     Resolution is by ID alone (the species segment is decorative) to avoid
     URL-encoding pitfalls with species names containing spaces. A stale/deleted
     detection falls back to a generic branded card so the link still previews.
-    No image is emitted (a ``summary`` card): the only per-detection raster is a
-    WebP spectrogram, which unfurlers don't render.
+    Every card carries the app's branded bird illustration as ``og:image`` so it
+    unfurls as a large-thumbnail card (which also reveals the description on
+    iMessage). A per-detection image isn't used: the only per-detection raster is
+    a WebP spectrogram, which unfurlers don't reliably render.
     """
     base = _external_base_url()
+    image_url = f"{base}{OG_CARD_IMAGE_PATH}"
 
     detection = _run_db(db_manager.get_detection_by_id, recording_id)
     if detection is None:
@@ -1463,6 +1516,8 @@ def get_recording_og_card(recording_id):
             title="Bird detections",
             description="Live bird detections from a BirdNET listening station.",
             url=f"{base}/",
+            image_url=image_url,
+            image_size=OG_CARD_IMAGE_SIZE,
         ), mimetype='text/html')
 
     settings = load_user_settings()
@@ -1474,10 +1529,19 @@ def get_recording_og_card(recording_id):
     # against) for the path segment, properly URL-encoded.
     share_url = f"{base}/bird/{quote(common, safe='')}/recording/{recording_id}"
 
+    # iMessage's no-image summary card mostly shows the title, so it leads with
+    # the app and the species ("BirdNET-PiPy overheard a Northern Cardinal").
+    # "overheard" (not "spotted") keeps it accurate — detection is acoustic, the
+    # bird is heard, never seen. The scientific name / confidence / time ride
+    # along in the description for platforms (Slack, Discord, …) that show it.
+    title = f"BirdNET-PiPy overheard {_indefinite_article(display)} {display}"
+
     return Response(_render_og_card(
-        title=display,
+        title=title,
         description=_format_og_description(recording),
         url=share_url,
+        image_url=image_url,
+        image_size=OG_CARD_IMAGE_SIZE,
     ), mimetype='text/html')
 
 

@@ -281,7 +281,13 @@ import { useAudioTransport } from '@/composables/useAudioTransport'
 import { useDetectionInfo } from '@/composables/useDetectionInfo'
 import { useUnitSettings } from '@/composables/useUnitSettings'
 import { useCopyFeedback } from '@/composables/useCopyFeedback'
-import { computeSpectrogram, renderSpectrogramPixels } from '@/utils/spectrogram'
+import {
+  computeSpectrogram,
+  computeBaseBrightness,
+  buildSpectrogramRgbaLut,
+  spectrogramFilterRowOffsets,
+  colorizeBrightness
+} from '@/utils/spectrogram'
 import { confidenceColorClass, confidencePercent, formatMetadataKey, formatMetadataValue } from '@/utils/format'
 import { recordingShareUrl } from '@/utils/detectionLinks'
 import Spinner from '@/components/Spinner.vue'
@@ -408,18 +414,22 @@ const { isPlaying, currentTime, duration, progressPercent, clock, togglePlay, se
     }
   })
 
-// Web Audio graph + the cached filter-response overlay that shades the spectrogram.
+// Web Audio graph + the offscreen spectrogram base that the high-pass re-colours.
 let audioCtx = null
 let mediaSource = null
 let highpassNode = null
 let gainNode = null
 let objectUrl = null
 let spec = null // computeSpectrogram() result
-let specBaseCanvas = null // base spectrogram painted once; redraws just rescale it
+let specBase = null // per-pixel brightness bytes (computeBaseBrightness), computed once
+let specLut = null // 0–255 → RGBA colormap LUT
+let specBaseCanvas = null // offscreen base at native frames×bins, re-coloured on filter change
+let baseImageData = null // reusable ImageData backing specBaseCanvas
+let rowOffsets = null // per-row brightness attenuation (≤ 0) from the high-pass response
 let filterFreqs = null // bin centre frequencies (Hz), for getFrequencyResponse
 let filterMag = null // scratch magnitude-response buffer
 let filterPhase = null // scratch phase buffer (discarded)
-let filterOverlay = null // 1×bins attenuation overlay drawn over the base
+let repaintRaf = null // coalesces slider-driven re-colours to one per frame
 
 // Processing controls
 const highpassHz = ref(0)
@@ -452,8 +462,6 @@ const loadAudio = async () => {
       ? mixToMono(audioBuffer)
       : audioBuffer.getChannelData(0)
     spec = computeSpectrogram(mono, audioBuffer.sampleRate, { fftSize: 1024, hop: 256 })
-    buildSpectrogramBase()
-    drawSpectrogram()
 
     // Playback element fed from the same bytes (blob keeps it same-origin so the
     // MediaElementSource isn't muted by cross-origin rules).
@@ -464,9 +472,14 @@ const loadAudio = async () => {
     audioEl.value = el // useAudioTransport attaches its listeners off this ref
 
     // Build the graph now (silent while suspended) so the high-pass filter's
-    // real frequency response can shade the spectrogram before first play.
+    // real frequency response is available to shade the spectrogram before first
+    // play. Done before the base is painted so the initial image already reflects
+    // any engaged high-pass (the picture and the audio stay in step).
     buildGraph()
     initFilterResponse()
+
+    buildSpectrogramBase()
+    drawSpectrogram()
 
     audioState.value = 'ready'
   } catch (e) {
@@ -505,55 +518,76 @@ const applyHighpass = () => {
   highpassNode.frequency.value = highpassHz.value > 0 ? highpassHz.value : 10
 }
 
-// Shade the spectrogram with the filter's ACTUAL magnitude response (the biquad's
-// 12 dB/oct slope), not a brick-wall guess — one filter spec drives both the
-// audio and the picture. The overlay is a 1×bins alpha ramp; drawSpectrogram
-// stretches it to a smooth vertical gradient.
+// Allocate the scratch buffers for the biquad's frequency response (bin centre
+// frequencies + magnitude/phase outputs). The magnitude response — the filter's
+// ACTUAL 12 dB/oct slope, not a brick-wall guess — is what dims the spectrogram,
+// so one filter spec drives both the audio and the picture (see repaintBase).
 const initFilterResponse = () => {
   if (!spec) return
   filterFreqs = new Float32Array(spec.bins)
   for (let b = 0; b < spec.bins; b++) filterFreqs[b] = b * spec.binHz
   filterMag = new Float32Array(spec.bins)
   filterPhase = new Float32Array(spec.bins)
-  filterOverlay = document.createElement('canvas')
-  filterOverlay.width = 1
-  filterOverlay.height = spec.bins
-  updateFilterOverlay()
 }
 
-const updateFilterOverlay = () => {
-  if (!highpassNode || !spec || !filterFreqs) return
-  highpassNode.getFrequencyResponse(filterFreqs, filterMag, filterPhase)
-  const bins = spec.bins
-  const img = new ImageData(1, bins)
-  for (let r = 0; r < bins; r++) {
-    const bin = bins - 1 - r // row 0 = top = high frequency
-    const atten = 1 - Math.min(1, filterMag[bin]) // 0 in the passband, 1 fully cut
-    img.data[r * 4 + 3] = Math.round(atten * 0.85 * 255) // black, variable alpha
+// Per-row brightness attenuation (≤ 0) for the current high-pass setting, read
+// from the biquad's real magnitude response and mapped into the spectrogram's dB
+// window — so a cut row simply walks down the green colormap, the same truthful
+// effect LiveFeed's analyser shows by sitting after the filter. At Off, the
+// offsets are zero and the base reproduces the raw clip.
+const computeRowOffsets = () => {
+  if (!rowOffsets) return
+  if (highpassHz.value > 0 && highpassNode && filterFreqs) {
+    highpassNode.getFrequencyResponse(filterFreqs, filterMag, filterPhase)
+    spectrogramFilterRowOffsets(filterMag, rowOffsets)
+  } else {
+    rowOffsets.fill(0)
   }
-  filterOverlay.getContext('2d').putImageData(img, 0, 0)
+}
+
+// Re-colour the offscreen base from the current high-pass response. Cheap enough
+// to run on every slider tick: an integer add + LUT lookup per pixel, no log/pow.
+const repaintBase = () => {
+  if (!specBase || !baseImageData || !specBaseCanvas) return
+  computeRowOffsets()
+  colorizeBrightness(specBase, rowOffsets, specLut, baseImageData.data)
+  specBaseCanvas.getContext('2d').putImageData(baseImageData, 0, 0)
+}
+
+// Coalesce rapid slider input (the range fires on every value) into one
+// re-colour + redraw per animation frame.
+const scheduleRepaint = () => {
+  if (repaintRaf != null) return
+  repaintRaf = requestAnimationFrame(() => {
+    repaintRaf = null
+    repaintBase()
+    drawSpectrogram()
+  })
 }
 
 watch(highpassHz, () => {
-  applyHighpass()
-  updateFilterOverlay()
-  drawSpectrogram()
+  applyHighpass() // audio: immediate
+  scheduleRepaint() // picture: coalesced to one redraw per frame
 })
 watch(gainDb, (db) => {
   if (gainNode) gainNode.gain.value = dbToGain(db)
 })
 
 // --- Spectrogram drawing ---
-// Paint the (expensive) per-pixel pass once into an offscreen canvas. Redraws —
-// on resize and on every high-pass slider tick — then only rescale this base and
-// overlay the high-pass shading, so there's no per-pixel work on those paths.
+// Reduce the clip to per-pixel brightness bytes once (the expensive log-domain
+// pass), then keep an offscreen base canvas at native resolution. The high-pass
+// re-colours this base in place (repaintBase); resize just rescales it onto the
+// visible canvas. Painted initially unfiltered (rowOffsets all zero).
 const buildSpectrogramBase = () => {
   if (!spec) return
-  const { data, width, height } = renderSpectrogramPixels(spec)
+  specBase = computeBaseBrightness(spec)
+  specLut = buildSpectrogramRgbaLut()
+  rowOffsets = new Int16Array(specBase.height)
+  baseImageData = new ImageData(specBase.width, specBase.height)
   specBaseCanvas = document.createElement('canvas')
-  specBaseCanvas.width = width
-  specBaseCanvas.height = height
-  specBaseCanvas.getContext('2d').putImageData(new ImageData(data, width, height), 0, 0)
+  specBaseCanvas.width = specBase.width
+  specBaseCanvas.height = specBase.height
+  repaintBase()
 }
 
 const drawSpectrogram = () => {
@@ -576,13 +610,9 @@ const drawSpectrogram = () => {
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = 'high'
   ctx.clearRect(0, 0, canvas.width, canvas.height)
+  // The high-pass attenuation is already baked into specBaseCanvas (repaintBase),
+  // so this is a straight rescale of the post-filter image.
   ctx.drawImage(specBaseCanvas, 0, 0, canvas.width, canvas.height)
-
-  // High-pass: dim each frequency row by the filter's real attenuation. The
-  // 1×bins overlay stretches (with smoothing) into the filter's actual slope.
-  if (highpassHz.value > 0 && filterOverlay) {
-    ctx.drawImage(filterOverlay, 0, 0, canvas.width, canvas.height)
-  }
 }
 
 // --- Seek by clicking the spectrogram (its x-axis is the audio timeline) ---
@@ -614,6 +644,7 @@ onUnmounted(() => {
   // Transport listeners + rAF are torn down by useAudioTransport; here we stop
   // playback and release the audio resources this view owns.
   clearTimeout(resizeTimer)
+  if (repaintRaf != null) cancelAnimationFrame(repaintRaf)
   window.removeEventListener('resize', onResize)
   if (audioEl.value) audioEl.value.pause()
   if (objectUrl) URL.revokeObjectURL(objectUrl)

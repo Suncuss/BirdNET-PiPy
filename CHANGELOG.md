@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Changed the detection player's spectrogram to reflect the high-pass filter the same way the Live Feed does — cut frequencies gently fade instead of being hidden under a heavy black overlay, so the picture matches what the filter does to the audio
+- Added rich link previews for shared detection permalinks — pasting one into iMessage, Slack, Discord, etc. now unfurls into a card with the bird's photo, species, confidence, and time
+
 ## [0.8.1] - 2026-06-28
 
 - Fixed the Live Feed and Dashboard playback spectrograms scrolling at different speeds across browsers and displays — they advanced a fixed step per animation frame, so speed tracked the refresh rate (e.g. Safari vs Chrome, or 60 Hz vs 120 Hz screens) and a given call rendered wider or narrower per screen. Both now scroll at a fixed rate in real time, so audio features keep a consistent size on any display
