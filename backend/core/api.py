@@ -1,5 +1,4 @@
 import csv
-import html
 import io
 import json
 import os
@@ -20,7 +19,7 @@ from flask import (
     send_from_directory,
     session,
 )
-from flask_socketio import SocketIO, emit
+from flask_socketio import SocketIO, emit, join_room
 from timezonefinder import TimezoneFinder
 
 from config.constants import (
@@ -53,14 +52,18 @@ from core.auth import (
     authenticate,
     change_password,
     configure_session,
+    forwarded_scheme,
     get_public_features,
+    get_request_tier,
     is_auth_enabled,
     is_authenticated,
     is_feature_public,
+    is_public_access_enabled,
     is_setup_complete,
     logout,
     require_auth,
     require_feature,
+    require_scope,
     set_auth_enabled,
     setup_password,
 )
@@ -76,7 +79,9 @@ from core.bird_name_utils import (
 from core.db import PRIVATE_DETECTION_FIELDS, DatabaseManager
 from core.db_executor import create_db_executor
 from core.ha_mode import get_runtime_mode, is_home_assistant_mode
+from core.internal_auth import INTERNAL_SECRET_HEADER, verify_internal_secret
 from core.logging_config import get_logger, log_api_request, setup_logging
+from core.media_access import sign_media_query, verify_media_signature
 from core.migration import (
     BirdNETPiMigrator,
     clear_migration_progress,
@@ -98,6 +103,12 @@ from core.migration_audio import (
     start_audio_import_if_not_running,
     start_spectrogram_generation_if_not_running,
 )
+from core.og_card import (
+    OG_CARD_IMAGE_PATH,
+    format_og_description,
+    indefinite_article,
+    render_og_card,
+)
 from core.runtime_config import (
     classify_setting_changes,
     deep_merge_settings,
@@ -105,6 +116,7 @@ from core.runtime_config import (
     get_setting_differences,
     invalidate_runtime_settings_cache,
 )
+from core.share_tokens import mint_share_token, share_token_subject, verify_share_token
 from core.storage_manager import delete_detection_files
 from core.timezone_service import get_timezone_str, local_now
 from model_service.label_utils import get_species_list, resolve_to_scientific_name
@@ -194,19 +206,125 @@ def is_internal_request():
 
 
 def require_internal(f):
-    """Decorator to restrict endpoint to internal requests only."""
+    """Restrict an endpoint to internal callers.
+
+    Requires BOTH an internal source address AND the shared internal secret.
+    The IP check alone was insufficient: nginx proxies external requests from a
+    172.x docker address, so every proxied request looked "internal" and an
+    external client could POST to /api/broadcast/*. The shared secret (known
+    only to the main/inference processes via the shared data volume) is the
+    real gate; the IP check stays as a cheap secondary filter.
+    """
     from functools import wraps
 
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if not is_internal_request():
-            logger.warning("Rejected external request to internal endpoint", extra={
+        provided = request.headers.get(INTERNAL_SECRET_HEADER)
+        if not is_internal_request() or not verify_internal_secret(provided):
+            logger.warning("Rejected request to internal endpoint", extra={
                 'remote_addr': request.remote_addr,
-                'endpoint': request.endpoint
+                'endpoint': request.endpoint,
+                'had_secret': bool(provided),
             })
             return jsonify({'error': 'Internal endpoint only'}), 403
         return f(*args, **kwargs)
+    decorated_function._access_gate = 'internal'
     return decorated_function
+
+
+# Structural default-deny backstop. Endpoints an anonymous (auth-on, no session)
+# caller may even REACH are an explicit allowlist; everything else is denied here
+# before the view runs. So a newly added route is private by default even if its
+# gate decorator is forgotten — closing the original "no decorator means public"
+# failure mode. The per-route decorators still apply the fine-grained rules
+# (public_access window, feature flags, share tokens, the internal secret); this
+# is only the coarse "is this endpoint anonymous-reachable at all" gate.
+# Forgetting to allowlist a new public route fails safe (it's denied, surfacing
+# in testing); tests guard against stale entries and against any sensitive
+# endpoint being added here (see test_access_control.TestDefaultDenyBackstop).
+_ANON_REACHABLE_ENDPOINTS = frozenset({
+    # Bounded public reads (require_scope('public:read') decides on public_access)
+    'get_wikimedia_image', 'get_wikimedia_image_candidates', 'get_wikimedia_choice',
+    'get_latest_observation', 'get_recent_observations', 'get_observation_summary',
+    'get_dashboard', 'get_dashboard_summary', 'get_unique_detections', 'get_sightings',
+    'get_bird_details', 'serve_bird_image', 'get_bird_recordings',
+    'get_detection_distribution', 'get_all_species', 'get_available_species',
+    # Feature-gated (require_feature decides on the charts/table/live_feed flags)
+    'get_hourly_activity', 'get_activity_overview', 'get_detection_trends',
+    'get_detections', 'get_stream_config',
+    # Token/window-gated media + permalink (the handlers do their own checks)
+    'serve_audio', 'serve_spectrogram', 'get_bird_recording',
+    # Link-unfurl crawlers are anonymous; the handler mirrors the by-id gate
+    # and falls back to a generic branded card when not entitled
+    'get_recording_og_card',
+    # Always-public bootstrap / auth / non-detection info
+    'get_auth_status', 'auth_login', 'auth_logout', 'auth_setup', 'auth_verify',
+    'health_check', 'get_system_storage', 'get_system_version', 'check_for_updates',
+    # Internal-only (require_internal validates the shared secret; the caller has
+    # no session, so it must be allowed past this anonymous gate to be checked)
+    'broadcast_detection_endpoint', 'broadcast_recorder_status_endpoint',
+})
+
+
+@api.before_request
+def _default_deny_anonymous():
+    """Deny anonymous callers any endpoint not on the explicit allowlist."""
+    if request.method == 'OPTIONS':
+        return None  # let CORS/preflight through
+    endpoint = (request.endpoint or '').rsplit('.', 1)[-1]
+    if endpoint in _ANON_REACHABLE_ENDPOINTS:
+        # Cheap set check first: allowlisted routes proceed for everyone, so
+        # the auth lookup is left to the route's own decorator/handler, which
+        # makes the final call anyway.
+        return None
+    if is_authenticated():
+        return None  # owner, or auth disabled (everyone is owner)
+    return jsonify({'error': 'Authentication required'}), 401
+
+
+def _assert_route_access_declared(app):
+    """Boot-time audit: every api route must declare its access story.
+
+    A route declares access by carrying a gate decorator (require_auth /
+    require_scope / require_feature / require_internal — each marks its wrapper
+    with ``_access_gate``, which @wraps propagates outward) and/or by an
+    ``_ANON_REACHABLE_ENDPOINTS`` entry. The default-deny before_request
+    already fails closed for anonymous callers, but an *undeclared* route is
+    almost always an oversight — the OG-card route drifted in on another branch
+    with neither a decorator nor an allowlist entry, silently 401ing every
+    link-preview crawler post-merge. Failing at boot turns that class of drift
+    into an immediate, named error.
+
+    Cross-checks the two declarations for consistency, in both directions:
+    an anonymous-reachable gate (public:read / feature:* / internal) off the
+    allowlist is dead code (the before_request denies first), and an
+    owner-gated route on the allowlist is a stale entry that would outlive the
+    route's protection if the decorator were ever dropped.
+    """
+    problems = []
+    for name, view in app.view_functions.items():
+        if not name.startswith(f'{api.name}.'):
+            continue
+        endpoint = name.rsplit('.', 1)[-1]
+        gate = getattr(view, '_access_gate', None)
+        allowlisted = endpoint in _ANON_REACHABLE_ENDPOINTS
+        if gate is None and not allowlisted:
+            problems.append(
+                f"{endpoint}: no access declaration — add require_auth/"
+                "require_scope/require_feature/require_internal, or an "
+                "_ANON_REACHABLE_ENDPOINTS entry if its handler self-gates")
+        elif gate == 'owner' and allowlisted:
+            problems.append(
+                f"{endpoint}: owner-gated but on the anonymous allowlist — "
+                "remove the stale allowlist entry")
+        elif gate is not None and gate != 'owner' and not allowlisted:
+            problems.append(
+                f"{endpoint}: gated '{gate}' (anonymous-reachable) but missing "
+                "from _ANON_REACHABLE_ENDPOINTS — the default-deny backstop "
+                "will 401 anonymous callers before the gate runs")
+    if problems:
+        raise RuntimeError(
+            'Route access audit failed:\n  ' + '\n  '.join(sorted(problems)))
 
 
 # Simple in-memory cache
@@ -677,6 +795,7 @@ def fetch_wikimedia_image(species_name):
     return None, error
 
 @api.route('/api/wikimedia_image', methods=['GET'])
+@require_scope('public:read')
 def get_wikimedia_image():
     species_name = request.args.get('species', '')
     if not species_name:
@@ -730,6 +849,7 @@ def get_wikimedia_image():
 
 
 @api.route('/api/wikimedia_image/candidates', methods=['GET'])
+@require_scope('public:read')
 @log_api_request
 @handle_api_errors
 def get_wikimedia_image_candidates():
@@ -764,6 +884,7 @@ def get_wikimedia_image_candidates():
 
 
 @api.route('/api/bird/<species_name>/wikimedia_choice', methods=['GET'])
+@require_scope('public:read')
 @log_api_request
 @handle_api_errors
 def get_wikimedia_choice(species_name):
@@ -828,29 +949,38 @@ def delete_wikimedia_choice(species_name):
     return jsonify({'hasChoice': False})
 
 @api.route('/api/observations/latest', methods=['GET'])
+@require_scope('public:read')
 @log_api_request
 @handle_api_errors
 def get_latest_observation():
     observation = _run_db(db_manager.get_latest_detections, 1)
     if observation:
-        log_data_metrics('get_latest_observation', observation[0], {
-            'species': observation[0].get('common_name'),
-            'timestamp': observation[0].get('timestamp')
+        settings = load_user_settings()
+        localized = _localize_detection(observation[0], settings=settings)
+        log_data_metrics('get_latest_observation', localized, {
+            'species': localized.get('common_name'),
+            'timestamp': localized.get('timestamp')
         })
-        return jsonify(observation[0])
+        return jsonify(localized)
     # Return 200 with null for empty database - frontend shows "No observations available yet."
     return jsonify(None)
 
 @api.route('/api/observations/recent', methods=['GET'])
+@require_scope('public:read')
 @log_api_request
 @handle_api_errors
 def get_recent_observations():
     unique = request.args.get('unique', 'false').lower() == 'true'
-    observations = _run_db(db_manager.get_latest_detections, 7, unique=unique)
+    settings = load_user_settings()
+    observations = _localize_detection_list(
+        _run_db(db_manager.get_latest_detections, 7, unique=unique),
+        settings=settings,
+    )
     log_data_metrics('get_recent_observations', observations)
     return jsonify(observations)
 
 @api.route('/api/observations/summary', methods=['GET'])
+@require_scope('public:read')
 @log_api_request
 @handle_api_errors
 def get_observation_summary():
@@ -1057,7 +1187,8 @@ def _build_sightings_payload(most_frequent):
     sightings = db_manager.get_species_sightings(
         limit=_GALLERY_SIGHTINGS_LIMIT, most_frequent=most_frequent,
     )
-    return _localize_detection_list(sightings, settings=settings)
+    # Cached + shared across tiers -> always emit the anonymous-safe variant.
+    return _localize_detection_list(sightings, settings=settings, public_only=True)
 
 
 def _build_species_all_payload():
@@ -1075,8 +1206,10 @@ def _build_dashboard_payload():
 
     recent_all = db_manager.get_latest_detections(7)
     recent_unique = db_manager.get_latest_detections(7, unique=True)
-    recent_all = _localize_detection_list(recent_all, settings=settings)
-    recent_unique = _localize_detection_list(recent_unique, settings=settings)
+    # Cached + shared across tiers -> always emit the anonymous-safe variant
+    # (the dashboard never displays source_label, so owners lose nothing here).
+    recent_all = _localize_detection_list(recent_all, settings=settings, public_only=True)
+    recent_unique = _localize_detection_list(recent_unique, settings=settings, public_only=True)
     latest = recent_all[0] if recent_all else None
 
     summary = {
@@ -1099,6 +1232,7 @@ def _build_dashboard_payload():
 
 
 @api.route('/api/dashboard', methods=['GET'])
+@require_scope('public:read')
 @log_api_request
 @handle_api_errors
 def get_dashboard():
@@ -1115,6 +1249,7 @@ def get_dashboard():
 
 
 @api.route('/api/dashboard/summary', methods=['GET'])
+@require_scope('public:read')
 @log_api_request
 @handle_api_errors
 def get_dashboard_summary():
@@ -1135,11 +1270,21 @@ def get_dashboard_summary():
 
 
 @api.route('/api/sightings/unique', methods=['GET'])
+@require_scope('public:read')
 @log_api_request
 @validate_date_param(required=True)
 @handle_api_errors
 def get_unique_detections():
     date_str = request.args.get('date')
+    # Anonymous callers are limited to the recent window: a past-date query would
+    # otherwise let them date-walk historical species-by-day metadata. The gallery
+    # only ever requests today's date, so this doesn't affect the public UI.
+    if (
+        get_request_tier() == 'public'
+        and date_str
+        and date_str < _public_window_cutoff_date()
+    ):
+        return jsonify([])
     settings = load_user_settings()
     # Get the unique detections from the database
     unique_detections = _run_db(
@@ -1156,6 +1301,7 @@ def get_unique_detections():
     return jsonify(unique_detections)
 
 @api.route('/api/sightings', methods=['GET'])
+@require_scope('public:read')
 @validate_limit_param(default=_GALLERY_SIGHTINGS_LIMIT)
 @handle_api_errors
 def get_sightings():
@@ -1186,15 +1332,59 @@ def get_sightings():
     return jsonify(_localize_detection_list(sightings, settings=settings))
 
 
+def _share_token_authorizes_file(token, filename):
+    """True if a share token's own detection owns this audio/spectrogram file."""
+    detection_id = share_token_subject(token)
+    if detection_id is None:
+        return False
+    detection = _run_db(db_manager.get_detection_by_id, detection_id)
+    if detection is None:
+        return False
+    return filename in (
+        detection.get('audio_filename'),
+        detection.get('spectrogram_filename'),
+    )
+
+
+def _media_request_authorized(filename):
+    """Whether the current request may fetch this media file.
+
+    Owners (and auth-off installs) always may. A share token authorizes its own
+    detection's two files even when public access is off (a private station can
+    still share one detection's clip). Otherwise an anonymous caller needs a
+    valid signed URL, and only while public access is on — so the deterministic
+    filenames listed in public payloads can't be turned into a bulk download.
+
+    Checked BEFORE serve_file_with_fallback, which returns a 200 placeholder on
+    any miss: letting that run for an unauthorized request would leak access (and
+    mask a broken gate) instead of returning 401.
+    """
+    if is_authenticated():
+        return True
+    share = request.args.get('s')
+    if share and _share_token_authorizes_file(share, filename):
+        return True
+    if not is_public_access_enabled():
+        return False
+    return verify_media_signature(
+        filename, request.args.get('exp'), request.args.get('sig'),
+    )
+
+
 @api.route('/api/audio/<filename>')
 def serve_audio(filename):
+    if not _media_request_authorized(filename):
+        return jsonify({'error': 'Authentication required'}), 401
     return serve_file_with_fallback(EXTRACTED_AUDIO_DIR, filename, DEFAULT_AUDIO_PATH, "audio")
 
 @api.route('/api/spectrogram/<filename>')
 def serve_spectrogram(filename):
+    if not _media_request_authorized(filename):
+        return jsonify({'error': 'Authentication required'}), 401
     return serve_file_with_fallback(SPECTROGRAM_DIR, filename, DEFAULT_IMAGE_PATH, "spectrogram")
 
 @api.route('/api/bird/<species_name>', methods=['GET'])
+@require_scope('public:read')
 @log_api_request
 def get_bird_details(species_name):
     settings = load_user_settings()
@@ -1252,6 +1442,7 @@ def upload_bird_image(species_name):
 
 
 @api.route('/api/bird/<species_name>/image', methods=['GET'])
+@require_scope('public:read')
 def serve_bird_image(species_name):
     """Serve a custom bird image."""
     _, filename = _get_custom_image_path(species_name)
@@ -1275,8 +1466,65 @@ def delete_bird_image(species_name):
 # whose audio/spectrogram files are missing from disk still fills the page.
 RECORDINGS_MEDIA_OVERFETCH = 16
 
+# Hard ceiling on how many recordings a single request may return. An omitted or
+# oversized ``limit`` previously fell through to the DB as ``LIMIT -1`` (unbounded),
+# letting a caller pull a species' entire detection history — and every audio
+# filename — in one request: the cleanest full-DB scrape path. The frontend only
+# ever asks for small pages (<=16), so this ceiling never affects the UI.
+RECORDINGS_MAX_LIMIT = 500
+
+# Tighter per-request cap for anonymous (auth-on, not-signed-in) callers, so the
+# public bird-detail view still works (it asks for <=16) but a scripted crawl
+# gets only a recent slice per species, not the archive. Owners are uncapped
+# beyond RECORDINGS_MAX_LIMIT.
+RECORDINGS_PUBLIC_MAX = 30
+
+# Recency window for anonymous callers: the public view shows only the recent
+# slice, so an anonymous caller can't pull a species' old all-time clips (incl.
+# high-confidence ones via 'best' sort), nor id-walk historical detections via
+# the by-id permalink. Owners and share-token holders are not windowed.
+RECORDINGS_PUBLIC_WINDOW_DAYS = 30
+
+
+def _public_window_cutoff():
+    """ISO timestamp lower bound for the anonymous recent window.
+
+    Floored to midnight (whole days) so every consumer agrees on one boundary:
+    the recordings/by-id ``since`` filters, the media-signature gate
+    (``_within_public_window``), and the Detections table — which floors an
+    anonymous ``start_date`` to ``YYYY-MM-DD``. Without the floor the table
+    floored by date but the signature gate compared the full timestamp, so rows
+    earlier in the cutoff day than the current time were shown to anonymous
+    callers with unplayable (unsigned) media. Whole-day granularity keeps the
+    window ~30 calendar days and makes the two agree exactly.
+    """
+    cutoff_day = (local_now() - timedelta(days=RECORDINGS_PUBLIC_WINDOW_DAYS)).date()
+    return f'{cutoff_day.isoformat()}T00:00:00'
+
+
+def _public_window_cutoff_date():
+    """The window boundary as a bare ``YYYY-MM-DD``, for date-granular params.
+
+    Lives next to _public_window_cutoff so the "first 10 chars of the ISO
+    timestamp = the date" layout knowledge stays in one place — consumers
+    comparing bare dates (table start_date, sightings/unique date-walk) must
+    use the SAME day the timestamp consumers use.
+    """
+    return _public_window_cutoff()[:10]
+
+
+def _within_public_window(detection, cutoff=None):
+    """Whether a detection is recent enough to be in the anonymous public view.
+
+    ``cutoff`` may be passed in (computed once per request) to avoid recomputing
+    the window boundary for every row of a list payload.
+    """
+    timestamp = detection.get('timestamp')
+    return bool(timestamp) and str(timestamp) >= (cutoff or _public_window_cutoff())
+
 
 @api.route('/api/bird/<species_name>/recordings', methods=['GET'])
+@require_scope('public:read')
 @log_api_request
 def get_bird_recordings(species_name):
     """Get recordings for a species with sorting options.
@@ -1286,11 +1534,28 @@ def get_bird_recordings(species_name):
     - limit: optional max number of records (omit for all)
     """
     sort = request.args.get('sort', 'recent')
-    limit = request.args.get('limit', type=int)  # None if not provided
+    requested_limit = request.args.get('limit', type=int)  # None if not provided
 
     # Validate sort parameter
     if sort not in ['recent', 'best']:
         return jsonify({"error": "Sort must be 'recent' or 'best'"}), 400
+
+    # Always bound the query. An omitted or oversized limit must never become an
+    # unbounded scan (SQLite LIMIT -1) — that let an unauthenticated caller dump
+    # a species' entire history (and every audio filename) in one request.
+    if requested_limit is None:
+        limit = RECORDINGS_MAX_LIMIT
+    else:
+        limit = max(1, min(requested_limit, RECORDINGS_MAX_LIMIT))
+
+    # Anonymous (auth-on, not signed in) callers get a tighter, recency-windowed
+    # slice per species — the bird-detail UI only asks for <=16, so this keeps the
+    # public view working while denying a scripted per-species history dump and
+    # old all-time 'best' clips.
+    since = None
+    if get_request_tier() == 'public':
+        limit = min(limit, RECORDINGS_PUBLIC_MAX)
+        since = _public_window_cutoff()
 
     settings = load_user_settings()
     sci, common = _resolve_species_filter(species_name)
@@ -1300,13 +1565,14 @@ def get_bird_recordings(species_name):
     # also fail independently). Over-fetch a small constant beyond the requested
     # page so dropping those doesn't leave the grid short — the displayed records
     # normally sit inside cleanup's protected window, so few (if any) are dropped.
-    fetch_limit = limit + RECORDINGS_MEDIA_OVERFETCH if limit is not None else None
+    fetch_limit = limit + RECORDINGS_MEDIA_OVERFETCH
     fetched = _run_db(
         db_manager.get_bird_recordings,
         common,
         sort,
         fetch_limit,
         scientific_name=sci,
+        since=since,
     )
     present = [
         r for r in fetched
@@ -1326,6 +1592,26 @@ def get_bird_recordings(species_name):
     })
     return jsonify(recordings)
 
+def _detection_view_entitled(detection, detection_id):
+    """May the current request read this one detection (by-id permalink AND its
+    OG share card — single owner of the rule so the two can never drift)?
+
+    Owner always; a valid ``?s=`` share token grants exactly this detection
+    (any age, even when public access is off); otherwise anonymous may read it
+    only within the public recent window — so the historical archive can't be
+    id-walked. Callers shape their own denial (404 vs. generic card) so the
+    endpoint stays existence-oracle-free.
+    """
+    if detection is None:
+        return False
+    if is_authenticated():
+        return True
+    share = request.args.get('s')
+    if share and verify_share_token(share, detection_id):
+        return True
+    return is_public_access_enabled() and _within_public_window(detection)
+
+
 @api.route('/api/bird/<species_name>/recording/<int:recording_id>', methods=['GET'])
 @log_api_request
 def get_bird_recording(species_name, recording_id):
@@ -1340,26 +1626,69 @@ def get_bird_recording(species_name, recording_id):
     storage cleanup can delete them while keeping the row, so the client shows
     a graceful "no longer available" notice instead of a dead player.
     """
+    # Mirror the recordings list filter: by scientific_name when the route name
+    # resolves to a known species, otherwise by the legacy common_name.
+    sci, common = _resolve_species_filter(species_name)
+
     detection = _run_db(db_manager.get_detection_by_id, recording_id)
     if detection is None:
         return jsonify({"error": "Recording not found"}), 404
 
-    # Mirror the recordings list filter: by scientific_name when the route name
-    # resolves to a known species, otherwise by the legacy common_name.
-    sci, common = _resolve_species_filter(species_name)
     belongs = (
         detection.get('scientific_name') == sci if sci
         else detection.get('common_name') == common
     )
     if not belongs:
-        return jsonify({"error": "Recording not found for this species"}), 404
+        # Return the SAME 404 as a missing id (not "...for this species"): a
+        # distinct message let a caller distinguish "id exists under another
+        # species" from "id doesn't exist", an existence oracle for DB size.
+        return jsonify({"error": "Recording not found"}), 404
+
+    # Access control (manual, not @require_scope, so a share token grants access
+    # even when public access is off — see _detection_view_entitled). 404 (not
+    # 401) on denial so the endpoint can't be probed for which ids exist.
+    if not _detection_view_entitled(detection, recording_id):
+        return jsonify({"error": "Recording not found"}), 404
 
     settings = load_user_settings()
     recording = _localize_detection(detection, settings=settings)
     recording['has_media'] = recording_has_media(
         recording, EXTRACTED_AUDIO_DIR, SPECTROGRAM_DIR,
     )
+    # Same-species sibling detections from the same source recording, so the
+    # player's analysis-window bar can label every 3s window that fired — not
+    # just this row's. Added after _localize_detection on purpose: it's safe
+    # for public/share viewers (timestamps + confidence of the same species
+    # within the same few seconds of audio; no ids, no location, no source).
+    recording['group_detections'] = _run_db(
+        db_manager.get_group_detection_windows, detection)
     return jsonify(recording)
+
+
+@api.route('/api/detections/<int:detection_id>/share', methods=['POST'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def create_share_link(detection_id):
+    """Mint a share token for one detection (owner only).
+
+    The token authorizes read of exactly this detection (its id is a signed
+    claim) plus its two media files — see core.share_tokens. The frontend builds
+    the shareable URL from the returned token, so base-href/ingress prefixes are
+    handled client-side.
+    """
+    detection = _run_db(db_manager.get_detection_by_id, detection_id)
+    if detection is None:
+        return jsonify({'error': 'Recording not found'}), 404
+
+    token = mint_share_token(detection_id)
+    return jsonify({'token': token})
+
+
+# hostname/IPv4 (dots, hyphens), IPv6 ([...]), optional :port — nothing else,
+# so a forged forwarding header can't smuggle a path, userinfo, or markup into
+# the absolute URLs reflected on the OG card.
+_FORWARDED_HOST_RE = re.compile(r'^[A-Za-z0-9.\-]+(:\d{1,5})?$|^\[[0-9A-Fa-f:]+\](:\d{1,5})?$')
 
 
 def _external_base_url():
@@ -1369,122 +1698,17 @@ def _external_base_url():
     X-Forwarded-Host (see ``frontend/nginx.conf``); fall back to the request's
     own scheme/host for direct access. Proxy chains can comma-join these, so we
     take the first (outermost) hop.
+
+    Both headers are ultimately client-controlled (nginx copies the client's
+    own ``Host`` into X-Forwarded-Host), so constrain them to a plain
+    http(s)://host[:port] shape — a forged header degrades to the request's own
+    scheme/host instead of planting an arbitrary URL on the card.
     """
-    proto = (request.headers.get('X-Forwarded-Proto', '').split(',')[0].strip()
-             or request.scheme)
-    host = (request.headers.get('X-Forwarded-Host', '').split(',')[0].strip()
-            or request.host)
+    proto = forwarded_scheme()
+    host = request.headers.get('X-Forwarded-Host', '').split(',')[0].strip()
+    if not _FORWARDED_HOST_RE.match(host):
+        host = request.host
     return f"{proto}://{host}"
-
-
-def _format_og_timestamp(ts):
-    """Human-friendly detection time for the preview description. 24-hour clock
-    sidesteps platform-specific strftime padding flags; raw value if unparseable."""
-    if not ts:
-        return ''
-    try:
-        dt = datetime.fromisoformat(str(ts))
-    except ValueError:
-        return str(ts)
-    return dt.strftime('%b %d, %Y, %H:%M')
-
-
-def _format_og_description(recording):
-    """One-line ' · '-joined summary: scientific name, confidence, and time.
-
-    The audio source is intentionally omitted — it's an internal label
-    (``source_0``, an RTSP name, …) that means nothing to someone receiving a
-    shared link."""
-    parts = []
-    sci = recording.get('scientific_name')
-    if sci:
-        parts.append(sci)
-    conf = recording.get('confidence')
-    if isinstance(conf, (int, float)):
-        parts.append(f"{round(conf * 100)}% confidence")
-    when = _format_og_timestamp(recording.get('timestamp'))
-    if when:
-        parts.append(when)
-    return " · ".join(parts) or "Bird detection"
-
-
-def _indefinite_article(noun):
-    """'a' or 'an' for the leading sound of ``noun`` (a species name).
-
-    Heuristic, not perfect: vowel-initial → 'an', except the 'eu-' words that
-    read with a 'y' glide ('a European Starling', 'a Eurasian Wigeon'). Good
-    enough for the species names that appear in share-card titles."""
-    word = str(noun).strip().lower()
-    if not word:
-        return 'a'
-    if word.startswith('eu'):
-        return 'a'
-    return 'an' if word[0] in 'aeiou' else 'a'
-
-
-# A single static PNG (the app's branded bird illustration) backs every card.
-# It lives in the frontend's public/ dir, so nginx serves it at the web root —
-# the OG endpoint only needs to reference its absolute URL. PNG (not the WebP
-# original) because several unfurlers won't render WebP og:images.
-OG_CARD_IMAGE_PATH = "/default_bird.png"
-OG_CARD_IMAGE_SIZE = (1024, 1024)  # square — the full branded illustration
-
-
-def _render_og_card(*, title, description, url, image_url=None,
-                    image_size=None, site_name="BirdNET-PiPy"):
-    """Render a minimal HTML doc carrying Open Graph + Twitter Card meta tags for
-    link-unfurl crawlers (iMessage/LinkPresentation, Slack, Discord, …). Only
-    crawlers reach this (nginx routes them here); a canonical link + meta-refresh
-    send any stray human to the real SPA page. All values are attribute-escaped.
-
-    Passing ``image_url`` upgrades the card from a compact ``summary`` to a
-    large-thumbnail ``summary_large_image`` and reveals the description on
-    iMessage (its no-image card shows only the title)."""
-    e = lambda s: html.escape(str(s), quote=True)
-    t, d, u, s = e(title), e(description), e(url), e(site_name)
-    # The <title> appends " · site" for branding, but skip it when the title
-    # already names the site (e.g. "BirdNET-PiPy overheard a Northern Cardinal")
-    # to avoid a redundant doubled brand.
-    page_title = t if site_name in title else f"{t} · {s}"
-    image_tags = ""
-    card_type = "summary"
-    if image_url:
-        card_type = "summary_large_image"
-        iu = e(image_url)
-        image_tags = (
-            f'<meta property="og:image" content="{iu}">\n'
-            f'<meta property="og:image:alt" content="{s}">\n'
-            '<meta property="og:image:type" content="image/png">\n'
-            f'<meta name="twitter:image" content="{iu}">\n'
-        )
-        if image_size:
-            w, h = image_size
-            image_tags = (
-                f'<meta property="og:image:width" content="{int(w)}">\n'
-                f'<meta property="og:image:height" content="{int(h)}">\n'
-            ) + image_tags
-    return (
-        "<!DOCTYPE html>\n"
-        '<html lang="en" prefix="og: https://ogp.me/ns#">\n'
-        "<head>\n"
-        '<meta charset="utf-8">\n'
-        f"<title>{page_title}</title>\n"
-        f'<link rel="canonical" href="{u}">\n'
-        f'<meta name="description" content="{d}">\n'
-        '<meta property="og:type" content="website">\n'
-        f'<meta property="og:site_name" content="{s}">\n'
-        f'<meta property="og:title" content="{t}">\n'
-        f'<meta property="og:description" content="{d}">\n'
-        f'<meta property="og:url" content="{u}">\n'
-        + image_tags +
-        f'<meta name="twitter:card" content="{card_type}">\n'
-        f'<meta name="twitter:title" content="{t}">\n'
-        f'<meta name="twitter:description" content="{d}">\n'
-        f'<meta http-equiv="refresh" content="0; url={u}">\n'
-        "</head>\n"
-        f'<body><p>View this detection at <a href="{u}">{u}</a>.</p></body>\n'
-        "</html>\n"
-    )
 
 
 @api.route('/api/og/recording/<int:recording_id>', methods=['GET'])
@@ -1506,18 +1730,25 @@ def get_recording_og_card(recording_id):
     unfurls as a large-thumbnail card (which also reveals the description on
     iMessage). A per-detection image isn't used: the only per-detection raster is
     a WebP spectrogram, which unfurlers don't reliably render.
+
+    Access mirrors the by-id permalink gate (owner / share token / public
+    recent window): the card is derived from the same data the permalink would
+    serve, so it must not reveal more. Crawlers are anonymous, so on an
+    auth-enabled station a detection outside the anonymous view unfurls as the
+    SAME generic branded card as a nonexistent id — the link still previews
+    (title + illustration), it names no species, and the route can't be
+    id-walked as an existence oracle for private detections.
     """
     base = _external_base_url()
     image_url = f"{base}{OG_CARD_IMAGE_PATH}"
 
     detection = _run_db(db_manager.get_detection_by_id, recording_id)
-    if detection is None:
-        return Response(_render_og_card(
+    if not _detection_view_entitled(detection, recording_id):
+        return Response(render_og_card(
             title="Bird detections",
             description="Live bird detections from a BirdNET listening station.",
             url=f"{base}/",
             image_url=image_url,
-            image_size=OG_CARD_IMAGE_SIZE,
         ), mimetype='text/html')
 
     settings = load_user_settings()
@@ -1534,18 +1765,18 @@ def get_recording_og_card(recording_id):
     # "overheard" (not "spotted") keeps it accurate — detection is acoustic, the
     # bird is heard, never seen. The scientific name / confidence / time ride
     # along in the description for platforms (Slack, Discord, …) that show it.
-    title = f"BirdNET-PiPy overheard {_indefinite_article(display)} {display}"
+    title = f"BirdNET-PiPy overheard {indefinite_article(display)} {display}"
 
-    return Response(_render_og_card(
+    return Response(render_og_card(
         title=title,
-        description=_format_og_description(recording),
+        description=format_og_description(recording),
         url=share_url,
         image_url=image_url,
-        image_size=OG_CARD_IMAGE_SIZE,
     ), mimetype='text/html')
 
 
 @api.route('/api/bird/<species_name>/detection_distribution', methods=['GET'])
+@require_scope('public:read')
 @validate_date_param()
 @handle_api_errors
 def get_detection_distribution(species_name):
@@ -1559,6 +1790,7 @@ def get_detection_distribution(species_name):
     return jsonify(distribution)
 
 @api.route('/api/species/all', methods=['GET'])
+@require_scope('public:read')
 @log_api_request
 @handle_api_errors
 def get_all_species():
@@ -1665,6 +1897,17 @@ def get_detections():
 
     # Cap per_page at 100 (same as db method)
     per_page = min(max(1, per_page), 100)
+
+    # Anonymous callers (when the owner has published the table) see only the
+    # recent window — consistent with the rest of the public view, so table_public
+    # can't expose the full historical archive and every visible row's media stays
+    # playable (its signature is minted). Owners see the full table. Applies to
+    # both query paths below (and so also caps the in-memory full-table sort).
+    if get_request_tier() == 'public':
+        cutoff_date = _public_window_cutoff_date()
+        if not start_date or start_date < cutoff_date:
+            start_date = cutoff_date
+
     settings = load_user_settings()
     bird_name_language = get_bird_name_language(settings)
     sci, common = _resolve_species_filter(species)
@@ -1944,22 +2187,104 @@ def _strip_private_fields(detection):
     return detection
 
 
-def _localize_detection(detection, settings=None):
+def _add_media_signatures(detection, cutoff=None):
+    """Attach short-lived signed query strings (``audio_sig``/``spectrogram_sig``)
+    so an anonymous client can fetch exactly this detection's audio/spectrogram.
+
+    Only minted for detections within the public recency window. So an
+    anonymous caller never receives a working media URL for an OLD clip via ANY
+    payload path (sightings, sightings/unique date-walk, dashboard samples, etc.),
+    not just the recordings list. Owners still play old clips via their session
+    (the bare-filename request is authorized by the cookie); share links use the
+    token, not the signature. Handles both field-name conventions (recordings use
+    ``audio_filename``; the dashboard/recent path renames to ``bird_song_file_name``).
+    See core.media_access.
+    """
+    if not isinstance(detection, dict) or not _within_public_window(detection, cutoff):
+        return detection
+    audio_fn = detection.get('audio_filename') or detection.get('bird_song_file_name')
+    if audio_fn:
+        detection['audio_sig'] = sign_media_query(audio_fn)
+    spectrogram_fn = (
+        detection.get('spectrogram_filename') or detection.get('spectrogram_file_name')
+    )
+    if spectrogram_fn:
+        detection['spectrogram_sig'] = sign_media_query(spectrogram_fn)
+    return detection
+
+
+# Extra-blob keys safe to expose to anonymous callers. Anything else (notably
+# source_label, a user-chosen name that can hint at the station's location or
+# layout) is dropped from public payloads, along with the raw audio_source id.
+_PUBLIC_EXTRA_KEYS = {'weather'}
+
+
+def _strip_public_metadata(detection):
+    """Drop owner-only metadata (source label/id; any non-weather extra key)
+    from a payload bound for an anonymous caller."""
+    if not isinstance(detection, dict):
+        return detection
+    detection.pop('audio_source', None)
+    extra = detection.get('extra')
+    if isinstance(extra, dict):
+        detection['extra'] = {
+            key: value for key, value in extra.items()
+            if key.lower() in _PUBLIC_EXTRA_KEYS
+        }
+    return detection
+
+
+def _localize_detection(detection, settings=None, is_public=None, cutoff=None):
     # add_display_common_name returns a copy, so popping here never mutates the
     # underlying DB row.
-    return _strip_private_fields(add_display_common_name(
+    # is_public=None derives the tier from the current request; callers
+    # serializing a list pass it (and cutoff) in once, computed per-request,
+    # rather than re-deriving them for every row. Off-request-thread callers
+    # (the cached payload builders) MUST pass is_public explicitly — there is
+    # no request context to derive from.
+    if is_public is None:
+        is_public = get_request_tier() == 'public'
+    localized = _strip_private_fields(add_display_common_name(
         detection,
         language=get_bird_name_language(settings),
         settings=settings,
     ))
+    # Anonymous callers get the safe variant: owner-only metadata stripped, and
+    # signed media URLs minted (owners fetch media by bare filename via their
+    # session, so signatures would be dead payload weight for them). Cached
+    # payloads (dashboard/sightings) are built once and shared across tiers, so
+    # their builders force is_public=True to keep the cached copy the safe one.
+    if is_public:
+        _add_media_signatures(localized, cutoff)
+        _strip_public_metadata(localized)
+    return localized
 
 
-def _localize_detection_list(detections, settings=None):
-    return [_localize_detection(detection, settings=settings) for detection in detections]
+def _localize_detection_list(detections, settings=None, public_only=False):
+    # public_only forces the anonymous-safe variant without consulting the
+    # request tier: cached payloads (dashboard/sightings) are built off the
+    # request thread, so there is no request context to classify.
+    is_public = public_only or get_request_tier() == 'public'
+    cutoff = _public_window_cutoff()
+    return [
+        _localize_detection(detection, settings=settings, is_public=is_public,
+                            cutoff=cutoff)
+        for detection in detections
+    ]
 
 
 def _localize_species_list(species_list, settings=None):
-    localized = [_localize_detection(species, settings=settings) for species in species_list]
+    # The species catalog is built off the request thread (single-flight gallery
+    # cache) and shared across tiers, so it must NOT resolve a request tier per
+    # row: get_request_tier() -> is_authenticated() -> session access has no
+    # request context on the db-executor thread and raises "Working outside of
+    # request context", which hard-500s /api/species/all whenever auth is enabled
+    # (the failed build never warms the cache, so every subsequent request 500s
+    # too, for owners as well as anonymous callers). public_only=True forces the
+    # anonymous-safe variant like the dashboard/sightings builders; catalog rows
+    # carry no owner-only metadata (common/scientific name + last_detected
+    # only), so the stripping is a no-op on the data.
+    localized = _localize_detection_list(species_list, settings=settings, public_only=True)
     localized.sort(key=lambda species: species.get('display_common_name', species.get('common_name', '')))
     return localized
 
@@ -2026,6 +2351,7 @@ def load_available_species():
 
 
 @api.route('/api/species/available', methods=['GET'])
+@require_scope('public:read')
 @log_api_request
 @handle_api_errors
 def get_available_species():
@@ -2100,16 +2426,18 @@ def broadcast_detection_endpoint():
 @api.route('/api/broadcast/recorder-status', methods=['POST'])
 @require_internal
 def broadcast_recorder_status_endpoint():
-    """Receive recorder health status from main container and broadcast to clients.
+    """Receive recorder health status from main container and broadcast to owners.
 
     Internal-only endpoint - only accessible from docker network or localhost.
-    Called by the main processing container on recorder state changes.
+    Called by the main processing container on recorder state changes. The status
+    is emitted only to the owner room (authenticated sockets), since it carries
+    source labels and error text that must not reach anonymous live_feed clients.
     """
     global _recorder_status
     try:
         _recorder_status = request.json
         if socketio:
-            socketio.emit('recorder_status', _recorder_status)
+            socketio.emit('recorder_status', _recorder_status, room=_OWNER_ROOM)
         logger.debug("Recorder status broadcasted", extra={
             'state': _recorder_status.get('state')
         })
@@ -2849,6 +3177,7 @@ def test_stream():
 
 
 @api.route('/api/system/storage', methods=['GET'])
+@require_scope('public:read')
 @log_api_request
 @handle_api_errors
 def get_system_storage():
@@ -2883,7 +3212,22 @@ def get_system_storage():
         return jsonify({'error': f'Failed to get storage info: {str(e)}'}), 500
 
 
+def _public_version_view(response):
+    """Drop the build fingerprint (exact commit + branch) for anonymous callers.
+
+    The precise commit and branch let anyone match a pinned build to a known CVE.
+    Only the owner needs them (Settings displays them); the public view keeps
+    ``version`` + ``runtime_mode`` so the background update check still works
+    without popping a login modal.
+    """
+    if get_request_tier() == 'public':
+        for field in ('current_commit', 'current_commit_date', 'current_branch'):
+            response.pop(field, None)
+    return response
+
+
 @api.route('/api/system/version', methods=['GET'])
+@require_scope('public:read')
 @log_api_request
 @handle_api_errors
 def get_system_version():
@@ -2902,7 +3246,7 @@ def get_system_version():
                 'remote_url': f'https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}',
                 'runtime_mode': runtime_mode,
             }
-            return jsonify(response), 200
+            return jsonify(_public_version_view(response)), 200
 
         version_info = load_version_info()
 
@@ -2911,14 +3255,14 @@ def get_system_version():
                 'error': 'Version information not available. Run build.sh to generate version.json'
             }), 500
 
-        return jsonify({
+        return jsonify(_public_version_view({
             'version': version_info.get('version', 'unknown'),
             'current_commit': version_info.get('commit', 'unknown'),
             'current_commit_date': version_info.get('commit_date', 'unknown'),
             'current_branch': version_info.get('branch', 'unknown'),
             'remote_url': version_info.get('remote_url', f'https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}'),
             'runtime_mode': runtime_mode,
-        }), 200
+        })), 200
     except Exception as e:
         return jsonify({'error': f'Failed to get version info: {str(e)}'}), 500
 
@@ -2942,6 +3286,7 @@ def get_channel_branch():
 
 
 @api.route('/api/system/update-check', methods=['GET'])
+@require_scope('public:read')
 @log_api_request
 @handle_api_errors
 def check_for_updates():
@@ -3325,14 +3670,23 @@ def get_system_logs():
 def get_auth_status():
     """Get authentication status for frontend."""
     auth_enabled = is_auth_enabled()
-    public_features = sorted(get_public_features()) if auth_enabled else []
+    public_access = (not auth_enabled) or is_public_access_enabled()
+    # When the master public-access switch is off, no feature is effectively
+    # public even if its per-feature flag is set.
+    public_features = sorted(get_public_features()) if (auth_enabled and public_access) else []
     settings = get_runtime_settings()
+    # Don't leak the station name to an anonymous visitor behind a full login
+    # wall (auth on, public access off, not signed in). When public access is on
+    # the name is part of the public view anyway, and the login screen shows it.
+    show_station = public_access or is_authenticated()
+    station_name = settings.get('display', {}).get('station_name', '') if show_station else ''
     return jsonify({
         'auth_enabled': auth_enabled,
         'setup_complete': is_setup_complete(),
         'authenticated': is_authenticated(),
+        'public_access': public_access,
         'public_features': public_features,
-        'station_name': settings.get('display', {}).get('station_name', '')
+        'station_name': station_name
     }), 200
 
 
@@ -3446,13 +3800,15 @@ def save_access_settings():
     """Save per-feature access settings with merge semantics.
 
     Accepts partial payloads — only provided keys are updated.
-    Valid keys: charts_public, table_public, live_feed_public (all booleans).
+    Valid keys: public_access, charts_public, table_public, live_feed_public
+    (all booleans). public_access is the master switch for the anonymous limited
+    view; the *_public keys broaden that view to specific feature areas.
     """
     data = request.json
     if not data:
         return jsonify({'error': 'Request body required'}), 400
 
-    valid_keys = {'charts_public', 'table_public', 'live_feed_public'}
+    valid_keys = {'public_access', 'charts_public', 'table_public', 'live_feed_public'}
     for key, value in data.items():
         if key not in valid_keys:
             return jsonify({'error': f'Unknown key: {key}'}), 400
@@ -4169,6 +4525,11 @@ def _cooperative_yield():
 # Latest recorder health status (populated by main container broadcasts)
 _recorder_status = {}
 
+# SocketIO room that only authenticated (owner) sockets join, so recorder health
+# — which carries source labels/types and ffmpeg error text that can echo RTSP
+# credentials — is broadcast to owners only, matching the @require_auth REST route.
+_OWNER_ROOM = 'owners'
+
 def create_app(async_mode='threading'):
     # The 'threading' default is load-bearing, not cosmetic. requirements.txt
     # ships gevent (for the gunicorn wsgi.py path), and Flask-SocketIO's
@@ -4199,6 +4560,7 @@ def create_app(async_mode='threading'):
         logger.warning("Startup migration temp cleanup failed", extra={'error': str(e)})
 
     app.register_blueprint(api)
+    _assert_route_access_declared(app)
 
     # Initialize SocketIO.
     # `cors_allowed_origins=None` lets Engine.IO compute allowed origins from the
@@ -4209,12 +4571,20 @@ def create_app(async_mode='threading'):
     # WebSocket event handlers
     @socketio.on('connect')
     def handle_connect():
-        if not is_feature_public('live_feed') and not session.get('authenticated', False):
+        is_owner = is_authenticated()
+        if not is_feature_public('live_feed') and not is_owner:
             return False  # Reject connection
         logger.info('WebSocket client connected')
         emit('status', {'message': 'Connected to live detection feed'})
-        if _recorder_status:
-            emit('recorder_status', _recorder_status)
+        # recorder_status is owner-only (source labels/types + ffmpeg error text
+        # that can contain RTSP credentials), matching the @require_auth
+        # /api/recorder/status route. Anonymous live_feed listeners must not get
+        # it. Owners join a room so the main container's status broadcasts reach
+        # only them (see broadcast_recorder_status_endpoint).
+        if is_owner:
+            join_room(_OWNER_ROOM)
+            if _recorder_status:
+                emit('recorder_status', _recorder_status)
 
     @socketio.on('disconnect')
     def handle_disconnect():

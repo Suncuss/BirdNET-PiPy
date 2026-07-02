@@ -72,6 +72,7 @@ describe('useAuth', () => {
         authEnabled: false,
         setupComplete: false,
         authenticated: false,
+        publicAccess: true,
         publicFeatures: [],
         stationName: ''
       })
@@ -170,9 +171,43 @@ describe('useAuth', () => {
         authEnabled: true,
         setupComplete: true,
         authenticated: false,
+        publicAccess: true,
         publicFeatures: ['charts'],
         stationName: ''
       })
+    })
+
+    it('maps public_access:false from the response', async () => {
+      mockApi.get.mockResolvedValueOnce({
+        status: 200,
+        data: {
+          auth_enabled: true,
+          setup_complete: true,
+          authenticated: false,
+          public_access: false
+        }
+      })
+
+      const auth = useAuth()
+      await auth.checkAuthStatus()
+
+      expect(auth.authStatus.value.publicAccess).toBe(false)
+    })
+
+    it('defaults publicAccess to true when not in response', async () => {
+      mockApi.get.mockResolvedValueOnce({
+        status: 200,
+        data: {
+          auth_enabled: true,
+          setup_complete: true,
+          authenticated: false
+        }
+      })
+
+      const auth = useAuth()
+      await auth.checkAuthStatus()
+
+      expect(auth.authStatus.value.publicAccess).toBe(true)
     })
 
     it('defaults publicFeatures to empty array when not in response', async () => {

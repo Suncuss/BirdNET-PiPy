@@ -5,28 +5,12 @@ nginx routes only crawler user-agents to /api/og/recording/<id>; this endpoint
 returns a tiny HTML doc whose <head> carries per-detection OG/Twitter tags so a
 shared link previews as a titled card instead of a bare URL.
 """
-
-
-def _insert_detection(db, **overrides):
-    detection = {
-        'timestamp': '2024-01-15T10:30:00',
-        'group_timestamp': '2024-01-15T10:30:00',
-        'common_name': 'American Robin',
-        'scientific_name': 'Turdus migratorius',
-        'confidence': 0.85,
-        'latitude': 40.7128,
-        'longitude': -74.0060,
-        'cutoff': 0.5,
-        'sensitivity': 0.75,
-        'overlap': 0.25,
-    }
-    detection.update(overrides)
-    return db.insert_detection(detection)
+from tests.api.conftest import auth_enabled_app, insert_detection, iso_ago, login_owner
 
 
 class TestOgCard:
     def test_renders_per_detection_card(self, api_client, real_db_manager):
-        rec_id = _insert_detection(real_db_manager)
+        rec_id = insert_detection(real_db_manager, confidence=0.85)
 
         resp = api_client.get(f'/api/og/recording/{rec_id}')
 
@@ -64,7 +48,7 @@ class TestOgCard:
     def test_og_image_uses_forwarded_origin(self, api_client, real_db_manager):
         # The image URL must resolve to the external origin too, else the crawler
         # fetches it from the wrong host (or an unreachable inner localhost).
-        rec_id = _insert_detection(real_db_manager)
+        rec_id = insert_detection(real_db_manager)
 
         resp = api_client.get(
             f'/api/og/recording/{rec_id}',
@@ -80,7 +64,7 @@ class TestOgCard:
         # Behind a TLS-terminating proxy/tunnel, absolute URLs must use the
         # externally requested scheme+host (forwarded by nginx), not the inner
         # http://localhost — else iMessage can't fetch og:url.
-        rec_id = _insert_detection(real_db_manager)
+        rec_id = insert_detection(real_db_manager)
 
         resp = api_client.get(
             f'/api/og/recording/{rec_id}',
@@ -94,7 +78,7 @@ class TestOgCard:
 
     def test_escapes_html_in_fields(self, api_client, real_db_manager):
         # Species names are reflected into HTML attributes; they must be escaped.
-        rec_id = _insert_detection(
+        rec_id = insert_detection(
             real_db_manager, common_name='Evil "Bird" <script>',
             scientific_name='Malus injectus',
         )
@@ -109,7 +93,7 @@ class TestOgCard:
     def test_description_omits_audio_source(self, api_client, real_db_manager):
         # The audio source is an internal label, not something a link recipient
         # should see — it must not leak into the shared card.
-        rec_id = _insert_detection(real_db_manager, audio_source='source_3')
+        rec_id = insert_detection(real_db_manager, audio_source='source_3')
 
         resp = api_client.get(f'/api/og/recording/{rec_id}')
 
@@ -119,7 +103,7 @@ class TestOgCard:
     def test_title_uses_an_before_vowel(self, api_client, real_db_manager):
         # Unknown scientific_name so the localizer falls back to common_name
         # (the displayed name is otherwise resolved from the species DB).
-        rec_id = _insert_detection(
+        rec_id = insert_detection(
             real_db_manager, common_name='Eastern Bluebird',
             scientific_name='Testus vowelis',
         )
@@ -131,7 +115,7 @@ class TestOgCard:
 
     def test_title_uses_a_before_eu_word(self, api_client, real_db_manager):
         # 'Eu-' species read with a 'y' glide: "a European Starling", not "an".
-        rec_id = _insert_detection(
+        rec_id = insert_detection(
             real_db_manager, common_name='European Starling',
             scientific_name='Testus euensis',
         )
@@ -140,3 +124,106 @@ class TestOgCard:
 
         body = resp.get_data(as_text=True)
         assert 'content="BirdNET-PiPy overheard a European Starling"' in body
+
+    def test_rejects_forged_forwarded_host(self, api_client, real_db_manager):
+        # X-Forwarded-Host is client-controlled (nginx copies the client's own
+        # Host header into it); anything but a plain host[:port] degrades to
+        # the request's own host instead of planting a foreign URL on the card.
+        rec_id = insert_detection(real_db_manager)
+
+        resp = api_client.get(
+            f'/api/og/recording/{rec_id}',
+            headers={'X-Forwarded-Proto': 'javascript',
+                     'X-Forwarded-Host': 'evil.example/phish?x='},
+        )
+
+        body = resp.get_data(as_text=True)
+        assert 'evil.example' not in body
+        assert 'javascript' not in body
+        assert ('property="og:image" '
+                'content="http://localhost/default_bird.png"') in body
+
+
+class TestOgCardAccess:
+    """With auth enabled, the card's detail mirrors the by-id permalink gate:
+    owner / share token / public recent window see species detail; everyone
+    else gets the generic branded card — identical for denied and nonexistent
+    ids, so the route is not an id-walk existence oracle."""
+
+    def _generic_body(self, client):
+        return client.get('/api/og/recording/999999').get_data(as_text=True)
+
+    def test_anonymous_in_window_gets_detailed_card(self, real_db_manager):
+        rec_id = insert_detection(
+            real_db_manager, timestamp=iso_ago(days_ago=1),
+        )
+        with auth_enabled_app(real_db_manager) as (client, _):
+            resp = client.get(f'/api/og/recording/{rec_id}')
+
+            assert resp.status_code == 200
+            assert 'American Robin' in resp.get_data(as_text=True)
+
+    def test_anonymous_out_of_window_gets_generic_card(self, real_db_manager):
+        rec_id = insert_detection(
+            real_db_manager, timestamp=iso_ago(days_ago=45),
+        )
+        with auth_enabled_app(real_db_manager) as (client, _):
+            resp = client.get(f'/api/og/recording/{rec_id}')
+
+            assert resp.status_code == 200
+            body = resp.get_data(as_text=True)
+            assert 'American Robin' not in body
+            # Byte-identical to a nonexistent id: no existence oracle.
+            assert body == self._generic_body(client)
+
+    def test_anonymous_behind_login_wall_gets_generic_card(self, real_db_manager):
+        rec_id = insert_detection(
+            real_db_manager, timestamp=iso_ago(days_ago=1),
+        )
+        with auth_enabled_app(
+            real_db_manager, access={'public_access': False},
+        ) as (client, _):
+            resp = client.get(f'/api/og/recording/{rec_id}')
+
+            assert resp.status_code == 200
+            body = resp.get_data(as_text=True)
+            assert 'American Robin' not in body
+            assert body == self._generic_body(client)
+
+    def test_share_token_reveals_detail_even_on_private_station(self, real_db_manager):
+        # Out-of-window AND public_access off — the share token alone entitles
+        # the crawler to this one detection's card (nginx forwards ?s= through).
+        rec_id = insert_detection(
+            real_db_manager, timestamp=iso_ago(days_ago=45),
+        )
+        with auth_enabled_app(
+            real_db_manager, access={'public_access': False},
+        ) as (client, _):
+            login_owner(client)
+            token = client.post(f'/api/detections/{rec_id}/share').get_json()['token']
+            client.post('/api/auth/logout')
+
+            resp = client.get(f'/api/og/recording/{rec_id}?s={token}')
+
+            assert 'American Robin' in resp.get_data(as_text=True)
+
+    def test_forged_share_token_gets_generic_card(self, real_db_manager):
+        rec_id = insert_detection(
+            real_db_manager, timestamp=iso_ago(days_ago=45),
+        )
+        with auth_enabled_app(real_db_manager) as (client, _):
+            resp = client.get(f'/api/og/recording/{rec_id}?s=forged-token')
+
+            assert resp.status_code == 200
+            assert 'American Robin' not in resp.get_data(as_text=True)
+
+    def test_owner_sees_detail_regardless_of_window(self, real_db_manager):
+        rec_id = insert_detection(
+            real_db_manager, timestamp=iso_ago(days_ago=45),
+        )
+        with auth_enabled_app(real_db_manager) as (client, _):
+            login_owner(client)
+
+            resp = client.get(f'/api/og/recording/{rec_id}')
+
+            assert 'American Robin' in resp.get_data(as_text=True)

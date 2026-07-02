@@ -36,13 +36,18 @@ export function recordingPath(commonName, id) {
 
 /**
  * Absolute, shareable URL for a single-recording permalink — what the "share"
- * buttons put on the clipboard.
+ * buttons put on the clipboard. An optional share token rides along as the
+ * `?s=` query the backend's by-id gate reads, so the recipient stays
+ * authorized even on a private station — built here so every share path
+ * composes it identically.
  *
  * @param {string} commonName - Untranslated species common name
  * @param {number|string} id - Detection (recording) ID
+ * @param {string} [shareToken] - Scoped share token authorizing this detection
  * @returns {string}
  */
-export function recordingShareUrl(commonName, id) {
+export function recordingShareUrl(commonName, id, shareToken = '') {
   const origin = typeof window !== 'undefined' ? window.location.origin : ''
-  return `${origin}${recordingPath(commonName, id)}`
+  const url = `${origin}${recordingPath(commonName, id)}`
+  return shareToken ? `${url}?s=${encodeURIComponent(shareToken)}` : url
 }

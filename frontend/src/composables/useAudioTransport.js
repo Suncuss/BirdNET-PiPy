@@ -1,10 +1,11 @@
 import { ref, computed, watch, onUnmounted } from 'vue'
+import { formatClock, progressPercentString } from '@/utils/format'
 
 /**
  * Shared transport for an <audio> element: play/pause state, a smooth
  * requestAnimationFrame-driven clock, seeking, and listener/teardown plumbing.
- * Used by both the SpectrogramPlayer (template-ref <audio>) and the Detection
- * Detail page (an imperatively-created Audio() routed through a Web Audio graph).
+ * Used by SpectrogramPlayer (template-ref <audio>). DetectionPlayer instead uses
+ * useAudioBufferTransport, which avoids a WebKit MediaElementSource startup glitch.
  *
  * Pass a ref holding the element (a template ref, or one assigned later); the
  * composable (de)attaches its listeners as that ref changes and on unmount.
@@ -20,17 +21,7 @@ export function useAudioTransport(audioElRef, { onBeforePlay } = {}) {
   const duration = ref(0)
   let rafId = null
 
-  const progressPercent = computed(() => {
-    if (!duration.value) return '0%'
-    return `${Math.min(100, (currentTime.value / duration.value) * 100)}%`
-  })
-
-  const clock = (seconds) => {
-    if (!Number.isFinite(seconds) || seconds < 0) return '0:00'
-    const m = Math.floor(seconds / 60)
-    const s = Math.floor(seconds % 60)
-    return `${m}:${String(s).padStart(2, '0')}`
-  }
+  const progressPercent = computed(() => progressPercentString(currentTime.value, duration.value))
 
   // Drive the clock from rAF while playing (smooth ~60fps) rather than the
   // element's coarse `timeupdate` (~4/s). Started/stopped by play/pause/ended,
@@ -114,5 +105,5 @@ export function useAudioTransport(audioElRef, { onBeforePlay } = {}) {
     detach(audioElRef.value)
   })
 
-  return { isPlaying, currentTime, duration, progressPercent, clock, togglePlay, seekTo, seekToFraction }
+  return { isPlaying, currentTime, duration, progressPercent, clock: formatClock, togglePlay, seekTo, seekToFraction }
 }

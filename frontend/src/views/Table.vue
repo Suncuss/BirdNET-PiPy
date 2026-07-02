@@ -795,13 +795,13 @@ const handleClearFilters = () => {
 
 const togglePlayAudio = (detection) => {
   if (!detection?.id) return
-  const audioUrl = getAudioUrl(detection.audio_filename)
+  const audioUrl = getAudioUrl(detection.audio_filename, detection.audio_sig)
   if (!audioUrl) return
   togglePlay(detection.id, audioUrl)
 }
 
 const showSpectrogram = (detection) => {
-	  currentSpectrogramUrl.value = getSpectrogramUrl(detection.spectrogram_filename)
+	  currentSpectrogramUrl.value = getSpectrogramUrl(detection.spectrogram_filename, detection.spectrogram_sig)
 	  isSpectrogramModalVisible.value = true
 	}
 

@@ -425,6 +425,51 @@ class TestDatabaseQueryMethods:
         assert len(unique_results) == 1
         assert unique_results[0]['common_name'] == 'American Robin'
 
+    def test_get_group_detection_windows(self, test_db_manager, sample_detection):
+        """Sibling windows: same species + same recording (group) + same audio
+        source only, ordered by timestamp — what the player's analysis-window
+        bar uses to label every 3s window that fired."""
+        def insert(**overrides):
+            return test_db_manager.insert_detection({**sample_detection, **overrides})
+
+        # Chunks 0 and 1 of the same recording, same species (incl. the row itself)
+        target_id = insert(timestamp='2024-01-15T10:30:00')
+        insert(timestamp='2024-01-15T10:30:03', confidence=0.65)
+        # Same recording, different species — excluded
+        insert(timestamp='2024-01-15T10:30:03', common_name='Blue Jay',
+               scientific_name='Cyanocitta cristata')
+        # Same species, different recording — excluded
+        insert(timestamp='2024-01-15T10:31:00', group_timestamp='2024-01-15T10:31:00')
+        # Same species and recording window, different audio source — excluded
+        insert(timestamp='2024-01-15T10:30:06', audio_source='cam2')
+
+        detection = test_db_manager.get_detection_by_id(target_id)
+        windows = test_db_manager.get_group_detection_windows(detection)
+
+        assert windows == [
+            {'timestamp': '2024-01-15T10:30:00', 'confidence': 0.95},
+            {'timestamp': '2024-01-15T10:30:03', 'confidence': 0.65},
+        ]
+
+    def test_get_group_detection_windows_species_key_fallback(
+            self, test_db_manager, sample_detection):
+        """Legacy rows with empty scientific_name group on common_name (the
+        same species key the display dedup partitions on)."""
+        def insert(**overrides):
+            return test_db_manager.insert_detection(
+                {**sample_detection, 'scientific_name': '', **overrides})
+
+        target_id = insert(timestamp='2024-01-15T10:30:00')
+        insert(timestamp='2024-01-15T10:30:03', confidence=0.55)
+        insert(timestamp='2024-01-15T10:30:06', common_name='Blue Jay')
+
+        detection = test_db_manager.get_detection_by_id(target_id)
+        windows = test_db_manager.get_group_detection_windows(detection)
+
+        assert [w['timestamp'] for w in windows] == [
+            '2024-01-15T10:30:00', '2024-01-15T10:30:03',
+        ]
+
     def test_empty_database_queries(self, test_db_manager):
         """Test various queries on empty database."""
         # Test methods that should handle empty database gracefully

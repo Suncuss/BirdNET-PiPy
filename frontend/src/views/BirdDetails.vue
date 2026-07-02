@@ -262,7 +262,7 @@
             :key="recording.id"
             :recording="recording"
             class="rounded-lg border border-gray-200"
-            @expand="openSpectrogram(recording.spectrogram_filename)"
+            @expand="openSpectrogram(recording.spectrogram_filename, recording.spectrogram_sig)"
           />
         </div>
 
@@ -388,8 +388,8 @@ export default {
       licenseType: 'N/A'
     })
 
-	    const openSpectrogram = (filename) => {
-	      selectedSpectrogramUrl.value = getSpectrogramUrl(filename)
+	    const openSpectrogram = (filename, sig) => {
+	      selectedSpectrogramUrl.value = getSpectrogramUrl(filename, sig)
 	    }
 
     const closeSpectrogram = () => {

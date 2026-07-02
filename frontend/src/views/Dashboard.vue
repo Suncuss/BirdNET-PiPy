@@ -349,7 +349,7 @@
               </button>
               <button
                 class="text-green-600 hover:text-green-700"
-                @click="showSpectrogram(observation.spectrogram_file_name)"
+                @click="showSpectrogram(observation.spectrogram_file_name, observation.spectrogram_sig)"
               >
                 <SpectrogramIcon class="h-4 w-4" />
               </button>
@@ -937,7 +937,7 @@ export default {
             prevFrequencyDataArray.fill(-200);
             signalStarted = false;
             audioClockRunning = false;
-	            const latestAudioUrl = getAudioUrl(latestObservationData.value?.bird_song_file_name)
+	            const latestAudioUrl = getAudioUrl(latestObservationData.value?.bird_song_file_name, latestObservationData.value?.audio_sig)
 	            if (!latestAudioUrl) return
 	            audioElement = new Audio(latestAudioUrl);
 	            audioElement.crossOrigin = "anonymous";
@@ -962,7 +962,7 @@ export default {
 
         const togglePlayBirdCall = (observation) => {
             if (!observation?.id) return
-            const audioUrl = getAudioUrl(observation?.bird_song_file_name)
+            const audioUrl = getAudioUrl(observation?.bird_song_file_name, observation?.audio_sig)
             if (!audioUrl) return
             audioTogglePlay(observation.id, audioUrl)
         };
@@ -987,8 +987,8 @@ export default {
             return summary?.[`${key}Display`] || summary?.[key] || ''
         }
 
-	        const showSpectrogram = (spectrogramFileName) => {
-	            currentSpectrogramUrl.value = getSpectrogramUrl(spectrogramFileName)
+	        const showSpectrogram = (spectrogramFileName, sig) => {
+	            currentSpectrogramUrl.value = getSpectrogramUrl(spectrogramFileName, sig)
 	            isSpectrogramModalVisible.value = true
 	        }
 

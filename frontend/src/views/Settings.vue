@@ -341,22 +341,43 @@
         <!-- Public Access Options (when auth enabled) -->
         <div
           v-if="auth.authStatus.value.authEnabled"
-          class="bg-gray-50 rounded-lg p-3 space-y-2"
+          class="bg-gray-50 rounded-lg p-3 space-y-3"
         >
-          <p class="text-xs text-gray-500">
-            Public access (no login required)
-          </p>
-          <div
-            v-for="feature in accessFeatures"
-            :key="feature.key"
-            class="flex items-center justify-between"
-          >
-            <label class="text-sm text-gray-600">{{ feature.label }}</label>
+          <!-- Master switch: limited public view vs. full login wall. When off,
+               the backend also treats it as a kill-switch over the per-feature
+               flags below. -->
+          <div class="flex items-center justify-between">
+            <div>
+              <label class="text-sm text-gray-600">Allow public access</label>
+              <p class="text-xs text-gray-400">
+                Show a limited view (dashboard, gallery, bird pages) without
+                login. Turn off to require sign-in for everything.
+              </p>
+            </div>
             <ToggleSwitch
-              :model-value="settings.access[feature.key]"
-              size="sm"
-              @update:model-value="toggleFeatureAccess(feature.key)"
+              :model-value="settings.access.public_access"
+              @update:model-value="toggleFeatureAccess('public_access')"
             />
+          </div>
+
+          <!-- Broaden the public view to extra features -->
+          <div
+            v-if="settings.access.public_access"
+            class="space-y-2 border-t border-gray-200 pt-2"
+          >
+            <p class="text-xs text-gray-500">Also show without login:</p>
+            <div
+              v-for="feature in accessFeatures"
+              :key="feature.key"
+              class="flex items-center justify-between"
+            >
+              <label class="text-sm text-gray-600">{{ feature.label }}</label>
+              <ToggleSwitch
+                :model-value="settings.access[feature.key]"
+                size="sm"
+                @update:model-value="toggleFeatureAccess(feature.key)"
+              />
+            </div>
           </div>
         </div>
 
@@ -1775,7 +1796,7 @@ export default {
       display: {},
       birdweather: { id: null },
       notifications: { apprise_urls: [] },
-      access: { charts_public: false, table_public: false, live_feed_public: false }
+      access: { public_access: true, charts_public: false, table_public: false, live_feed_public: false }
     })
 
     // Unsaved changes tracking
@@ -1936,7 +1957,8 @@ export default {
       if (data.display.station_name === undefined) data.display.station_name = ''
       if (!data.model) data.model = { type: 'birdnet' }
       if (!data.notifications) data.notifications = {}
-      if (!data.access) data.access = { charts_public: false, table_public: false, live_feed_public: false }
+      if (!data.access) data.access = { public_access: true, charts_public: false, table_public: false, live_feed_public: false }
+      if (data.access.public_access === undefined) data.access.public_access = true
       if (!data.playback) data.playback = { normalize: false }
       if (data.updates.channel === 'stable') data.updates.channel = 'release'
       if (!data.audio) data.audio = {}
@@ -2527,6 +2549,8 @@ export default {
       { key: 'live_feed_public', label: 'Live Feed' }
     ]
 
+    // Optimistic flip with revert on failure; also used by the public_access
+    // master switch (it's just another key in the access settings payload).
     const toggleFeatureAccess = async (featureKey) => {
       const newValue = !settings.value.access[featureKey]
       settings.value.access[featureKey] = newValue

@@ -138,8 +138,8 @@ const props = defineProps({
 
 defineEmits(['expand'])
 
-const audioUrl = computed(() => getAudioUrl(props.recording?.audio_filename))
-const spectrogramUrl = computed(() => getSpectrogramUrl(props.recording?.spectrogram_filename))
+const audioUrl = computed(() => getAudioUrl(props.recording?.audio_filename, props.recording?.audio_sig))
+const spectrogramUrl = computed(() => getSpectrogramUrl(props.recording?.spectrogram_filename, props.recording?.spectrogram_sig))
 const downloadName = computed(() => props.recording?.audio_filename || 'recording.mp3')
 
 // --- Audio playback (shared transport; `--seek-fill` uses progressPercent) ---

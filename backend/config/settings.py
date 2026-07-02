@@ -92,6 +92,7 @@ DEFAULT_SETTINGS = {
         "audio_status": False
     },
     "access": {
+        "public_access": True,
         "charts_public": False,
         "table_public": False,
         "live_feed_public": False
@@ -410,4 +411,5 @@ CREATE INDEX IF NOT EXISTS idx_detections_location ON detections(latitude, longi
 CREATE INDEX IF NOT EXISTS idx_detections_timestamp_date ON detections(date(timestamp));
 CREATE INDEX IF NOT EXISTS idx_detections_species_date ON detections(common_name, date(timestamp));
 CREATE INDEX IF NOT EXISTS idx_detections_scientific_timestamp ON detections(scientific_name, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_detections_group_timestamp ON detections(group_timestamp);
 '''

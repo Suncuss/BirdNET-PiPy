@@ -7,6 +7,7 @@
       <DetectionPlayer
         :id="route.params.id"
         :name="route.params.name"
+        :share-token="route.query.s || ''"
       >
         <template #not-found-action>
           <router-link

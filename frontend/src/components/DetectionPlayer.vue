@@ -94,7 +94,7 @@
           v-if="audioState === 'loading'"
           class="absolute inset-0 flex items-center justify-center text-gray-300 text-sm"
         >
-          <Spinner class="h-5 w-5 text-green-500" />
+          <Spinner class="h-5 w-5 text-green-600" />
           <span class="ml-2">Analyzing audio…</span>
         </div>
         <div
@@ -103,6 +103,35 @@
         >
           {{ audioError }}
         </div>
+      </div>
+
+      <!-- Analysis windows: which 3s slice of the clip the model flagged.
+           Width-aligned with the spectrogram above (both span the container),
+           so each tile sits under the audio it covers. Hidden whenever the
+           clip layout can't be derived (see computeAnalysisSegments). -->
+      <div
+        v-if="analysisSegments.length"
+        class="flex h-[14px] mt-1.5 rounded-md overflow-hidden"
+        role="group"
+        aria-label="Analysis windows"
+      >
+        <button
+          v-for="seg in analysisSegments"
+          :key="seg.start"
+          type="button"
+          class="relative min-w-0 border-r last:border-r-0 border-white transition-colors"
+          :class="seg.tileClass"
+          :style="seg.widthStyle"
+          :title="seg.title"
+          :aria-label="seg.title"
+          @click="seekTo(seg.start)"
+        >
+          <span
+            v-if="seg.role !== 'context'"
+            class="absolute inset-0 flex items-center justify-center text-[9px] font-semibold uppercase tracking-wider pointer-events-none"
+            :class="seg.textClass"
+          >Detected</span>
+        </button>
       </div>
 
       <!-- Transport -->
@@ -131,15 +160,17 @@
             class="inline-flex items-center gap-1.5 border rounded-md px-2.5 sm:px-3 h-8 sm:h-9 text-[13px] font-medium transition-colors"
             :class="copied
               ? 'border-green-600 text-green-700 bg-green-50'
-              : 'border-gray-200 bg-white text-gray-700 hover:border-green-600 hover:text-green-600'"
-            :title="copied ? 'Link copied' : 'Copy share link'"
+              : shareFailed
+                ? 'border-red-500 text-red-600 bg-red-50'
+                : 'border-gray-200 bg-white text-gray-700 hover:border-green-600 hover:text-green-600'"
+            :title="copied ? 'Link copied' : shareFailed ? 'Couldn’t create share link — try again' : 'Copy share link'"
             @click="share"
           >
             <font-awesome-icon
               :icon="copied ? ['fas', 'check'] : ['fas', 'arrow-up-from-bracket']"
               class="h-3.5 w-3.5"
             />
-            <span class="hidden sm:inline">{{ copied ? 'Copied' : 'Share' }}</span>
+            <span class="hidden sm:inline">{{ copied ? 'Copied' : shareFailed ? 'Failed' : 'Share' }}</span>
           </button>
           <a
             :href="audioUrl"
@@ -275,9 +306,10 @@ import { faPlay, faPause, faDownload, faArrowUpFromBracket, faCheck } from '@for
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome'
 
 import api from '@/services/api'
+import { useAuth } from '@/composables/useAuth'
 import { getAudioUrl } from '@/services/media'
 import { useTimeFormat } from '@/composables/useTimeFormat'
-import { useAudioTransport } from '@/composables/useAudioTransport'
+import { useAudioBufferTransport } from '@/composables/useAudioBufferTransport'
 import { useDetectionInfo } from '@/composables/useDetectionInfo'
 import { useUnitSettings } from '@/composables/useUnitSettings'
 import { useCopyFeedback } from '@/composables/useCopyFeedback'
@@ -288,7 +320,9 @@ import {
   spectrogramFilterRowOffsets,
   colorizeBrightness
 } from '@/utils/spectrogram'
-import { confidenceColorClass, confidencePercent, formatMetadataKey, formatMetadataValue } from '@/utils/format'
+import { confidenceColorClass, confidencePercent, formatConfidence, formatMetadataKey, formatMetadataValue, progressPercentString } from '@/utils/format'
+import { computeAnalysisSegments } from '@/utils/analysisSegments'
+import { declarePlaybackAudioSession } from '@/utils/audioSession'
 import { recordingShareUrl } from '@/utils/detectionLinks'
 import Spinner from '@/components/Spinner.vue'
 import RangeSlider from '@/components/RangeSlider.vue'
@@ -305,6 +339,12 @@ const props = defineProps({
   id: {
     type: [String, Number],
     required: true
+  },
+  // Present when opened from a share link (?s=). Authorizes this one detection
+  // and its media even on a private station (public access off).
+  shareToken: {
+    type: String,
+    default: ''
   }
 })
 
@@ -325,7 +365,10 @@ const fetchRecording = async () => {
   loading.value = true
   error.value = false
   try {
-    const { data } = await api.get(`/bird/${props.name}/recording/${props.id}`)
+    const url = `/bird/${props.name}/recording/${props.id}`
+    const { data } = props.shareToken
+      ? await api.get(url, { params: { s: props.shareToken } })
+      : await api.get(url)
     recording.value = data
   } catch {
     recording.value = null
@@ -342,16 +385,46 @@ const hasMedia = computed(() => !!recording.value?.has_media)
 const displayName = computed(
   () => recording.value?.display_common_name || recording.value?.common_name || ''
 )
-const audioUrl = computed(() => getAudioUrl(recording.value?.audio_filename))
+// A share-link viewer authorizes media with the share token (works even on a
+// private station). We ALSO pass the payload's per-file signature when present,
+// so an expired/tampered token falls back to the signature on a public-access
+// station instead of breaking the audio outright.
+const mediaQuery = computed(() => {
+  const sig = recording.value?.audio_sig || ''
+  if (!props.shareToken) return sig
+  const tokenParam = `s=${encodeURIComponent(props.shareToken)}`
+  return sig ? `${tokenParam}&${sig}` : tokenParam
+})
+const audioUrl = computed(() => getAudioUrl(recording.value?.audio_filename, mediaQuery.value))
 const downloadName = computed(() => recording.value?.audio_filename || 'recording.mp3')
 
-// --- Share: copy a permalink to this detection. common_name is the untranslated
+// --- Share: copy a link to this detection. common_name is the untranslated
 // English key the share route needs (display_common_name is the localized label).
+const { isAuthenticated } = useAuth()
 const { copied, copy } = useCopyFeedback()
-const share = () => {
+const shareFailed = ref(false)
+
+const share = async () => {
   const name = recording.value?.common_name
-  if (!name || recording.value?.id == null) return
-  copy(recordingShareUrl(name, recording.value.id))
+  const id = recording.value?.id
+  if (!name || id == null) return
+  shareFailed.value = false
+  // window.location may be the table URL (in-table modal), so we never reuse
+  // it — the permalink is always rebuilt via recordingShareUrl.
+  // Anonymous: copy a permalink carrying any token we arrived with (it keeps
+  // the recipient authorized even on a private station).
+  if (!isAuthenticated.value) {
+    copy(recordingShareUrl(name, id, props.shareToken))
+    return
+  }
+  // Owner: mint a scoped token so the recipient sees only this one detection.
+  try {
+    const { data } = await api.post(`/detections/${id}/share`)
+    copy(recordingShareUrl(name, id, data.token))
+  } catch {
+    // Don't fake success with a dead link — surface the failure.
+    shareFailed.value = true
+  }
 }
 
 const confidenceInt = computed(() => confidencePercent(recording.value?.confidence))
@@ -401,25 +474,74 @@ const metadataRows = computed(() =>
 // --- Audio + spectrogram ---
 const specWrap = ref(null)
 const specCanvas = ref(null)
-const audioEl = ref(null) // created imperatively (see loadAudio)
 const audioState = ref('loading') // 'loading' | 'ready' | 'error'
 const audioError = ref('') // message shown in the 'error' state
 
-// Shared transport. The graph is built at load (works while the context is
-// suspended); the first play just needs a user gesture to resume the context.
-const { isPlaying, currentTime, duration, progressPercent, clock, togglePlay, seekToFraction } =
-  useAudioTransport(audioEl, {
-    onBeforePlay: async () => {
-      if (audioCtx?.state === 'suspended') await audioCtx.resume()
+// Playback transport. We play the decoded AudioBuffer through an
+// AudioBufferSourceNode rather than routing an <audio> element through
+// createMediaElementSource: on WebKit that bridge stalls once at startup,
+// glitching both the audio and the playhead in the first second (see
+// useAudioBufferTransport). configure() is called from loadAudio once the
+// buffer + filter chain exist.
+const { isPlaying, currentTime, duration, progressPercent, clock, togglePlay, seekTo, seekToFraction, configure: configureTransport } =
+  useAudioBufferTransport()
+
+// --- Analysis-window bar: where in the clip the model flagged the bird ---
+// Derived from data the payload already carries (timestamp − group_timestamp,
+// overlap) plus the decoded duration; empty until the audio is ready. Migrated
+// BirdNET-Pi rows are excluded — their clips were extracted by another tool,
+// so the context-chunk layout this derivation assumes doesn't hold. Tile
+// widths and titles are precomputed here so they don't rebuild on every frame
+// the playback clock re-renders the view (same reason as metadataRows).
+// Per-role presentation for the analysis-window bar tiles. Every detected
+// window (this row's and its siblings') is the same green — only the tooltip
+// distinguishes them; context audio stays gray.
+// green-600 matches the play button — the view's primary green — so the bar
+// reads as one system with the transport rather than a second, lighter green.
+const DETECTED_TILE = { tile: 'bg-green-600 hover:bg-green-700', text: 'text-white' }
+const SEGMENT_ROLES = {
+  primary: { ...DETECTED_TILE, label: () => 'This detection' },
+  sibling: {
+    ...DETECTED_TILE,
+    label: (seg) => {
+      const pct = formatConfidence(seg.confidence)
+      return `Also detected in this recording${pct ? ` · ${pct}` : ''}`
+    }
+  },
+  context: { tile: 'bg-gray-200 hover:bg-gray-300', text: '', label: () => 'Context audio' }
+}
+
+const analysisSegments = computed(() => {
+  const r = recording.value
+  if (!r || !duration.value || r.extra?.original_file_name) return []
+  return computeAnalysisSegments({
+    timestamp: r.timestamp,
+    groupTimestamp: r.group_timestamp,
+    overlap: r.overlap,
+    duration: duration.value,
+    // Sibling windows of the same species in the same source recording — the
+    // bar labels every window that fired, not just this row's (the display
+    // dedup collapses those rows into the one being viewed).
+    groupDetections: r.group_detections
+  }).map(seg => {
+    const role = SEGMENT_ROLES[seg.role]
+    return {
+      ...seg,
+      widthStyle: { width: progressPercentString(seg.end - seg.start, duration.value) },
+      tileClass: role.tile,
+      textClass: role.text,
+      title: `${role.label(seg)} · ${clock(seg.start)}–${clock(seg.end)}`
     }
   })
+})
 
 // Web Audio graph + the offscreen spectrogram base that the high-pass re-colours.
+// The persistent chain is highpass -> gain -> destination; the transport's
+// per-play AudioBufferSourceNode connects into highpassNode.
 let audioCtx = null
-let mediaSource = null
+let audioBuffer = null // decoded clip, played by the transport
 let highpassNode = null
 let gainNode = null
-let objectUrl = null
 let spec = null // computeSpectrogram() result
 let specBase = null // per-pixel brightness bytes (computeBaseBrightness), computed once
 let specLut = null // 0–255 → RGBA colormap LUT
@@ -454,8 +576,10 @@ const loadAudio = async () => {
 
     // One context for both decoding and playback; starts suspended until play().
     audioCtx = new AudioContext()
-    const audioBuffer = await audioCtx.decodeAudioData(buf.slice(0))
-    duration.value = audioBuffer.duration
+    // Playback goes through the Web Audio graph (no <audio> element), which the
+    // iOS mute switch silences unless a 'playback' session is declared.
+    declarePlaybackAudioSession()
+    audioBuffer = await audioCtx.decodeAudioData(buf)
 
     // Mono mix for the spectrogram.
     const mono = audioBuffer.numberOfChannels > 1
@@ -463,23 +587,19 @@ const loadAudio = async () => {
       : audioBuffer.getChannelData(0)
     spec = computeSpectrogram(mono, audioBuffer.sampleRate, { fftSize: 1024, hop: 256 })
 
-    // Playback element fed from the same bytes (blob keeps it same-origin so the
-    // MediaElementSource isn't muted by cross-origin rules).
-    objectUrl = URL.createObjectURL(new Blob([buf]))
-    const el = new Audio()
-    el.src = objectUrl
-    el.preload = 'auto'
-    audioEl.value = el // useAudioTransport attaches its listeners off this ref
-
-    // Build the graph now (silent while suspended) so the high-pass filter's
-    // real frequency response is available to shade the spectrogram before first
-    // play. Done before the base is painted so the initial image already reflects
-    // any engaged high-pass (the picture and the audio stay in step).
+    // Build the filter chain now (silent while suspended) so the high-pass
+    // filter's real frequency response is available to shade the spectrogram
+    // before first play. Done before the base is painted so the initial image
+    // already reflects any engaged high-pass (picture and audio stay in step).
     buildGraph()
     initFilterResponse()
 
     buildSpectrogramBase()
     drawSpectrogram()
+
+    // Wire playback: an AudioBufferSourceNode feeds the filter chain, and the
+    // playhead is derived from audioCtx.currentTime.
+    configureTransport({ context: audioCtx, buffer: audioBuffer, destination: highpassNode })
 
     audioState.value = 'ready'
   } catch (e) {
@@ -502,14 +622,13 @@ const mixToMono = (audioBuffer) => {
 }
 
 const buildGraph = () => {
-  if (mediaSource || !audioCtx || !audioEl.value) return
-  mediaSource = audioCtx.createMediaElementSource(audioEl.value)
+  if (highpassNode || !audioCtx) return
   highpassNode = audioCtx.createBiquadFilter()
   highpassNode.type = 'highpass'
   applyHighpass()
   gainNode = audioCtx.createGain()
   gainNode.gain.value = dbToGain(gainDb.value)
-  mediaSource.connect(highpassNode).connect(gainNode).connect(audioCtx.destination)
+  highpassNode.connect(gainNode).connect(audioCtx.destination)
 }
 
 const applyHighpass = () => {
@@ -641,13 +760,12 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  // Transport listeners + rAF are torn down by useAudioTransport; here we stop
-  // playback and release the audio resources this view owns.
+  // The transport stops its own source + rAF via its onUnmounted; here we just
+  // release the audio resources this view owns. Closing the context also
+  // silences anything still connected.
   clearTimeout(resizeTimer)
   if (repaintRaf != null) cancelAnimationFrame(repaintRaf)
   window.removeEventListener('resize', onResize)
-  if (audioEl.value) audioEl.value.pause()
-  if (objectUrl) URL.revokeObjectURL(objectUrl)
   if (audioCtx && audioCtx.state !== 'closed') audioCtx.close()
 })
 </script>

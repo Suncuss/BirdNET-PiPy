@@ -19,6 +19,25 @@ export const formatBytes = (bytes) => {
 }
 
 /**
+ * Format elapsed media time as mm:ss ("1:07"). Returns "0:00" for negative or
+ * non-finite input. This is a playback position, not wall-clock time-of-day —
+ * see useTimeFormat for the latter. Shared by the audio transports.
+ */
+export const formatClock = (seconds) => {
+  if (!Number.isFinite(seconds) || seconds < 0) return '0:00'
+  const m = Math.floor(seconds / 60)
+  const s = Math.floor(seconds % 60)
+  return `${m}:${String(s).padStart(2, '0')}`
+}
+
+/**
+ * Playback progress as a CSS-width percentage string ("42%"), clamped to 100%;
+ * "0%" when duration is missing/zero. Drives both transports' playheads.
+ */
+export const progressPercentString = (currentTime, duration) =>
+  duration ? `${Math.min(100, (currentTime / duration) * 100)}%` : '0%'
+
+/**
  * Round a 0–1 confidence to an integer percent (0–100). Returns null for
  * null/undefined so callers can decide what to render for a missing value.
  */

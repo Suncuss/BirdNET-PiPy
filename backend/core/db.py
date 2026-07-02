@@ -912,7 +912,7 @@ class DatabaseManager:
 
 
     def get_bird_recordings(self, species_name=None, sort='recent', limit=None,
-                             *, scientific_name=None):
+                             *, scientific_name=None, since=None):
         """
         Get recordings for a species with sorting options.
 
@@ -925,6 +925,9 @@ class DatabaseManager:
             sort: 'recent' (timestamp DESC) or 'best' (confidence DESC)
             limit: Optional max number of records (None = all)
             scientific_name: Stable species key (preferred when known)
+            since: Optional ISO timestamp lower bound (timestamp >= since), used
+                to restrict anonymous callers to a recent window so the public
+                view can't surface old all-time clips (incl. via 'best' sort).
 
         Returns:
             List of recording dicts with id, timestamp, common_name, confidence,
@@ -936,32 +939,29 @@ class DatabaseManager:
         if filter_col is None:
             return []
 
-        # Use separate queries based on sort order (safer than f-string interpolation
-        # of the entire query). The filter column is validated above.
-        # LIMIT is parameterized using -1 for unlimited (SQLite treats negative LIMIT as no limit).
-        if sort == 'best':
-            query = f"""
-            SELECT id, timestamp, common_name, confidence, extra, audio_source
-            FROM detections
-            WHERE {filter_col} = ?
-            ORDER BY confidence DESC
-            LIMIT ?
-            """
-        else:  # default to 'recent'
-            query = f"""
-            SELECT id, timestamp, common_name, confidence, extra, audio_source
-            FROM detections
-            WHERE {filter_col} = ?
-            ORDER BY timestamp DESC
-            LIMIT ?
-            """
+        # Order column is chosen from a fixed set (not interpolated user input);
+        # the filter column is validated above. LIMIT uses -1 for unlimited.
+        window_clause = "AND timestamp >= ?" if since else ""
+        order_by = "confidence DESC" if sort == 'best' else "timestamp DESC"
+        query = f"""
+        SELECT id, timestamp, common_name, confidence, extra, audio_source
+        FROM detections
+        WHERE {filter_col} = ?
+        {window_clause}
+        ORDER BY {order_by}
+        LIMIT ?
+        """
 
         # Use -1 for unlimited (SQLite treats negative LIMIT as no limit)
         limit_param = limit if limit is not None else -1
+        params = [filter_value]
+        if since:
+            params.append(since)
+        params.append(limit_param)
 
         with self.get_db_connection() as conn:
             cur = conn.cursor()
-            cur.execute(query, (filter_value, limit_param))
+            cur.execute(query, params)
             rows = cur.fetchall()
 
         recordings = [self._normalize_detection(row, include_filenames=True) for row in rows]
@@ -1583,6 +1583,34 @@ class DatabaseManager:
         if row:
             return self._normalize_detection(row, include_filenames=True)
         return None
+
+    def get_group_detection_windows(self, detection):
+        """Timestamp + confidence of every detection of the same species in
+        the same source recording (group) and audio source as ``detection``.
+
+        Powers the player's analysis-window bar: sibling rows mark which
+        OTHER 3s analysis windows of the clip also crossed the threshold,
+        not just the row being viewed. Species matches on the same key the
+        display dedup partitions on — evaluated in SQL against the target
+        row (not re-encoded in Python) so _species_key() stays the single
+        owner of that expression. ``audio_source`` compares with IS so NULL
+        (single-source) rows group together. The SELECT projects only the
+        two fields the bar needs; the payload is public-safe by shape.
+        """
+        query = f"""
+        SELECT timestamp, confidence FROM detections
+        WHERE group_timestamp = ? AND audio_source IS ?
+          AND {_SPECIES_KEY} = (SELECT {_SPECIES_KEY} FROM detections WHERE id = ?)
+        ORDER BY timestamp
+        """
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(query, (
+                detection['group_timestamp'],
+                detection.get('audio_source'),
+                detection['id'],
+            ))
+            return [dict(row) for row in cur.fetchall()]
 
     def delete_detection(self, detection_id):
         """Delete a detection record by ID.

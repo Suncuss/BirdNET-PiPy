@@ -278,6 +278,13 @@ def select_audio_chunks(detected_chunk_index, total_chunks):
     Returns:
         tuple: (start_chunk_index, end_chunk_index) - both inclusive.
                Used by extract_detection_audio() to calculate time range.
+
+    NOTE: the detection player's analysis-window bar re-derives this layout
+    client-side (frontend/src/utils/analysisSegments.js) from
+    timestamp/group_timestamp/overlap — it assumes at most ONE context chunk
+    before the detected window. If the selection layout changes, update that
+    derivation too (or start stamping the clip-relative window into the
+    detection's extra field).
     """
     if detected_chunk_index < 0 or detected_chunk_index >= total_chunks:
         raise ValueError("detected_chunk_index must be within the range of total_chunks")

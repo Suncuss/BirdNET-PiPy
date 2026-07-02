@@ -8,6 +8,8 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from tests.api.conftest import insert_detection
+
 
 class TestSimpleAPI:
     """Basic API tests with proper mocking."""
@@ -755,6 +757,41 @@ class TestSimpleAPI:
         assert 'audio_filename' in data[0]
         assert 'spectrogram_filename' in data[0]
 
+    def test_bird_recordings_clamps_to_max_limit(self, api_client, real_db_manager, create_recording_files):
+        """An omitted or oversized limit is clamped to RECORDINGS_MAX_LIMIT, so
+        a caller can't pull a species' whole history in one request (the old
+        LIMIT -1 dump path); a small explicit limit is still honored."""
+        from core import api as api_module
+        species = 'American Crow'
+        for i in range(6):
+            real_db_manager.insert_detection({
+                'timestamp': f'2024-03-15T{10 + i:02d}:00:00',
+                'group_timestamp': f'2024-03-15T{10 + i:02d}:00:00',
+                'common_name': species,
+                'scientific_name': 'Corvus brachyrhynchos',
+                'confidence': 0.80 + i * 0.01,
+                'latitude': 40.7128,
+                'longitude': -74.0060,
+                'cutoff': 0.5,
+                'sensitivity': 0.75,
+                'overlap': 0.25,
+            })
+        create_recording_files(real_db_manager, species_name=species)
+
+        with patch.object(api_module, 'RECORDINGS_MAX_LIMIT', 3):
+            # Omitted limit must be bounded, not unlimited.
+            response = api_client.get(f'/api/bird/{species}/recordings')
+            assert response.status_code == 200
+            assert len(response.get_json()) == 3
+
+            # Oversized explicit limit is clamped down.
+            response = api_client.get(f'/api/bird/{species}/recordings?limit=100000')
+            assert len(response.get_json()) == 3
+
+            # A smaller explicit limit is still honored.
+            response = api_client.get(f'/api/bird/{species}/recordings?limit=2')
+            assert len(response.get_json()) == 2
+
     def test_bird_recordings_empty_species(self, api_client, real_db_manager):
         """Test /api/bird/<species>/recordings returns empty list for unknown species."""
         response = api_client.get('/api/bird/Unknown%20Bird/recordings')
@@ -861,6 +898,25 @@ class TestSimpleAPI:
         assert 'latitude' not in data
         assert 'longitude' not in data
 
+    def test_bird_recording_permalink_group_detections(self, api_client, real_db_manager):
+        """The by-id payload carries same-species sibling detections from the
+        same source recording (group_detections), and exactly the two fields
+        the analysis bar needs. Which rows qualify as siblings is pinned at
+        the DB layer (test_get_group_detection_windows)."""
+        group = '2024-01-15T10:30:00'
+        target_id = insert_detection(
+            real_db_manager, timestamp=group, confidence=0.80)
+        insert_detection(
+            real_db_manager, timestamp='2024-01-15T10:30:03',
+            group_timestamp=group, confidence=0.65)
+
+        response = api_client.get(f'/api/bird/American Robin/recording/{target_id}')
+        assert response.status_code == 200
+        assert response.get_json()['group_detections'] == [
+            {'timestamp': '2024-01-15T10:30:00', 'confidence': 0.8},
+            {'timestamp': '2024-01-15T10:30:03', 'confidence': 0.65},
+        ]
+
     def test_bird_recording_permalink_not_found(self, api_client, real_db_manager):
         """An unknown recording ID returns 404."""
         response = api_client.get('/api/bird/American%20Robin/recording/999999')
@@ -887,6 +943,34 @@ class TestSimpleAPI:
 
         response = api_client.get(f'/api/bird/Blue%20Jay/recording/{target["id"]}')
         assert response.status_code == 404
+
+    def test_bird_recording_permalink_no_existence_oracle(self, api_client, real_db_manager, create_recording_files):
+        """A missing id and a real id under the wrong species return identical
+        404 responses, so the endpoint can't be probed to learn which ids exist
+        (which would leak the DB size / population)."""
+        species = 'American Robin'
+        real_db_manager.insert_detection({
+            'timestamp': '2024-01-15T10:30:00',
+            'group_timestamp': '2024-01-15T10:30:00',
+            'common_name': species,
+            'scientific_name': 'Turdus migratorius',
+            'confidence': 0.80,
+            'latitude': 40.7128,
+            'longitude': -74.0060,
+            'cutoff': 0.5,
+            'sensitivity': 0.75,
+            'overlap': 0.25,
+        })
+        recordings = create_recording_files(real_db_manager, species_name=species)
+        target = recordings[0]
+
+        missing = api_client.get('/api/bird/Blue%20Jay/recording/999999')
+        mismatch = api_client.get(f'/api/bird/Blue%20Jay/recording/{target["id"]}')
+
+        assert missing.status_code == 404
+        assert mismatch.status_code == 404
+        # Identical bodies — no way to tell "absent" from "wrong species".
+        assert missing.get_json() == mismatch.get_json()
 
     def test_bird_recording_permalink_media_gone(self, api_client, real_db_manager, create_recording_files):
         """A recording whose media files were cleaned up still resolves, but
@@ -917,7 +1001,12 @@ class TestSimpleAPI:
         assert data['has_media'] is False
 
     def test_broadcast_detection_endpoint(self):
-        """Test detection broadcasting."""
+        """Detection broadcast requires the internal shared secret.
+
+        The test client is local (127.0.0.1) so it passes the IP check; the
+        secret is the real gate that closes the nginx-172.x "looks internal"
+        bypass.
+        """
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
@@ -929,28 +1018,46 @@ class TestSimpleAPI:
                 MockDB.return_value = mock_db_instance
 
                 from core.api import create_app
+                from core.internal_auth import (
+                    INTERNAL_SECRET_HEADER,
+                    get_or_create_internal_secret,
+                )
                 app, _ = create_app()
                 client = app.test_client()
 
-                # Test broadcast with valid data
                 detection_data = {
                     'common_name': 'Test Bird',
                     'confidence': 0.95,
                     'timestamp': '2024-01-15 10:00:00'
                 }
+                secret = get_or_create_internal_secret()
 
+                # No secret header -> rejected.
                 response = client.post('/api/broadcast/detection',
                                      data=json.dumps(detection_data),
                                      content_type='application/json')
-                assert response.status_code == 200
-                # API returns the detection data, not a message
+                assert response.status_code == 403
+
+                # Wrong secret -> rejected.
+                response = client.post('/api/broadcast/detection',
+                                     data=json.dumps(detection_data),
+                                     content_type='application/json',
+                                     headers={INTERNAL_SECRET_HEADER: 'nope'})
+                assert response.status_code == 403
+
+                # Correct secret -> broadcast succeeds.
+                response = client.post('/api/broadcast/detection',
+                                     data=json.dumps(detection_data),
+                                     content_type='application/json',
+                                     headers={INTERNAL_SECRET_HEADER: secret})
                 assert response.status_code == 200
 
-                # Test with missing data
+                # Correct secret, empty body -> still succeeds (broadcasts empty).
                 response = client.post('/api/broadcast/detection',
                                      data=json.dumps({}),
-                                     content_type='application/json')
-                assert response.status_code == 200  # Still succeeds but broadcasts empty
+                                     content_type='application/json',
+                                     headers={INTERNAL_SECRET_HEADER: secret})
+                assert response.status_code == 200
 
     def test_stream_config_endpoint(self):
         """Test stream configuration endpoint."""

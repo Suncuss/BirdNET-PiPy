@@ -16,6 +16,7 @@ from threading import Lock
 
 import bcrypt
 from flask import jsonify, request, session
+from flask.sessions import SecureCookieSessionInterface
 
 from core.logging_config import get_logger
 
@@ -43,21 +44,43 @@ _login_attempts = defaultdict(list)  # IP -> list of timestamps
 _login_attempts_lock = Lock()
 
 
+# Parsed auth.json, keyed by (path, mtime) so an external edit (or the test
+# suite pointing AUTH_CONFIG_FILE elsewhere) invalidates naturally. Auth is
+# consulted several times per request (default-deny gate, scope decorators,
+# tier checks), so uncached disk reads would multiply per request.
+_auth_config_cache = None  # (path, mtime, config)
+_auth_config_lock = Lock()
+
+
 def load_auth_config(check_reset=True):
-    """Load authentication configuration from JSON file.
+    """Load authentication configuration from JSON file (mtime-cached).
 
     Args:
         check_reset: If True, check for password reset file first.
                     Set to False to avoid redundant checks.
     """
+    global _auth_config_cache
+
     # Check for password reset file first (only when requested)
     if check_reset:
         check_password_reset()
 
-    if os.path.exists(AUTH_CONFIG_FILE):
+    try:
+        mtime = os.path.getmtime(AUTH_CONFIG_FILE)
+    except OSError:
+        mtime = None
+
+    if mtime is not None:
+        with _auth_config_lock:
+            if _auth_config_cache and _auth_config_cache[:2] == (AUTH_CONFIG_FILE, mtime):
+                # Copy so callers' mutate-then-save flows can't corrupt the cache.
+                return dict(_auth_config_cache[2])
         try:
             with open(AUTH_CONFIG_FILE) as f:
-                return json.load(f)
+                config = json.load(f)
+            with _auth_config_lock:
+                _auth_config_cache = (AUTH_CONFIG_FILE, mtime, config)
+            return dict(config)
         except Exception as e:
             logger.error("Failed to load auth config", extra={'error': str(e)})
 
@@ -73,6 +96,8 @@ def load_auth_config(check_reset=True):
 
 def save_auth_config(config):
     """Atomically save authentication configuration to JSON file."""
+    global _auth_config_cache
+
     # Ensure directory exists
     os.makedirs(AUTH_CONFIG_DIR, exist_ok=True)
 
@@ -86,6 +111,11 @@ def save_auth_config(config):
 
     os.replace(temp_file, AUTH_CONFIG_FILE)
 
+    # Drop the read cache explicitly — mtime alone can miss a same-instant
+    # rewrite on filesystems with coarse timestamp resolution.
+    with _auth_config_lock:
+        _auth_config_cache = None
+
     # Set restrictive permissions (owner read/write only)
     try:
         os.chmod(AUTH_CONFIG_FILE, 0o600)
@@ -97,12 +127,15 @@ def save_auth_config(config):
 
 def check_password_reset():
     """Check for password reset file and handle reset if present."""
+    global _auth_config_cache
     if os.path.exists(RESET_PASSWORD_FILE):
         logger.warning("Password reset file detected, resetting authentication")
 
         # Delete auth config
         if os.path.exists(AUTH_CONFIG_FILE):
             os.remove(AUTH_CONFIG_FILE)
+            with _auth_config_lock:
+                _auth_config_cache = None
             logger.info("Auth config deleted")
 
         # Delete reset file
@@ -114,17 +147,25 @@ def check_password_reset():
 
 
 def _get_client_ip():
-    """Get client IP address from request, handling proxies."""
-    # Check X-Forwarded-For header (set by nginx reverse proxy)
-    forwarded_for = request.headers.get('X-Forwarded-For')
-    if forwarded_for:
-        # Take the first IP (original client)
-        return forwarded_for.split(',')[0].strip()
-    # Check X-Real-IP header (alternative proxy header)
+    """Get the client IP as seen by our trusted nginx proxy.
+
+    Only headers our own nginx sets are trustworthy. nginx sets
+    ``X-Real-IP $remote_addr`` (overwriting any client-supplied value) and
+    appends the real peer to ``X-Forwarded-For`` (so the RIGHTMOST entry is the
+    hop nginx added). The LEFTMOST X-Forwarded-For entries are fully
+    client-controlled, so keying rate limiting on them let an attacker rotate
+    the header to evade the login lockout. Prefer X-Real-IP, then the rightmost
+    forwarded hop, then the direct peer.
+    """
     real_ip = request.headers.get('X-Real-IP')
     if real_ip:
         return real_ip.strip()
-    # Fall back to remote_addr
+
+    forwarded_for = request.headers.get('X-Forwarded-For')
+    if forwarded_for:
+        # Rightmost = appended by our nginx hop; left entries are spoofable.
+        return forwarded_for.split(',')[-1].strip()
+
     return request.remote_addr or 'unknown'
 
 
@@ -195,24 +236,52 @@ def clear_failed_attempts(ip=None):
             logger.debug("Cleared failed attempts", extra={'ip': ip})
 
 
-def get_or_create_session_secret():
-    """Get existing session secret or create a new one."""
+def _get_or_create_secret(key, label):
+    """Get an existing secret from auth.json, or generate, persist and return one.
+
+    Backs the session/media/share secret accessors — each is the same
+    get-or-create-and-save logic over a different config key.
+    """
     config = load_auth_config()
 
-    if config.get('session_secret'):
-        return config['session_secret']
+    if config.get(key):
+        return config[key]
 
-    # Generate new secret
     secret = secrets.token_hex(32)
-    config['session_secret'] = secret
+    config[key] = secret
 
     if not config.get('created_at'):
         config['created_at'] = datetime.utcnow().isoformat() + 'Z'
 
     save_auth_config(config)
-    logger.info("Generated new session secret")
+    logger.info("Generated new %s secret", label)
 
     return secret
+
+
+def get_or_create_session_secret():
+    """Get existing session secret or create a new one."""
+    return _get_or_create_secret('session_secret', 'session')
+
+
+def get_or_create_media_secret():
+    """Get or create the secret used to sign media capability URLs.
+
+    Separate from the session secret so it can be reasoned about (and rotated)
+    independently. Persisted in auth.json so signed media URLs survive a
+    restart within their TTL.
+    """
+    return _get_or_create_secret('media_secret', 'media')
+
+
+def get_or_create_share_secret():
+    """Get or create the secret used to sign detection share tokens.
+
+    Dedicated (not the session/media secret) so share links can be reasoned
+    about and mass-revoked independently — regenerating this secret invalidates
+    every outstanding share link at once. Persisted in auth.json.
+    """
+    return _get_or_create_secret('share_secret', 'share')
 
 
 def hash_password(password):
@@ -269,20 +338,23 @@ def get_public_features():
 
     Returns empty set if auth is disabled (everything is public anyway).
     """
-    from core.runtime_config import get_runtime_settings
-    settings = get_runtime_settings()
-    access = settings.get('access', {})
+    from core.runtime_config import get_runtime_setting
+    access = get_runtime_setting('access', {})
     return {feature for key, feature in _FEATURE_KEY_MAP.items() if access.get(key)}
 
 
 def is_feature_public(feature):
     """Check if a feature is publicly accessible.
 
-    Returns True if auth is disabled (everything public) or the feature
-    is configured as public in access settings.
+    Returns True if auth is disabled (everything public). When auth is enabled,
+    a feature is public only if the master public-access switch is on AND the
+    feature is configured public — so turning public access off is a true
+    kill-switch that overrides the per-feature flags.
     """
     if not is_auth_enabled():
         return True
+    if not is_public_access_enabled():
+        return False
     return feature in get_public_features()
 
 
@@ -301,6 +373,56 @@ def require_feature(feature_name):
             if session.get('authenticated'):
                 return f(*args, **kwargs)
             return jsonify({'error': 'Authentication required'}), 401
+        # Access-declaration marker for the boot-time route audit (see
+        # api._assert_route_access_declared). @wraps on any outer decorator
+        # copies it forward to the registered view function.
+        decorated_function._access_gate = f'feature:{feature_name}'
+        return decorated_function
+    return decorator
+
+
+def get_request_tier():
+    """Classify the current request as 'owner' or 'public'.
+
+    'owner' = auth disabled OR a valid authenticated session (full access).
+    'public' = auth enabled and not signed in (the bounded anonymous view).
+    Handlers use this to clamp what anonymous callers may read.
+    """
+    return 'owner' if is_authenticated() else 'public'
+
+
+def is_public_access_enabled():
+    """Whether anonymous visitors get the limited public view.
+
+    Defaults to True so existing installs are unchanged. Only meaningful when
+    auth is enabled (when auth is off everyone is already 'owner'). Setting it
+    False turns the whole anonymous surface into a login wall. Read via the
+    copy-free accessor — this runs on every anonymous request and media fetch.
+    """
+    from core.runtime_config import get_runtime_setting
+    return get_runtime_setting('access.public_access', True)
+
+
+def require_scope(scope):
+    """Gate a route by access scope — the default-deny model.
+
+    scope='owner'       -> requires auth disabled or an authenticated session.
+    scope='public:read' -> allowed for owner, or for an anonymous visitor when
+                           public access is enabled; otherwise 401 (login wall).
+
+    Unlike the old "no decorator = public" behavior, an endpoint without a
+    scope decorator is never reachable by an anonymous caller, so newly added
+    routes are private by default.
+    """
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            if is_authenticated():
+                return f(*args, **kwargs)
+            if scope == 'public:read' and is_public_access_enabled():
+                return f(*args, **kwargs)
+            return jsonify({'error': 'Authentication required'}), 401
+        decorated_function._access_gate = scope
         return decorated_function
     return decorator
 
@@ -401,16 +523,43 @@ def require_auth(f):
             return jsonify({'error': 'Authentication required'}), 401
 
         return f(*args, **kwargs)
+    decorated_function._access_gate = 'owner'
     return decorated_function
+
+
+def forwarded_scheme():
+    """The scheme the request externally arrived over: X-Forwarded-Proto's
+    first (outermost) hop when a proxy reports one, else the connection's own
+    scheme. The header is client-influencable on direct access, so anything but
+    plain http/https degrades to the connection's scheme.
+
+    Single owner of this parse — the session cookie's Secure flag and the
+    absolute share/OG URLs both key off it and must agree on the answer.
+    """
+    proto = request.headers.get('X-Forwarded-Proto', '').split(',')[0].strip().lower()
+    return proto if proto in ('http', 'https') else request.scheme
+
+
+class _AutoSecureCookieSessionInterface(SecureCookieSessionInterface):
+    """Set the session cookie's Secure flag per-request, from how the request
+    actually arrived: HTTPS (directly, or via a TLS-terminating proxy that
+    nginx reports through X-Forwarded-Proto) marks the cookie Secure; plain
+    HTTP (the common http://pi LAN case) leaves it off, since Secure there
+    would break login entirely. A static True/False can't serve both: the same
+    station is often reached over LAN HTTP and an HTTPS tunnel, and a static
+    False lets an HTTPS deployment's cookie be replayed over a downgraded
+    plain-HTTP hop."""
+
+    def get_cookie_secure(self, app):
+        return forwarded_scheme() == 'https'
 
 
 def configure_session(app):
     """Configure Flask session settings for the app.
 
-    Session cookie settings are configured to work with nginx reverse proxy:
-    - Secure flag is controlled by SESSION_COOKIE_SECURE env var (default: false)
-    - Set SESSION_COOKIE_SECURE=true when deploying behind HTTPS
-    - When behind nginx with SSL termination, nginx sets X-Forwarded-Proto
+    Session cookie settings are configured to work with nginx reverse proxy;
+    the Secure flag is decided per-request from X-Forwarded-Proto (see
+    _AutoSecureCookieSessionInterface).
     """
     # Get or create session secret
     secret = get_or_create_session_secret()
@@ -420,12 +569,6 @@ def configure_session(app):
     app.config['SESSION_COOKIE_HTTPONLY'] = True
     app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
     app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=SESSION_LIFETIME_DAYS)
-
-    # Secure flag = False: cookies sent over both HTTP and HTTPS
-    # This works for:
-    # - Local HTTP access (http://pi) - the common case
-    # - Behind HTTPS proxy (ngrok, Cloudflare, etc.) - browser sees HTTPS, sends cookie
-    # Setting True would break local HTTP access with no real benefit for this app.
-    app.config['SESSION_COOKIE_SECURE'] = False
+    app.session_interface = _AutoSecureCookieSessionInterface()
 
     logger.info("Session configured", extra={'lifetime_days': SESSION_LIFETIME_DAYS})

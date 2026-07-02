@@ -2,15 +2,49 @@
 API-specific test fixtures and configuration.
 """
 import contextlib
+import json
 import os
 import sys
 import tempfile
+from datetime import datetime, timedelta
 from unittest.mock import Mock, patch
 
 import pytest
 
 # Add parent directory to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+
+AUTH_TEST_PASSWORD = 'testpass123'
+DEFAULT_STATION_NAME = 'My Secret Station'
+
+
+def iso_ago(days_ago=0, seconds=0):
+    """A timestamp days_ago in the past (recent < 30d = in the public window)."""
+    return (datetime.now() - timedelta(days=days_ago, seconds=seconds)).strftime('%Y-%m-%dT%H:%M:%S')
+
+
+def insert_detection(db_manager, **overrides):
+    """Seed one detection row, defaulting the boilerplate columns.
+
+    Most API tests need the same fully-populated row shape and only care about
+    one or two fields; keeping the boilerplate here means a schema change (a
+    new required column) touches one place. ``group_timestamp`` defaults to
+    ``timestamp``. Returns the inserted row id.
+    """
+    detection = {
+        'timestamp': '2024-01-15T10:30:00',
+        'common_name': 'American Robin',
+        'scientific_name': 'Turdus migratorius',
+        'confidence': 0.9,
+        'latitude': 40.7128,
+        'longitude': -74.0060,
+        'cutoff': 0.5,
+        'sensitivity': 0.75,
+        'overlap': 0.25,
+        **overrides,
+    }
+    detection.setdefault('group_timestamp', detection['timestamp'])
+    return db_manager.insert_detection(detection)
 
 
 @pytest.fixture
@@ -70,6 +104,90 @@ def api_client(real_db_manager):
     """Create a test client for the Flask API with REAL database integration."""
     with _sandboxed_app(real_db_manager) as client:
         yield client
+
+
+@contextlib.contextmanager
+def sandboxed_auth_env(db_manager=None, settings=None, mock_socketio=True):
+    """Tempdir sandbox for auth-ENABLED app tests.
+
+    Same path-redirection idea as _sandboxed_app, but writes a settings file
+    the test controls (auth/access tests toggle flags through it) and can keep
+    the real SocketIO instance (mock_socketio=False, for websocket tests).
+    db_manager=None patches core.api.db_manager with a bare Mock. Yields
+    (api_module, settings_file); callers run create_app() themselves so they
+    can shape what they need (HTTP test client vs. socketio test client).
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        settings_file = os.path.join(tmpdir, 'user_settings.json')
+        with open(settings_file, 'w') as f:
+            json.dump(settings or {}, f)
+
+        patches = [
+            patch('core.auth.AUTH_CONFIG_DIR', tmpdir),
+            patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')),
+            patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')),
+            patch('config.settings.USER_SETTINGS_PATH', settings_file),
+            patch('core.runtime_config.USER_SETTINGS_PATH', settings_file),
+            patch('core.timezone_service.USER_SETTINGS_PATH', settings_file),
+            patch('core.api.USER_SETTINGS_PATH', settings_file),
+            patch('core.api.db_manager') if db_manager is None
+            else patch('core.api.db_manager', db_manager),
+        ]
+        if mock_socketio:
+            patches.append(patch('core.api.socketio'))
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            import core.api as api_module
+            from core.runtime_config import invalidate_runtime_settings_cache
+
+            # The runtime-settings cache is module-global; drop any other
+            # sandbox's cached file on the way in and our own on the way out.
+            invalidate_runtime_settings_cache()
+            try:
+                yield api_module, settings_file
+            finally:
+                invalidate_runtime_settings_cache()
+
+
+@contextlib.contextmanager
+def auth_enabled_app(db_manager, access=None):
+    """Flask test client with auth SET UP and ENABLED, starting anonymous.
+
+    The existing api_client fixture runs auth-disabled (every caller is
+    'owner', so access gating is inert); this harness exercises the gates for
+    real. Default access settings: master public_access on, per-feature flags
+    off; ``access`` overrides individual keys. Yields (client, settings_file).
+    """
+    settings = {
+        'audio': {'recording_mode': 'pulseaudio'},
+        'location': {'latitude': 40.0, 'longitude': -75.0},
+        'display': {'station_name': DEFAULT_STATION_NAME},
+        'access': {
+            'public_access': True,
+            'charts_public': False,
+            'table_public': False,
+            'live_feed_public': False,
+        },
+    }
+    if access:
+        settings['access'].update(access)
+    with sandboxed_auth_env(db_manager, settings) as (api_module, settings_file):
+        app, _ = api_module.create_app()
+        app.config['TESTING'] = True
+        with app.test_client() as client:
+            client.post('/api/auth/setup',
+                        data=json.dumps({'password': AUTH_TEST_PASSWORD}),
+                        content_type='application/json')
+            client.post('/api/auth/logout')  # start anonymous
+            yield client, settings_file
+
+
+def login_owner(client):
+    """Sign the test client in as the station owner."""
+    client.post('/api/auth/login',
+                data=json.dumps({'password': AUTH_TEST_PASSWORD}),
+                content_type='application/json')
 
 
 @pytest.fixture

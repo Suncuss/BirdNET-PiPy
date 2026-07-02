@@ -135,6 +135,7 @@ import api from '@/services/api'
 import { SOCKET_PATH } from '@/services/baseUrl'
 import { spectrogramColor, SPECTROGRAM_MAX_HZ, SPECTROGRAM_FLOOR_DB } from '@/utils/spectrogram'
 import { createScrollPacer } from '@/utils/scrollPacer'
+import { declarePlaybackAudioSession } from '@/utils/audioSession'
 import { useIcecastStream } from '@/composables/useIcecastStream'
 
 export default {
@@ -251,14 +252,9 @@ export default {
           isSafari ? {} : { sampleRate: 44100 }
         );
         // On iOS, Web Audio is silenced by the hardware mute switch unless the
-        // page declares a 'playback' audio session. The <audio> element wasn't
-        // subject to that; declaring it keeps the decoded path audible with the
-        // ringer off, matching the old behaviour. (Safari 16.4+, harmless else.)
-        if (isSafari) {
-          try {
-            if (navigator.audioSession) navigator.audioSession.type = 'playback';
-          } catch { /* not supported — degrade silently */ }
-        }
+        // page declares a 'playback' audio session — keeps the decoded path
+        // audible with the ringer off, matching the old <audio> behaviour.
+        declarePlaybackAudioSession();
         analyser = audioContext.createAnalyser();
         // Tuned to match the detection-detail spectrogram (@/utils/spectrogram):
         // same 1024-pt FFT, light temporal smoothing for crispness without
