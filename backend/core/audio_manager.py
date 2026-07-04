@@ -23,6 +23,9 @@ from core.utils import sanitize_url
 
 logger = logging.getLogger(__name__)
 
+RTSP_SOCKET_TIMEOUT_US = '10000000'
+RTSP_PROBE_TIMEOUT_SECONDS = 20
+
 # ffmpeg stderr prefixes to skip (boilerplate + redundant wrappers)
 _FFMPEG_SKIP_PREFIXES = (
     # Build/version boilerplate
@@ -94,8 +97,8 @@ def test_stream_url(url: str) -> tuple:
         result = subprocess.run(
             [
                 'ffmpeg',
-                '-rtsp_transport', 'tcp',
-                '-timeout', '5000000',
+                '-rtsp_flags', 'prefer_tcp',
+                '-timeout', RTSP_SOCKET_TIMEOUT_US,
                 '-allowed_media_types', 'audio',
                 '-fflags', '+genpts+discardcorrupt',
                 '-use_wallclock_as_timestamps', '1',
@@ -103,7 +106,7 @@ def test_stream_url(url: str) -> tuple:
                 '-t', '1',
                 '-f', 'null', '-',
             ],
-            timeout=10,
+            timeout=RTSP_PROBE_TIMEOUT_SECONDS,
             capture_output=True,
             text=True,
         )
@@ -113,7 +116,7 @@ def test_stream_url(url: str) -> tuple:
         return (False, f'Stream probe failed: {error_msg}')
 
     except subprocess.TimeoutExpired:
-        return (False, 'Connection timed out')
+        return (False, 'Connection timed out while probing stream')
     except Exception as e:
         logger.error('Stream test error', extra={'error': str(e), 'url': safe_url})
         return (False, f'Stream test error: {str(e)}')
@@ -365,18 +368,17 @@ class RtspRecorder(BaseRecorder):
         Build RTSP ffmpeg arguments for unstable camera streams.
 
         Restricting the demuxer to audio avoids unnecessary video parsing
-        errors, while regenerating/smoothing timestamps prevents broken
-        output when cameras emit non-monotonic RTP timing.
+        errors, while regenerating timestamps prevents broken output when
+        cameras emit non-monotonic RTP timing.
         """
         return [
-            '-rtsp_transport', 'tcp',
-            '-timeout', '10000000',  # 10 second connection timeout (microseconds)
+            '-rtsp_flags', 'prefer_tcp',
+            '-timeout', RTSP_SOCKET_TIMEOUT_US,
             '-allowed_media_types', 'audio',
             '-fflags', '+genpts+discardcorrupt',
             '-use_wallclock_as_timestamps', '1',
             '-i', self.rtsp_url,
             '-map', '0:a:0',
-            '-af', 'aresample=async=1:first_pts=0',
         ]
 
     def _execute_recording(self, temp_path: str) -> bool:

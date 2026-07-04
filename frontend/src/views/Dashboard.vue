@@ -215,7 +215,10 @@
         >
           Fetching the latest data...
         </CenteredMessage>
-        <div v-else-if="!summaryError">
+        <div
+          v-else
+          class="flex flex-col flex-1"
+        >
           <div class="mb-3">
             <nav
               class="flex space-x-1"
@@ -230,45 +233,57 @@
                     ? 'bg-blue-100 text-blue-700'
                     : 'text-gray-500 hover:text-gray-700'
                 ]"
-                @click="currentSummaryPeriod = tab.value"
+                @click="selectSummaryPeriod(tab.value)"
               >
                 {{ tab.label }}
               </button>
             </nav>
           </div>
+          <CenteredMessage
+            v-if="currentSummaryLoading"
+            variant="loading"
+            container-class="flex-1"
+          >
+            Fetching the latest data...
+          </CenteredMessage>
           <ul
-            v-if="summaryEntries.length"
+            v-else-if="!currentSummaryError && summaryEntries.length"
             class="space-y-1 text-sm"
           >
             <li
               v-for="entry in summaryEntries"
               :key="entry.key"
+              class="flex items-baseline"
             >
-              <span class="font-medium">{{ formatSummaryKey(entry.key) }}: </span> 
+              <span class="font-medium whitespace-nowrap mr-1">{{ formatSummaryKey(entry.key) }}:</span>
               <router-link
                 v-if="(entry.key === 'mostCommonBird' || entry.key === 'rarestBird') && entry.value !== 'N/A'"
                 :to="{ name: 'BirdDetails', params: { name: entry.value } }"
-                class="font-medium hover:text-blue-600 hover:underline transition-colors duration-300"
+                :title="getSummaryBirdDisplay(currentPeriodSummary, entry.key)"
+                class="font-medium hover:text-blue-600 hover:underline transition-colors duration-300 truncate min-w-0"
               >
                 {{ getSummaryBirdDisplay(currentPeriodSummary, entry.key) }}
               </router-link>
-              <span v-else>{{ formatSummaryValue(entry.key, entry.value) }}</span>
+              <span
+                v-else
+                class="truncate min-w-0"
+              >{{ formatSummaryValue(entry.key, entry.value) }}</span>
             </li>
           </ul>
           <p
-            v-else
+            v-else-if="!currentSummaryError"
             class="text-gray-500"
           >
             No summary data available for this period.
           </p>
+          <CenteredMessage
+            v-else
+            variant="error"
+            container-class="flex-1"
+          >
+            {{ currentSummaryError }}
+          </CenteredMessage>
         </div>
-        <CenteredMessage
-          v-else
-          variant="error"
-          container-class="flex-1"
-        >
-          {{ summaryError }}
-        </CenteredMessage>
       </div>
 
       <!-- Recent Observations -->
@@ -334,12 +349,9 @@
               </button>
               <button
                 class="text-green-600 hover:text-green-700"
-                @click="showSpectrogram(observation.spectrogram_file_name)"
+                @click="showSpectrogram(observation.spectrogram_file_name, observation.spectrogram_sig)"
               >
-                <font-awesome-icon
-                  :icon="['fas', 'circle-info']"
-                  class="h-4 w-4"
-                />
+                <SpectrogramIcon class="h-4 w-4" />
               </button>
             </div>
           </li>
@@ -401,7 +413,6 @@
 
 <script>
 import { ref, onMounted, onUnmounted, onActivated, onDeactivated, computed, watch, nextTick } from 'vue'
-import { useRouter } from 'vue-router'
 import Chart from 'chart.js/auto'
 import { MatrixController, MatrixElement } from 'chartjs-chart-matrix'
 
@@ -416,12 +427,15 @@ import { faPlay, faPause, faCircleInfo } from '@fortawesome/free-solid-svg-icons
 	import { useAppStatus } from '@/composables/useAppStatus';
 import { useTimeFormat } from '@/composables/useTimeFormat';
 import SpectrogramModal from '@/components/SpectrogramModal.vue';
+import SpectrogramIcon from '@/components/icons/SpectrogramIcon.vue';
 import CenteredMessage from '@/components/CenteredMessage.vue';
 import SpeciesAxisLinks from '@/components/SpeciesAxisLinks.vue';
 import TimeAxisLinks from '@/components/TimeAxisLinks.vue';
 import { getAudioUrl, getSpectrogramUrl } from '@/services/media'
 import { getDisplayCommonName } from '@/utils/birdNames'
-import { tableDetectionsLink } from '@/utils/detectionLinks'
+import { formatConfidence } from '@/utils/format'
+import { createScrollPacer } from '@/utils/scrollPacer'
+import { SPECTROGRAM_MAX_HZ } from '@/utils/spectrogram'
 
 library.add(faPlay, faPause, faCircleInfo);
 Chart.register(MatrixController, MatrixElement)
@@ -431,6 +445,7 @@ export default {
     components: {
         FontAwesomeIcon,
         SpectrogramModal,
+        SpectrogramIcon,
         CenteredMessage,
         SpeciesAxisLinks,
         TimeAxisLinks
@@ -451,12 +466,15 @@ export default {
             latestObservationError,
             recentObservationsError,
             summaryError,
+            summaryLoading,
+            summaryErrors,
 
             // Loading state
             hasLoadedOnce,
 
             // Methods
             fetchDashboardData,
+            fetchSummaryData,
             setActivityOrder,
             setRecentObsMode
         } = useFetchBirdData();
@@ -464,11 +482,23 @@ export default {
         // Audio state
         let audioCtx, audioAnalyser, source, frequencyDataArray, prevFrequencyDataArray, animationId;
         let spectrogramCanvasCtx, canvasWidth, canvasHeight;
-        let rollingMaxDb = -Infinity; // Per-playback peak; mirrors PNG's normalize-to-clip-max
+        let signalStarted = false; // Latch: hold the scroll until the first non-silent frame (see drawSpectrogram)
+        let audioClockRunning = false; // Tracks 'playing' vs 'waiting'/'pause' — gates scrolling on real playback progress
         const SPECTROGRAM_SUPERSAMPLE = 2; // Render at 2x internal resolution; browser downscales for smoother edges
-        // Match backend PNG window — see backend/core/utils.py min_dbfs/max_dbfs defaults.
-        const SPEC_DB_FLOOR = -120;
-        const SPEC_DB_RANGE = 120;
+        // Scroll speed in CSS px per second of wall-clock. 240 matches the look this
+        // view had on a 120 Hz display when it stepped a fixed 2 CSS px per animation
+        // frame — but now it's the same on every browser and refresh rate, instead of
+        // tracking the rAF cadence (2x faster at 120 Hz than 60 Hz, slower on frame
+        // drops), which made the same call render wider or narrower per display.
+        const SPECTROGRAM_SCROLL_PX_PER_SEC = 240;
+        // Wall-clock scroll pacing (see @/utils/scrollPacer). Paced in CSS px; the
+        // backing store is SPECTROGRAM_SUPERSAMPLE× denser, so multiply when drawing.
+        const scrollPacer = createScrollPacer(SPECTROGRAM_SCROLL_PX_PER_SEC);
+        // Fixed dB window (not a per-playback peak), matching the Live Feed view:
+        // floor -110 dBFS up to -30 dBFS — an 80 dB span. Brightness stays stable
+        // instead of auto-gaining to the loudest recent bin.
+        const SPEC_DB_FLOOR = -110;
+        const SPEC_DB_RANGE = 80;
         // Gamma <1 brightens midtones without shifting the dark floor or white peak — keeps
         // the Greens_r identity but lifts the bulk of typical bin values up the ramp.
         const SPEC_BRIGHTNESS_GAMMA = 0.8;
@@ -495,9 +525,9 @@ export default {
         // Idle background — pale green for an inviting "ready to play" look. Once playback
         // starts, the canvas scrolls fresh dark-green silence in from the right.
         const SPECTROGRAM_BG_COLOR = '#E8F5E9';
-        const dbToLutIndex = (db, ref) => {
-            if (!Number.isFinite(db) || !Number.isFinite(ref)) return 0;
-            const t = (db - ref - SPEC_DB_FLOOR) / SPEC_DB_RANGE;
+        const dbToLutIndex = (db) => {
+            if (!Number.isFinite(db)) return 0;
+            const t = (db - SPEC_DB_FLOOR) / SPEC_DB_RANGE;
             if (t <= 0) return 0;
             if (t >= 1) return 255;
             return Math.round(Math.pow(t, SPEC_BRIGHTNESS_GAMMA) * 255);
@@ -571,15 +601,6 @@ export default {
         // User-configurable time-format helper
         const { formatTime: formatTimeOfDay, formatHourLabel } = useTimeFormat()
 
-        const router = useRouter()
-
-        // Heatmap cell drill-down: open the Table view filtered to that
-        // species + hour (+ the heatmap's date). Shares the deep-link query
-        // contract with the TimeAxisLinks hour labels via tableDetectionsLink.
-        const goToCellDetections = ({ commonName, hour, date }) => {
-            router.push(tableDetectionsLink({ hour, date, species: commonName }))
-        }
-
         const currentOrder = () => showLeastCommon.value ? 'least' : 'most'
         const recentMode = () => showUniqueSpecies.value ? 'unique' : 'all'
 
@@ -590,13 +611,34 @@ export default {
             setRecentObsMode(recentMode())
         }
 
+        const refreshDashboardData = async () => {
+            // fetchDashboardData drops non-today summary periods; re-seed the
+            // visible one so its tab keeps showing data through the refetch.
+            const period = currentSummaryPeriod.value
+            const staleSummary = period !== 'today' ? summaryData.value?.[period] : undefined
+            await fetchDashboardData(currentOrder(), { recentMode: recentMode() })
+            if (period !== 'today') {
+                if (staleSummary) {
+                    summaryData.value = { ...summaryData.value, [period]: staleSummary }
+                }
+                await fetchSummaryData(period, { force: true })
+            }
+        }
+
+        const selectSummaryPeriod = async (period) => {
+            currentSummaryPeriod.value = period
+            if (!summaryData.value?.[period]) {
+                await fetchSummaryData(period)
+            }
+        }
+
         // Single-in-flight poll loop: waits for the current fetch to
         // finish before scheduling the next one, so slow responses never
         // pile up and get discarded by the race guard.
         const startPolling = () => {
             if (pollInterval) return
             const poll = async () => {
-                await fetchDashboardData(currentOrder(), { recentMode: recentMode() })
+                await refreshDashboardData()
                 if (!isActive) return
                 redrawCharts()
                 pollInterval = setTimeout(poll, POLL_INTERVAL)
@@ -621,7 +663,7 @@ export default {
                     if (document.hidden) {
                         stopPolling()
                     } else {
-                        await fetchDashboardData(currentOrder(), { recentMode: recentMode() })
+                        await refreshDashboardData()
                         if (!isActive) return
                         redrawCharts()
                         startPolling()
@@ -630,7 +672,7 @@ export default {
                 document.addEventListener('visibilitychange', visibilityHandler)
             }
 
-            await fetchDashboardData(currentOrder(), { recentMode: recentMode() });
+            await refreshDashboardData();
             if (!isActive) return  // Deactivated while fetching — bail out
             startPolling()
 
@@ -642,7 +684,7 @@ export default {
             }
             if (!isDataEmpty.value) {
                 createTotalObsChart(totalObservationsChart, detailedBirdActivityData.value, { animate: initialLoad.value, title: null });
-                createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: initialLoad.value, title: null, date: getLocalDateString(), onCellClick: goToCellDetections });
+                createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: initialLoad.value, title: null, date: getLocalDateString() });
             }
 
             // Initialize spectrogram canvas after DOM updates with new data
@@ -695,7 +737,8 @@ export default {
             audioAnalyser = null
             frequencyDataArray = null
             prevFrequencyDataArray = null
-            rollingMaxDb = -Infinity
+            signalStarted = false
+            audioClockRunning = false
         })
 
         onDeactivated(() => {
@@ -730,7 +773,7 @@ export default {
                 await redrawCharts(true)
 
                 // Fetch new data in background, then silently update.
-                await fetchDashboardData(currentOrder(), { recentMode: recentMode() })
+                await refreshDashboardData()
                 if (!isActive || myActivation !== activationId) return
                 startPolling()
                 await nextTick()
@@ -744,6 +787,14 @@ export default {
                 ? summaryData.value[currentSummaryPeriod.value]
                 : {}
         })
+
+        const currentSummaryLoading = computed(() => (
+            !!summaryLoading.value?.[currentSummaryPeriod.value]
+        ))
+
+        const currentSummaryError = computed(() => (
+            summaryErrors.value?.[currentSummaryPeriod.value] || summaryError.value
+        ))
 
         const summaryEntries = computed(() => (
             Object.entries(currentPeriodSummary.value || {})
@@ -760,31 +811,49 @@ export default {
         )
 
         // Methods
-        const drawSpectrogram = () => {
+        const drawSpectrogram = (nowMs) => {
+            animationId = requestAnimationFrame(drawSpectrogram);
+
+            // Only draw while the media clock is running ('playing' → 'waiting'/'pause') —
+            // otherwise startup latency and buffering stalls scroll in blank (silent) columns.
+            // Reset the pacer while stopped so a resume starts fresh rather than jumping
+            // forward by the elapsed time.
+            if (!audioClockRunning) { scrollPacer.reset(); return; }
+
             const frequencyResolution = audioCtx.sampleRate / audioAnalyser.fftSize;
             const minIndex = 0;
             const maxIndex = Math.min(
-                Math.floor(12000 / frequencyResolution),
+                Math.floor(SPECTROGRAM_MAX_HZ / frequencyResolution),
                 audioAnalyser.frequencyBinCount - 1
             );
             const binSpan = maxIndex - minIndex;
 
-            const stepXCss = 2; // CSS pixels per frame: wider = faster scroll, larger features
-            const stepX = stepXCss * SPECTROGRAM_SUPERSAMPLE;
-
-            animationId = requestAnimationFrame(drawSpectrogram);
-
             audioAnalyser.getFloatFrequencyData(frequencyDataArray);
 
-            // Update running peak across the visible band so the colormap gets normalized to the
-            // loudest bin observed so far — matches the PNG's `Sxx / max_power` step.
-            for (let i = minIndex; i <= maxIndex; i++) {
-                const v = frequencyDataArray[i];
-                if (v > rollingMaxDb) rollingMaxDb = v;
+            // 'playing' fires on the media element slightly before decoded samples reach the
+            // analyser, which would scroll in a blank lead-in. Hold the scroll until the first
+            // real signal: getFloatFrequencyData reports -Infinity for every bin during the
+            // silent lead-in, so latch once the first finite bin appears.
+            if (!signalStarted) {
+                for (let i = minIndex; i <= maxIndex; i++) {
+                    if (Number.isFinite(frequencyDataArray[i])) { signalStarted = true; break; }
+                }
+                if (!signalStarted) return;
             }
 
-            const imageData = spectrogramCanvasCtx.getImageData(stepX, 0, canvasWidth - stepX, canvasHeight);
-            spectrogramCanvasCtx.putImageData(imageData, 0, 0);
+            // Columns (CSS px) to advance this frame from elapsed wall-clock time, scaled
+            // to the supersampled backing store. 0 until a full column is due, and 0 after
+            // a stall (e.g. a backgrounded tab) so we resume cleanly instead of smearing
+            // one spectrum across the missed gap.
+            const cols = scrollPacer.tick(nowMs);
+            if (cols < 1) return;
+            const stepX = cols * SPECTROGRAM_SUPERSAMPLE;
+
+            // Scroll left by stepX. (Guarded against a zero-width copy.)
+            if (stepX < canvasWidth) {
+                const imageData = spectrogramCanvasCtx.getImageData(stepX, 0, canvasWidth - stepX, canvasHeight);
+                spectrogramCanvasCtx.putImageData(imageData, 0, 0);
+            }
 
             let index = 0;
             for (let i = minIndex; i <= maxIndex; i++) {
@@ -796,8 +865,8 @@ export default {
                 // Horizontal gradient interpolates each row's color from the previous frame's
                 // intensity to the current — smooths the time axis without a post-process blur.
                 const grad = spectrogramCanvasCtx.createLinearGradient(canvasWidth - stepX, 0, canvasWidth, 0);
-                grad.addColorStop(0, SPECTROGRAM_COLOR_LUT[dbToLutIndex(prevFrequencyDataArray[i], rollingMaxDb)]);
-                grad.addColorStop(1, SPECTROGRAM_COLOR_LUT[dbToLutIndex(frequencyDataArray[i], rollingMaxDb)]);
+                grad.addColorStop(0, SPECTROGRAM_COLOR_LUT[dbToLutIndex(prevFrequencyDataArray[i])]);
+                grad.addColorStop(1, SPECTROGRAM_COLOR_LUT[dbToLutIndex(frequencyDataArray[i])]);
                 spectrogramCanvasCtx.fillStyle = grad;
                 spectrogramCanvasCtx.fillRect(canvasWidth - stepX, canvasHeight - index - binHeight, stepX, binHeight);
 
@@ -838,7 +907,7 @@ export default {
                 audioElement.play().catch((err) => {
                     console.warn('Failed to resume audio:', err);
                 });
-                drawSpectrogram();
+                animationId = requestAnimationFrame(drawSpectrogram);
                 latestObservationIsPlaying.value = true;
                 return;
             }
@@ -866,8 +935,9 @@ export default {
             prevFrequencyDataArray = new Float32Array(audioAnalyser.frequencyBinCount);
             // Initialize prev far below the floor so the first frame's left edge starts dark.
             prevFrequencyDataArray.fill(-200);
-            rollingMaxDb = -Infinity;
-	            const latestAudioUrl = getAudioUrl(latestObservationData.value?.bird_song_file_name)
+            signalStarted = false;
+            audioClockRunning = false;
+	            const latestAudioUrl = getAudioUrl(latestObservationData.value?.bird_song_file_name, latestObservationData.value?.audio_sig)
 	            if (!latestAudioUrl) return
 	            audioElement = new Audio(latestAudioUrl);
 	            audioElement.crossOrigin = "anonymous";
@@ -876,28 +946,29 @@ export default {
             audioAnalyser.connect(audioCtx.destination);
 
             audioElement.addEventListener('ended', pauseLatestObservation);
+            // 'playing' fires once frames actually advance (initial start, post-buffer, resume);
+            // 'waiting'/'pause' mark buffering stalls and pauses. Covers resume latency too.
+            audioElement.addEventListener('playing', () => { audioClockRunning = true; });
+            audioElement.addEventListener('waiting', () => { audioClockRunning = false; });
+            audioElement.addEventListener('pause', () => { audioClockRunning = false; });
 
 	            audioElement.play().catch((err) => {
 	                console.warn('Failed to play audio:', err)
 	                latestObservationIsPlaying.value = false
 	            });
-	            drawSpectrogram();
+	            animationId = requestAnimationFrame(drawSpectrogram);
 	            latestObservationIsPlaying.value = true;
 	        };
 
         const togglePlayBirdCall = (observation) => {
             if (!observation?.id) return
-            const audioUrl = getAudioUrl(observation?.bird_song_file_name)
+            const audioUrl = getAudioUrl(observation?.bird_song_file_name, observation?.audio_sig)
             if (!audioUrl) return
             audioTogglePlay(observation.id, audioUrl)
         };
 
         const formatTimestamp = (dateString) => {
             return formatTimeOfDay(dateString)
-        }
-
-        const formatConfidence = (confidence) => {
-            return `${Math.round(confidence * 100)}%`;
         }
 
         const formatSummaryKey = (key) => {
@@ -916,8 +987,8 @@ export default {
             return summary?.[`${key}Display`] || summary?.[key] || ''
         }
 
-	        const showSpectrogram = (spectrogramFileName) => {
-	            currentSpectrogramUrl.value = getSpectrogramUrl(spectrogramFileName)
+	        const showSpectrogram = (spectrogramFileName, sig) => {
+	            currentSpectrogramUrl.value = getSpectrogramUrl(spectrogramFileName, sig)
 	            isSpectrogramModalVisible.value = true
 	        }
 
@@ -928,7 +999,7 @@ export default {
             try {
                 setActivityOrder(currentOrder())
                 await createTotalObsChart(totalObservationsChart, detailedBirdActivityData.value, { animate: true, title: null })
-                await createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: true, title: null, date: getLocalDateString(), onCellClick: goToCellDetections })
+                await createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: true, title: null, date: getLocalDateString() })
             } finally {
                 isActivityUpdating.value = false
             }
@@ -938,7 +1009,7 @@ export default {
         const redrawCharts = async (animate = false) => {
             initialLoad.value = false;
             await createTotalObsChart(totalObservationsChart, detailedBirdActivityData.value, { animate, title: null });
-            await createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate, title: null, date: getLocalDateString(), onCellClick: goToCellDetections });
+            await createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate, title: null, date: getLocalDateString() });
             await createHourlyChart(hourlyActivityChart, hourlyBirdActivityData.value, { animate });
         };
 
@@ -949,6 +1020,8 @@ export default {
             currentSummaryPeriod,
             summaryPeriods,
             currentPeriodSummary,
+            currentSummaryLoading,
+            currentSummaryError,
             summaryEntries,
             hourlyActivityChart,
             isSpectrogramModalVisible,
@@ -984,7 +1057,8 @@ export default {
             hasLoadedOnce,
             showUniqueSpecies,
             recentObsFilterOptions,
-            toggleRecentObsFilter
+            toggleRecentObsFilter,
+            selectSummaryPeriod
         }
     }
 }

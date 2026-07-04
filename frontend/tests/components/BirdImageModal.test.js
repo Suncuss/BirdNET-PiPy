@@ -2,7 +2,7 @@
  * Tests for BirdImageModal.vue: candidate grid, selection, apply flows.
  */
 
-import { mount, flushPromises } from '@vue/test-utils'
+import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import BirdImageModal from '@/components/BirdImageModal.vue'
 
@@ -56,6 +56,8 @@ const mountOpen = (overrides = {}) =>
     }
   })
 
+enableAutoUnmount(afterEach)
+
 describe('BirdImageModal', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -72,6 +74,7 @@ describe('BirdImageModal', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+    document.body.style.overflow = ''
   })
 
   it('fetches candidates when opened and renders one tile per candidate plus an upload tile', async () => {
@@ -89,6 +92,23 @@ describe('BirdImageModal', () => {
     // Apply button starts disabled (selection unchanged).
     const applyBtn = wrapper.findAll('button').find(b => b.text().trim() === 'Apply')
     expect(applyBtn.attributes('disabled')).toBeDefined()
+  })
+
+  it('closes on Escape unless an apply is in progress', async () => {
+    const wrapper = mountOpen()
+    await flushPromises()
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await wrapper.vm.$nextTick()
+    expect(wrapper.emitted('close')).toBeTruthy()
+
+    const busyWrapper = mountOpen()
+    await flushPromises()
+    busyWrapper.vm.isApplying = true
+    await busyWrapper.vm.$nextTick()
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await busyWrapper.vm.$nextTick()
+    expect(busyWrapper.emitted('close')).toBeFalsy()
   })
 
   it('highlights the saved choice when selectedFileTitle matches a candidate', async () => {
@@ -117,7 +137,10 @@ describe('BirdImageModal', () => {
 
     expect(mockApi.put).toHaveBeenCalledWith(
       '/bird/American%20Robin/wikimedia_choice',
-      expect.objectContaining({ fileTitle: 'File:B.jpg' })
+      expect.objectContaining({
+        fileTitle: 'File:B.jpg',
+        thumbUrl: 'https://upload.wikimedia.org/thumb/B_400.jpg'
+      })
     )
     // No custom image existed → no DELETE /image call.
     expect(mockApi.delete).not.toHaveBeenCalled()
@@ -234,7 +257,8 @@ describe('BirdImageModal', () => {
         kind: 'wikimedia',
         hasCustomImage: false,
         fileTitle: 'File:B.jpg',
-        imageUrl: 'https://upload.wikimedia.org/B.jpg'
+        imageUrl: 'https://upload.wikimedia.org/B.jpg',
+        thumbUrl: 'https://upload.wikimedia.org/thumb/B_400.jpg'
       })
     } finally {
       window.removeEventListener('bird-image:changed', listener)

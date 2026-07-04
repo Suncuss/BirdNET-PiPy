@@ -77,7 +77,8 @@ Testing this requires a real Docker daemon and systemd, which can't be mocked. D
 | Privileged mode | Required for nested Docker |
 | Read-only project mount | Protects local codebase |
 | Copy to writable location | install.sh can modify files |
-| VFS storage driver | Works reliably in nested Docker |
+| Volume at `/var/lib/docker` + overlay2 | Nested image layers live on real ext4 (overlay2 can't stack on the outer overlayfs); vfs — the old fallback — copied the full FS per layer and could fill the host disk |
+| Disk preflight + stale-run sweep | A crashed run can't leave multi-GB containers behind or start without headroom |
 
 ### Limitations
 

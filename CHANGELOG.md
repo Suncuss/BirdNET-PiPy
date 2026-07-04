@@ -2,6 +2,94 @@
 
 ## [Unreleased]
 
+- Fixed clicks on species and page links doing nothing in browser tabs loaded before an update ("Failed to fetch dynamically imported module" in the console) — the app now recovers by reloading itself onto the intended page, and the web server tells browsers to always revalidate the app shell so a stale build doesn't linger in cache after an update
+
+## [0.8.2] - 2026-07-02
+
+- Added an analysis-window bar under the detection player's spectrogram showing which 3-second slice of the clip the model actually flagged (the rest is context audio around it); click a tile to jump playback there. When the same species also fired in neighboring slices of the same recording, those windows are marked too, so a clip with back-to-back calls doesn't read as one detection surrounded by silence
+- Improved API responsiveness on the Pi: the auth configuration is now cached instead of re-read from disk several times per request, hot access checks skip a full settings copy, and signed media links are only minted for logged-out viewers (owners' detection payloads slim down since their session already authorizes playback)
+- Added an "Allow public access" switch (Settings → Security): with authentication enabled you can keep a limited public view (dashboard, gallery, and bird pages without login) or turn it off to require sign-in for everything. When off it also overrides the per-feature public toggles, and the station name is no longer shown to logged-out visitors
+- Hardened the API so enabling authentication actually keeps detection data private: the logged-out view is now enforced and bounded server-side (it previously left many endpoints open, so a script could rebuild the database even with the Table hidden), and is limited to recent activity — logged-out visitors get a capped, recent window per species and can no longer open or play older detections by guessing or walking permalink URLs (older ones need a login or a share link), and a published Table likewise shows them only the recent window. Login rate-limiting can't be bypassed via a forged forwarding header, the internal detection-broadcast endpoints now require a shared secret, and a default-deny backstop keeps any future endpoint private to logged-out visitors unless explicitly opened
+- Closed the last logged-out scraping hole for media: with authentication enabled, detection audio and spectrogram files are served only via short-lived signed links that the dashboard, gallery, and bird pages mint for the clips they show — so a logged-out visitor can still play those clips, but the recordings can no longer be bulk-downloaded by guessing filenames. Signed-in owners are unaffected
+- Tightened what logged-out visitors can see further: per-detection source labels (and the internal source id) are stripped from public responses, and the system info endpoints (version, storage, update check) are now part of the limited public view rather than readable behind the login wall
+- Fixed recorder health (audio source names and stream error text, which can include camera URLs/credentials) being pushed to logged-out viewers over the live-feed WebSocket when the live feed is public — it now goes only to signed-in owners, matching the authenticated status endpoint
+- Hardened the public version info: logged-out visitors now see only the version number, not the exact build commit and branch (which fingerprint the build for known-vulnerability matching); signed-in owners still see full details
+- Improved transport hardening: the session cookie is now marked Secure automatically when the station is reached over HTTPS (e.g. behind a TLS proxy or tunnel), so it can't be replayed over a downgraded plain-HTTP hop, while plain-HTTP LAN logins keep working; the web server also sends a Content-Security-Policy header (permitting WebAssembly compilation, which the Live Feed's Safari stream decoder needs) and rate-limits the API read path (with a tighter budget on login attempts), so a scraper can't turn the bounded public view into a bulk download by request volume
+- Changed the detection "Share" button to create a scoped share link: the link opens that one detection (its player, spectrogram, and clip) for someone without an account — even on a fully private station — but can't be edited to browse other detections, so sharing one sighting never exposes the rest
+- Fixed the detection player stuttering in the first second of playback on Safari and iOS — the audio and the moving playhead would briefly freeze then jump. Playback now feeds the decoded audio straight through Web Audio instead of routing an `<audio>` element, which avoids a Safari startup glitch; the player declares a "playback" audio session so the iPhone ringer switch doesn't mute it, and recovers after a phone call or backgrounding
+- Changed the detection player's spectrogram to reflect the high-pass filter the same way the Live Feed does — cut frequencies gently fade instead of being hidden under a heavy black overlay, so the picture matches what the filter does to the audio
+- Added rich link previews for shared detection permalinks — pasting one into iMessage, Slack, Discord, etc. now unfurls into a card with the bird's photo, species, confidence, and time. On an authenticated station the card details only what a logged-out visitor could open (recent detections, or any detection via its share link); anything else unfurls as a generic branded card
+
+## [0.8.1] - 2026-06-28
+
+- Fixed the Live Feed and Dashboard playback spectrograms scrolling at different speeds across browsers and displays — they advanced a fixed step per animation frame, so speed tracked the refresh rate (e.g. Safari vs Chrome, or 60 Hz vs 120 Hz screens) and a given call rendered wider or narrower per screen. Both now scroll at a fixed rate in real time, so audio features keep a consistent size on any display
+- Added the live spectrogram and high-pass/gain filters to the Live Feed on Safari, which couldn't show them before — Safari can't tap a live stream through Web Audio the normal way, so the audio is now decoded in-browser and fed through the same graph (it falls back to plain playback if the decoder can't load)
+- Improved the high-pass and gain sliders for touch — the thumb and track are larger on phones and tablets so they're easier to grab and harder to miss, while the desktop slider is unchanged
+- Polished the high-pass/gain filter panels on the Live Feed and detection player — the sliders now sit vertically centered in the grey panel instead of low (the slider thumb was poking into the panel's bottom padding), and the Live Feed's live spectrogram is a bit shorter on small screens
+- Tightened the Live Feed layout on phones — smaller gaps, padding, and slider thumb plus a slightly shorter spectrogram, so the first detection shows without scrolling as far; desktop spacing is unchanged
+
+## [0.8.0] - 2026-06-27
+
+- Fixed the public detection/observation/recording API responses leaking the station's exact coordinates — latitude/longitude are now stripped at the data layer so these endpoints stay private-by-default while share permalinks keep working without login. The authenticated CSV export still includes coordinates
+- Changed `/api/settings/defaults` to require authentication, since it carries the default station coordinates and is only used as an authenticated-load fallback
+- Added shareable permalinks to individual recordings — a "Share" button copies a deep link that opens a dedicated player page (spectrogram, audio player, download), so you can point others at a specific detection instead of just the species
+- Changed the species page's Recordings grid to use this same custom player instead of the browser's default audio bar, so playback and sharing are consistent everywhere; per-clip download moved to the detail page
+- Fixed the bird detail page's Recordings grid showing dead players and placeholder spectrograms for detections whose audio had been cleaned up — such records are now skipped so the grid only shows playable clips
+- Changed the shared detection player page to a single-card layout — a framed spectrogram with time axis, unified playback and high-pass/gain controls, a confidence score, and weather plus detection metadata inline, with the eBird code now linking out to that species' eBird page
+- Changed the Detections table's per-row info button to open the full detection player in an in-place modal instead of a small info modal, so you keep your place in the table; ⌘/Ctrl/middle-click still opens it in a new tab
+- Added the current page, filters, and sort to the Detections table's URL, so a refresh, bookmark, or Back button restores the exact view instead of snapping back to page 1
+- Improved modal dismissal consistency — viewer, settings, confirmation, and workflow dialogs now close via the close button, backdrop, or Escape when safe, while saving/testing/processing states still block accidental dismissal
+- Added live high-pass filter and gain controls to the Live Feed, matching the detection player — filter out low-frequency rumble (which also clears from the live spectrogram) and boost quiet audio, all non-destructively while listening
+- Changed the Live Feed spectrogram to match the detection player's look — same green palette, 0–12 kHz range, and contrast — so the live and recorded views read as one instrument
+- Changed the Dashboard's Latest Observation spectrogram to a fixed brightness window (matching the Live Feed) instead of auto-gaining to the loudest sound, so brightness stays steady during playback rather than fluctuating
+- Fixed the Live Feed's high-pass and gain controls showing on Safari, where they had no effect — Safari doesn't route the live stream through Web Audio (the same reason the live spectrogram is unavailable there), so the controls are now hidden with a note that audio still plays
+- Updated frontend dependencies (form-data, ws, js-yaml) to clear three Dependabot security advisories
+
+## [0.7.5] - 2026-06-20
+
+- Fixed the Dashboard's live playback spectrogram scrolling through blank columns while audio is still loading or buffering — the canvas now only advances while real audio is playing
+- Added an early installer check that stops on 32-bit OSes with a clear "reflash with the 64-bit image" message — BirdNET-PiPy is arm64-only, and previously the install aborted partway through with a blank web UI
+- Fixed the installer aborting when run from a directory other than the cloned repo, and restored the dev-branch "building locally" detection that a `--skip-build` shortcut had bypassed
+- Added an optional "Normalize Recording" toggle (Settings → Personalization) that loudness-normalizes saved detection clips so faint or distant birds are easier to hear. It runs after BirdNET analysis so detection is unaffected, applies to new recordings only, and is off by default
+- Added an "Always Include Species" list (Settings → Species Filter) that reports the listed species even when the location filter rates them unlikely for your coordinates
+- Fixed long photographer names wrapping the "Photo by …" image attribution onto a second line — the name now truncates with an ellipsis in gallery cards, bird detail pages, and the image picker
+- Fixed the Live Feed giving up with "Could not start audio playback" when an RTSP audio source drops mid-stream (some cameras periodically end their audio track) — the player now retries with backoff and self-heals instead of forcing a manual restart. Also fixed the stream "Test" button timing out before the backend probe could answer, and showing a generic "Test request failed" instead of a timeout-specific message
+- Changed spectrograms to use an absolute full-scale dBFS reference instead of per-clip auto-gain, so loudness is comparable across recordings — quiet detections render dim and loud ones bright, instead of every clip being peak-normalized to its own maximum
+
+## [0.7.4] - 2026-05-31
+
+- Changed Bird Gallery tab switches to show a loading spinner while an uncached tab's query runs, instead of leaving the previous tab's cards on screen until it resolves. Revisiting a cached tab is still instant
+- Added the "scroll to top" button to the Bird Gallery (previously only on the Detections table); the bottom-right status indicators now yield the corner so they no longer overlap it
+- Fixed Bird Gallery thumbnails intermittently not appearing — the gallery now serves Wikimedia's smaller thumbnail and loads card images lazily as they near the viewport, instead of fanning out a lookup for all ~200 species when the Species Catalog opens
+- Fixed saved "customize image" choices still loading the full-resolution original in the gallery — a choice now stores and serves a thumbnail (re-save older choices to shrink them)
+- Hardened the Wikimedia image proxy against rate limiting — a 429 surfaces the upstream `Retry-After` instead of a 500, concurrent misses for the same species share one fetch, and gallery lookups skip Wikimedia for species that already have a custom image
+- Added a contact URL to the Wikimedia API `User-Agent` per Wikimedia's policy, keeping the app in the 200 req/min identified tier rather than the 10 req/min "unidentified" tier
+- Fixed the "Most Activity Time" on a bird's detail page ignoring the "Use 24-hour Clock" preference and always showing 24-hour time
+- Fixed RTSP audio sources (e.g. some IP cameras) timing out when added or recorded even though the stream plays in VLC — ffmpeg now prefers TCP with UDP fallback instead of forcing TCP, with longer connection-test timeouts for slow handshakes
+
+## [0.7.3] - 2026-05-27
+
+- Fixed RTSP audio recordings being choppy from well-behaved producers such as mediamtx restreaming a local capture — an `aresample` ffmpeg filter (added earlier to handle IP cameras with non-monotonic timestamps) was injecting silence and warping samples in response to ordinary network jitter, and has been removed from the recorder and live stream
+
+## [0.7.2] - 2026-05-23
+
+- Improved dashboard resilience on slow devices such as the Raspberry Pi Zero, where API requests routinely exceed the frontend's timeout — a failed `/settings` request no longer hides the whole dashboard, a failed refresh keeps the last-good data on screen, request timeouts are sized per endpoint, and navigation no longer blocks on an `/auth/status` roundtrip
+- Fixed the metric/imperial unit and time-format toggles in Settings silently failing to apply when the settings store hadn't loaded — they now propagate their change directly
+- Consolidated frontend settings handling — `/settings` is now fetched once into a shared store that feeds the unit and time-format composables, replacing several independent fetch sites
+- Fixed Bird Gallery cards intermittently falling back to the placeholder after the first ~8-9 species — the image worker pool added in 0.7.1 fired too many concurrent Wikimedia hits and tripped the burst throttle, so image loads are now serialized
+- Fixed the Dashboard's Observation Summary card growing taller than the adjacent Latest Observation card at narrow widths when long bird names wrapped — names now truncate to a single line (full name on hover, click still opens the species page)
+- Fixed the Distribution chart on bird detail pages occasionally rendering blank when the window was resized quickly — competing resize handlers were racing and latching a 0-width canvas, and now defer to Chart.js's built-in resize handling
+
+## [0.7.1] - 2026-05-21
+
+- Sped up Bird Gallery tab loading — the Species Catalog drops its per-species API fan-out, sightings are computed in one query instead of three table scans, results are cached, and card images load in the background without blocking the tab switch
+- Changed Dashboard Summary to load only the visible Today tab up front and lazy-load 7-Day, 30-Day, and All Time on selection, keeping the initial payload small
+- Fixed dashboard navigation freezing after the 0.7.0 gunicorn+gevent migration — the dashboard's sequential SQLite queries blocked the single event loop, stalling concurrent requests; DB work now runs on a dedicated thread executor with short-TTL caching
+- Fixed dashboard summary stats (Most Common, Rarest, Most Active Hour) showing inconsistent species names across periods after a V2→V3 upgrade — each species now resolves to one canonical name, with alphabetical tie-breaks so low-activity picks no longer flap
+- Fixed the Charts page flashing empty-state messages during the initial fetch, a stale chart leaking on a failed refetch, and a mount race that left the trends canvas blank — loading, error, and empty are now distinct states
+- Fixed the bird detail page flashing "No recordings available" and a blank distribution chart during the initial fetch — each now shows a spinner until its data loads, and a slow image lookup no longer stalls the others
+- Fixed Hourly Activity heatmap cells not deep-linking into the Table on the Charts page
+
 ## [0.7.0] - 2026-05-18
 
 - Added an "Audio Status" notification trigger (Settings → Notifications): when an Apprise URL is configured and the toggle is on, audio-pipeline degradation and recovery are pushed as notifications — one alert on degrade/stop (with the affected source and last ffmpeg error), an escalation if it worsens to fully stopped, and one recovery alert. Flapping streams are debounced (10-min cooldown) and startup never alerts. Off by default; the Notifications section subtitle is broadened to "Detection and system status alerts"

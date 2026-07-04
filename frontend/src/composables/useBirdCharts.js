@@ -1,9 +1,11 @@
 import { nextTick, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import Chart from 'chart.js/auto'
 import { useChartColors } from './useChartColors'
 import { useChartHelpers } from './useChartHelpers'
 import { useTimeFormat } from './useTimeFormat'
 import { getDisplaySpeciesName } from '@/utils/birdNames'
+import { tableDetectionsLink } from '@/utils/detectionLinks'
 
 // Assign `next` to `layoutRef` only if it differs from the current value.
 // Each layout is flat scalars plus a `ticks` array of flat objects; equality
@@ -29,6 +31,7 @@ export function useBirdCharts() {
   const { colorPalette, secondaryRGB } = useChartColors()
   const { resolveCanvas, destroyChart, freezeChart, generateHourLabels, calculateRowStats, prepareDataForCategoryMatrix } = useChartHelpers()
   const { formatHourLabel } = useTimeFormat()
+  const router = useRouter()
 
   // Reactive layout state for the species-axis HTML overlay (SpeciesAxisLinks).
   // Populated by createTotalObservationsChart via a Chart.js afterLayout plugin.
@@ -250,10 +253,8 @@ export function useBirdCharts() {
    * @param {string} options.title - Chart title (default: 'Hourly Activity Heatmap')
    * @param {string} options.date - Date (YYYY-MM-DD) the heatmap represents; emitted
    *   into timeAxisLayout so the TimeAxisLinks overlay can deep-link the Table view
-   *   to that date + clicked hour.
-   * @param {Function} [options.onCellClick] - Invoked when a non-empty cell is
-   *   clicked, with `{ commonName, hour, count, date }` so the caller can
-   *   deep-link the Table view to that species + hour (+ date).
+   *   to that date + clicked hour, and also used as the date filter when a cell
+   *   is clicked to drill into the Table view.
    * @returns {Promise<Chart|null>} Chart instance or null if canvas not available
    *
    * Side effect: emits x-axis tick positions into `timeAxisLayout` (returned from
@@ -262,7 +263,7 @@ export function useBirdCharts() {
    * height but is not visible.
    */
   const createHourlyActivityHeatmap = async (canvasRef, data, options = {}) => {
-    const { animate = true, title = 'Hourly Activity Heatmap', date = null, onCellClick = null } = options
+    const { animate = true, title = 'Hourly Activity Heatmap', date = null } = options
 
     // Resolve the data point under a pointer event, or null if the pointer
     // isn't over a cell. Shared by onClick (navigate) and onHover (cursor).
@@ -338,10 +339,9 @@ export function useBirdCharts() {
         // view to that species + hour (+ date). Empty cells (v <= 0) are
         // inert so clicking the heatmap's whitespace does nothing.
         onClick: (event, _elements, chart) => {
-          if (!onCellClick) return
           const point = cellAtEvent(event, chart)
           if (!point || point.v <= 0) return
-          onCellClick({ commonName: point.commonName, hour: point.hour, count: point.v, date })
+          router.push(tableDetectionsLink({ hour: point.hour, date, species: point.commonName }))
         },
         // A pointer cursor marks clickable (non-empty) cells. onHover fires
         // on every pointer move, so skip the CSSOM write unless the cursor
@@ -349,7 +349,7 @@ export function useBirdCharts() {
         onHover: (event, _elements, chart) => {
           const target = event?.native?.target
           if (!target) return
-          const point = onCellClick ? cellAtEvent(event, chart) : null
+          const point = cellAtEvent(event, chart)
           const cursor = point && point.v > 0 ? 'pointer' : 'default'
           if (target.style.cursor !== cursor) target.style.cursor = cursor
         },

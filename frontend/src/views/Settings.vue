@@ -90,19 +90,7 @@
           aria-label="Dismiss update reminder"
           @click="systemUpdate.dismissUpdate()"
         >
-          <svg
-            class="w-4 h-4"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M6 18L18 6M6 6l12 12"
-            />
-          </svg>
+          <CloseIcon class="w-4 h-4" />
         </button>
       </div>
     </div>
@@ -173,7 +161,10 @@
         <hr class="my-3 border-gray-100">
 
         <!-- Audio sources -->
-        <label class="block text-sm text-gray-600 mb-1">Sources<span v-if="hasInactiveSource" class="text-xs text-gray-400 font-normal"> — highlighted sources are active</span></label>
+        <label class="block text-sm text-gray-600 mb-1">Sources<span
+          v-if="hasInactiveSource"
+          class="text-xs text-gray-400 font-normal"
+        > — highlighted sources are active</span></label>
         <div class="flex flex-wrap gap-2">
           <!-- Source pills (click to edit) -->
           <button
@@ -350,22 +341,43 @@
         <!-- Public Access Options (when auth enabled) -->
         <div
           v-if="auth.authStatus.value.authEnabled"
-          class="bg-gray-50 rounded-lg p-3 space-y-2"
+          class="bg-gray-50 rounded-lg p-3 space-y-3"
         >
-          <p class="text-xs text-gray-500">
-            Public access (no login required)
-          </p>
-          <div
-            v-for="feature in accessFeatures"
-            :key="feature.key"
-            class="flex items-center justify-between"
-          >
-            <label class="text-sm text-gray-600">{{ feature.label }}</label>
+          <!-- Master switch: limited public view vs. full login wall. When off,
+               the backend also treats it as a kill-switch over the per-feature
+               flags below. -->
+          <div class="flex items-center justify-between">
+            <div>
+              <label class="text-sm text-gray-600">Allow public access</label>
+              <p class="text-xs text-gray-400">
+                Show a limited view (dashboard, gallery, bird pages) without
+                login. Turn off to require sign-in for everything.
+              </p>
+            </div>
             <ToggleSwitch
-              :model-value="settings.access[feature.key]"
-              size="sm"
-              @update:model-value="toggleFeatureAccess(feature.key)"
+              :model-value="settings.access.public_access"
+              @update:model-value="toggleFeatureAccess('public_access')"
             />
+          </div>
+
+          <!-- Broaden the public view to extra features -->
+          <div
+            v-if="settings.access.public_access"
+            class="space-y-2 border-t border-gray-200 pt-2"
+          >
+            <p class="text-xs text-gray-500">Also show without login:</p>
+            <div
+              v-for="feature in accessFeatures"
+              :key="feature.key"
+              class="flex items-center justify-between"
+            >
+              <label class="text-sm text-gray-600">{{ feature.label }}</label>
+              <ToggleSwitch
+                :model-value="settings.access[feature.key]"
+                size="sm"
+                @update:model-value="toggleFeatureAccess(feature.key)"
+              />
+            </div>
           </div>
         </div>
 
@@ -548,7 +560,7 @@
       <!-- Species Filter (Collapsible) -->
       <CollapsibleSection
         title="Species Filter"
-        subtitle="Allowed and blocked species lists"
+        subtitle="Allowed, blocked, and always-include species lists"
       >
         <div class="space-y-3">
           <!-- Allowed Species -->
@@ -636,6 +648,56 @@
               class="text-xs text-gray-400 mt-2 italic"
             >
               No species blocked
+            </p>
+          </div>
+
+          <!-- Always Include Species -->
+          <div class="border border-gray-200 rounded-lg p-3">
+            <div class="flex items-center justify-between">
+              <div>
+                <h4 class="text-sm font-medium text-gray-700">
+                  Always Include Species
+                </h4>
+                <p class="text-xs text-gray-400">
+                  Always detect these, even if unlikely for your location
+                </p>
+              </div>
+              <button
+                class="px-3 py-1.5 text-xs bg-emerald-50 text-emerald-600 hover:bg-emerald-100 rounded-lg transition-colors"
+                @click="openFilterModal('included')"
+              >
+                Edit
+              </button>
+            </div>
+            <div
+              v-if="settings.species_filter?.included_species?.length"
+              class="flex flex-wrap gap-1.5 mt-2"
+            >
+              <span
+                v-for="species in settings.species_filter.included_species.slice(0, 5)"
+                :key="species"
+                class="px-2 py-0.5 text-xs bg-emerald-100 text-emerald-700 rounded-full"
+              >
+                {{ getCommonName(species) }}
+              </span>
+              <span
+                v-if="settings.species_filter.included_species.length > 5"
+                class="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded-full"
+              >
+                +{{ settings.species_filter.included_species.length - 5 }} more
+              </span>
+            </div>
+            <p
+              v-else
+              class="text-xs text-gray-400 mt-2 italic"
+            >
+              No always-include species
+            </p>
+            <p
+              v-if="settings.species_filter?.allowed_species?.length && settings.species_filter?.included_species?.length"
+              class="text-xs text-amber-600 mt-2"
+            >
+              Ignored while an Allowed Species list is set.
             </p>
           </div>
         </div>
@@ -884,7 +946,7 @@
       <!-- Personalization (Collapsible) -->
       <CollapsibleSection
         title="Personalization"
-        subtitle="Units and display preferences"
+        subtitle="Units, display, and playback preferences"
         body-class="border-t border-gray-100 p-5 space-y-6"
       >
         <div>
@@ -953,6 +1015,20 @@
             :model-value="!timeFormatSettings.hour12.value"
             :disabled="timeFormatSaving"
             @update:model-value="toggleTimeFormat"
+          />
+        </div>
+
+        <div class="pt-4 border-t border-gray-100 flex items-center justify-between">
+          <div>
+            <label class="text-sm text-gray-600">Normalize Recording</label>
+            <p class="text-xs text-gray-400">
+              Boost faint or distant birds so saved clips are easier to hear. Applies to new recordings; existing clips are unchanged.
+            </p>
+          </div>
+          <ToggleSwitch
+            :model-value="settings.playback?.normalize ?? false"
+            :disabled="playbackNormalizeSaving"
+            @update:model-value="togglePlaybackNormalize"
           />
         </div>
       </CollapsibleSection>
@@ -1150,11 +1226,19 @@
     >
       <div
         class="fixed inset-0 bg-black bg-opacity-50 transition-opacity"
-        @click="showChangePassword = false"
+        @click="requestChangePasswordDismiss"
       />
       <div class="flex min-h-full items-center justify-center p-4">
         <div class="relative bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
-          <h3 class="text-lg font-semibold text-gray-900 mb-4">
+          <button
+            v-if="!authLoading"
+            class="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
+            title="Close"
+            @click="requestChangePasswordDismiss"
+          >
+            <CloseIcon class="w-5 h-5" />
+          </button>
+          <h3 class="text-lg font-semibold text-gray-900 mb-4 pr-8">
             Change Password
           </h3>
 
@@ -1201,7 +1285,7 @@
               <button
                 type="button"
                 class="flex-1 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-                @click="showChangePassword = false"
+                @click="requestChangePasswordDismiss"
               >
                 Cancel
               </button>
@@ -1225,11 +1309,19 @@
     >
       <div
         class="fixed inset-0 bg-black bg-opacity-50 transition-opacity"
-        @click="showSetupPassword = false"
+        @click="requestSetupPasswordDismiss"
       />
       <div class="flex min-h-full items-center justify-center p-4">
         <div class="relative bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
-          <h3 class="text-lg font-semibold text-gray-900 mb-2">
+          <button
+            v-if="!authLoading"
+            class="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
+            title="Close"
+            @click="requestSetupPasswordDismiss"
+          >
+            <CloseIcon class="w-5 h-5" />
+          </button>
+          <h3 class="text-lg font-semibold text-gray-900 mb-2 pr-8">
             Set Up Authentication
           </h3>
           <p class="text-sm text-gray-600 mb-4">
@@ -1270,7 +1362,7 @@
               <button
                 type="button"
                 class="flex-1 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-                @click="showSetupPassword = false"
+                @click="requestSetupPasswordDismiss"
               >
                 Cancel
               </button>
@@ -1294,11 +1386,18 @@
     >
       <div
         class="fixed inset-0 bg-black bg-opacity-50 transition-opacity"
-        @click="showUpdateConfirm = false"
+        @click="requestUpdateConfirmDismiss"
       />
       <div class="flex min-h-full items-center justify-center p-4">
         <div class="relative bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
-          <h3 class="text-lg font-semibold text-gray-900 mb-2">
+          <button
+            class="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
+            title="Close"
+            @click="requestUpdateConfirmDismiss"
+          >
+            <CloseIcon class="w-5 h-5" />
+          </button>
+          <h3 class="text-lg font-semibold text-gray-900 mb-2 pr-8">
             Update System?
           </h3>
           <p class="text-sm text-gray-600 mb-4">
@@ -1319,7 +1418,7 @@
           <div class="flex gap-3">
             <button
               class="flex-1 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-              @click="showUpdateConfirm = false"
+              @click="requestUpdateConfirmDismiss"
             >
               Cancel
             </button>
@@ -1403,6 +1502,8 @@ import { useAuth } from '@/composables/useAuth'
 import { useUnitSettings } from '@/composables/useUnitSettings'
 import { useTimeFormat } from '@/composables/useTimeFormat'
 import { useAppStatus } from '@/composables/useAppStatus'
+import { useSettings } from '@/composables/useSettings'
+import { useModalDismiss } from '@/composables/useModalDismiss'
 import { limitDecimals } from '@/utils/inputHelpers'
 import { FILTER_DEFAULTS, modelTypeOptions } from '@/utils/modelDefaults'
 import { RECORDER_STATES } from '@/utils/recorderStates'
@@ -1420,6 +1521,7 @@ import CollapsibleSection from '@/components/CollapsibleSection.vue'
 import ToggleSwitch from '@/components/ToggleSwitch.vue'
 import LogsModal from '@/components/LogsModal.vue'
 import Spinner from '@/components/Spinner.vue'
+import CloseIcon from '@/components/icons/CloseIcon.vue'
 import { SCHEME_TO_SERVICE_NAME } from '@/utils/notificationServices'
 
 const DEFAULT_REPOSITORY_URL = 'https://github.com/Suncuss/BirdNET-PiPy'
@@ -1438,7 +1540,8 @@ export default {
     CollapsibleSection,
     ToggleSwitch,
     LogsModal,
-    Spinner
+    Spinner,
+    CloseIcon
   },
   setup() {
     // Composables
@@ -1447,6 +1550,7 @@ export default {
     const unitSettings = useUnitSettings()
     const timeFormatSettings = useTimeFormat()
     const appStatus = useAppStatus()
+    const settingsStore = useSettings()
 
     // Dropdown options (static configuration)
     const recordingLengthOptions = [
@@ -1641,6 +1745,22 @@ export default {
     const changePasswordError = ref('')
     const setupPasswordError = ref('')
 
+    // canDismiss already guards on authLoading, so the close callbacks just flip the flag.
+    const { requestDismiss: requestChangePasswordDismiss } = useModalDismiss(
+      showChangePassword,
+      () => { showChangePassword.value = false },
+      { canDismiss: () => !authLoading.value }
+    )
+    const { requestDismiss: requestSetupPasswordDismiss } = useModalDismiss(
+      showSetupPassword,
+      () => { showSetupPassword.value = false },
+      { canDismiss: () => !authLoading.value }
+    )
+    const { requestDismiss: requestUpdateConfirmDismiss } = useModalDismiss(
+      showUpdateConfirm,
+      () => { showUpdateConfirm.value = false }
+    )
+
     // Notification modal state
     const showAddNotificationModal = ref(false)
     const editingNotificationIndex = ref(null)
@@ -1660,21 +1780,23 @@ export default {
     const updateChannelSaving = ref(false)
     const metricUnitsSaving = ref(false)
     const timeFormatSaving = ref(false)
+    const playbackNormalizeSaving = ref(false)
 
     // Minimal settings skeleton - actual values loaded from API
     const settings = ref({
       location: {},
       detection: {},
-      species_filter: { allowed_species: [], blocked_species: [] },
+      species_filter: { allowed_species: [], blocked_species: [], included_species: [] },
       audio: {},
       spectrogram: {},
+      playback: { normalize: false },
       storage: { auto_cleanup_enabled: true, trigger_percent: 85, target_percent: 80 },
       updates: {},
       model: { type: 'birdnet' },
       display: {},
       birdweather: { id: null },
       notifications: { apprise_urls: [] },
-      access: { charts_public: false, table_public: false, live_feed_public: false }
+      access: { public_access: true, charts_public: false, table_public: false, live_feed_public: false }
     })
 
     // Unsaved changes tracking
@@ -1694,7 +1816,8 @@ export default {
       detection: { sensitivity: s.detection?.sensitivity, cutoff: s.detection?.cutoff, species_filter_threshold: s.detection?.species_filter_threshold },
       species_filter: {
         allowed_species: s.species_filter?.allowed_species || [],
-        blocked_species: s.species_filter?.blocked_species || []
+        blocked_species: s.species_filter?.blocked_species || [],
+        included_species: s.species_filter?.included_species || []
       },
       model: { type: s.model?.type },
       display: { bird_name_language: s.display?.bird_name_language || 'en', station_name: s.display?.station_name || '' },
@@ -1711,6 +1834,25 @@ export default {
       if (!originalSettings.value) return false
       return JSON.stringify(getComparableSettings(settings.value)) !== JSON.stringify(originalSettings.value)
     })
+
+    // Recording normalization toggle — saves immediately, no restart needed.
+    // The main container reads playback.normalize when it saves each clip, so
+    // the change takes effect on the next recording.
+    const togglePlaybackNormalize = async (value) => {
+      if (playbackNormalizeSaving.value) return
+      try {
+        playbackNormalizeSaving.value = true
+        if (!settings.value.playback) settings.value.playback = {}
+        await api.put('/settings/playback', { normalize: value })
+        settings.value.playback.normalize = value
+        showStatus('success', 'Settings applied.')
+      } catch (error) {
+        console.error('Error saving normalization setting:', error)
+        showStatus('error', 'Failed to save normalization setting')
+      } finally {
+        playbackNormalizeSaving.value = false
+      }
+    }
 
     // System update composable
     const systemUpdate = useSystemUpdate()
@@ -1815,7 +1957,9 @@ export default {
       if (data.display.station_name === undefined) data.display.station_name = ''
       if (!data.model) data.model = { type: 'birdnet' }
       if (!data.notifications) data.notifications = {}
-      if (!data.access) data.access = { charts_public: false, table_public: false, live_feed_public: false }
+      if (!data.access) data.access = { public_access: true, charts_public: false, table_public: false, live_feed_public: false }
+      if (data.access.public_access === undefined) data.access.public_access = true
+      if (!data.playback) data.playback = { normalize: false }
       if (data.updates.channel === 'stable') data.updates.channel = 'release'
       if (!data.audio) data.audio = {}
 
@@ -1892,11 +2036,15 @@ export default {
     const loadSettings = async (retryCount = 0) => {
       try {
         loading.value = true
-        const { data } = await api.get('/settings')
+        // useSettings owns the /settings fetch and syncs display prefs.
+        // Take an independent deep copy — the form mutates this draft.
+        const ok = await settingsStore.refresh()
+        if (!ok || !settingsStore.settings.value) {
+          throw new Error('settings unavailable')
+        }
+        const data = JSON.parse(JSON.stringify(settingsStore.settings.value))
         normalizeSettingsData(data)
         settings.value = data
-        unitSettings.setUseMetricUnits(settings.value.display.use_metric_units ?? true)
-        timeFormatSettings.setTimeFormat(settings.value.display.time_format)
         if (saveStatus.value?.type === 'error') {
           saveStatus.value = null
         }
@@ -1944,6 +2092,8 @@ export default {
         // Apply server-computed fields (e.g. timezone from coordinates)
         if (data.settings) {
           settings.value = data.settings
+          // Keep the shared store in sync with the just-saved state.
+          settingsStore.setSettings(data.settings)
         }
         // Update snapshot after successful save
         takeSnapshot()
@@ -2279,32 +2429,41 @@ export default {
       await systemUpdate.triggerUpdate(true)
     }
 
-    // Species filter modal handlers
-    const openFilterModal = (filterType) => {
-      currentFilterType.value = filterType
+    // Species filter modal handlers — single source of truth for each list's
+    // modal copy and its settings key (drives both open and save).
+    const speciesFilterConfigs = {
+      allowed: {
+        title: 'Allowed Species',
+        description: 'Only detect these species. Leave empty to detect all species for your location.',
+        listKey: 'allowed_species'
+      },
+      blocked: {
+        title: 'Blocked Species',
+        description: 'Never detect these species, even if they match your location.',
+        listKey: 'blocked_species'
+      },
+      included: {
+        title: 'Always Include Species',
+        description: 'Always detect these species, even when the location filter rates them unlikely. Has no effect while an Allowed Species list is set.',
+        listKey: 'included_species'
+      }
+    }
 
-      // Ensure species_filter exists
+    const ensureSpeciesFilter = () => {
       if (!settings.value.species_filter) {
         settings.value.species_filter = {
           allowed_species: [],
-          blocked_species: []
+          blocked_species: [],
+          included_species: []
         }
       }
+    }
 
-      const configs = {
-        allowed: {
-          title: 'Allowed Species',
-          description: 'Only detect these species. Leave empty to detect all species for your location.',
-          listKey: 'allowed_species'
-        },
-        blocked: {
-          title: 'Blocked Species',
-          description: 'Never detect these species, even if they match your location.',
-          listKey: 'blocked_species'
-        }
-      }
+    const openFilterModal = (filterType) => {
+      currentFilterType.value = filterType
+      ensureSpeciesFilter()
 
-      const config = configs[filterType]
+      const config = speciesFilterConfigs[filterType]
       speciesFilterModalConfig.value = {
         title: config.title,
         description: config.description,
@@ -2321,19 +2480,8 @@ export default {
     }
 
     const updateFilterList = (newList) => {
-      if (!settings.value.species_filter) {
-        settings.value.species_filter = {
-          allowed_species: [],
-          blocked_species: []
-        }
-      }
-
-      const listKeys = {
-        allowed: 'allowed_species',
-        blocked: 'blocked_species'
-      }
-
-      const listKey = listKeys[currentFilterType.value]
+      ensureSpeciesFilter()
+      const listKey = speciesFilterConfigs[currentFilterType.value]?.listKey
       if (listKey) {
         settings.value.species_filter[listKey] = newList
       }
@@ -2401,6 +2549,8 @@ export default {
       { key: 'live_feed_public', label: 'Live Feed' }
     ]
 
+    // Optimistic flip with revert on failure; also used by the public_access
+    // master switch (it's just another key in the access settings payload).
     const toggleFeatureAccess = async (featureKey) => {
       const newValue = !settings.value.access[featureKey]
       settings.value.access[featureKey] = newValue
@@ -2555,7 +2705,7 @@ export default {
       loadRecorderStatus()
       loadSpeciesList()
       systemUpdate.loadVersionInfo()
-      auth.checkAuthStatus()
+      auth.ensureAuthLoaded()
       initSettingsSocket()
       window.addEventListener('beforeunload', handleBeforeUnload)
     })
@@ -2589,6 +2739,8 @@ export default {
       updateSubLabel,
       toggleMetricUnits,
       toggleTimeFormat,
+      togglePlaybackNormalize,
+      playbackNormalizeSaving,
       timeFormatSettings,
       showRecorderError,
       limitDecimals,
@@ -2613,6 +2765,9 @@ export default {
       confirmSetupPassword,
       changePasswordError,
       setupPasswordError,
+      requestChangePasswordDismiss,
+      requestSetupPasswordDismiss,
+      requestUpdateConfirmDismiss,
       handleAuthToggle,
       handleChangePassword,
       handleSetupPassword,

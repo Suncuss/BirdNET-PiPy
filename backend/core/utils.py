@@ -1,9 +1,12 @@
+import logging
 import os
 import re
 import subprocess
 import threading
 
 from core.runtime_config import get_runtime_settings
+
+logger = logging.getLogger(__name__)
 
 BUFFER_SIZE = 1000
 
@@ -167,8 +170,8 @@ def generate_spectrogram(input_file_path, output_file_path, graph_title, start_t
     wavfile = runtime['wavfile']
 
     spec_cfg = get_runtime_settings().get('spectrogram', {})
-    max_dbfs = spec_cfg.get('max_dbfs', 0)
-    min_dbfs = spec_cfg.get('min_dbfs', -120)
+    max_dbfs = spec_cfg.get('max_dbfs', 0)      # absolute dBFS ceiling (0 = full scale)
+    min_dbfs = spec_cfg.get('min_dbfs', -100)    # absolute dBFS floor / contrast knob
     max_freq_khz = spec_cfg.get('max_freq_khz', 12)
     min_freq_khz = spec_cfg.get('min_freq_khz', 0)
 
@@ -191,18 +194,32 @@ def generate_spectrogram(input_file_path, output_file_path, graph_title, start_t
     # Slice the data to the specified time range
     data = data[start_sample:end_sample]
 
-    # Normalize audio
+    # Normalize to absolute digital full scale — NOT to each clip's own peak.
+    # This gives a fixed dBFS reference (like sox -Z 0, birdnet-go and
+    # birdnet-live-app) so levels are comparable across clips: a quiet/distant
+    # detection renders dim and a loud one bright, instead of every clip being
+    # auto-gained until its loudest bin hits the top of the scale.
     epsilon = 1e-10
-    data = data / (np.max(np.abs(data)) + epsilon)
+    if np.issubdtype(data.dtype, np.floating):
+        data = data.astype(np.float64)  # float WAVs are already in [-1, 1]
+    elif np.issubdtype(data.dtype, np.unsignedinteger):
+        info = np.iinfo(data.dtype)  # e.g. uint8: midpoint 128, full scale 128
+        midpoint = (int(info.max) + 1) / 2
+        data = (data.astype(np.float64) - midpoint) / midpoint
+    else:
+        info = np.iinfo(data.dtype)  # signed PCM: int16 -32768 maps to -1.0
+        data = data.astype(np.float64) / (int(info.max) + 1)
 
-    # Generate spectrogram
-    frequencies, times, Sxx = spectrogram(data, rate, window=np.hamming(256), noverlap=128, nperseg=256)
+    # Power spectrum (scaling='spectrum') so the level maps to true dBFS: a
+    # full-scale sine peaks at power 0.5, which we treat as the 0 dBFS ceiling.
+    frequencies, times, Sxx = spectrogram(data, rate, window=np.hamming(256),
+                                          noverlap=128, nperseg=256,
+                                          scaling='spectrum')
 
-    # Convert to dBFS, guarding against zero-energy (silent) inputs
-    max_power = np.max(Sxx)
-    if max_power <= 0:
-        max_power = epsilon
-    Sxx_dbfs = 10 * np.log10((Sxx / max_power) + epsilon)
+    # Convert to absolute dBFS referenced to a full-scale sine. The +epsilon
+    # keeps silent (zero-energy) inputs finite; imshow clamps to [min, max]_dbfs.
+    full_scale_power = 0.5
+    Sxx_dbfs = 10 * np.log10((Sxx / full_scale_power) + epsilon)
 
     # Convert frequencies to kHz
     frequencies = frequencies / 1000
@@ -261,6 +278,13 @@ def select_audio_chunks(detected_chunk_index, total_chunks):
     Returns:
         tuple: (start_chunk_index, end_chunk_index) - both inclusive.
                Used by extract_detection_audio() to calculate time range.
+
+    NOTE: the detection player's analysis-window bar re-derives this layout
+    client-side (frontend/src/utils/analysisSegments.js) from
+    timestamp/group_timestamp/overlap — it assumes at most ONE context chunk
+    before the detected window. If the selection layout changes, update that
+    derivation too (or start stamping the clip-relative window into the
+    detection's extra field).
     """
     if detected_chunk_index < 0 or detected_chunk_index >= total_chunks:
         raise ValueError("detected_chunk_index must be within the range of total_chunks")
@@ -282,18 +306,33 @@ def select_audio_chunks(detected_chunk_index, total_chunks):
         return (start, end)
 
 
-def convert_wav_to_mp3(input_file_name, output_file_name, bitrate="320k"):
-    command = [
-        "ffmpeg",
-        "-y",  # Overwrite output file if it exists
-        "-loglevel", "error",  # Suppress most of the output
-        "-i", input_file_name,
-        "-ac", "1", # Convert to mono
-        "-codec:a", "libmp3lame",
-        "-b:a", bitrate,
-        output_file_name
-    ]
-    subprocess.run(command, check=True, timeout=30)
+def convert_wav_to_mp3(input_file_name, output_file_name, bitrate="320k", normalize=False):
+    # Loudness-normalize the clip for human listening so faint/distant birds are
+    # audible. Runs AFTER BirdNET analysis, so it never changes detections.
+    def _run(use_normalize):
+        normalize_filter = ["-af", "loudnorm=I=-18:LRA=11:TP=-1.5"] if use_normalize else []
+        command = [
+            "ffmpeg",
+            "-y",  # Overwrite output file if it exists
+            "-loglevel", "error",  # Suppress most of the output
+            "-i", input_file_name,
+            *normalize_filter,
+            "-ac", "1",  # Convert to mono
+            "-codec:a", "libmp3lame",
+            "-b:a", bitrate,
+            output_file_name,
+        ]
+        subprocess.run(command, check=True, timeout=30)
+
+    if normalize:
+        try:
+            _run(True)
+            return
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            # Don't lose the clip just because the optional loudnorm pass failed —
+            # fall back to an un-normalized conversion.
+            logger.warning("Loudness normalization failed (%s); saving un-normalized clip", e)
+    _run(False)
 
 
 def get_legacy_filename(filename):

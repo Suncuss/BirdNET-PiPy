@@ -1,6 +1,7 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import SetupWizard from '@/components/SetupWizard.vue'
+import { useSettings } from '@/composables/useSettings'
 
 // Mock the api service
 const mockApi = vi.hoisted(() => ({
@@ -10,7 +11,8 @@ const mockApi = vi.hoisted(() => ({
 }))
 
 vi.mock('@/services/api', () => ({
-  default: mockApi
+  default: mockApi,
+  createLongRequest: () => mockApi
 }))
 
 // Mock the useServiceRestart composable
@@ -43,6 +45,7 @@ describe('SetupWizard', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    useSettings().resetState()
     fetchMock = vi.fn()
     global.fetch = fetchMock
   })

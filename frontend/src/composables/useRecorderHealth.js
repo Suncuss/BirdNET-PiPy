@@ -1,25 +1,15 @@
 import { ref, computed } from 'vue'
 import api from '@/services/api'
 import { useAuth } from './useAuth'
+import { useDismissible } from './useDismissible'
 import { RECORDER_STATES } from '@/utils/recorderStates'
+import { RECORDER_DISMISSED_UNTIL_KEY } from '@/utils/storageKeys'
 
 // Module-level state (shared across all components - singleton)
 const recorderStatus = ref(null)
 
-// Dismissal state - stores expiry timestamp (when to show again)
-const DISMISS_STORAGE_KEY = 'birdnet_recorder_dismissed_until'
-const DISMISS_DURATION_MS = 24 * 60 * 60 * 1000 // 24 hours
-
-function loadDismissedUntil() {
-  try {
-    const stored = localStorage.getItem(DISMISS_STORAGE_KEY)
-    return stored ? parseInt(stored, 10) : null
-  } catch {
-    return null
-  }
-}
-
-const dismissedUntil = ref(loadDismissedUntil())
+// Recorder warning is snoozable for 24h.
+const dismissal = useDismissible(RECORDER_DISMISSED_UNTIL_KEY, 24 * 60 * 60 * 1000)
 
 export function useRecorderHealth() {
   const { isAuthenticated } = useAuth()
@@ -28,14 +18,8 @@ export function useRecorderHealth() {
     const state = recorderStatus.value?.state
     if (state !== RECORDER_STATES.DEGRADED && state !== RECORDER_STATES.STOPPED) return false
     if (!isAuthenticated.value) return false
-    return !dismissedUntil.value || Date.now() >= dismissedUntil.value
+    return !dismissal.isDismissed()
   })
-
-  const dismissWarning = () => {
-    const expiry = Date.now() + DISMISS_DURATION_MS
-    dismissedUntil.value = expiry
-    localStorage.setItem(DISMISS_STORAGE_KEY, String(expiry))
-  }
 
   const checkStatus = async () => {
     try {
@@ -53,7 +37,7 @@ export function useRecorderHealth() {
 
   return {
     showRecorderWarning,
-    dismissWarning,
+    dismissWarning: dismissal.dismiss,
     checkStatus
   }
 }

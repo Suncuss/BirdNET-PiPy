@@ -16,6 +16,20 @@ from fixtures.test_config import TEST_DATABASE_SCHEMA
 
 
 @pytest.fixture
+def frozen_db_now(monkeypatch):
+    """Pin core.db.local_now to a fixed mid-day for the duration of the test.
+
+    The SQL in get_summary_stats_all_periods uses local_now() as its
+    upper-bound clock. Pinning it to mid-day decouples tests from CI wall
+    time — without this, tests that insert detections at small negative
+    second-offsets flake near midnight.
+    """
+    fixed = datetime(2026, 5, 20, 12, 0, 0)
+    monkeypatch.setattr('core.db.local_now', lambda: fixed)
+    return fixed
+
+
+@pytest.fixture
 def test_db_manager():
     """Create a DatabaseManager with temporary test database."""
     with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:

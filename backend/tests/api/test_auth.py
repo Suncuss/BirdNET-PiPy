@@ -7,6 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.api.conftest import sandboxed_auth_env
+
 
 class TestAuthEndpoints:
     """Test authentication API endpoints."""
@@ -120,6 +122,33 @@ class TestAuthEndpoints:
 
         assert response.status_code == 200
         assert response.get_json()['success'] is True
+
+    def test_session_cookie_secure_tracks_request_scheme(self, auth_client):
+        """The session cookie's Secure flag is per-request: set when the
+        request arrived over HTTPS (X-Forwarded-Proto from a TLS-terminating
+        proxy), clear over plain HTTP so http://pi logins keep working."""
+        client, _ = auth_client
+
+        client.post('/api/auth/setup',
+                    data=json.dumps({'password': 'testpass123'}),
+                    content_type='application/json')
+        client.post('/api/auth/logout')
+
+        plain = client.post('/api/auth/login',
+                            data=json.dumps({'password': 'testpass123'}),
+                            content_type='application/json')
+        plain_cookie = plain.headers.get('Set-Cookie', '')
+        assert 'birdnet_session' in plain_cookie
+        assert 'Secure' not in plain_cookie
+
+        client.post('/api/auth/logout')
+        https = client.post('/api/auth/login',
+                            data=json.dumps({'password': 'testpass123'}),
+                            content_type='application/json',
+                            headers={'X-Forwarded-Proto': 'https'})
+        https_cookie = https.headers.get('Set-Cookie', '')
+        assert 'birdnet_session' in https_cookie
+        assert 'Secure' in https_cookie
 
     def test_login_with_wrong_password(self, auth_client):
         """Test login with wrong password."""
@@ -583,56 +612,32 @@ class TestFeatureAccess:
     @pytest.fixture
     def feature_client(self):
         """Create a test client with auth enabled, writable settings, and mock DB."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            settings_file = os.path.join(tmpdir, 'user_settings.json')
-            # Write default settings with access block
-            default_settings = {
-                'audio': {'recording_mode': 'pulseaudio'},
-                'location': {'latitude': 40.0, 'longitude': -75.0},
-                'access': {
-                    'charts_public': False,
-                    'table_public': False,
-                    'live_feed_public': False
-                }
+        settings = {
+            'audio': {'recording_mode': 'pulseaudio'},
+            'location': {'latitude': 40.0, 'longitude': -75.0},
+            'access': {
+                'charts_public': False,
+                'table_public': False,
+                'live_feed_public': False
             }
-            with open(settings_file, 'w') as f:
-                json.dump(default_settings, f)
+        }
+        mock_db = MagicMock()
+        mock_db.get_hourly_activity.return_value = []
+        mock_db.get_paginated_detections.return_value = ([], 0)
 
-            def mock_load():
-                with open(settings_file) as f:
-                    return json.load(f)
+        with sandboxed_auth_env(mock_db, settings) as (api_module, settings_file):
+            app, _ = api_module.create_app()
+            app.config['TESTING'] = True
 
-            def mock_save(data):
-                with open(settings_file, 'w') as f:
-                    json.dump(data, f)
+            with app.test_client() as client:
+                # Setup auth and enable it
+                client.post('/api/auth/setup',
+                           data=json.dumps({'password': 'testpass123'}),
+                           content_type='application/json')
+                # Logout to test unauthenticated access
+                client.post('/api/auth/logout')
 
-            mock_db = MagicMock()
-            mock_db.get_hourly_activity.return_value = []
-            mock_db.get_paginated_detections.return_value = ([], 0)
-
-            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
-                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
-                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
-                 patch('core.api.db_manager', mock_db), \
-                 patch('core.api.socketio'), \
-                 patch('core.api.load_user_settings', side_effect=mock_load), \
-                 patch('core.api.save_user_settings', side_effect=mock_save), \
-                 patch('core.runtime_config.get_runtime_settings', side_effect=mock_load), \
-                 patch('core.api.invalidate_runtime_settings_cache'):
-
-                from core.api import create_app
-                app, _ = create_app()
-                app.config['TESTING'] = True
-
-                with app.test_client() as client:
-                    # Setup auth and enable it
-                    client.post('/api/auth/setup',
-                               data=json.dumps({'password': 'testpass123'}),
-                               content_type='application/json')
-                    # Logout to test unauthenticated access
-                    client.post('/api/auth/logout')
-
-                    yield client, settings_file
+                yield client, settings_file
 
     def _login(self, client):
         """Helper to login."""
@@ -838,3 +843,38 @@ class TestFeatureAccess:
         assert response.status_code == 200
         data = response.get_json()
         assert 'recorder_status' not in data
+
+
+class TestGetClientIp:
+    """_get_client_ip must key on proxy-set headers, not client-supplied ones.
+
+    nginx sets X-Real-IP to the real peer (overwriting any client value) and
+    appends the peer to X-Forwarded-For. Keying rate limiting on the LEFTMOST
+    X-Forwarded-For entry let an attacker rotate it to evade the login lockout.
+    """
+
+    def _client_ip(self, headers=None, remote_addr='172.18.0.5'):
+        from flask import Flask
+
+        from core.auth import _get_client_ip
+        app = Flask(__name__)
+        with app.test_request_context(headers=headers or {},
+                                      environ_base={'REMOTE_ADDR': remote_addr}):
+            return _get_client_ip()
+
+    def test_prefers_x_real_ip_over_forwarded_for(self):
+        # X-Real-IP wins even when a (spoofable) X-Forwarded-For is present.
+        assert self._client_ip(headers={
+            'X-Real-IP': '203.0.113.7',
+            'X-Forwarded-For': '6.6.6.6',
+        }) == '203.0.113.7'
+
+    def test_uses_rightmost_forwarded_for_hop(self):
+        # Client prepends a fake IP; nginx appends the real peer on the right.
+        # We must take the rightmost (proxy-added) hop, not the spoofed leftmost.
+        assert self._client_ip(headers={
+            'X-Forwarded-For': '6.6.6.6, 203.0.113.7',
+        }) == '203.0.113.7'
+
+    def test_falls_back_to_remote_addr(self):
+        assert self._client_ip(headers={}, remote_addr='172.18.0.9') == '172.18.0.9'

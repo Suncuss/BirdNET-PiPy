@@ -88,8 +88,15 @@
       </div>
 
       <div class="flex-1 min-h-0">
+        <CenteredMessage
+          v-if="!chartsLoadedOnce"
+          variant="loading"
+          container-class="h-full"
+        >
+          Fetching the latest data...
+        </CenteredMessage>
         <div
-          v-if="!isDataEmpty && !detailedBirdActivityError"
+          v-else-if="!isDataEmpty && !detailedBirdActivityError"
           class="flex h-full"
         >
           <div class="w-full lg:w-1/3 lg:pr-2 relative">
@@ -123,14 +130,20 @@
             </div>
           </div>
         </div>
-        <div
-          v-else
-          class="flex items-center justify-center h-full"
+        <CenteredMessage
+          v-else-if="detailedBirdActivityError"
+          variant="error"
+          container-class="h-full"
         >
-          <p class="text-lg text-gray-500">
-            {{ detailedBirdActivityError || 'No bird activity recorded for this day.' }}
-          </p>
-        </div>
+          {{ detailedBirdActivityError }}
+        </CenteredMessage>
+        <CenteredMessage
+          v-else
+          variant="info"
+          container-class="h-full"
+        >
+          No bird activity recorded for this day.
+        </CenteredMessage>
       </div>
     </div>
 
@@ -235,8 +248,15 @@
       </div>
 
       <!-- Chart or Placeholder -->
+      <CenteredMessage
+        v-if="!trendsLoadedOnce"
+        variant="loading"
+        container-class="h-[300px] lg:h-[375px]"
+      >
+        Fetching the latest data...
+      </CenteredMessage>
       <div
-        v-if="trendsChartData.data.length > 0 && !trendsChartError"
+        v-else-if="trendsChartData.data.length > 0 && !trendsChartError"
         class="h-[300px] lg:h-[375px]"
       >
         <canvas
@@ -244,22 +264,20 @@
           class="h-full"
         />
       </div>
-      <div
+      <CenteredMessage
         v-else-if="trendsChartError"
-        class="flex items-center justify-center h-[300px] lg:h-[375px]"
+        variant="error"
+        container-class="h-[300px] lg:h-[375px]"
       >
-        <p class="text-lg text-gray-500">
-          {{ trendsChartError }}
-        </p>
-      </div>
-      <div
+        {{ trendsChartError }}
+      </CenteredMessage>
+      <CenteredMessage
         v-else
-        class="flex items-center justify-center h-[300px] lg:h-[375px]"
+        variant="info"
+        container-class="h-[300px] lg:h-[375px]"
       >
-        <p class="text-lg text-gray-500">
-          No detection data available for the selected period.
-        </p>
-      </div>
+        No detection data available for the selected period.
+      </CenteredMessage>
     </div>
 
     <!-- Species Detection Distribution -->
@@ -288,19 +306,10 @@
                   :disabled="isLoadingSpecies"
                   @click="toggleDropdown"
                 >
-                  <svg
+                  <ChevronIcon
+                    direction="down"
                     class="h-4 w-4"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      stroke-width="2"
-                      d="M19 9l-7 7-7-7"
-                    />
-                  </svg>
+                  />
                 </button>
                                 
                 <!-- Dropdown List -->
@@ -457,8 +466,10 @@ import { useChartHelpers } from '@/composables/useChartHelpers'
 import api from '@/services/api'
 import AppButton from '@/components/AppButton.vue'
 import AppDatePicker from '@/components/AppDatePicker.vue'
+import CenteredMessage from '@/components/CenteredMessage.vue'
 import SpeciesAxisLinks from '@/components/SpeciesAxisLinks.vue'
 import TimeAxisLinks from '@/components/TimeAxisLinks.vue'
+import ChevronIcon from '@/components/icons/ChevronIcon.vue'
 import { getDisplayCommonName, matchesBirdQuery } from '@/utils/birdNames'
 
 Chart.register(MatrixController, MatrixElement)
@@ -468,8 +479,10 @@ export default {
     components: {
         AppButton,
         AppDatePicker,
+        CenteredMessage,
         SpeciesAxisLinks,
-        TimeAxisLinks
+        TimeAxisLinks,
+        ChevronIcon
     },
     setup() {
         const {
@@ -508,6 +521,7 @@ export default {
         const maxDate = ref(getLocalDateString())
         const isLoading = ref(false)
         const isUpdating = ref(false)
+        const chartsLoadedOnce = ref(false)
 
         // Species limit for heatmap
         const speciesLimit = ref(10)
@@ -542,6 +556,7 @@ export default {
         const isUpdatingTrends = ref(false)
         const trendsChartData = ref({ labels: [], data: [] })
         const trendsChartError = ref(null)
+        const trendsLoadedOnce = ref(false)
 
         // Computed properties
         const limitedBirdActivityData = computed(() => {
@@ -604,6 +619,8 @@ export default {
             year: 'Year'
         }
 
+        const TRENDS_FETCH_ERROR = 'Failed to load detection trends'
+
         // Methods
         const onDateChange = async () => {
             if (isUpdating.value) return
@@ -613,6 +630,11 @@ export default {
 
             try {
                 await fetchChartsData(selectedDate.value)
+                // Flip BEFORE createCharts so Vue's next render unmounts
+                // the loading placeholder and the data branch's <canvas>
+                // is in the DOM by the time createCharts's nextTick
+                // resolves. Mirrors the dfa2c90 fix on the trends path.
+                chartsLoadedOnce.value = true
                 if (!isDataEmpty.value) {
                     await createCharts()
                 }
@@ -836,15 +858,29 @@ export default {
                 const endDate = trendsEndDate.value
 
                 const data = await fetchTrendsData(startDate, endDate)
+                // Flip the loaded flag BEFORE the nextTick that swaps the
+                // loading placeholder for the <canvas>; otherwise the canvas
+                // ref is still null when createTrendsChart runs and Chart.js
+                // never draws on the initial load.
+                trendsLoadedOnce.value = true
 
                 if (data) {
                     trendsChartData.value = data
                     await nextTick()
                     createTrendsChart(data)
+                } else {
+                    // fetchTrendsData swallows network errors and returns null;
+                    // surface that as an error and drop the prior chart so a
+                    // stale line doesn't render under a new date range.
+                    trendsChartError.value = TRENDS_FETCH_ERROR
+                    trendsChartData.value = { labels: [], data: [] }
+                    destroyChart(trendsChart)
                 }
             } catch (error) {
                 console.error('Error updating trends chart:', error)
-                trendsChartError.value = 'Failed to load detection trends'
+                trendsChartError.value = TRENDS_FETCH_ERROR
+                destroyChart(trendsChart)
+                trendsLoadedOnce.value = true
             } finally {
                 isUpdatingTrends.value = false
             }
@@ -991,6 +1027,7 @@ export default {
         // Lifecycle
         onMounted(async () => {
             await fetchChartsData(selectedDate.value)
+            chartsLoadedOnce.value = true
             if (!isDataEmpty.value) {
                 createCharts()
             }
@@ -1027,6 +1064,7 @@ export default {
             canGoForward,
             isLoading,
             isUpdating,
+            chartsLoadedOnce,
             activityChartHeight,
             speciesLimit,
             speciesLimitOptions,
@@ -1063,6 +1101,7 @@ export default {
             trendsMaxDate,
             trendsChartData,
             trendsChartError,
+            trendsLoadedOnce,
             isUpdatingTrends,
             canGoForwardTrends,
             onTrendsTimeRangeChange,

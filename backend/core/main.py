@@ -32,6 +32,7 @@ from core.bird_name_utils import get_localized_common_name, get_spectrogram_comm
 from core.birdweather_service import get_birdweather_service
 from core.db import DatabaseManager
 from core.fd_diagnostics import log_fd_exhaustion_if_needed
+from core.internal_auth import INTERNAL_SECRET_HEADER, get_or_create_internal_secret
 from core.logging_config import get_logger, setup_logging
 from core.notification_service import get_notification_service
 from core.runtime_config import get_runtime_settings, resolve_source_label
@@ -261,6 +262,7 @@ def broadcast_recorder_status(
         resp = requests.post(
             f'http://{API_HOST}:{API_PORT}/api/broadcast/recorder-status',
             json=status_data,
+            headers={INTERNAL_SECRET_HEADER: get_or_create_internal_secret()},
             timeout=BROADCAST_TIMEOUT
         )
         resp.raise_for_status()
@@ -496,6 +498,9 @@ def continuous_audio_recording(thread_logger):
 def extract_detection_audio(detection: dict[str, Any], input_file_path: str) -> str:
     """Extract audio segment for detection and convert to MP3.
 
+    The frontend's analysis-window bar mirrors this start/end math from the
+    detection row alone (see select_audio_chunks NOTE) — keep them in step.
+
     Args:
         detection: Detection dictionary from BirdNet analysis
         input_file_path: Path to the source audio file
@@ -513,9 +518,17 @@ def extract_detection_audio(detection: dict[str, Any], input_file_path: str) -> 
     wav_path = os.path.join(EXTRACTED_AUDIO_DIR, detection['bird_song_file_name'])
     mp3_path = wav_path.replace('.wav', '.mp3')
 
+    normalize = get_runtime_settings().get('playback', {}).get('normalize', False)
     trim_audio(input_file_path, wav_path, start_time, end_time)
-    convert_wav_to_mp3(wav_path, mp3_path)
-    os.remove(wav_path)
+    try:
+        convert_wav_to_mp3(wav_path, mp3_path, normalize=normalize)
+    finally:
+        # Always drop the intermediate WAV — without this, a conversion failure
+        # would orphan it in EXTRACTED_AUDIO_DIR with no DB row to ever clean up.
+        try:
+            os.remove(wav_path)
+        except OSError:
+            pass
 
     return mp3_path
 
@@ -594,6 +607,7 @@ def broadcast_detection(detection: dict[str, Any], thread_logger) -> None:
         requests.post(
             f'http://{API_HOST}:{API_PORT}/api/broadcast/detection',
             json=detection_data,
+            headers={INTERNAL_SECRET_HEADER: get_or_create_internal_secret()},
             timeout=BROADCAST_TIMEOUT
         )
         thread_logger.debug("Detection broadcasted via WebSocket", extra={

@@ -151,15 +151,34 @@ class TestDatabaseBasicOperations:
         }
         test_db_manager.insert_detection(rare_detection)
 
-        stats = test_db_manager.get_summary_stats()
+        # The fixture data is anchored in 2024, well outside today/week/month
+        # relative to the test clock — so it lands in the allTime bucket.
+        now = datetime.now()
+        all_stats = test_db_manager.get_summary_stats_all_periods(
+            now.replace(hour=0, minute=0, second=0, microsecond=0),
+            now - timedelta(weeks=1),
+            now - timedelta(days=30),
+        )
 
-        # Check structure
+        # allTime sees the full fixture.
+        stats = all_stats['allTime']
         assert 'totalObservations' in stats
         assert 'uniqueSpecies' in stats
         assert stats['totalObservations'] == 11
         assert stats['uniqueSpecies'] == 2
         assert stats['mostCommonBird'] == 'American Robin'
         assert stats['rarestBird'] == 'Hooded Warbler'
+
+        # Today/week/month buckets stay empty — the WHERE c_<period> > 0
+        # guards in the SQL must prevent leaking historical detections
+        # into recent buckets.
+        for period in ('today', 'week', 'month'):
+            empty = all_stats[period]
+            assert empty['totalObservations'] == 0, period
+            assert empty['uniqueSpecies'] == 0, period
+            assert empty['mostActiveHour'] == 'N/A', period
+            assert empty['mostCommonBird'] == 'N/A', period
+            assert empty['rarestBird'] == 'N/A', period
 
     def test_get_bird_details(self, test_db_manager):
         """Test bird details with proper data."""
@@ -341,3 +360,7 @@ class TestDatabaseBasicOperations:
         # Check alphabetical order
         names = [s['common_name'] for s in result]
         assert names == sorted(names)
+
+        # Each species carries its latest detection timestamp so the Species
+        # Catalog needs no per-species detail fetch.
+        assert all(s['last_detected'] == '2024-01-15T12:00:00' for s in result)

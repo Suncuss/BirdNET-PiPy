@@ -98,6 +98,27 @@ Three test suites cover backend, frontend, and install scripts. Each has its own
 
 Before syncing dev to staging or main, always run `./build.sh` first and confirm it passes.
 
+## Changelog
+
+Add user-facing changes as a bullet under `## [Unreleased]` in `CHANGELOG.md`. Keep each entry concise: lead with `Fixed`/`Added`/`Changed`/`Improved`, and state the change and (briefly) the why in one or two sentences. Prefer a single tight bullet over a paragraph — trim mechanism detail that belongs in the commit message, not the changelog. Don't reference GitHub issue numbers in changelog entries.
+
+## Home Assistant Add-on
+
+A Home Assistant add-on packages this project for HA users (see
+`internal_docs/HA_ADDON_WORKFLOW.md`). The add-on builds BirdNET-PiPy **from
+source**, not from a published image: our test repo
+(`Suncuss/hassio-addon-birdnet-pipy`) builds the `ha` branch; the public
+add-on (`alexbelgium/hassio-addons`) builds `main` HEAD. The `ha` branch is
+**not** auto-updated — it is a manual content snapshot of `main`/`dev`.
+
+When a change touches anything the add-on build or runtime depends on —
+`backend/requirements.txt` deps, the API entrypoint / `wsgi.py`, anything
+affecting s6 service startup or which ports services bind — proactively tell
+the user that (1) the `ha` branch must be re-synced before HA users get it,
+and (2) the add-on repos (`hassio-addon-birdnet-pipy` and an
+`alexbelgium/hassio-addons` PR) may need a matching change. Do not assume an
+upstream code change reaches HA users on its own.
+
 ## Git Hygiene
 
 Never bypass `.gitignore` (no `git add -f`, no explicit-path force-staging) without explicit user approval. If a file genuinely needs to be in the repo, change the ignore rule instead of overriding it for one file — silently force-adding leaves a tracked file behind that the ignore pattern can't clean up later.

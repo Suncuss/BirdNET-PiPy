@@ -153,9 +153,14 @@ class TestBirdRecordingsResolverIngress:
     """V2 and V3 route params both produce the merged recording list."""
 
     def test_merges_recordings_across_english_variants(
-        self, api_client, real_db_manager
+        self, api_client, real_db_manager, create_recording_files
     ):
         _seed_blackbird_mixed_history(real_db_manager)
+
+        # The recordings endpoint skips records whose media files are absent;
+        # make both seeded detections' files present (they share a scientific
+        # name but differ in common_name, so fetch by scientific_name).
+        create_recording_files(real_db_manager, scientific_name='Turdus merula')
 
         with _patch_settings('en'):
             v2 = api_client.get('/api/bird/Eurasian Blackbird/recordings')

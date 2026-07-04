@@ -1,5 +1,5 @@
-import { mount, flushPromises } from '@vue/test-utils'
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import AddNotificationModal from '@/components/AddNotificationModal.vue'
 import {
   SERVICES,
@@ -16,6 +16,9 @@ vi.mock('@/services/api', () => ({
 }))
 
 const mountModal = () => mount(AddNotificationModal)
+
+enableAutoUnmount(afterEach)
+afterEach(() => { document.body.style.overflow = '' })
 
 describe('notificationServices - URL builders', () => {
   it('Telegram: builds correct URL', () => {
@@ -314,6 +317,26 @@ describe('AddNotificationModal - component', () => {
 
     const backdrop = wrapper.find('.bg-black')
     await backdrop.trigger('click')
+
+    expect(wrapper.emitted('close')).toBeFalsy()
+  })
+
+  it('Escape emits close when not testing', async () => {
+    const wrapper = mountModal()
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.emitted('close')).toBeTruthy()
+  })
+
+  it('Escape does not emit close when testing', async () => {
+    const wrapper = mountModal()
+
+    wrapper.vm.testing = true
+    await wrapper.vm.$nextTick()
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await wrapper.vm.$nextTick()
 
     expect(wrapper.emitted('close')).toBeFalsy()
   })

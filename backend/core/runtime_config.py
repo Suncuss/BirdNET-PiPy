@@ -25,10 +25,11 @@ def _safe_mtime(path: str) -> float | None:
         return None
 
 
-def get_runtime_settings(force_reload: bool = False) -> dict[str, Any]:
-    """Get settings with mtime-based caching.
+def _load_cached_settings(force_reload: bool = False) -> dict[str, Any]:
+    """Return the cached settings dict itself (reloading on mtime change).
 
-    Returns a deep copy so callers can mutate safely.
+    Internal: the returned object is shared — callers must treat it as
+    read-only and never hand it out.
     """
     global _cached_settings, _cached_mtime
 
@@ -44,7 +45,31 @@ def get_runtime_settings(force_reload: bool = False) -> dict[str, Any]:
             _cached_mtime = _safe_mtime(USER_SETTINGS_PATH)
 
         # load_user_settings() always returns a dict, but keep this guard for safety
-        return copy.deepcopy(_cached_settings or {})
+        return _cached_settings or {}
+
+
+def get_runtime_settings(force_reload: bool = False) -> dict[str, Any]:
+    """Get settings with mtime-based caching.
+
+    Returns a deep copy so callers can mutate safely.
+    """
+    return copy.deepcopy(_load_cached_settings(force_reload))
+
+
+def get_runtime_setting(path: str, default: Any = None) -> Any:
+    """Read one setting by dotted path without get_runtime_settings' deep copy.
+
+    For hot per-request/per-file paths (e.g. the anonymous access flag checked
+    on every media fetch) where deep-copying the whole settings dict per read
+    is measurable on a Pi. Returns the cached object itself for container
+    values — treat the result as read-only.
+    """
+    value: Any = _load_cached_settings()
+    for key in path.split('.'):
+        if not isinstance(value, dict) or key not in value:
+            return default
+        value = value[key]
+    return value
 
 
 def resolve_source_label(source_id: str, fallback: str = '') -> str:

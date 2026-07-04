@@ -2,11 +2,18 @@
   <div class="fixed inset-0 z-50 overflow-y-auto">
     <div
       class="fixed inset-0 bg-black bg-opacity-50 transition-opacity"
-      @click="$emit('cancel')"
+      @click="requestDismiss"
     />
     <div class="flex min-h-full items-center justify-center p-4">
       <div class="relative bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
-        <h3 class="text-lg font-semibold text-gray-900 mb-2">
+        <button
+          class="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
+          title="Close"
+          @click="requestDismiss"
+        >
+          <CloseIcon class="w-5 h-5" />
+        </button>
+        <h3 class="text-lg font-semibold text-gray-900 mb-2 pr-8">
           {{ title }}
         </h3>
         <p class="text-sm text-gray-600 mb-4">
@@ -32,8 +39,12 @@
 </template>
 
 <script>
+import CloseIcon from '@/components/icons/CloseIcon.vue'
+import { useModalDismiss } from '@/composables/useModalDismiss'
+
 export default {
   name: 'ConfirmModal',
+  components: { CloseIcon },
   props: {
     title: {
       type: String,
@@ -52,6 +63,16 @@ export default {
       default: 'Cancel'
     }
   },
-  emits: ['confirm', 'cancel']
+  emits: ['confirm', 'cancel'],
+  setup(_, { emit }) {
+    const { requestDismiss } = useModalDismiss(
+      () => true,
+      () => emit('cancel')
+    )
+
+    return {
+      requestDismiss
+    }
+  }
 }
 </script>

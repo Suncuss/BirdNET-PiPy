@@ -47,6 +47,8 @@ describe('useFetchBirdData', () => {
       expect(result).toHaveProperty('latestObservationError')
       expect(result).toHaveProperty('recentObservationsError')
       expect(result).toHaveProperty('summaryError')
+      expect(result).toHaveProperty('summaryLoading')
+      expect(result).toHaveProperty('summaryErrors')
       expect(result).toHaveProperty('latestObservationimageUrl')
     })
 
@@ -54,10 +56,12 @@ describe('useFetchBirdData', () => {
       const result = useFetchBirdData()
 
       expect(result).toHaveProperty('fetchDashboardData')
+      expect(result).toHaveProperty('fetchSummaryData')
       expect(result).toHaveProperty('setActivityOrder')
       expect(result).toHaveProperty('setRecentObsMode')
       expect(result).toHaveProperty('fetchChartsData')
       expect(typeof result.fetchDashboardData).toBe('function')
+      expect(typeof result.fetchSummaryData).toBe('function')
       expect(typeof result.setActivityOrder).toBe('function')
       expect(typeof result.setRecentObsMode).toBe('function')
       expect(typeof result.fetchChartsData).toBe('function')
@@ -71,6 +75,8 @@ describe('useFetchBirdData', () => {
       expect(result.latestObservationData.value).toBeNull()
       expect(result.recentObservationsData.value).toEqual([])
       expect(result.summaryData.value).toEqual({})
+      expect(result.summaryLoading.value).toEqual({})
+      expect(result.summaryErrors.value).toEqual({})
       expect(result.latestObservationimageUrl.value).toBe('default_bird.webp')
     })
 
@@ -209,6 +215,124 @@ describe('useFetchBirdData', () => {
       expect(summaryData.value).toEqual(dashData.summary)
       expect(hourlyBirdActivityData.value).toEqual(dashData.hourlyActivity)
       expect(detailedBirdActivityData.value).toEqual(dashData.activityOverview.most)
+    })
+
+    it('fetches one lazy summary period and stores it by period', async () => {
+      const weekSummary = {
+        totalObservations: 42,
+        uniqueSpecies: 7,
+        mostActiveHour: '09:00',
+        mostCommonBird: 'Robin',
+        rarestBird: 'Sparrow'
+      }
+
+      mockApi.get.mockImplementation((url) => {
+        if (url === '/dashboard/summary') {
+          return Promise.resolve({ data: weekSummary })
+        }
+        return Promise.reject(new Error(`Unknown URL: ${url}`))
+      })
+
+      const {
+        fetchSummaryData,
+        summaryData,
+        summaryLoading,
+        summaryErrors
+      } = useFetchBirdData()
+
+      const result = await fetchSummaryData('week')
+
+      expect(result).toEqual(weekSummary)
+      expect(mockApi.get).toHaveBeenCalledWith('/dashboard/summary', {
+        params: { period: 'week' }
+      })
+      expect(summaryData.value.week).toEqual(weekSummary)
+      expect(summaryLoading.value.week).toBe(false)
+      expect(summaryErrors.value.week).toBe(null)
+    })
+
+    it('does not refetch an already-loaded summary period unless forced', async () => {
+      mockApi.get.mockResolvedValue({
+        data: { totalObservations: 42 }
+      })
+
+      const { fetchSummaryData, summaryData } = useFetchBirdData()
+
+      await fetchSummaryData('week')
+      await fetchSummaryData('week')
+      expect(mockApi.get).toHaveBeenCalledTimes(1)
+
+      await fetchSummaryData('week', { force: true })
+      expect(mockApi.get).toHaveBeenCalledTimes(2)
+      expect(summaryData.value.week).toEqual({ totalObservations: 42 })
+    })
+
+    it('dashboard refresh drops hidden lazy summaries so they refetch when selected later', async () => {
+      const initialData = mockDashboardResponse({
+        summary: {
+          today: { totalObservations: 1 },
+          week: { totalObservations: 7 }
+        }
+      })
+      const refreshedData = mockDashboardResponse({
+        summary: {
+          today: { totalObservations: 2 }
+        }
+      })
+
+      mockApi.get.mockImplementation((url) => {
+        if (url === '/dashboard') {
+          return Promise.resolve({
+            data: mockApi.get.mock.calls.filter(([calledUrl]) => calledUrl === '/dashboard').length === 1
+              ? initialData
+              : refreshedData
+          })
+        }
+        if (url === '/wikimedia_image') {
+          return Promise.resolve({ data: { imageUrl: '/robin.jpg' } })
+        }
+        return Promise.reject(new Error(`Unknown URL: ${url}`))
+      })
+
+      const { fetchDashboardData, summaryData } = useFetchBirdData()
+
+      await fetchDashboardData()
+      expect(summaryData.value.week).toEqual({ totalObservations: 7 })
+
+      await fetchDashboardData()
+      expect(summaryData.value).toEqual({ today: { totalObservations: 2 } })
+    })
+
+    it('records lazy summary period errors without clearing loaded summaries', async () => {
+      mockApi.get.mockImplementation((url) => {
+        if (url === '/dashboard') {
+          return Promise.resolve({
+            data: mockDashboardResponse({ summary: { today: { totalObservations: 5 } } })
+          })
+        }
+        if (url === '/wikimedia_image') {
+          return Promise.resolve({ data: { imageUrl: '/robin.jpg' } })
+        }
+        if (url === '/dashboard/summary') {
+          return Promise.reject(new Error('Network error'))
+        }
+        return Promise.reject(new Error(`Unknown URL: ${url}`))
+      })
+
+      const {
+        fetchDashboardData,
+        fetchSummaryData,
+        summaryData,
+        summaryErrors,
+        summaryLoading
+      } = useFetchBirdData()
+
+      await fetchDashboardData()
+      await fetchSummaryData('allTime')
+
+      expect(summaryData.value.today).toEqual({ totalObservations: 5 })
+      expect(summaryErrors.value.allTime).toBe('Hmm, cannot reach the server')
+      expect(summaryLoading.value.allTime).toBe(false)
     })
 
     it('switches activity order instantly via setActivityOrder', async () => {

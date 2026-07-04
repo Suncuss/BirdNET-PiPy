@@ -31,6 +31,23 @@ def reset_imports():
         sys.modules.pop(module, None)
 
 
+@pytest.fixture(autouse=True)
+def isolate_internal_secret(tmp_path):
+    """Redirect the internal broadcast secret to a tmp file.
+
+    docker-test.sh mounts the repo at /app, so the default secret path is the
+    LIVE data/config dir; without this, any broadcast in a test would write a
+    real internal_secret there. Also resets the in-process cache so each test
+    gets a fresh, isolated secret.
+    """
+    from unittest.mock import patch
+
+    import core.internal_auth as internal_auth
+    with patch.object(internal_auth, '_SECRET_FILE', str(tmp_path / 'internal_secret')), \
+         patch.object(internal_auth, '_cached_secret', None):
+        yield
+
+
 @pytest.fixture
 def test_env(monkeypatch):
     """Set up test environment variables."""

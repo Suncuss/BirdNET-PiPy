@@ -1,5 +1,5 @@
-import { mount, flushPromises } from '@vue/test-utils'
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import SpeciesFilterModal from '@/components/SpeciesFilterModal.vue'
 
 const mockApi = vi.hoisted(() => ({
@@ -24,6 +24,9 @@ const mountModal = (props = {}) => mount(SpeciesFilterModal, {
     ...props
   }
 })
+
+enableAutoUnmount(afterEach)
+afterEach(() => { document.body.style.overflow = '' })
 
 describe('SpeciesFilterModal', () => {
   beforeEach(() => {
@@ -85,5 +88,28 @@ describe('SpeciesFilterModal', () => {
 
     expect(wrapper.vm.filteredSpecies).toHaveLength(1)
     expect(wrapper.vm.filteredSpecies[0].common_name).toBe('Blue Jay')
+  })
+
+  it('closes on Escape unless saving or restarting', async () => {
+    const wrapper = mountModal()
+    await flushPromises()
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await wrapper.vm.$nextTick()
+    expect(wrapper.emitted('close')).toBeTruthy()
+
+    const savingWrapper = mountModal()
+    await flushPromises()
+    savingWrapper.vm.saving = true
+    await savingWrapper.vm.$nextTick()
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await savingWrapper.vm.$nextTick()
+    expect(savingWrapper.emitted('close')).toBeFalsy()
+
+    const restartingWrapper = mountModal({ isRestarting: true })
+    await flushPromises()
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await restartingWrapper.vm.$nextTick()
+    expect(restartingWrapper.emitted('close')).toBeFalsy()
   })
 })

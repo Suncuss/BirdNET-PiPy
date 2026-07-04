@@ -3,7 +3,7 @@
     <!-- Backdrop -->
     <div
       class="fixed inset-0 bg-black bg-opacity-50 transition-opacity"
-      @click="$emit('close')"
+      @click="requestDismiss"
     />
 
     <!-- Modal -->
@@ -19,21 +19,10 @@
           </h2>
           <button
             class="text-gray-400 hover:text-gray-600"
-            @click="$emit('close')"
+            title="Close"
+            @click="requestDismiss"
           >
-            <svg
-              class="w-5 h-5"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M6 18L18 6M6 6l12 12"
-              />
-            </svg>
+            <CloseIcon class="w-5 h-5" />
           </button>
         </div>
 
@@ -178,12 +167,14 @@
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useLogs } from '@/composables/useLogs'
 import CenteredMessage from '@/components/CenteredMessage.vue'
+import CloseIcon from '@/components/icons/CloseIcon.vue'
+import { useModalDismiss } from '@/composables/useModalDismiss'
 
 export default {
   name: 'LogsModal',
-  components: { CenteredMessage },
+  components: { CenteredMessage, CloseIcon },
   emits: ['close'],
-  setup() {
+  setup(_, { emit }) {
     const {
       entries, total, isLoading, error,
       serviceFilter, searchQuery, isPolling,
@@ -193,6 +184,10 @@ export default {
     const logContainer = ref(null)
     const isAtBottom = ref(true)
     let searchTimeout = null
+    const { requestDismiss } = useModalDismiss(
+      () => true,
+      () => emit('close')
+    )
 
     // Reverse: API returns newest-first, we want oldest-first (newest at bottom)
     const displayEntries = computed(() => [...entries.value].reverse())
@@ -282,7 +277,8 @@ export default {
       applyFilters, clearFilters,
       logContainer, isAtBottom,
       levelClass, padLevel, formatTimestamp, hasExtras, formatExtras,
-      onScroll, scrollToBottom, togglePolling, onSearchInput
+      onScroll, scrollToBottom, togglePolling, onSearchInput,
+      requestDismiss
     }
   }
 }

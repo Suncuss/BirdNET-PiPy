@@ -18,11 +18,52 @@ from unittest.mock import Mock, patch
 import pytest
 
 from core.audio_manager import (
+    RTSP_PROBE_TIMEOUT_SECONDS,
+    RTSP_SOCKET_TIMEOUT_US,
     BaseRecorder,
     PulseAudioRecorder,
     RtspRecorder,
     create_recorder,
 )
+
+# Aliased on import: the source name starts with "test_", so importing it
+# under that name makes pytest try to collect it as a test case.
+from core.audio_manager import test_stream_url as probe_stream_url
+
+
+class TestRtspStreamProbe:
+    """Test RTSP stream probe behavior."""
+
+    def test_probe_uses_prefer_tcp_with_runtime_timeout(self):
+        """Probe should prefer TCP but allow ffmpeg's RTSP fallback."""
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value = Mock(returncode=0, stderr='')
+
+            success, message = probe_stream_url('rtsp://192.168.1.100:554/stream')
+
+            assert success is True
+            assert message == 'Stream is accessible'
+
+            cmd = mock_run.call_args[0][0]
+            assert '-rtsp_flags' in cmd
+            assert 'prefer_tcp' in cmd
+            assert '-rtsp_transport' not in cmd
+            assert '-timeout' in cmd
+            assert RTSP_SOCKET_TIMEOUT_US in cmd
+            assert mock_run.call_args[1]['timeout'] == RTSP_PROBE_TIMEOUT_SECONDS
+
+    def test_probe_timeout_returns_failure_message(self):
+        """Probe timeout should be surfaced without raising."""
+        with patch('subprocess.run') as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(
+                cmd='ffmpeg',
+                timeout=RTSP_PROBE_TIMEOUT_SECONDS,
+            )
+
+            success, message = probe_stream_url('rtsp://192.168.1.100:554/stream')
+
+            assert success is False
+            assert message == 'Connection timed out while probing stream'
 
 
 class TestCreateRecorderFactory:
@@ -443,10 +484,11 @@ class TestRtspRecorderRecordChunk:
             # Should be a list, not a string (no shell injection)
             assert isinstance(cmd, list)
             assert cmd[0] == 'ffmpeg'
-            assert '-rtsp_transport' in cmd
-            assert 'tcp' in cmd
+            assert '-rtsp_transport' not in cmd
+            assert '-rtsp_flags' in cmd
+            assert 'prefer_tcp' in cmd
             assert '-timeout' in cmd
-            assert '10000000' in cmd
+            assert RTSP_SOCKET_TIMEOUT_US in cmd
             assert '-allowed_media_types' in cmd
             assert 'audio' in cmd
             assert '-fflags' in cmd
@@ -456,8 +498,8 @@ class TestRtspRecorderRecordChunk:
             assert 'rtsp://192.168.1.100:554/stream' in cmd
             assert '-map' in cmd
             assert '0:a:0' in cmd
-            assert '-af' in cmd
-            assert 'aresample=async=1:first_pts=0' in cmd
+            assert '-af' not in cmd
+            assert 'aresample=async=1:first_pts=0' not in cmd
             assert '-t' in cmd
             assert '3.0' in cmd
             assert '-ar' in cmd

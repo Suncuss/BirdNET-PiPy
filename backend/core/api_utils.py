@@ -175,6 +175,29 @@ def serve_file_with_fallback(directory, filename, default_file_path, file_type="
     return serve_default()
 
 
+def recording_has_media(recording, audio_dir, spectrogram_dir):
+    """Return True only when both the recording's audio and spectrogram files
+    exist on disk.
+
+    A detection row can outlive its files: storage cleanup deletes the audio
+    and spectrogram but keeps the row, and spectrogram generation can fail
+    independently of audio extraction. Such records would otherwise render as a
+    dead audio player next to a default-placeholder image (the serve endpoints
+    return a default with HTTP 200, so the browser gets no error to react to).
+
+    The filenames are derived server-side from detection metadata, so they are
+    trusted here and need no path-traversal guard (unlike serve_file_with_fallback,
+    whose filename comes from the request URL).
+    """
+    audio = recording.get('audio_filename')
+    spectrogram = recording.get('spectrogram_filename')
+    return (
+        bool(audio and spectrogram)
+        and os.path.exists(os.path.join(audio_dir, audio))
+        and os.path.exists(os.path.join(spectrogram_dir, spectrogram))
+    )
+
+
 def validate_limit_param(default=10, min_val=1, max_val=100):
     """
     Decorator to validate and constrain 'limit' parameter

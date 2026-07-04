@@ -10,11 +10,11 @@
     <div
       v-if="isVisible"
       class="fixed inset-0 z-50 overflow-y-auto bg-black/70"
-      @click.self="onCancel"
+      @click.self="requestDismiss"
     >
       <div
         class="flex min-h-full items-center justify-center p-4"
-        @click.self="onCancel"
+        @click.self="requestDismiss"
       >
         <div class="relative bg-white rounded-xl shadow-xl max-w-3xl w-full max-h-[90vh] flex flex-col">
           <!-- Header -->
@@ -25,21 +25,12 @@
             <button
               class="p-1 rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
               title="Close"
-              @click="onCancel"
+              @click="requestDismiss"
             >
-              <svg
+              <CloseIcon
                 class="h-5 w-5"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke-width="2.5"
-                stroke="currentColor"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  d="M6 18L18 6M6 6l12 12"
-                />
-              </svg>
+                :stroke-width="2.5"
+              />
             </button>
           </div>
 
@@ -139,19 +130,10 @@
                     title="Remove custom image"
                     @click.stop="markReset"
                   >
-                    <svg
+                    <CloseIcon
                       class="w-3.5 h-3.5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke-width="2.5"
-                      stroke="currentColor"
-                    >
-                      <path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        d="M6 18L18 6M6 6l12 12"
-                      />
-                    </svg>
+                      :stroke-width="2.5"
+                    />
                   </button>
                 </template>
                 <template v-else-if="pendingFile">
@@ -214,18 +196,21 @@
             <div class="mt-4 min-h-[2.5rem] text-sm text-gray-600">
               <p
                 v-if="attributionText"
-                class="leading-snug"
+                class="flex items-baseline leading-snug"
               >
-                {{ attributionText.prefix }}
+                <span class="shrink-0">{{ attributionText.prefix }}&nbsp;</span>
                 <a
                   v-if="attributionText.authorUrl"
                   :href="attributionText.authorUrl"
                   target="_blank"
                   rel="noopener noreferrer"
-                  class="text-blue-600 underline"
+                  class="text-blue-600 underline truncate min-w-0"
                 >{{ attributionText.authorName }}</a>
-                <span v-else>{{ attributionText.authorName }}</span>
-                {{ attributionText.suffix }}
+                <span
+                  v-else
+                  class="truncate min-w-0"
+                >{{ attributionText.authorName }}</span>
+                <span class="shrink-0">{{ attributionText.suffix }}</span>
               </p>
               <p
                 v-else-if="selectedKind === 'reset'"
@@ -254,7 +239,7 @@
               type="button"
               class="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 border border-gray-200 rounded-lg transition-colors"
               :disabled="isApplying"
-              @click="onCancel"
+              @click="requestDismiss"
             >
               Cancel
             </button>
@@ -281,7 +266,9 @@
 import { ref, computed, watch } from 'vue'
 import api from '@/services/api'
 import Spinner from '@/components/Spinner.vue'
+import CloseIcon from '@/components/icons/CloseIcon.vue'
 import { useAuth } from '@/composables/useAuth'
+import { useModalDismiss } from '@/composables/useModalDismiss'
 import { getBirdImageUrl } from '@/services/media'
 import { formatBytes } from '@/utils/format'
 
@@ -290,7 +277,7 @@ const ALLOWED_UPLOAD_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gi
 
 export default {
   name: 'BirdImageModal',
-  components: { Spinner },
+  components: { Spinner, CloseIcon },
   props: {
     isVisible: { type: Boolean, default: false },
     speciesName: { type: String, required: true },
@@ -505,9 +492,14 @@ export default {
     })
 
     const onCancel = () => {
-      if (isApplying.value) return
       emit('close')
     }
+
+    const { requestDismiss } = useModalDismiss(
+      () => props.isVisible,
+      onCancel,
+      { canDismiss: () => !isApplying.value }
+    )
 
     const requireAuth = () => {
       if (needsLogin.value) {
@@ -532,6 +524,7 @@ export default {
       kind,
       hasCustomImage: false,
       imageUrl: source?.imageUrl,
+      thumbUrl: source?.thumbUrl,
       pageUrl: source?.pageUrl,
       authorName: source?.authorName,
       authorUrl: source?.authorUrl,
@@ -551,6 +544,7 @@ export default {
           await api.put(`/bird/${encodeURIComponent(props.speciesName)}/wikimedia_choice`, {
             fileTitle: candidate.fileTitle,
             imageUrl: candidate.imageUrl,
+            thumbUrl: candidate.thumbUrl,
             pageUrl: candidate.pageUrl,
             authorName: candidate.authorName,
             authorUrl: candidate.authorUrl,
@@ -622,7 +616,7 @@ export default {
       onFilePicked,
       markReset,
       onCandidateImageError,
-      onCancel,
+      requestDismiss,
       onApply,
       loadCandidates,
       formatBytes

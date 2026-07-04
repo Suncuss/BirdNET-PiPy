@@ -1,5 +1,5 @@
-import { mount, flushPromises } from '@vue/test-utils'
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import Settings from '@/views/Settings.vue'
 import { RECORDER_STATES } from '@/utils/recorderStates'
 
@@ -17,7 +17,8 @@ const mockApi = vi.hoisted(() => ({
 }))
 
 vi.mock('@/services/api', () => ({
-  default: mockApi
+  default: mockApi,
+  createLongRequest: () => mockApi
 }))
 
 const ioMock = vi.hoisted(() => vi.fn(() => ({
@@ -67,6 +68,9 @@ vi.mock('@/composables/useSystemUpdate', () => ({
   useSystemUpdate: () => mockSystemUpdate
 }))
 
+enableAutoUnmount(afterEach)
+afterEach(() => { document.body.style.overflow = '' })
+
 // Mock the useAuth composable to avoid extra fetch calls
 vi.mock('@/composables/useAuth', () => ({
   useAuth: () => ({
@@ -76,6 +80,7 @@ vi.mock('@/composables/useAuth', () => ({
     needsLogin: { value: false },
     isAuthenticated: { value: true },
     checkAuthStatus: vi.fn().mockResolvedValue(undefined),
+    ensureAuthLoaded: vi.fn().mockResolvedValue(undefined),
     login: vi.fn().mockResolvedValue(true),
     logout: vi.fn().mockResolvedValue(undefined),
     setup: vi.fn().mockResolvedValue(true),
@@ -792,6 +797,45 @@ describe('Settings', () => {
       await flushPromises()
 
       expect(wrapper.vm.hasUnsavedChanges).toBe(false)
+    })
+
+    it('toggling recording normalization saves immediately without marking unsaved changes', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      expect(wrapper.vm.settings.playback?.normalize ?? false).toBe(false)
+      expect(wrapper.vm.hasUnsavedChanges).toBe(false)
+
+      mockApi.put.mockResolvedValueOnce({ data: { success: true, normalize: true } })
+      await wrapper.vm.togglePlaybackNormalize(true)
+      await flushPromises()
+
+      // Saved instantly via the dedicated endpoint — no full-settings PUT, no draft change
+      expect(mockApi.put).toHaveBeenCalledWith('/settings/playback', { normalize: true })
+      expect(wrapper.vm.settings.playback.normalize).toBe(true)
+      expect(wrapper.vm.hasUnsavedChanges).toBe(false)
+    })
+
+    it('togglePlaybackNormalize ignores re-entry while request is in flight', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      let resolveRequest
+      mockApi.put = vi.fn().mockImplementationOnce(() => new Promise((resolve) => {
+        resolveRequest = resolve
+      }))
+
+      const firstCall = wrapper.vm.togglePlaybackNormalize(true)
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.vm.playbackNormalizeSaving).toBe(true)
+
+      await wrapper.vm.togglePlaybackNormalize(true)
+      expect(mockApi.put).toHaveBeenCalledTimes(1)
+
+      resolveRequest({ data: { success: true } })
+      await firstCall
+      expect(wrapper.vm.playbackNormalizeSaving).toBe(false)
     })
 
     it('shows orange indicator on Save button when there are unsaved changes', async () => {

@@ -28,6 +28,37 @@ def _species_key(alias: str = "") -> str:
 _SPECIES_KEY = _species_key()
 
 
+# Detection fields that must never reach a public JSON payload. Exact
+# coordinates pinpoint the user's station. _normalize_detection drops these so
+# detection dicts are private-by-default; the api layer imports this same tuple
+# for its endpoint-level guard, keeping a single source of truth. The
+# authenticated CSV export builds rows from its own query
+# (get_all_detections_for_export), not _normalize_detection, so it keeps coords.
+PRIVATE_DETECTION_FIELDS = ('latitude', 'longitude')
+
+
+# Width of the zero-padded id packed into a "latest key"; comfortably above
+# the 19 digits of a max int64, so the id stays fixed-width and recoverable.
+_LATEST_KEY_ID_WIDTH = 20
+
+
+def _latest_key(alias: str = "") -> str:
+    """SQL expression packing a detection's timestamp and id into one
+    lexically sortable string, optionally qualified with a table alias.
+
+    MAX() over it yields the newest row, with id breaking exact-timestamp
+    ties. char(31) sorts below '.' and every digit, so a variable-width
+    (microsecond) timestamp still orders chronologically.
+    """
+    return (f"{alias}timestamp || char(31) || "
+            f"printf('%0{_LATEST_KEY_ID_WIDTH}d', {alias}id)")
+
+
+def _latest_key_id(key_expr: str) -> str:
+    """SQL expression recovering the integer id packed by _latest_key()."""
+    return f"CAST(substr({key_expr}, -{_LATEST_KEY_ID_WIDTH}) AS INTEGER)"
+
+
 def _resolve_filter_column(species_name=None, *, scientific_name=None):
     """Resolve a (column, value) pair for species-keyed WHERE clauses.
 
@@ -41,6 +72,28 @@ def _resolve_filter_column(species_name=None, *, scientific_name=None):
     if species_name:
         return 'common_name', species_name
     return None, None
+
+
+def _summary_stats_bucket(total, unique, hour, most_key, rare_key, names):
+    """Build the 7-key summary-stats dict shared by the per-period and
+    all-periods queries. ``names`` maps a species key to its resolved
+    ``(common, scientific)`` name pair."""
+    def display(key):
+        if not key:
+            return "N/A", ""
+        return names.get(key, ("N/A", ""))
+
+    most_common, most_sci = display(most_key)
+    rarest_common, rarest_sci = display(rare_key)
+    return {
+        'totalObservations': total or 0,
+        'uniqueSpecies': unique or 0,
+        'mostActiveHour': f"{hour}:00" if hour else "N/A",
+        'mostCommonBird': most_common or "N/A",
+        'mostCommonBirdScientificName': most_sci or "",
+        'rarestBird': rarest_common or "N/A",
+        'rarestBirdScientificName': rarest_sci or "",
+    }
 
 
 # Create a custom logger adapter that adds a prefix to all messages
@@ -69,8 +122,17 @@ class DatabaseManager:
 
     @contextmanager
     def get_db_connection(self):
-        conn = sqlite3.connect(self.db_path)
+        # busy_timeout: with WAL plus multiple connections (executor lane +
+        # main pipeline), readers and writers can momentarily contend. Wait
+        # up to 30s for the lock rather than failing fast with SQLITE_BUSY.
+        # synchronous=NORMAL: skip fsync per transaction; sqlite still
+        # syncs on WAL checkpoint. Cannot corrupt the DB, but a power loss
+        # can drop the last few committed detections. Acceptable for this
+        # app — detections are continuous and eventual-consistency-tolerant.
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row  # This line ensures we get dictionaries instead of tuples
+        conn.execute("PRAGMA busy_timeout = 30000")
+        conn.execute("PRAGMA synchronous = NORMAL")
         try:
             yield conn
         finally:
@@ -79,6 +141,15 @@ class DatabaseManager:
     def initialize_database(self):
         with self.get_db_connection() as conn:
             cursor = conn.cursor()
+            # journal_mode=WAL is a database-level property persisted into
+            # the DB file; setting it once at init is sufficient. WAL lets
+            # readers run concurrently with a writer (and with each other),
+            # which is the main reason we can safely move DB work onto a
+            # separate executor lane without serializing every read.
+            # synchronous and busy_timeout are per-connection, set in
+            # get_db_connection() — no value in setting them here on a
+            # connection that's about to be closed.
+            cursor.execute("PRAGMA journal_mode = WAL")
             cursor.executescript(DATABASE_SCHEMA)
 
             # Auto-migrate: add 'extra' column if missing (for existing databases)
@@ -135,6 +206,9 @@ class DatabaseManager:
             return cur.lastrowid
 
     def get_latest_detections(self, limit=15, unique=False):
+        if limit <= 0:
+            return []
+
         # Use window function to deduplicate detections.
         # unique=False (default): highest confidence per (group_timestamp, species_key)
         # unique=True: most recent detection per species (one row per species_key)
@@ -147,7 +221,7 @@ class DatabaseManager:
         # single bogus group.
         if unique:
             partition = f"PARTITION BY {_SPECIES_KEY}"
-            rank_order = "ORDER BY timestamp DESC"
+            rank_order = "ORDER BY timestamp DESC, id DESC"
         else:
             partition = f"PARTITION BY group_timestamp, {_SPECIES_KEY}, audio_source"
             rank_order = "ORDER BY confidence DESC"
@@ -158,11 +232,20 @@ class DatabaseManager:
 
         rows = self._fetch_deduplicated(partition, rank_order, pre_fetch, limit)
 
-        # Fallback: if unique query didn't find enough species in the
-        # pre-fetch window (e.g. one species dominates recent rows),
-        # retry without the row limit.
+        # For unique=True, a single noisy species can dominate the recent
+        # prefetch window. Expand bounded windows before falling back to an
+        # exact full-table grouping query; this keeps the common dashboard
+        # path in the millisecond range without sacrificing correctness.
         if unique and len(rows) < limit:
-            rows = self._fetch_deduplicated(partition, rank_order, None, limit)
+            for _ in range(5):
+                pre_fetch *= 2
+                rows = self._fetch_deduplicated(
+                    partition, rank_order, pre_fetch, limit,
+                )
+                if len(rows) >= limit:
+                    break
+            else:
+                rows = self._fetch_latest_unique_by_species(limit)
 
         detections = []
         for row in rows:
@@ -177,7 +260,7 @@ class DatabaseManager:
     def _fetch_deduplicated(self, partition, rank_order, pre_fetch, limit):
         """Run the windowed dedup query, optionally bounded by pre_fetch."""
         if pre_fetch is not None:
-            source = f"(SELECT * FROM detections ORDER BY timestamp DESC LIMIT {pre_fetch})"
+            source = f"(SELECT * FROM detections ORDER BY timestamp DESC, id DESC LIMIT {pre_fetch})"
         else:
             source = "detections"
 
@@ -207,7 +290,42 @@ class DatabaseManager:
                 FROM {source}
             ) WHERE rn = 1
         )
-        ORDER BY timestamp DESC
+        ORDER BY timestamp DESC, id DESC
+        LIMIT ?
+        """
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(query, (limit,))
+            return cur.fetchall()
+
+    def _fetch_latest_unique_by_species(self, limit):
+        """Exact fallback for unique latest detections without a full window sort."""
+        query = f"""
+        WITH species_latest AS (
+            SELECT {_SPECIES_KEY} AS species_key,
+                   MAX({_latest_key()}) AS latest_key
+            FROM detections
+            GROUP BY species_key
+        )
+        SELECT
+            d.id,
+            d.timestamp,
+            d.group_timestamp,
+            d.scientific_name,
+            d.common_name,
+            d.confidence,
+            d.latitude,
+            d.longitude,
+            d.cutoff,
+            d.sensitivity,
+            d.overlap,
+            d.week,
+            d.extra,
+            d.audio_source
+        FROM detections d
+        JOIN species_latest sl
+          ON ({_latest_key('d.')}) = sl.latest_key
+        ORDER BY d.timestamp DESC, d.id DESC
         LIMIT ?
         """
         with self.get_db_connection() as conn:
@@ -437,154 +555,308 @@ class DatabaseManager:
 
         return {'most': most, 'least': least}
 
-    def get_summary_stats(self, start_date=None):
-        if start_date is None:
-            start_date = datetime.min.isoformat()
-        else:
-            start_date = start_date.isoformat()
+    def get_summary_stats_all_periods(self, today_start, week_start, month_start):
+        """Compute today/week/month/allTime summary stats in one query.
 
-        end_date = local_now().isoformat()
+        Replaces what used to be 4 sequential per-period calls. Each per-period
+        bucket has the same 7-key shape: totalObservations, uniqueSpecies,
+        mostActiveHour, mostCommonBird, mostCommonBirdScientificName,
+        rarestBird, rarestBirdScientificName.
+
+        Species are grouped by the species key (scientific_name with a
+        common_name fallback for legacy rows) so V2/V3 English drift
+        collapses but unrelated blank-sci rows do not.
+
+        The `WHERE c_<period> > 0` filters in the species and hour selects
+        are load-bearing — without them a period with no detections would
+        return the all-time top species/hour (since the per-period count
+        would be 0 but the row still exists in species_counts/hourly_per_period).
+        """
+        now = local_now().isoformat()
+        params = {
+            'all_time_start': datetime.min.isoformat(),
+            'now': now,
+            'today_start': today_start.isoformat(),
+            'week_start': week_start.isoformat(),
+            'month_start': month_start.isoformat(),
+        }
 
         with self.get_db_connection() as conn:
             cur = conn.cursor()
 
-            logger.debug("Calculating summary statistics", extra={
-                'start_date': start_date[:10] if start_date else 'all_time',
-                'end_date': end_date[:10]
+            logger.debug("Calculating summary stats for all periods", extra={
+                'today_start': params['today_start'][:10],
+                'week_start': params['week_start'][:10],
+                'month_start': params['month_start'][:10],
+                'now': now[:10],
             })
 
-            # Single optimized query using CTEs (replaces 5 separate queries).
-            # Species are grouped by the species key (scientific_name with a
-            # common_name fallback for legacy rows that have blank sci) so
-            # V2/V3 English drift collapses but unrelated empty-sci rows do
-            # not.
+            query = f"""
+            WITH filtered_detections AS (
+                SELECT id, scientific_name, common_name, timestamp
+                FROM detections
+                WHERE timestamp BETWEEN :all_time_start AND :now
+            ),
+            counts AS (
+                SELECT
+                    COUNT(*) AS total_all,
+                    SUM(CASE WHEN timestamp >= :today_start THEN 1 ELSE 0 END) AS total_today,
+                    SUM(CASE WHEN timestamp >= :week_start  THEN 1 ELSE 0 END) AS total_week,
+                    SUM(CASE WHEN timestamp >= :month_start THEN 1 ELSE 0 END) AS total_month,
+                    COUNT(DISTINCT {_SPECIES_KEY}) AS unique_all,
+                    COUNT(DISTINCT CASE WHEN timestamp >= :today_start THEN {_SPECIES_KEY} END) AS unique_today,
+                    COUNT(DISTINCT CASE WHEN timestamp >= :week_start  THEN {_SPECIES_KEY} END) AS unique_week,
+                    COUNT(DISTINCT CASE WHEN timestamp >= :month_start THEN {_SPECIES_KEY} END) AS unique_month
+                FROM filtered_detections
+            ),
+            hourly_per_period AS (
+                SELECT strftime('%H', timestamp) AS hour,
+                       SUM(CASE WHEN timestamp >= :today_start THEN 1 ELSE 0 END) AS c_today,
+                       SUM(CASE WHEN timestamp >= :week_start  THEN 1 ELSE 0 END) AS c_week,
+                       SUM(CASE WHEN timestamp >= :month_start THEN 1 ELSE 0 END) AS c_month,
+                       COUNT(*) AS c_all
+                FROM filtered_detections
+                GROUP BY hour
+            ),
+            -- Secondary ORDER BY key makes ties deterministic. Without it,
+            -- two hours/species at the same count would flap call-to-call
+            -- depending on plan choices.
+            hour_today AS (SELECT hour FROM hourly_per_period WHERE c_today > 0 ORDER BY c_today DESC, hour ASC LIMIT 1),
+            hour_week  AS (SELECT hour FROM hourly_per_period WHERE c_week  > 0 ORDER BY c_week  DESC, hour ASC LIMIT 1),
+            hour_month AS (SELECT hour FROM hourly_per_period WHERE c_month > 0 ORDER BY c_month DESC, hour ASC LIMIT 1),
+            hour_all   AS (SELECT hour FROM hourly_per_period WHERE c_all   > 0 ORDER BY c_all   DESC, hour ASC LIMIT 1),
+            species_counts AS (
+                SELECT {_SPECIES_KEY} AS species_key,
+                       SUM(CASE WHEN timestamp >= :today_start THEN 1 ELSE 0 END) AS c_today,
+                       SUM(CASE WHEN timestamp >= :week_start  THEN 1 ELSE 0 END) AS c_week,
+                       SUM(CASE WHEN timestamp >= :month_start THEN 1 ELSE 0 END) AS c_month,
+                       COUNT(*) AS c_all
+                FROM filtered_detections
+                GROUP BY species_key
+            ),
+            most_today AS (SELECT species_key FROM species_counts WHERE c_today > 0 ORDER BY c_today DESC, species_key ASC LIMIT 1),
+            rare_today AS (SELECT species_key FROM species_counts WHERE c_today > 0 ORDER BY c_today ASC,  species_key ASC LIMIT 1),
+            most_week  AS (SELECT species_key FROM species_counts WHERE c_week  > 0 ORDER BY c_week  DESC, species_key ASC LIMIT 1),
+            rare_week  AS (SELECT species_key FROM species_counts WHERE c_week  > 0 ORDER BY c_week  ASC,  species_key ASC LIMIT 1),
+            most_month AS (SELECT species_key FROM species_counts WHERE c_month > 0 ORDER BY c_month DESC, species_key ASC LIMIT 1),
+            rare_month AS (SELECT species_key FROM species_counts WHERE c_month > 0 ORDER BY c_month ASC,  species_key ASC LIMIT 1),
+            most_all   AS (SELECT species_key FROM species_counts WHERE c_all   > 0 ORDER BY c_all   DESC, species_key ASC LIMIT 1),
+            rare_all   AS (SELECT species_key FROM species_counts WHERE c_all   > 0 ORDER BY c_all   ASC,  species_key ASC LIMIT 1)
+            SELECT
+                (SELECT total_today  FROM counts) AS total_today,
+                (SELECT total_week   FROM counts) AS total_week,
+                (SELECT total_month  FROM counts) AS total_month,
+                (SELECT total_all    FROM counts) AS total_all,
+                (SELECT unique_today FROM counts) AS unique_today,
+                (SELECT unique_week  FROM counts) AS unique_week,
+                (SELECT unique_month FROM counts) AS unique_month,
+                (SELECT unique_all   FROM counts) AS unique_all,
+                (SELECT hour FROM hour_today) AS hour_today,
+                (SELECT hour FROM hour_week)  AS hour_week,
+                (SELECT hour FROM hour_month) AS hour_month,
+                (SELECT hour FROM hour_all)   AS hour_all,
+                (SELECT species_key FROM most_today) AS most_today_key,
+                (SELECT species_key FROM rare_today) AS rare_today_key,
+                (SELECT species_key FROM most_week)  AS most_week_key,
+                (SELECT species_key FROM rare_week)  AS rare_week_key,
+                (SELECT species_key FROM most_month) AS most_month_key,
+                (SELECT species_key FROM rare_month) AS rare_month_key,
+                (SELECT species_key FROM most_all)   AS most_all_key,
+                (SELECT species_key FROM rare_all)   AS rare_all_key
+            """
+
+            cur.execute(query, params)
+            row = cur.fetchone()
+            selected_species_names = {}
+            if row is not None:
+                selected_keys = {
+                    row[f'{kind}_{period}_key']
+                    for period in ('today', 'week', 'month', 'all')
+                    for kind in ('most', 'rare')
+                    if row[f'{kind}_{period}_key']
+                }
+                selected_species_names = {
+                    species_key: self._get_latest_species_name_for_key(
+                        cur,
+                        species_key,
+                        all_time_start=params['all_time_start'],
+                        now=params['now'],
+                    )
+                    for species_key in selected_keys
+                }
+
+        if row is None:
+            empty = _summary_stats_bucket(0, 0, None, None, None, {})
+            return {key: dict(empty) for key in ('today', 'week', 'month', 'allTime')}
+
+        return {
+            'today': _summary_stats_bucket(
+                row['total_today'], row['unique_today'], row['hour_today'],
+                row['most_today_key'], row['rare_today_key'], selected_species_names,
+            ),
+            'week': _summary_stats_bucket(
+                row['total_week'], row['unique_week'], row['hour_week'],
+                row['most_week_key'], row['rare_week_key'], selected_species_names,
+            ),
+            'month': _summary_stats_bucket(
+                row['total_month'], row['unique_month'], row['hour_month'],
+                row['most_month_key'], row['rare_month_key'], selected_species_names,
+            ),
+            'allTime': _summary_stats_bucket(
+                row['total_all'], row['unique_all'], row['hour_all'],
+                row['most_all_key'], row['rare_all_key'], selected_species_names,
+            ),
+        }
+
+    def get_summary_stats_for_period(self, period_start, now=None):
+        """Compute summary stats for one dashboard period.
+
+        Dashboard only shows one summary tab at a time. This period-specific
+        query lets the initial page load pay for the visible period instead
+        of always scanning the all-time history for hidden tabs.
+        """
+        now = (now or local_now()).isoformat()
+        params = {
+            'period_start': period_start.isoformat(),
+            'all_time_start': datetime.min.isoformat(),
+            'now': now,
+        }
+
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
             query = f"""
             WITH filtered_detections AS (
                 SELECT scientific_name, common_name, timestamp
                 FROM detections
-                WHERE timestamp BETWEEN ? AND ?
+                WHERE timestamp BETWEEN :period_start AND :now
             ),
             counts AS (
                 SELECT
-                    COUNT(*) as total_observations,
-                    COUNT(DISTINCT {_SPECIES_KEY}) as unique_species
+                    COUNT(*) AS total_observations,
+                    COUNT(DISTINCT {_SPECIES_KEY}) AS unique_species
                 FROM filtered_detections
             ),
-            hourly AS (
-                SELECT strftime('%H', timestamp) as hour, COUNT(*) as count
+            hourly_counts AS (
+                SELECT strftime('%H', timestamp) AS hour,
+                       COUNT(*) AS detection_count
                 FROM filtered_detections
                 GROUP BY hour
-                ORDER BY count DESC
-                LIMIT 1
             ),
             species_counts AS (
                 SELECT {_SPECIES_KEY} AS species_key,
-                       MAX(scientific_name) AS scientific_name,
-                       MIN(common_name) AS common_name,
-                       COUNT(*) as count
+                       COUNT(*) AS detection_count
                 FROM filtered_detections
                 GROUP BY species_key
-            ),
-            most_common AS (
-                SELECT scientific_name, common_name
-                FROM species_counts
-                ORDER BY count DESC
-                LIMIT 1
-            ),
-            rarest AS (
-                SELECT scientific_name, common_name
-                FROM species_counts
-                ORDER BY count ASC
-                LIMIT 1
             )
             SELECT
-                (SELECT total_observations FROM counts) as totalObservations,
-                (SELECT unique_species FROM counts) as uniqueSpecies,
-                (SELECT hour FROM hourly) as mostActiveHour,
-                (SELECT common_name FROM most_common) as mostCommonBird,
-                (SELECT scientific_name FROM most_common) as mostCommonBirdScientificName,
-                (SELECT common_name FROM rarest) as rarestBird,
-                (SELECT scientific_name FROM rarest) as rarestBirdScientificName
+                (SELECT total_observations FROM counts) AS total_observations,
+                (SELECT unique_species FROM counts) AS unique_species,
+                (SELECT hour FROM hourly_counts
+                 ORDER BY detection_count DESC, hour ASC LIMIT 1) AS most_active_hour,
+                (SELECT species_key FROM species_counts
+                 ORDER BY detection_count DESC, species_key ASC LIMIT 1) AS most_common_key,
+                (SELECT species_key FROM species_counts
+                 ORDER BY detection_count ASC, species_key ASC LIMIT 1) AS rarest_key
             """
+            cur.execute(query, params)
+            row = cur.fetchone()
 
-            cur.execute(query, (start_date, end_date))
-            result = cur.fetchone()
-
-            if result:
-                most_active_hour = f"{result['mostActiveHour']}:00" if result['mostActiveHour'] else "N/A"
-                return {
-                    'totalObservations': result['totalObservations'] or 0,
-                    'uniqueSpecies': result['uniqueSpecies'] or 0,
-                    'mostActiveHour': most_active_hour,
-                    'mostCommonBird': result['mostCommonBird'] or "N/A",
-                    'mostCommonBirdScientificName': result['mostCommonBirdScientificName'] or "",
-                    'rarestBird': result['rarestBird'] or "N/A",
-                    'rarestBirdScientificName': result['rarestBirdScientificName'] or "",
+            selected_species_names = {}
+            if row is not None:
+                selected_keys = {
+                    row[key]
+                    for key in ('most_common_key', 'rarest_key')
+                    if row[key]
+                }
+                selected_species_names = {
+                    species_key: self._get_latest_species_name_for_key(
+                        cur,
+                        species_key,
+                        all_time_start=params['all_time_start'],
+                        now=params['now'],
+                    )
+                    for species_key in selected_keys
                 }
 
-        return {
-            'totalObservations': 0,
-            'uniqueSpecies': 0,
-            'mostActiveHour': "N/A",
-            'mostCommonBird': "N/A",
-            'mostCommonBirdScientificName': "",
-            'rarestBird': "N/A",
-            'rarestBirdScientificName': "",
-        }
+        if row is None:
+            total_observations = 0
+            unique_species = 0
+            most_active_hour = None
+            most_common_key = None
+            rarest_key = None
+        else:
+            total_observations = row['total_observations'] or 0
+            unique_species = row['unique_species'] or 0
+            most_active_hour = row['most_active_hour']
+            most_common_key = row['most_common_key']
+            rarest_key = row['rarest_key']
+
+        return _summary_stats_bucket(
+            total_observations, unique_species, most_active_hour,
+            most_common_key, rarest_key, selected_species_names,
+        )
+
+    def _get_latest_species_name_for_key(self, cur, species_key, *, all_time_start, now):
+        """Return the newest display name for a summary species key."""
+        query = """
+        SELECT common_name, scientific_name
+        FROM detections
+        WHERE timestamp BETWEEN :all_time_start AND :now
+          AND (
+              scientific_name = :species_key
+              OR (
+                  (scientific_name IS NULL OR scientific_name = '')
+                  AND common_name = :species_key
+              )
+          )
+        ORDER BY timestamp DESC, id DESC
+        LIMIT 1
+        """
+        cur.execute(query, {
+            'species_key': species_key,
+            'all_time_start': all_time_start,
+            'now': now,
+        })
+        row = cur.fetchone()
+        if row is None:
+            return "N/A", ""
+        return row['common_name'] or "N/A", row['scientific_name'] or ""
 
     def get_species_sightings(self, limit=10, most_frequent=True):
-        # Group/join by the species key so V2/V3 English drift for the same
-        # species merges into a single sighting entry. Blank-sci legacy rows
-        # fall back to common_name and stay separate from each other.
-        species_key_d = _species_key('d.')
-        if most_frequent:
-            query = f"""
-            WITH SpeciesCount AS (
-                SELECT {_SPECIES_KEY} AS species_key, COUNT(*) as count
-                FROM detections
-                GROUP BY species_key
-                ORDER BY count DESC
-                LIMIT ?
-            )
-            SELECT d.*
-            FROM detections d
-            JOIN SpeciesCount sc ON {species_key_d} = sc.species_key
-            WHERE ({species_key_d}, d.timestamp) IN (
-                SELECT {_SPECIES_KEY}, MAX(timestamp)
-                FROM detections
-                GROUP BY {_SPECIES_KEY}
-            )
-            ORDER BY sc.count DESC, d.timestamp DESC
-            """
-        else:
-            query = f"""
-            WITH SpeciesCount AS (
-                SELECT {_SPECIES_KEY} AS species_key, COUNT(*) as count
-                FROM detections
-                GROUP BY species_key
-                ORDER BY count ASC
-                LIMIT ?
-            )
-            SELECT d.*
-            FROM detections d
-            JOIN SpeciesCount sc ON {species_key_d} = sc.species_key
-            WHERE ({species_key_d}, d.timestamp) IN (
-                SELECT {_SPECIES_KEY}, MAX(timestamp)
-                FROM detections
-                GROUP BY {_SPECIES_KEY}
-            )
-            ORDER BY sc.count ASC, d.timestamp DESC
-            """
+        # Group by the species key so V2/V3 English drift for the same species
+        # merges into one entry; blank-sci legacy rows fall back to common_name.
+        # MAX(_latest_key) picks each species' newest detection by id, so the
+        # join back to detections yields exactly one row per species.
+        order = 'DESC' if most_frequent else 'ASC'
+        query = f"""
+        WITH species_stats AS (
+            SELECT
+                {_SPECIES_KEY} AS species_key,
+                COUNT(*) AS detection_count,
+                MAX({_latest_key()}) AS latest_key
+            FROM detections
+            GROUP BY species_key
+        ),
+        selected AS (
+            SELECT
+                detection_count,
+                {_latest_key_id('latest_key')} AS latest_id
+            FROM species_stats
+            ORDER BY detection_count {order}, species_key ASC
+            LIMIT ?
+        )
+        SELECT d.*
+        FROM selected s
+        JOIN detections d ON d.id = s.latest_id
+        ORDER BY s.detection_count {order}, d.timestamp DESC
+        """
         with self.get_db_connection() as conn:
             cur = conn.cursor()
             cur.execute(query, (limit,))
-            rows = cur.fetchall()
-            results = []
-            for row in rows:
-                detection = dict(row)
-                detection['extra'] = self._parse_extra(detection.get('extra'))
-                results.append(detection)
-            return results
+            return [
+                self._normalize_detection(row, include_filenames=False)
+                for row in cur.fetchall()
+            ]
 
 
 
@@ -640,7 +912,7 @@ class DatabaseManager:
 
 
     def get_bird_recordings(self, species_name=None, sort='recent', limit=None,
-                             *, scientific_name=None):
+                             *, scientific_name=None, since=None):
         """
         Get recordings for a species with sorting options.
 
@@ -653,6 +925,9 @@ class DatabaseManager:
             sort: 'recent' (timestamp DESC) or 'best' (confidence DESC)
             limit: Optional max number of records (None = all)
             scientific_name: Stable species key (preferred when known)
+            since: Optional ISO timestamp lower bound (timestamp >= since), used
+                to restrict anonymous callers to a recent window so the public
+                view can't surface old all-time clips (incl. via 'best' sort).
 
         Returns:
             List of recording dicts with id, timestamp, common_name, confidence,
@@ -664,32 +939,29 @@ class DatabaseManager:
         if filter_col is None:
             return []
 
-        # Use separate queries based on sort order (safer than f-string interpolation
-        # of the entire query). The filter column is validated above.
-        # LIMIT is parameterized using -1 for unlimited (SQLite treats negative LIMIT as no limit).
-        if sort == 'best':
-            query = f"""
-            SELECT id, timestamp, common_name, confidence, extra, audio_source
-            FROM detections
-            WHERE {filter_col} = ?
-            ORDER BY confidence DESC
-            LIMIT ?
-            """
-        else:  # default to 'recent'
-            query = f"""
-            SELECT id, timestamp, common_name, confidence, extra, audio_source
-            FROM detections
-            WHERE {filter_col} = ?
-            ORDER BY timestamp DESC
-            LIMIT ?
-            """
+        # Order column is chosen from a fixed set (not interpolated user input);
+        # the filter column is validated above. LIMIT uses -1 for unlimited.
+        window_clause = "AND timestamp >= ?" if since else ""
+        order_by = "confidence DESC" if sort == 'best' else "timestamp DESC"
+        query = f"""
+        SELECT id, timestamp, common_name, confidence, extra, audio_source
+        FROM detections
+        WHERE {filter_col} = ?
+        {window_clause}
+        ORDER BY {order_by}
+        LIMIT ?
+        """
 
         # Use -1 for unlimited (SQLite treats negative LIMIT as no limit)
         limit_param = limit if limit is not None else -1
+        params = [filter_value]
+        if since:
+            params.append(since)
+        params.append(limit_param)
 
         with self.get_db_connection() as conn:
             cur = conn.cursor()
-            cur.execute(query, (filter_value, limit_param))
+            cur.execute(query, params)
             rows = cur.fetchall()
 
         recordings = [self._normalize_detection(row, include_filenames=True) for row in rows]
@@ -946,13 +1218,17 @@ class DatabaseManager:
     def get_all_unique_species(self):
         """Get all unique bird species ever detected, sorted alphabetically.
 
+        Each row also carries ``last_detected`` (the species' MAX timestamp)
+        so the Species Catalog needs no per-species detail fetch.
+
         Distinct on the species key so the same species detected under
         different V2/V3 English variants surfaces as a single entry, while
         blank-sci legacy rows still differentiate by common_name.
         """
         query = f"""
         SELECT MAX(scientific_name) AS scientific_name,
-               MIN(common_name) AS common_name
+               MIN(common_name) AS common_name,
+               MAX(timestamp) AS last_detected
         FROM detections
         GROUP BY {_SPECIES_KEY}
         ORDER BY common_name ASC
@@ -965,7 +1241,8 @@ class DatabaseManager:
         return [
             {
                 'common_name': row['common_name'],
-                'scientific_name': row['scientific_name']
+                'scientific_name': row['scientific_name'],
+                'last_detected': row['last_detected'],
             }
             for row in results
         ]
@@ -1307,6 +1584,34 @@ class DatabaseManager:
             return self._normalize_detection(row, include_filenames=True)
         return None
 
+    def get_group_detection_windows(self, detection):
+        """Timestamp + confidence of every detection of the same species in
+        the same source recording (group) and audio source as ``detection``.
+
+        Powers the player's analysis-window bar: sibling rows mark which
+        OTHER 3s analysis windows of the clip also crossed the threshold,
+        not just the row being viewed. Species matches on the same key the
+        display dedup partitions on — evaluated in SQL against the target
+        row (not re-encoded in Python) so _species_key() stays the single
+        owner of that expression. ``audio_source`` compares with IS so NULL
+        (single-source) rows group together. The SELECT projects only the
+        two fields the bar needs; the payload is public-safe by shape.
+        """
+        query = f"""
+        SELECT timestamp, confidence FROM detections
+        WHERE group_timestamp = ? AND audio_source IS ?
+          AND {_SPECIES_KEY} = (SELECT {_SPECIES_KEY} FROM detections WHERE id = ?)
+        ORDER BY timestamp
+        """
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(query, (
+                detection['group_timestamp'],
+                detection.get('audio_source'),
+                detection['id'],
+            ))
+            return [dict(row) for row in cur.fetchall()]
+
     def delete_detection(self, detection_id):
         """Delete a detection record by ID.
 
@@ -1488,6 +1793,11 @@ class DatabaseManager:
             dict: Normalized detection with parsed extra and optional filenames
         """
         detection = dict(row)
+        # Strip private coordinates here so detection dicts are private-by-default
+        # — an endpoint returning rows without the api-layer _localize_detection
+        # guard (e.g. /api/observations/latest) still can't leak the location.
+        for field in PRIVATE_DETECTION_FIELDS:
+            detection.pop(field, None)
         detection['extra'] = self._parse_extra(detection.get('extra'))
 
         if include_filenames:

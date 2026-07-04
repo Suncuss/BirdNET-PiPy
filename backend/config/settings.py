@@ -28,7 +28,8 @@ DEFAULT_SETTINGS = {
     "detection": {"sensitivity": 0.75, "cutoff": 0.60, "species_filter_threshold": DEFAULT_SPECIES_FILTER_THRESHOLD},
     "species_filter": {
         "allowed_species": [],   # If non-empty, ONLY detect these (bypasses location filter)
-        "blocked_species": []    # Never detect these species
+        "blocked_species": [],   # Never detect these species
+        "included_species": []   # Always detect these, even if the location filter excludes them
     },
     "audio": {
         "sources": [],
@@ -41,7 +42,18 @@ DEFAULT_SETTINGS = {
         "max_freq_khz": 12,
         "min_freq_khz": 0,
         "max_dbfs": 0,
-        "min_dbfs": -120
+        # Floor for the absolute dBFS scale. With the full-scale-referenced
+        # normalization in generate_spectrogram(), this is the contrast/
+        # dynamic-range knob: 0 dBFS = digital full scale, -100 keeps typical
+        # (non-full-scale) detections visible with a softer, wider gradient.
+        "min_dbfs": -100
+    },
+    "playback": {
+        # Loudness-normalize saved detection clips (ffmpeg loudnorm) so faint or
+        # distant birds are easier to hear. Baked into the saved MP3, applied
+        # AFTER analysis so it never affects detection. Toggleable in the UI
+        # (Settings → "Normalize Recording"); off by default. See GH #54.
+        "normalize": False
     },
     "storage": {
         "auto_cleanup_enabled": True,
@@ -80,6 +92,7 @@ DEFAULT_SETTINGS = {
         "audio_status": False
     },
     "access": {
+        "public_access": True,
         "charts_public": False,
         "table_public": False,
         "live_feed_public": False
@@ -105,6 +118,42 @@ def _apply_model_aware_defaults(settings, user_data):
     user_threshold = (user_data.get('detection') or {}).get('species_filter_threshold')
     if model_type == ModelType.BIRDNET_V3.value and user_threshold is None:
         settings['detection']['species_filter_threshold'] = DEFAULT_GEOMODEL_FILTER_THRESHOLD
+
+
+def _write_user_settings_file(settings):
+    """Persist a settings dict back to the user settings file (best effort)."""
+    try:
+        os.makedirs(os.path.dirname(USER_SETTINGS_PATH), exist_ok=True)
+        with open(USER_SETTINGS_PATH, 'w') as f:
+            json.dump(settings, f, indent=2)
+    except Exception as e:
+        logger.warning(f"Failed to write settings during migration: {e}")
+
+
+# Spectrogram floor (min_dbfs) defaults shipped by earlier versions. The key has
+# no UI control, so any value in the user file is a frozen old default that the
+# frontend re-saves verbatim; the shallow per-section merge in load_user_settings
+# would otherwise let it shadow the current default forever, so an upgraded user
+# would never see floor changes. See review 2026-06.
+_SUPERSEDED_MIN_DBFS = (-120, -90)
+
+
+def _migrate_spectrogram_floor(settings, user_data):
+    """Reset a stale persisted spectrogram floor to the current default.
+
+    Rewrites only the single min_dbfs key in the user file (not the full default
+    set) so other sections are not accidentally frozen at today's defaults.
+    """
+    saved = user_data.get('spectrogram')
+    if not isinstance(saved, dict) or saved.get('min_dbfs') not in _SUPERSEDED_MIN_DBFS:
+        return
+
+    current_default = DEFAULT_SETTINGS['spectrogram']['min_dbfs']
+    settings.setdefault('spectrogram', {})['min_dbfs'] = current_default
+    saved['min_dbfs'] = current_default
+    logger.info("Reset stale spectrogram floor to current default",
+                extra={'min_dbfs': current_default})
+    _write_user_settings_file(user_data)
 
 
 def _migrate_audio_sources(settings):
@@ -190,12 +239,7 @@ def _migrate_audio_sources(settings):
                 extra={'source_count': len(sources)})
 
     # Write migrated settings back to disk
-    try:
-        os.makedirs(os.path.dirname(USER_SETTINGS_PATH), exist_ok=True)
-        with open(USER_SETTINGS_PATH, 'w') as f:
-            json.dump(settings, f, indent=2)
-    except Exception as e:
-        logger.warning(f"Failed to write migrated settings: {e}")
+    _write_user_settings_file(settings)
 
 
 def load_user_settings():
@@ -220,6 +264,10 @@ def load_user_settings():
                                 print(f"Settings: ignoring '{key}' with type {type(user_data[key]).__name__} (expected {type(defaults[key]).__name__})")
 
                 _apply_model_aware_defaults(defaults, user_data)
+
+                # Reset a stale spectrogram floor before the audio migration so
+                # the audio migration's full write (if any) carries the fix too.
+                _migrate_spectrogram_floor(defaults, user_data)
 
                 # Migrate old audio format to sources array
                 _migrate_audio_sources(defaults)
@@ -363,4 +411,5 @@ CREATE INDEX IF NOT EXISTS idx_detections_location ON detections(latitude, longi
 CREATE INDEX IF NOT EXISTS idx_detections_timestamp_date ON detections(date(timestamp));
 CREATE INDEX IF NOT EXISTS idx_detections_species_date ON detections(common_name, date(timestamp));
 CREATE INDEX IF NOT EXISTS idx_detections_scientific_timestamp ON detections(scientific_name, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_detections_group_timestamp ON detections(group_timestamp);
 '''

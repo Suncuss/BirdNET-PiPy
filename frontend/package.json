@@ -1,7 +1,7 @@
 {
   "name": "birdnet-pipy-frontend",
   "private": true,
-  "version": "0.7.0",
+  "version": "0.8.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -22,6 +22,7 @@
     "axios": "^1.13.5",
     "chart.js": "^4.4.3",
     "chartjs-chart-matrix": "^2.0.1",
+    "mpg123-decoder": "^1.0.3",
     "primevue": "^4.5.4",
     "smartcrop": "^2.0.5",
     "socket.io-client": "^4.7.5",
@@ -42,5 +43,9 @@
     "tailwindcss": "^3.4.4",
     "vite": "^7.3.3",
     "vitest": "^3.2.4"
+  },
+  "overrides": {
+    "esbuild": "^0.28.1",
+    "ws": "8.21.0"
   }
 }

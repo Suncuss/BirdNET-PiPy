@@ -21,6 +21,7 @@ vi.mock('@/composables/useAuth', () => ({
     loading: ref(false),
     error: ref(''),
     checkAuthStatus: vi.fn().mockResolvedValue(undefined),
+    ensureAuthLoaded: vi.fn().mockResolvedValue(undefined),
     logout: vi.fn().mockResolvedValue(undefined),
     clearError: vi.fn()
   })
@@ -34,7 +35,8 @@ const mockApi = vi.hoisted(() => ({
 }))
 
 vi.mock('@/services/api', () => ({
-  default: mockApi
+  default: mockApi,
+  createLongRequest: () => mockApi
 }))
 
 // Mock vue-router

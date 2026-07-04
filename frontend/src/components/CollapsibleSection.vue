@@ -12,20 +12,11 @@
           {{ subtitle }}
         </p>
       </div>
-      <svg
+      <ChevronIcon
+        direction="down"
         class="w-5 h-5 text-gray-400 transition-transform duration-200"
         :class="{ 'rotate-180': expanded }"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <path
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          stroke-width="2"
-          d="M19 9l-7 7-7-7"
-        />
-      </svg>
+      />
     </button>
 
     <div
@@ -39,9 +30,11 @@
 
 <script>
 import { ref } from 'vue'
+import ChevronIcon from '@/components/icons/ChevronIcon.vue'
 
 export default {
   name: 'CollapsibleSection',
+  components: { ChevronIcon },
   props: {
     title: {
       type: String,

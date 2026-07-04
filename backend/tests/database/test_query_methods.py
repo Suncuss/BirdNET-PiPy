@@ -4,6 +4,8 @@ Additional database query method tests for coverage.
 """
 from datetime import datetime, timedelta
 
+from core.timezone_service import local_now
+
 
 class TestDatabaseQueryMethods:
     """Additional tests for better coverage."""
@@ -178,6 +180,30 @@ class TestDatabaseQueryMethods:
         assert rarest[0]['common_name'] == 'Hooded Warbler'
         assert rarest[1]['common_name'] == 'Northern Cardinal'
 
+    def test_get_species_sightings_one_row_per_species_on_tied_timestamp(
+        self, test_db_manager
+    ):
+        """Two detections of one species sharing the latest timestamp must
+        still yield exactly one sighting row."""
+        for _ in range(2):
+            test_db_manager.insert_detection({
+                'timestamp': '2024-01-15T10:00:00',
+                'group_timestamp': '2024-01-15T10:00:00',
+                'scientific_name': 'Turdus migratorius',
+                'common_name': 'American Robin',
+                'confidence': 0.8,
+                'latitude': 40.7128,
+                'longitude': -74.0060,
+                'cutoff': 0.5,
+                'sensitivity': 0.75,
+                'overlap': 0.25,
+            })
+
+        result = test_db_manager.get_species_sightings(limit=10, most_frequent=True)
+
+        robins = [r for r in result if r['common_name'] == 'American Robin']
+        assert len(robins) == 1
+
     def test_get_detection_distribution_week_view(self, test_db_manager):
         """Test get_detection_distribution() for week view."""
         # Use Jan 14, 2024 (Sunday) as anchor - this is the start of the week
@@ -331,6 +357,55 @@ class TestDatabaseQueryMethods:
         results = test_db_manager.get_latest_detections(limit=3, unique=True)
         assert len(results) == 3
 
+    def test_get_latest_detections_unique_expands_recent_prefetch(
+        self, test_db_manager, monkeypatch
+    ):
+        """A dominant recent species should not force the full-table fallback."""
+        base_time = datetime(2024, 1, 20, 12, 0, 0)
+
+        for i in range(600):
+            timestamp = (base_time - timedelta(seconds=i)).isoformat()
+            test_db_manager.insert_detection({
+                'timestamp': timestamp,
+                'group_timestamp': timestamp,
+                'scientific_name': 'Dominantus noisii',
+                'common_name': 'Dominant Bird',
+                'confidence': 0.8,
+                'latitude': 40.7128, 'longitude': -74.0060,
+                'cutoff': 0.5, 'sensitivity': 0.75, 'overlap': 0.25,
+            })
+
+        for i, species in enumerate([
+            'Robin', 'Jay', 'Cardinal', 'Warbler', 'Sparrow', 'Nuthatch',
+        ]):
+            timestamp = (base_time - timedelta(days=1, seconds=i)).isoformat()
+            test_db_manager.insert_detection({
+                'timestamp': timestamp,
+                'group_timestamp': timestamp,
+                'scientific_name': f'{species}_sci',
+                'common_name': species,
+                'confidence': 0.8,
+                'latitude': 40.7128, 'longitude': -74.0060,
+                'cutoff': 0.5, 'sensitivity': 0.75, 'overlap': 0.25,
+            })
+
+        def fail_full_fallback(limit):
+            raise AssertionError("full-table fallback should not be used")
+
+        monkeypatch.setattr(
+            test_db_manager,
+            '_fetch_latest_unique_by_species',
+            fail_full_fallback,
+        )
+
+        results = test_db_manager.get_latest_detections(limit=7, unique=True)
+
+        assert len(results) == 7
+        assert {row['common_name'] for row in results} == {
+            'Dominant Bird', 'Robin', 'Jay', 'Cardinal',
+            'Warbler', 'Sparrow', 'Nuthatch',
+        }
+
     def test_get_latest_detections_unique_vs_default(self, test_db_manager):
         """Test unique=True collapses same species, default does not."""
         for i in range(3):
@@ -350,19 +425,302 @@ class TestDatabaseQueryMethods:
         assert len(unique_results) == 1
         assert unique_results[0]['common_name'] == 'American Robin'
 
+    def test_get_group_detection_windows(self, test_db_manager, sample_detection):
+        """Sibling windows: same species + same recording (group) + same audio
+        source only, ordered by timestamp — what the player's analysis-window
+        bar uses to label every 3s window that fired."""
+        def insert(**overrides):
+            return test_db_manager.insert_detection({**sample_detection, **overrides})
+
+        # Chunks 0 and 1 of the same recording, same species (incl. the row itself)
+        target_id = insert(timestamp='2024-01-15T10:30:00')
+        insert(timestamp='2024-01-15T10:30:03', confidence=0.65)
+        # Same recording, different species — excluded
+        insert(timestamp='2024-01-15T10:30:03', common_name='Blue Jay',
+               scientific_name='Cyanocitta cristata')
+        # Same species, different recording — excluded
+        insert(timestamp='2024-01-15T10:31:00', group_timestamp='2024-01-15T10:31:00')
+        # Same species and recording window, different audio source — excluded
+        insert(timestamp='2024-01-15T10:30:06', audio_source='cam2')
+
+        detection = test_db_manager.get_detection_by_id(target_id)
+        windows = test_db_manager.get_group_detection_windows(detection)
+
+        assert windows == [
+            {'timestamp': '2024-01-15T10:30:00', 'confidence': 0.95},
+            {'timestamp': '2024-01-15T10:30:03', 'confidence': 0.65},
+        ]
+
+    def test_get_group_detection_windows_species_key_fallback(
+            self, test_db_manager, sample_detection):
+        """Legacy rows with empty scientific_name group on common_name (the
+        same species key the display dedup partitions on)."""
+        def insert(**overrides):
+            return test_db_manager.insert_detection(
+                {**sample_detection, 'scientific_name': '', **overrides})
+
+        target_id = insert(timestamp='2024-01-15T10:30:00')
+        insert(timestamp='2024-01-15T10:30:03', confidence=0.55)
+        insert(timestamp='2024-01-15T10:30:06', common_name='Blue Jay')
+
+        detection = test_db_manager.get_detection_by_id(target_id)
+        windows = test_db_manager.get_group_detection_windows(detection)
+
+        assert [w['timestamp'] for w in windows] == [
+            '2024-01-15T10:30:00', '2024-01-15T10:30:03',
+        ]
+
     def test_empty_database_queries(self, test_db_manager):
         """Test various queries on empty database."""
         # Test methods that should handle empty database gracefully
         assert test_db_manager.get_latest_detections(10) == []
         assert test_db_manager.get_all_unique_species() == []
 
-        # Test summary stats on empty database
-        stats = test_db_manager.get_summary_stats()
-        assert stats['totalObservations'] == 0
-        assert stats['uniqueSpecies'] == 0
-        assert stats['mostActiveHour'] == 'N/A'
-        assert stats['mostCommonBird'] == 'N/A'
-        assert stats['rarestBird'] == 'N/A'
+        # Use local_now() (same source the SQL uses) so the test does not
+        # depend on the docker container's system tz matching the configured
+        # timezone in user_settings.json.
+        now = local_now()
+        all_stats = test_db_manager.get_summary_stats_all_periods(
+            now.replace(hour=0, minute=0, second=0, microsecond=0),
+            now - timedelta(weeks=1),
+            now - timedelta(days=30),
+        )
+        for period in ('today', 'week', 'month', 'allTime'):
+            stats = all_stats[period]
+            assert stats['totalObservations'] == 0
+            assert stats['uniqueSpecies'] == 0
+            assert stats['mostActiveHour'] == 'N/A'
+            assert stats['mostCommonBird'] == 'N/A'
+            assert stats['rarestBird'] == 'N/A'
+
+    def test_summary_stats_buckets_by_period(self, test_db_manager, frozen_db_now):
+        """Detections in different time windows land in the right buckets.
+
+        Pins the load-bearing semantic of get_summary_stats_all_periods: the
+        CASE-WHEN-driven per-period counts (and the empty-period guards)
+        must correctly route a detection at -2 days into today/week/month
+        but not all-time-only, and a detection at -45 days into all-time
+        only, not into today/week/month.
+        """
+        now = frozen_db_now
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_start = now - timedelta(weeks=1)
+        month_start = now - timedelta(days=30)
+
+        def _insert(when, common_name, scientific_name):
+            test_db_manager.insert_detection({
+                'timestamp': when.isoformat(),
+                'group_timestamp': when.isoformat(),
+                'common_name': common_name,
+                'scientific_name': scientific_name,
+                'confidence': 0.85,
+                'latitude': 40.7128, 'longitude': -74.0060,
+                'cutoff': 0.5, 'sensitivity': 0.75, 'overlap': 0.25,
+            })
+
+        # 3 of species A within today; 1 of species B 2 days ago (week+month
+        # but not today); 1 of species C 45 days ago (all-time only).
+        for offset_s in (10, 20, 30):
+            _insert(now - timedelta(seconds=offset_s),
+                    'Common Bird', 'Speciesus communis')
+        _insert(now - timedelta(days=2),
+                'Week Bird', 'Speciesus weekensis')
+        _insert(now - timedelta(days=45),
+                'Old Bird', 'Speciesus antiquus')
+
+        all_stats = test_db_manager.get_summary_stats_all_periods(
+            today_start, week_start, month_start,
+        )
+
+        assert all_stats['today']['totalObservations'] == 3
+        assert all_stats['today']['uniqueSpecies'] == 1
+        assert all_stats['today']['mostCommonBird'] == 'Common Bird'
+
+        assert all_stats['week']['totalObservations'] == 4
+        assert all_stats['week']['uniqueSpecies'] == 2
+        assert all_stats['week']['mostCommonBird'] == 'Common Bird'
+        assert all_stats['week']['rarestBird'] == 'Week Bird'
+
+        assert all_stats['month']['totalObservations'] == 4
+        assert all_stats['month']['uniqueSpecies'] == 2
+
+        # 45-day-old detection shows up only in allTime.
+        assert all_stats['allTime']['totalObservations'] == 5
+        assert all_stats['allTime']['uniqueSpecies'] == 3
+        assert all_stats['allTime']['rarestBird'] in {'Week Bird', 'Old Bird'}
+
+    def test_summary_stats_picks_most_recent_name_per_species(
+        self, test_db_manager, frozen_db_now
+    ):
+        """When a species appears under multiple common_name values across
+        its history (the V2→V3 model-rename scenario), every period bucket
+        must report the same canonical name — the one from the most recent
+        detection. Without this, today's bucket could show the new name
+        while allTime shows the old one for the *same* bird, since both
+        are equally valid representatives under MIN/MAX aggregation.
+
+        Names chosen specifically so MIN(common_name) (the broken
+        all-time behavior pre-Option-C) and most-recent disagree: 'Alpha
+        Historical' is alphabetically MIN, but 'Zulu Today' is the most
+        recent. The test asserts 'Zulu Today' — would fail on the broken
+        code, passes on Option C.
+        """
+        now = frozen_db_now
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_start = now - timedelta(weeks=1)
+        month_start = now - timedelta(days=30)
+
+        sci = 'Turdus merula'
+
+        # Historical detection — alphabetically MIN common_name. Same
+        # _SPECIES_KEY as the recent one below because scientific_name
+        # is identical.
+        test_db_manager.insert_detection({
+            'timestamp': (now - timedelta(days=200)).isoformat(),
+            'group_timestamp': (now - timedelta(days=200)).isoformat(),
+            'scientific_name': sci,
+            'common_name': 'Alpha Historical',
+            'confidence': 0.8,
+            'latitude': 40.7128, 'longitude': -74.0060,
+            'cutoff': 0.5, 'sensitivity': 0.75, 'overlap': 0.25,
+        })
+
+        # Recent detection — alphabetically MAX common_name, but
+        # chronologically newest.
+        test_db_manager.insert_detection({
+            'timestamp': (now - timedelta(seconds=10)).isoformat(),
+            'group_timestamp': (now - timedelta(seconds=10)).isoformat(),
+            'scientific_name': sci,
+            'common_name': 'Zulu Today',
+            'confidence': 0.8,
+            'latitude': 40.7128, 'longitude': -74.0060,
+            'cutoff': 0.5, 'sensitivity': 0.75, 'overlap': 0.25,
+        })
+
+        all_stats = test_db_manager.get_summary_stats_all_periods(
+            today_start, week_start, month_start,
+        )
+
+        # Today's bucket: one detection (the recent one); name is naturally
+        # 'Zulu Today' — but also note this is the only detection in today,
+        # so even MIN over the today subset would pick it. The real
+        # discriminator is the allTime assertion below.
+        assert all_stats['today']['totalObservations'] == 1
+        assert all_stats['today']['mostCommonBird'] == 'Zulu Today'
+
+        # The regression guard: allTime contains both rows. MIN over
+        # all-time would return 'Alpha Historical' (A < Z). Option C
+        # returns 'Zulu Today' (most recent). This is the case that
+        # actually distinguishes the two behaviors.
+        assert all_stats['allTime']['totalObservations'] == 2
+        assert all_stats['allTime']['mostCommonBird'] == 'Zulu Today'
+        assert all_stats['allTime']['rarestBird'] == 'Zulu Today'
+
+    def test_summary_stats_breaks_count_ties_alphabetically(
+        self, test_db_manager, frozen_db_now
+    ):
+        """Contract test for the tiebreaker on the per-period selectors.
+
+        When two species (or hours) tie on c_<period>, the LIMIT 1 pick must
+        be deterministic. SQLite today happens to return the species_key
+        ASC pick anyway because sort-based GROUP BY emits groups in key
+        order, so this test does not currently fail against the pre-fix SQL
+        on SQLite 3.40.1 in the Docker image. But the contract is not
+        guaranteed by SQL semantics — a future SQLite version that switches
+        to hash-based aggregation, an index change, or concurrent writes
+        could surface the non-determinism. This test pins the *required*
+        contract (alphabetic-ASC tiebreaker) so a future refactor that
+        breaks the tiebreaker fails loudly.
+        """
+        now = frozen_db_now
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_start = now - timedelta(weeks=1)
+        month_start = now - timedelta(days=30)
+
+        # Two species, each with one detection today — c_today=1 for both.
+        # Without the species_key ASC tiebreaker the pick is plan-dependent.
+        # Hours differ (08 and 10) so the hour tiebreaker is also probed.
+        # Both must be before frozen_db_now (12:00) or the SQL upper-bound
+        # `BETWEEN ... AND :now` silently drops them and the test reduces
+        # to a single-species sanity check that passes trivially.
+        # Zulu is inserted first so its rowid is lower — without the
+        # tiebreaker, SQLite's default group-scan order returns Zulu
+        # ahead of Alpha; the assertion then fails.
+        test_db_manager.insert_detection({
+            'timestamp': today_start.replace(hour=10).isoformat(),
+            'group_timestamp': today_start.replace(hour=10).isoformat(),
+            'scientific_name': 'Zulu species',
+            'common_name': 'Zulu Bird',
+            'confidence': 0.8,
+            'latitude': 40.7128, 'longitude': -74.0060,
+            'cutoff': 0.5, 'sensitivity': 0.75, 'overlap': 0.25,
+        })
+        test_db_manager.insert_detection({
+            'timestamp': today_start.replace(hour=8).isoformat(),
+            'group_timestamp': today_start.replace(hour=8).isoformat(),
+            'scientific_name': 'Alpha species',
+            'common_name': 'Alpha Bird',
+            'confidence': 0.8,
+            'latitude': 40.7128, 'longitude': -74.0060,
+            'cutoff': 0.5, 'sensitivity': 0.75, 'overlap': 0.25,
+        })
+
+        all_stats = test_db_manager.get_summary_stats_all_periods(
+            today_start, week_start, month_start,
+        )
+
+        # Both species tied at c_today=1. Alphabetic species_key wins both
+        # the most-common and rarest picks (only one alphabetically minimal
+        # row exists). Without the tiebreaker, either pick could come back.
+        assert all_stats['today']['mostCommonBird'] == 'Alpha Bird'
+        assert all_stats['today']['rarestBird'] == 'Alpha Bird'
+
+        # Hours 08 and 10 both have count=1. The hour ASC tiebreaker means
+        # the earlier hour (08) wins.
+        assert all_stats['today']['mostActiveHour'] == '08:00'
+
+    def test_single_period_summary_matches_all_periods_contract(
+        self, test_db_manager, frozen_db_now
+    ):
+        """The lazy Summary endpoint must preserve the all-period contract."""
+        now = frozen_db_now
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_start = now - timedelta(weeks=1)
+        month_start = now - timedelta(days=30)
+
+        rows = [
+            (today_start.replace(hour=9), 'Alpha species', 'Alpha Bird'),
+            (now - timedelta(days=3), 'Beta species', 'Beta Bird'),
+            (now - timedelta(days=20), 'Gamma species', 'Gamma Bird'),
+            (now - timedelta(days=200), 'Delta species', 'Delta Bird'),
+        ]
+        for timestamp, scientific_name, common_name in rows:
+            test_db_manager.insert_detection({
+                'timestamp': timestamp.isoformat(),
+                'group_timestamp': timestamp.isoformat(),
+                'scientific_name': scientific_name,
+                'common_name': common_name,
+                'confidence': 0.8,
+                'latitude': 40.7128, 'longitude': -74.0060,
+                'cutoff': 0.5, 'sensitivity': 0.75, 'overlap': 0.25,
+            })
+
+        all_stats = test_db_manager.get_summary_stats_all_periods(
+            today_start, week_start, month_start,
+        )
+
+        assert test_db_manager.get_summary_stats_for_period(
+            today_start, now=now,
+        ) == all_stats['today']
+        assert test_db_manager.get_summary_stats_for_period(
+            week_start, now=now,
+        ) == all_stats['week']
+        assert test_db_manager.get_summary_stats_for_period(
+            month_start, now=now,
+        ) == all_stats['month']
+        assert test_db_manager.get_summary_stats_for_period(
+            datetime.min, now=now,
+        ) == all_stats['allTime']
 
     def test_get_latest_detections_same_species_same_group(self, test_db_manager):
         """Test get_latest_detections with multiple detections of same species in same group_timestamp.

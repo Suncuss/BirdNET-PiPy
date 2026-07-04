@@ -2,7 +2,7 @@
   <div class="min-h-screen bg-gray-100">
     <nav class="bg-green-700 text-white p-4">
       <div class="container mx-auto">
-        <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center justify-between mb-2">
           <router-link
             to="/"
             class="hover:text-green-200 flex items-baseline gap-2"
@@ -108,31 +108,20 @@
       </router-view>
     </main>
 
-    <!-- Status FAB — recorder warning takes priority over update; hidden on Settings -->
+    <!-- Status FAB — recorder warning takes priority over update; hidden on
+         Settings and while a page-level scroll-to-top button occupies the corner -->
     <router-link
-      v-if="recorderHealth.showRecorderWarning.value && $route.name !== 'Settings'"
+      v-if="recorderHealth.showRecorderWarning.value && statusFabAllowed"
       to="/settings"
       class="fixed bottom-4 right-4 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-full shadow-lg hidden md:flex items-center gap-2 z-50 transition-colors"
       title="Audio recording issues detected"
       @click="handleRecorderWarningClick"
     >
-      <svg
-        class="w-5 h-5"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <path
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          stroke-width="2"
-          d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-        />
-      </svg>
+      <WarningIcon class="w-5 h-5" />
       <span class="text-sm font-medium">Audio Recording Issues</span>
     </router-link>
     <router-link
-      v-else-if="systemUpdate.showUpdateIndicator.value && $route.name !== 'Settings'"
+      v-else-if="systemUpdate.showUpdateIndicator.value && statusFabAllowed"
       to="/settings"
       class="fixed bottom-4 right-4 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-full shadow-lg hidden md:flex items-center gap-2 z-50 transition-colors"
       title="System update available"
@@ -173,39 +162,46 @@
 </template>
 
 <script>
-import { ref, nextTick, watchEffect, onMounted, onUnmounted } from 'vue'
+import { ref, computed, nextTick, watchEffect, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useLogger } from '@/composables/useLogger'
 import { useAuth } from '@/composables/useAuth'
-import { useUnitSettings } from '@/composables/useUnitSettings'
-import { useTimeFormat } from '@/composables/useTimeFormat'
+import { useSettings } from '@/composables/useSettings'
 import { useAppStatus } from '@/composables/useAppStatus'
 import { useSystemUpdate } from '@/composables/useSystemUpdate'
 import { useRecorderHealth } from '@/composables/useRecorderHealth'
+import { useScrollToTop } from '@/composables/useScrollToTop'
 import { DISPLAY_NAME } from './version'
 import SetupWizard from '@/components/SetupWizard.vue'
 import LoginModal from '@/components/LoginModal.vue'
 import WelcomeOverlay from '@/components/WelcomeOverlay.vue'
+import WarningIcon from '@/components/icons/WarningIcon.vue'
 import { WELCOME_PENDING_KEY } from '@/utils/storageKeys'
-import api from '@/services/api'
 
 export default {
   name: 'App',
   components: {
     SetupWizard,
     LoginModal,
-    WelcomeOverlay
+    WelcomeOverlay,
+    WarningIcon
   },
   setup() {
     const logger = useLogger('App')
     const route = useRoute()
     const router = useRouter()
     const auth = useAuth()
-    const unitSettings = useUnitSettings()
-    const timeFormat = useTimeFormat()
+    const appSettings = useSettings()
     const { stationName, setStationName, setLocationConfigured } = useAppStatus()
     const systemUpdate = useSystemUpdate()
     const recorderHealth = useRecorderHealth()
+    const scrollToTop = useScrollToTop()
+
+    // Whether the global status FABs may occupy the bottom-right corner: not on
+    // Settings, and not while a page-level scroll-to-top button claims it.
+    const statusFabAllowed = computed(
+      () => route.name !== 'Settings' && !scrollToTop.isVisible.value
+    )
 
     const showSetupWizard = ref(false)
     const showLoginModal = ref(false)
@@ -220,23 +216,25 @@ export default {
     })
 
     const checkLocationSetup = async () => {
-      try {
-        const { data: settings } = await api.get('/settings')
-        // Sync display preferences from settings
-        unitSettings.setUseMetricUnits(settings.display?.use_metric_units ?? true)
-        timeFormat.setTimeFormat(settings.display?.time_format)
-        setStationName(settings.display?.station_name)
-        // Show setup modal if location has not been configured
-        if (!settings.location?.configured) {
-          logger.info('Location not configured, showing setup wizard')
-          setLocationConfigured(false)
-          showSetupWizard.value = true
-        } else {
-          setLocationConfigured(true)
-        }
-      } catch (error) {
-        logger.error('Failed to check location setup', { error: error.message })
+      // useSettings owns the fetch and syncs unit / time-format prefs.
+      const ok = await appSettings.ensureLoaded()
+      if (!ok) {
+        // A network error says nothing about whether location is configured.
+        // Don't downgrade locationConfigured — leave it; the dashboard
+        // renders and shows its own error state, and the next
+        // ensureLoaded() retries.
+        logger.error('Failed to check location setup')
+        return
+      }
+      const settings = appSettings.settings.value
+      setStationName(settings?.display?.station_name)
+      // Show setup modal if location has not been configured
+      if (!settings?.location?.configured) {
+        logger.info('Location not configured, showing setup wizard')
         setLocationConfigured(false)
+        showSetupWizard.value = true
+      } else {
+        setLocationConfigured(true)
       }
     }
 
@@ -300,8 +298,9 @@ export default {
       // Listen for auth required events from API interceptor
       window.addEventListener('auth:required', handleAuthRequired)
 
-      // Check auth status
-      await auth.checkAuthStatus()
+      // Ensure auth status is loaded (shares the one-time load with the
+      // router guard — see useAuth.ensureAuthLoaded)
+      await auth.ensureAuthLoaded()
 
       // Check if location setup is needed
       if (auth.needsLogin.value) {
@@ -337,7 +336,8 @@ export default {
       auth,
       stationName,
       systemUpdate,
-      recorderHealth
+      recorderHealth,
+      statusFabAllowed
     }
   }
 }

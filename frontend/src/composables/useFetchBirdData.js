@@ -1,6 +1,7 @@
 import { ref } from "vue";
 import api from "@/services/api";
 import { getBirdImageUrl, getDefaultBirdImageUrl, isDefaultBirdImageUrl } from "@/services/media";
+import { ERR_UNREACHABLE } from "@/utils/errorMessages";
 import { useLogger } from "./useLogger";
 
 export function useFetchBirdData() {
@@ -11,6 +12,8 @@ export function useFetchBirdData() {
   const latestObservationData = ref(null);
   const recentObservationsData = ref([]);
   const summaryData = ref({});
+  const summaryLoading = ref({});
+  const summaryErrors = ref({});
 
   const detailedBirdActivityError = ref(null);
   const hourlyBirdActivityError = ref(null);
@@ -58,7 +61,7 @@ export function useFetchBirdData() {
         : hourlyBirdActivityResponse.data;
 
       hourlyBirdActivityError.value = hourlyBirdActivityResponse.error
-        ? "Hmm, cannot reach the server"
+        ? ERR_UNREACHABLE
         : null;
 
       detailedBirdActivityData.value = detailedBirdActivityResponse.error
@@ -66,7 +69,7 @@ export function useFetchBirdData() {
         : detailedBirdActivityResponse.data;
 
       detailedBirdActivityError.value = detailedBirdActivityResponse.error
-        ? "Hmm, cannot reach the server"
+        ? ERR_UNREACHABLE
         : null;
 
       logger.debug('Charts data fetched successfully', {
@@ -85,6 +88,14 @@ export function useFetchBirdData() {
   let recentObservationsCache = { all: [], unique: [] };
   let currentActivityOrder = 'most';
   let currentRecentObsMode = 'all';
+
+  const setSummaryLoading = (period, loading) => {
+    summaryLoading.value = { ...summaryLoading.value, [period]: loading };
+  };
+
+  const setSummaryError = (period, error) => {
+    summaryErrors.value = { ...summaryErrors.value, [period]: error };
+  };
 
   const applyDashboardSelections = () => {
     recentObservationsData.value = recentObservationsCache[currentRecentObsMode] || [];
@@ -113,7 +124,8 @@ export function useFetchBirdData() {
     const myVersion = ++fetchVersion;
     logger.info('Fetching dashboard data');
     try {
-      const response = await api.get('/dashboard');
+      // /dashboard is a heavy aggregation — allow generous time on slow devices.
+      const response = await api.get('/dashboard', { timeout: 45000 });
 
       // Bail out if a newer fetch has started while we were awaiting
       if (myVersion !== fetchVersion) return;
@@ -130,7 +142,13 @@ export function useFetchBirdData() {
       recentObservationsCache = data.recentObservations || { all: [], unique: [] };
       recentObservationsError.value = null;
 
-      summaryData.value = data.summary;
+      summaryData.value = data.summary || {};
+      Object.keys(data.summary || {}).forEach((period) => {
+        setSummaryLoading(period, false);
+      });
+      // Server is reachable — drop stale per-period errors, including for
+      // lazily-loaded periods absent from this payload.
+      summaryErrors.value = {};
       summaryError.value = null;
 
       hourlyBirdActivityData.value = data.hourlyActivity;
@@ -181,20 +199,55 @@ export function useFetchBirdData() {
 
       logger.error('Error fetching dashboard data', error);
 
-      const errMsg = 'Hmm, cannot reach the server';
-      latestObservationData.value = null;
-      latestObservationError.value = errMsg;
-      recentObservationsCache = { all: [], unique: [] };
-      recentObservationsData.value = [];
-      recentObservationsError.value = errMsg;
-      summaryData.value = {};
-      summaryError.value = errMsg;
-      hourlyBirdActivityData.value = [];
-      hourlyBirdActivityError.value = errMsg;
-      activityOverviewCache = { most: [], least: [] };
-      detailedBirdActivityData.value = [];
-      detailedBirdActivityError.value = errMsg;
-      hasLoadedOnce.value = true;
+      // A failed *refresh* must never destroy a good render — keep the last
+      // data on screen and let the next poll retry. Only surface the error
+      // when there is nothing to show yet (the very first load failed).
+      if (!hasLoadedOnce.value) {
+        latestObservationError.value = ERR_UNREACHABLE;
+        recentObservationsError.value = ERR_UNREACHABLE;
+        summaryError.value = ERR_UNREACHABLE;
+        hourlyBirdActivityError.value = ERR_UNREACHABLE;
+        detailedBirdActivityError.value = ERR_UNREACHABLE;
+        hasLoadedOnce.value = true;
+      }
+    }
+  };
+
+  const fetchSummaryData = async (period, { force = false } = {}) => {
+    if (!force && summaryData.value[period]) {
+      return summaryData.value[period];
+    }
+    if (summaryLoading.value[period]) {
+      return null;
+    }
+
+    // Spinner only on first load; a forced refresh keeps stale data visible.
+    const showLoading = !summaryData.value[period];
+    if (showLoading) {
+      setSummaryLoading(period, true);
+    }
+    setSummaryError(period, null);
+    summaryError.value = null;
+
+    try {
+      const response = await api.get('/dashboard/summary', {
+        params: { period }
+      });
+      logger.api('GET', '/dashboard/summary', { period }, response);
+
+      summaryData.value = {
+        ...summaryData.value,
+        [period]: response.data
+      };
+      return response.data;
+    } catch (error) {
+      logger.error('Failed to fetch summary data', error);
+      setSummaryError(period, ERR_UNREACHABLE);
+      return null;
+    } finally {
+      if (showLoading) {
+        setSummaryLoading(period, false);
+      }
     }
   };
 
@@ -218,7 +271,7 @@ export function useFetchBirdData() {
       return response.data;
     } catch (error) {
       logger.error('Failed to fetch trends data', error);
-      trendsError.value = 'Hmm, cannot reach the server';
+      trendsError.value = ERR_UNREACHABLE;
       trendsData.value = { labels: [], data: [] };
       return null;
     }
@@ -235,11 +288,14 @@ export function useFetchBirdData() {
     latestObservationError,
     recentObservationsError,
     summaryError,
+    summaryLoading,
+    summaryErrors,
     trendsData,
     trendsError,
     latestObservationimageUrl,
     hasLoadedOnce,
     fetchDashboardData,
+    fetchSummaryData,
     setActivityOrder,
     setRecentObsMode,
     fetchChartsData,

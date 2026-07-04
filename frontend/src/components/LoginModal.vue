@@ -6,7 +6,7 @@
     <!-- Backdrop -->
     <div
       class="fixed inset-0 bg-black bg-opacity-50 transition-opacity"
-      @click="handleCancel"
+      @click="requestDismiss"
     />
 
     <!-- Modal -->
@@ -17,21 +17,9 @@
           v-if="!loading"
           class="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
           title="Close"
-          @click="handleCancel"
+          @click="requestDismiss"
         >
-          <svg
-            class="h-5 w-5"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke-width="2"
-            stroke="currentColor"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              d="M6 18L18 6M6 6l12 12"
-            />
-          </svg>
+          <CloseIcon class="h-5 w-5" />
         </button>
 
         <!-- Header -->
@@ -120,11 +108,13 @@
 <script>
 import { ref, computed, watch, nextTick } from 'vue'
 import { useAuth } from '@/composables/useAuth'
+import { useModalDismiss } from '@/composables/useModalDismiss'
 import Spinner from '@/components/Spinner.vue'
+import CloseIcon from '@/components/icons/CloseIcon.vue'
 
 export default {
   name: 'LoginModal',
-  components: { Spinner },
+  components: { Spinner, CloseIcon },
   props: {
     isVisible: {
       type: Boolean,
@@ -175,6 +165,12 @@ export default {
       emit('cancel')
     }
 
+    const { requestDismiss } = useModalDismiss(
+      () => props.isVisible,
+      handleCancel,
+      { canDismiss: () => !loading.value }
+    )
+
     return {
       password,
       passwordInput,
@@ -182,7 +178,7 @@ export default {
       error,
       isValid,
       handleSubmit,
-      handleCancel
+      requestDismiss
     }
   }
 }

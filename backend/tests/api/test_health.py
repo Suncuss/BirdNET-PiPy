@@ -16,9 +16,13 @@ def test_create_app_accepts_gevent_async_mode():
     import core.api as api_module
 
     saved = api_module.socketio
+    saved_db_executor = api_module.db_executor
     try:
         app, sio = api_module.create_app(async_mode='gevent')
         assert sio.async_mode == 'gevent'
         assert app is not None
     finally:
         api_module.socketio = saved
+        if api_module.db_executor is not saved_db_executor:
+            api_module.db_executor.shutdown(wait=False)
+        api_module.db_executor = saved_db_executor

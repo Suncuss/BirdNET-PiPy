@@ -1,7 +1,10 @@
 <template>
   <div class="fixed inset-0 z-50 overflow-y-auto">
     <!-- Backdrop -->
-    <div class="fixed inset-0 bg-black bg-opacity-50 transition-opacity" />
+    <div
+      class="fixed inset-0 bg-black bg-opacity-50 transition-opacity"
+      @click="requestDismiss"
+    />
 
     <!-- Modal -->
     <div class="flex min-h-full items-center justify-center p-4">
@@ -10,21 +13,10 @@
         <button
           v-if="!isProcessing"
           class="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
-          @click="handleClose"
+          title="Close"
+          @click="requestDismiss"
         >
-          <svg
-            class="w-5 h-5"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M6 18L18 6M6 6l12 12"
-            />
-          </svg>
+          <CloseIcon class="w-5 h-5" />
         </button>
 
         <!-- Stage indicator -->
@@ -1177,12 +1169,15 @@
 <script>
 import { ref, computed, onUnmounted } from 'vue'
 import { useMigration } from '@/composables/useMigration'
-import { formatBytes } from '@/utils/format'
+import { useModalDismiss } from '@/composables/useModalDismiss'
+import { formatBytes, formatConfidence } from '@/utils/format'
+import CloseIcon from '@/components/icons/CloseIcon.vue'
 
 export default {
   name: 'MigrationModal',
+  components: { CloseIcon },
   emits: ['close'],
-  setup(props, { emit }) {
+  setup(_, { emit }) {
     // Composable
     const migration = useMigration()
 
@@ -1241,10 +1236,6 @@ export default {
       }
     }
 
-    const formatConfidence = (confidence) => {
-      if (confidence === undefined || confidence === null) return ''
-      return `${Math.round(confidence * 100)}%`
-    }
 
     // Stage 1 handlers
     const handleDrop = (event) => {
@@ -1339,6 +1330,12 @@ export default {
       emit('close')
     }
 
+    const { requestDismiss } = useModalDismiss(
+      () => true,
+      handleClose,
+      { canDismiss: () => !isProcessing.value }
+    )
+
     // Cleanup on unmount
     onUnmounted(() => {
       migration.reset()
@@ -1358,6 +1355,7 @@ export default {
       handleCancel,
       handleDone,
       handleClose,
+      requestDismiss,
       formatDate,
       formatConfidence,
       formatBytes,

@@ -73,14 +73,15 @@
             </div>
           </template>
           <template v-else>
-            <p>
-              Photo by <a
+            <p class="flex items-baseline">
+              <span class="shrink-0">Photo by&nbsp;</span>
+              <a
                 :href="birdImageData.authorUrl"
                 target="_blank"
                 rel="noopener noreferrer"
-                class="text-blue-600 underline"
-              >{{
-                birdImageData.authorName }}</a>, licensed under {{ birdImageData.licenseType }}
+                class="text-blue-600 underline truncate min-w-0"
+              >{{ birdImageData.authorName }}</a>
+              <span class="shrink-0">,&nbsp;licensed under {{ birdImageData.licenseType }}</span>
             </p>
           </template>
         </div>
@@ -88,7 +89,7 @@
           <p><span class="font-semibold text-gray-700">Total Detections:</span> {{ totalVisits }}</p>
           <p><span class="font-semibold text-gray-700">First Detected:</span> {{ formatDate(firstDetected) }}</p>
           <p><span class="font-semibold text-gray-700">Last Detected:</span> {{ formatDate(lastDetected) }}</p>
-          <p><span class="font-semibold text-gray-700">Most Activity Time:</span> {{ peakActivityTime }}</p>
+          <p><span class="font-semibold text-gray-700">Most Activity Time:</span> {{ formatHourLabel(peakActivityTime) }}</p>
           <p v-if="birdDetails.ebird_code">
             <a
               :href="`https://ebird.org/species/${birdDetails.ebird_code}`"
@@ -154,19 +155,10 @@
             ]"
             @click="navigatePrevious"
           >
-            <svg
+            <ChevronIcon
+              direction="left"
               class="w-3 h-3 sm:w-4 sm:h-4 mr-1"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M15 19l-7-7 7-7"
-              />
-            </svg>
+            />
             <span class="hidden sm:inline">Previous</span>
             <span class="sm:hidden">Prev</span>
           </button>
@@ -185,19 +177,10 @@
           >
             <span class="hidden sm:inline">Next</span>
             <span class="sm:hidden">Next</span>
-            <svg
+            <ChevronIcon
+              direction="right"
               class="w-3 h-3 sm:w-4 sm:h-4 ml-1"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M9 5l7 7-7 7"
-              />
-            </svg>
+            />
           </button>
         </div>
         
@@ -207,11 +190,36 @@
             ref="detectionChart"
             class="absolute inset-0 w-full h-full"
           />
+
+          <!-- Loading -->
+          <div
+            v-if="chartLoading"
+            class="absolute inset-0 flex items-center justify-center bg-white"
+          >
+            <Spinner class="h-8 w-8 text-green-600" />
+            <span class="ml-3 text-gray-600">Loading data...</span>
+          </div>
+
+          <!-- Error -->
+          <div
+            v-else-if="chartError"
+            class="absolute inset-0 flex items-center justify-center bg-white text-gray-500"
+          >
+            Couldn't load chart data.
+          </div>
+
+          <!-- Empty -->
+          <div
+            v-else-if="!chartHasData"
+            class="absolute inset-0 flex items-center justify-center bg-white text-gray-500"
+          >
+            No detections in this period.
+          </div>
         </div>
       </div>
 
       <!-- Recordings Section -->
-      <div class="bg-white rounded-lg shadow p-6 lg:col-span-3">
+      <div class="bg-white rounded-lg shadow px-4 py-4 sm:px-6 lg:col-span-3">
         <!-- Header with Selector -->
         <div class="flex items-center justify-between mb-4">
           <h2 class="text-lg font-semibold">
@@ -235,35 +243,27 @@
           </div>
         </div>
 
+        <!-- Loading -->
+        <div
+          v-if="recordingsLoading"
+          class="flex items-center justify-center py-8"
+        >
+          <Spinner class="h-6 w-6 text-green-600" />
+          <span class="ml-3 text-gray-500">Loading recordings...</span>
+        </div>
+
         <!-- Recordings Grid (show 4 per page) -->
         <div
-          v-if="currentPageRecordings.length > 0"
+          v-else-if="currentPageRecordings.length > 0"
           class="grid grid-cols-1 md:grid-cols-2 gap-6"
         >
-          <div
-            v-for="(recording, index) in currentPageRecordings"
+          <SpectrogramPlayer
+            v-for="recording in currentPageRecordings"
             :key="recording.id"
-            class="bg-gray-50 p-4 rounded-lg shadow-sm"
-          >
-            <div class="space-y-2">
-              <img
-                :src="getSpectrogramUrl(recording.spectrogram_filename)"
-                :alt="`Spectrogram ${index + 1}`"
-                class="w-full rounded-lg bg-gray-900 cursor-pointer hover:opacity-90 transition-opacity"
-                @click="openSpectrogram(recording.spectrogram_filename)"
-              >
-              <audio
-                controls
-                class="w-full rounded-lg shadow-sm"
-              >
-                <source
-                  :src="getAudioUrl(recording.audio_filename)"
-                  type="audio/mpeg"
-                >
-                Your browser does not support the audio element.
-              </audio>
-            </div>
-          </div>
+            :recording="recording"
+            class="rounded-lg border border-gray-200"
+            @expand="openSpectrogram(recording.spectrogram_filename, recording.spectrogram_sig)"
+          />
         </div>
 
         <!-- Empty state -->
@@ -277,7 +277,7 @@
         <!-- Pagination: 1 2 3 4 -->
         <div
           v-if="totalPages > 1"
-          class="flex justify-center items-center gap-2 mt-6"
+          class="flex justify-center items-center gap-2 mt-4"
         >
           <button
             v-for="page in totalPages"
@@ -323,15 +323,18 @@ import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import Chart from 'chart.js/auto'
 import SpectrogramModal from '@/components/SpectrogramModal.vue'
+import SpectrogramPlayer from '@/components/SpectrogramPlayer.vue'
 import BirdImageModal from '@/components/BirdImageModal.vue'
+import Spinner from '@/components/Spinner.vue'
+import ChevronIcon from '@/components/icons/ChevronIcon.vue'
 import { useAuth } from '@/composables/useAuth'
 import { useDateNavigation } from '@/composables/useDateNavigation'
 import { useChartHelpers } from '@/composables/useChartHelpers'
 import { useChartColors } from '@/composables/useChartColors'
 import { useSmartCrop } from '@/composables/useSmartCrop'
+import { useTimeFormat } from '@/composables/useTimeFormat'
 import api from '@/services/api'
 import {
-  getAudioUrl,
   getBirdImageUrl,
   getDefaultBirdImageUrl,
   getSpectrogramUrl,
@@ -342,7 +345,10 @@ export default {
   name: 'BirdDetails',
   components: {
     SpectrogramModal,
-    BirdImageModal
+    SpectrogramPlayer,
+    BirdImageModal,
+    Spinner,
+    ChevronIcon
   },
   setup() {
     const route = useRoute()
@@ -353,6 +359,9 @@ export default {
     const lastDetected = ref(null)
     const detectionChart = ref(null)
     const detectionChartInstance = ref(null)
+    const chartHasData = ref(false)
+    const chartLoadedOnce = ref(false)
+    const chartError = ref(false)
     const averageConfidence = ref(0)
     const peakActivityTime = ref('')
     const seasonality = ref('')
@@ -361,7 +370,8 @@ export default {
     const recordingSort = ref('recent') // Default to most recent
     const currentPage = ref(1)
     const recordingsPerPage = 4
-    const isLoadingRecordings = ref(false)
+    // Starts true: mount kicks off a fetch immediately.
+    const isLoadingRecordings = ref(true)
     const selectedSpectrogramUrl = ref(null)
 
     const hasCustomImage = ref(false)
@@ -378,8 +388,8 @@ export default {
       licenseType: 'N/A'
     })
 
-	    const openSpectrogram = (filename) => {
-	      selectedSpectrogramUrl.value = getSpectrogramUrl(filename)
+	    const openSpectrogram = (filename, sig) => {
+	      selectedSpectrogramUrl.value = getSpectrogramUrl(filename, sig)
 	    }
 
     const closeSpectrogram = () => {
@@ -402,6 +412,7 @@ export default {
     const { destroyChart } = useChartHelpers()
     const { colorPalette } = useChartColors()
     const { useFocalPoint } = useSmartCrop()
+    const { formatHourLabel } = useTimeFormat()
     const { focalPoint: imageFocalPoint, isReady: imageReady, updateFocalPoint } = useFocalPoint()
 
     // Detect mobile portrait mode and return appropriate tick limits
@@ -431,6 +442,26 @@ export default {
       }
     }
 
+    let resizeTimeout
+    let currentMaxTicksLimit = null
+
+    const syncChartTickDensity = () => {
+      const chart = detectionChartInstance.value
+      if (!chart) return
+
+      const nextMaxTicksLimit = getMaxTicksLimit(selectedView.value)
+      if (nextMaxTicksLimit === currentMaxTicksLimit) return
+
+      currentMaxTicksLimit = nextMaxTicksLimit
+      chart.options.scales.x.ticks.maxTicksLimit = nextMaxTicksLimit
+      chart.update('none')
+    }
+
+    const handleResize = () => {
+      clearTimeout(resizeTimeout)
+      resizeTimeout = setTimeout(syncChartTickDensity, 250)
+    }
+
     // Update queue for chart updates
     const updateQueue = ref([])
 
@@ -444,6 +475,15 @@ export default {
 
     // Inverted logic for template compatibility
     const isNextDisabled = computed(() => !canGoForward.value)
+
+    // Distinct from chartHasData (a resolved-but-empty period) so loading
+    // and empty never collapse together.
+    const chartLoading = computed(() => isUpdating.value || !chartLoadedOnce.value)
+    // Re-sorts keep the old grid visible (no flash); only show the loader
+    // when there's nothing to show yet.
+    const recordingsLoading = computed(
+      () => isLoadingRecordings.value && allRecordings.value.length === 0
+    )
 
     // Recordings pagination computed properties
     const totalPages = computed(() => Math.ceil(allRecordings.value.length / recordingsPerPage))
@@ -464,7 +504,17 @@ export default {
         averageConfidence.value = data.average_confidence
         peakActivityTime.value = data.peak_activity_time
         seasonality.value = data.seasonality
+      } catch (error) {
+        console.error('Error fetching bird details:', error)
+        return
+      }
 
+      // Independent of the wikimedia fetch below: a slow image lookup can't
+      // strand these loading states.
+      fetchRecordings()
+      updateChart()
+
+      try {
         const { data: imageData } = await api.get('/wikimedia_image', {
           params: { species: birdDetails.value.common_name }
         })
@@ -482,14 +532,8 @@ export default {
           // Calculate focal point for smart cropping
           await updateFocalPoint(imageData.imageUrl)
         }
-
-        // Fetch recordings
-        await fetchRecordings()
-
-        // Initial chart load
-        updateChart()
       } catch (error) {
-        console.error('Error fetching bird details:', error)
+        console.error('Error fetching bird image:', error)
       }
     }
 
@@ -532,6 +576,7 @@ export default {
       }
 
       isUpdating.value = true
+      chartError.value = false
 
       try {
         const localDateString = getLocalDateString(currentAnchorDate.value)
@@ -542,6 +587,10 @@ export default {
             date: localDateString
           }
         })
+
+        // All-zero counts count as empty (no flat, bar-less axis).
+        chartHasData.value = Array.isArray(chartData.data) &&
+          chartData.data.some((count) => Number(count) > 0)
 
         // Wait for Vue to update DOM
         await nextTick()
@@ -554,6 +603,8 @@ export default {
 
         // Destroy existing chart using composable helper
         destroyChart(detectionChart)
+
+        currentMaxTicksLimit = getMaxTicksLimit(selectedView.value)
 
         // Create new chart
         detectionChartInstance.value = new Chart(detectionChart.value, {
@@ -571,11 +622,6 @@ export default {
           options: {
             responsive: true,
             maintainAspectRatio: false,
-            // Explicitly handle resize for Safari
-            onResize: (chart, _size) => {
-              // Force redraw on resize
-              chart.update('none')
-            },
             animation: {
               duration: 300
             },
@@ -624,7 +670,7 @@ export default {
                   maxRotation: 45,
                   minRotation: 45,
                   autoSkip: true,
-                  maxTicksLimit: getMaxTicksLimit(selectedView.value),
+                  maxTicksLimit: currentMaxTicksLimit,
                   padding: 2
                 },
                 grid: {
@@ -641,8 +687,14 @@ export default {
 
       } catch (error) {
         console.error('Error updating chart:', error)
+        chartError.value = true
+        // Drop any existing chart so a fresh date label doesn't annotate
+        // stale bars. The error overlay covers the empty canvas.
+        destroyChart(detectionChart)
+        detectionChartInstance.value = null
       } finally {
         isUpdating.value = false
+        chartLoadedOnce.value = true
         
         // Process queued updates
         if (updateQueue.value.length > 0) {
@@ -768,36 +820,14 @@ export default {
       return date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
     }
 
-    // Handle window resize for Safari and orientation changes
-    let resizeTimeout
-    let lastWidth = typeof window !== 'undefined' ? window.innerWidth : 0
-    const handleResize = () => {
-      clearTimeout(resizeTimeout)
-      resizeTimeout = setTimeout(() => {
-        const currentWidth = window.innerWidth
-        const widthChanged = Math.abs(currentWidth - lastWidth) > 100
-
-        if (detectionChartInstance.value) {
-          // If significant width change (orientation change), rebuild chart for new tick density
-          if (widthChanged) {
-            lastWidth = currentWidth
-            updateChart()
-          } else {
-            detectionChartInstance.value.resize()
-          }
-        }
-      }, 250)
-    }
-
     onMounted(() => {
       fetchBirdDetails()
       window.addEventListener('resize', handleResize)
     })
-    
+
     onUnmounted(() => {
       window.removeEventListener('resize', handleResize)
-
-      // Clean up chart using composable helper
+      clearTimeout(resizeTimeout)
       destroyChart(detectionChart)
     })
 
@@ -821,19 +851,22 @@ export default {
       peakActivityTime,
       seasonality,
       formatDate,
+      formatHourLabel,
 	      detectionChart,
-	      getAudioUrl,
-	      getSpectrogramUrl,
 	      selectedView,
       currentAnchorDate,
       viewOptions,
       currentDateDisplay,
       isNextDisabled,
       isUpdating,
+      chartLoading,
+      chartHasData,
+      chartError,
       changeView,
       navigatePrevious,
       navigateNext,
       // Recordings section
+      recordingsLoading,
       recordingSort,
       recordingSortOptions,
       currentPage,

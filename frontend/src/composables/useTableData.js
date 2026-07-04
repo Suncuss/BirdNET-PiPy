@@ -2,6 +2,7 @@ import { ref, computed } from 'vue'
 import api from '@/services/api'
 import { useLogger } from './useLogger'
 import { normalizeHour } from '@/utils/inputHelpers'
+import { ERR_UNREACHABLE } from '@/utils/errorMessages'
 
 /**
  * Composable for managing paginated detection table data.
@@ -107,7 +108,7 @@ export function useTableData() {
       }
     } catch (err) {
       logger.error('Failed to fetch detections', err)
-      error.value = 'Hmm, cannot reach the server'
+      error.value = ERR_UNREACHABLE
       detections.value = []
       totalItems.value = 0
     } finally {
@@ -147,7 +148,7 @@ export function useTableData() {
       } else if (err.response?.status === 404) {
         actionError.value = 'Detection not found'
       } else {
-        actionError.value = 'Hmm, cannot reach the server'
+        actionError.value = ERR_UNREACHABLE
       }
       return false
     }
@@ -236,7 +237,7 @@ export function useTableData() {
       if (err.response?.status === 401) {
         actionError.value = 'Please log in to delete'
       } else {
-        actionError.value = 'Hmm, cannot reach the server'
+        actionError.value = ERR_UNREACHABLE
       }
       return { success: false, deleted: 0, failed: selectedIds.value.size }
     }

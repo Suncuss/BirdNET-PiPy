@@ -1,4 +1,5 @@
 """Tests for the POST /api/stream/test endpoint."""
+import subprocess
 from unittest.mock import MagicMock, patch
 
 
@@ -30,3 +31,15 @@ class TestStreamTestEndpoint:
         })
         assert resp.status_code == 200
         assert resp.json['success'] is True
+
+    @patch('core.audio_manager.subprocess.run')
+    def test_rtsp_stream_timeout_returns_failure_payload(self, mock_run, api_client):
+        """Timed-out RTSP probe returns success=false with message."""
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd='ffmpeg', timeout=20)
+
+        resp = api_client.post('/api/stream/test', json={
+            'url': 'rtsp://192.168.1.100:554/stream',
+        })
+        assert resp.status_code == 200
+        assert resp.json['success'] is False
+        assert 'timed out' in resp.json['message']

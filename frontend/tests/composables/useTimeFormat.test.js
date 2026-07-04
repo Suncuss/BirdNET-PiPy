@@ -176,43 +176,6 @@ describe('useTimeFormat', () => {
     })
   })
 
-  describe('loadTimeFormat', () => {
-    it('updates state from API response', async () => {
-      mockApi.get.mockResolvedValueOnce({ data: { display: { time_format: '12h' } } })
-      const { explicitFormat, loadTimeFormat } = useTimeFormat()
-      await loadTimeFormat()
-      expect(explicitFormat.value).toBe('12h')
-    })
-
-    it('treats missing field as no explicit choice', async () => {
-      mockApi.get.mockResolvedValueOnce({ data: { display: {} } })
-      const { explicitFormat, loadTimeFormat } = useTimeFormat()
-      await loadTimeFormat()
-      expect(explicitFormat.value).toBeNull()
-    })
-
-    it('tolerates legacy "auto" value (treats as no explicit choice)', async () => {
-      mockApi.get.mockResolvedValueOnce({ data: { display: { time_format: 'auto' } } })
-      const { explicitFormat, loadTimeFormat } = useTimeFormat()
-      await loadTimeFormat()
-      expect(explicitFormat.value).toBeNull()
-    })
-
-    it('ignores invalid values from the API', async () => {
-      mockApi.get.mockResolvedValueOnce({ data: { display: { time_format: 'bogus' } } })
-      const { explicitFormat, loadTimeFormat } = useTimeFormat()
-      await loadTimeFormat()
-      expect(explicitFormat.value).toBeNull()
-    })
-
-    it('does not throw when the API call fails', async () => {
-      mockApi.get.mockRejectedValueOnce(new Error('boom'))
-      const { explicitFormat, loadTimeFormat } = useTimeFormat()
-      await expect(loadTimeFormat()).resolves.toBeUndefined()
-      expect(explicitFormat.value).toBeNull()
-    })
-  })
-
   describe('saveTimeFormat', () => {
     it('PUTs to /settings/time-format and updates state on success', async () => {
       mockApi.put.mockResolvedValueOnce({ data: { success: true, time_format: '24h' } })

@@ -1,18 +1,24 @@
 import { ref, computed } from 'vue'
 import api from '@/services/api'
+import { createCoalescedLoader } from '@/utils/coalescedLoader'
 import { useLogger } from './useLogger'
+
+// Pre-load / post-reset shape of the auth status — single owner, so a new
+// field can't be added to one copy and silently reset to a stale shape.
+const defaultAuthStatus = () => ({
+  authEnabled: false,
+  setupComplete: false,
+  authenticated: false,
+  publicAccess: true,
+  publicFeatures: [],
+  stationName: ''
+})
 
 /**
  * Shared state (singleton pattern) - all components share the same refs.
  * This ensures that when one component updates auth state, all others see the change.
  */
-const authStatus = ref({
-  authEnabled: false,
-  setupComplete: false,
-  authenticated: false,
-  publicFeatures: [],
-  stationName: ''
-})
+const authStatus = ref(defaultAuthStatus())
 const loading = ref(false)
 const error = ref('')
 
@@ -20,6 +26,9 @@ const error = ref('')
 // (no err.response) always show "Connection error" regardless of fallback.
 const errorMessage = (err, serverFallback) =>
   err.response?.data?.error || (err.response ? serverFallback : 'Connection error')
+
+// Coalesces the one-time /auth/status load — see ensureAuthLoaded().
+const authLoad = createCoalescedLoader()
 
 /**
  * Composable for authentication state management.
@@ -43,11 +52,15 @@ export function useAuth() {
    */
   const checkAuthStatus = async () => {
     try {
-      const { data } = await api.get('/auth/status')
+      // Tiny endpoint — fail fast so a degraded backend can't stall the guard.
+      const { data } = await api.get('/auth/status', { timeout: 4000 })
       authStatus.value = {
         authEnabled: data.auth_enabled,
         setupComplete: data.setup_complete,
         authenticated: data.authenticated,
+        // Default true so an older backend without the field keeps the
+        // limited public view (the master switch is opt-out).
+        publicAccess: data.public_access !== false,
         publicFeatures: data.public_features || [],
         stationName: data.station_name || ''
       }
@@ -60,6 +73,14 @@ export function useAuth() {
       return false
     }
   }
+
+  /**
+   * Ensure auth status has loaded at least once (coalesced; a failed load
+   * retries on the next call). The authStatus singleton is then kept
+   * current by the mutations below.
+   * @returns {Promise<boolean>}
+   */
+  const ensureAuthLoaded = () => authLoad.ensure(checkAuthStatus)
 
   /**
    * Login with password
@@ -200,15 +221,10 @@ export function useAuth() {
    * Reset all state (for testing purposes)
    */
   const resetState = () => {
-    authStatus.value = {
-      authEnabled: false,
-      setupComplete: false,
-      authenticated: false,
-      publicFeatures: [],
-      stationName: ''
-    }
+    authStatus.value = defaultAuthStatus()
     loading.value = false
     error.value = ''
+    authLoad.reset()
   }
 
   return {
@@ -223,6 +239,7 @@ export function useAuth() {
 
     // Methods
     checkAuthStatus,
+    ensureAuthLoaded,
     login,
     logout,
     setup,

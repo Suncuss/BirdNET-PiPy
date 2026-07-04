@@ -17,6 +17,11 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # Configuration
 IMAGE_NAME="birdnet-install-test"
 CONTAINER_NAME="birdnet-install-test-$$"
+# Per-run volume for the nested Docker's /var/lib/docker — keeps inner image
+# layers on a real filesystem (enables overlay2) instead of in the container's
+# writable layer, and lets cleanup reclaim them reliably.
+DOCKER_VOLUME_NAME="birdnet-install-test-docker-$$"
+MIN_FREE_DISK_GB=15
 
 # Parse arguments
 KEEP_CONTAINER=false
@@ -84,16 +89,62 @@ cleanup() {
     if [ "$KEEP_CONTAINER" = true ]; then
         print_warning "Container kept for debugging: $CONTAINER_NAME"
         print_warning "To access: docker exec -it $CONTAINER_NAME bash"
-        print_warning "To stop: docker stop $CONTAINER_NAME && docker rm $CONTAINER_NAME"
+        print_warning "To stop: docker stop $CONTAINER_NAME && docker rm -v $CONTAINER_NAME && docker volume rm $DOCKER_VOLUME_NAME"
     else
         print_status "Cleaning up container..."
         docker stop "$CONTAINER_NAME" 2>/dev/null || true
-        docker rm "$CONTAINER_NAME" 2>/dev/null || true
+        docker rm -v "$CONTAINER_NAME" 2>/dev/null || true
+        docker volume rm "$DOCKER_VOLUME_NAME" 2>/dev/null || true
+    fi
+}
+
+# Guard against the failure mode where a run fills the disk: reclaim leftovers
+# from previous crashed runs, then refuse to start without headroom. Only stopped
+# containers and dangling volumes are removed, so a --keep'd debug container or a
+# concurrently-running suite (both still up) survive untouched.
+preflight() {
+    local stale_containers stale_volumes live_containers avail_kb
+    stale_containers=$(docker ps -aq \
+        --filter "name=birdnet-install-test-" \
+        --filter "status=exited" --filter "status=created" --filter "status=dead")
+    if [ -n "$stale_containers" ]; then
+        print_warning "Removing stopped install-test containers from previous runs..."
+        # shellcheck disable=SC2086  # word splitting over container IDs is intended
+        docker rm -f -v $stale_containers >/dev/null 2>&1 || true
+    fi
+    # dangling=true => not attached to any container, so a volume in use by a
+    # kept or concurrent run is never reclaimed out from under it.
+    stale_volumes=$(docker volume ls -q \
+        --filter "name=birdnet-install-test-docker-" --filter "dangling=true")
+    if [ -n "$stale_volumes" ]; then
+        print_warning "Removing dangling install-test volumes from previous runs..."
+        # shellcheck disable=SC2086
+        docker volume rm $stale_volumes >/dev/null 2>&1 || true
+    fi
+
+    live_containers=$(docker ps -q --filter "name=birdnet-install-test-")
+    if [ -n "$live_containers" ]; then
+        print_warning "Other install-test containers are still running (kept or concurrent runs); leaving them untouched."
+    fi
+
+    avail_kb=$(df -Pk /var/lib/docker 2>/dev/null | awk 'NR==2 {print $4}')
+    [ -n "$avail_kb" ] || avail_kb=$(df -Pk / 2>/dev/null | awk 'NR==2 {print $4}')
+    # Fail closed: a non-numeric value would otherwise make the comparison a
+    # no-op (test conditions are exempt from set -e), silently skipping the guard.
+    if ! [[ "$avail_kb" =~ ^[0-9]+$ ]]; then
+        print_error "Could not determine free disk space — aborting rather than risk filling the disk."
+        exit 1
+    fi
+    if [ "$avail_kb" -lt $((MIN_FREE_DISK_GB * 1024 * 1024)) ]; then
+        print_error "Less than ${MIN_FREE_DISK_GB}GB free on the Docker disk — aborting so the test run can't fill it."
+        exit 1
     fi
 }
 
 # Set up cleanup trap
 trap cleanup EXIT
+
+preflight
 
 # Build the test image
 print_status "Building test image..."
@@ -111,6 +162,7 @@ docker run -d \
     --privileged \
     --cgroupns=host \
     -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+    -v "$DOCKER_VOLUME_NAME:/var/lib/docker" \
     -v "$PROJECT_ROOT:/project:ro" \
     -v "$SCRIPT_DIR:/tests:ro" \
     "$IMAGE_NAME"
@@ -154,7 +206,12 @@ print_status "Docker daemon is ready"
 print_status "Setting up test environment..."
 docker exec "$CONTAINER_NAME" bash -c "
     rm -rf /home/testuser/BirdNET-PiPy
-    cp -r /project /home/testuser/BirdNET-PiPy
+    mkdir -p /home/testuser/BirdNET-PiPy
+    # Copy the repo but NOT the runtime data directory — on a live system ./data
+    # holds the recordings/spectrogram archive (tens of GB) and copying it can
+    # fill the host disk. The install tests need code + .git (for update tests),
+    # and a fresh install starts with no data anyway.
+    tar -C /project --exclude='./data' --exclude='./frontend/node_modules' --exclude='./internal_docs' -cf - . | tar -C /home/testuser/BirdNET-PiPy -xf -
     chown -R testuser:testuser /home/testuser/BirdNET-PiPy
     chmod +x /home/testuser/BirdNET-PiPy/install.sh /home/testuser/BirdNET-PiPy/build.sh
 

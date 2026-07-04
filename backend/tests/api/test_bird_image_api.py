@@ -298,12 +298,51 @@ class TestWikimediaHasCustomImage:
         with open(os.path.join(images_dir, 'American_Robin.jpg'), 'wb') as f:
             f.write(JPEG_HEADER)
 
-        mock_fetch.return_value = (None, 'No results found')
+        mock_fetch.return_value = (None, {'message': 'No results found', 'status': 404, 'retry_after': None})
 
         response = client.get('/api/wikimedia_image', query_string={'species': 'American Robin'})
         assert response.status_code == 200
         data = response.get_json()
         assert data['hasCustomImage'] is True
+
+    @patch('core.api.fetch_wikimedia_image')
+    def test_for_display_only_skips_fetch_when_custom_exists(self, mock_fetch, image_client):
+        """Gallery's for_display_only=1: a custom upload short-circuits the WMF lookup."""
+        client, images_dir = image_client
+        with open(os.path.join(images_dir, 'American_Robin.jpg'), 'wb') as f:
+            f.write(JPEG_HEADER)
+
+        response = client.get('/api/wikimedia_image',
+                              query_string={'species': 'American Robin', 'for_display_only': '1'})
+        assert response.status_code == 200
+        assert response.get_json()['hasCustomImage'] is True
+        mock_fetch.assert_not_called()
+
+    @patch('core.api.fetch_wikimedia_image')
+    def test_without_for_display_only_still_fetches_with_custom(self, mock_fetch, image_client):
+        """Without the flag (e.g. BirdDetails) the WMF lookup still runs for metadata."""
+        client, images_dir = image_client
+        with open(os.path.join(images_dir, 'American_Robin.jpg'), 'wb') as f:
+            f.write(JPEG_HEADER)
+        mock_fetch.return_value = ({
+            'imageUrl': 'https://upload.wikimedia.org/r.jpg',
+            'pageUrl': 'https://commons.wikimedia.org/wiki/File:R.jpg',
+            'authorName': 'J', 'authorUrl': None, 'licenseType': 'CC'
+        }, None)
+
+        response = client.get('/api/wikimedia_image', query_string={'species': 'American Robin'})
+        assert response.status_code == 200
+        mock_fetch.assert_called_once()
+
+    @patch('core.api.fetch_wikimedia_image')
+    def test_429_propagates_status_and_retry_after_header(self, mock_fetch, image_client):
+        """A 429 from upstream is surfaced (not collapsed to 500) with Retry-After."""
+        client, _ = image_client
+        mock_fetch.return_value = (None, {'message': 'Rate limited by Wikimedia', 'status': 429, 'retry_after': 42.0})
+
+        response = client.get('/api/wikimedia_image', query_string={'species': 'American Robin'})
+        assert response.status_code == 429
+        assert response.headers.get('Retry-After') == '42'
 
 
 class TestFilenameSanitization:
@@ -546,6 +585,98 @@ class TestWikimediaCandidates:
         assert err is None
         assert cands[0]['thumbUrl'] == cands[0]['imageUrl']
 
+    def test_user_agent_carries_contact_url(self, candidates_client):
+        """Wikimedia requests send a compliant UA with a contact URL (200/min tier)."""
+        from core import api as api_module
+        api_module.image_cache.clear()
+        captured = {}
+
+        class _R:
+            status_code = 200
+            def raise_for_status(self): pass
+            def json(self): return {'query': {'search': []}}
+
+        def fake_get(url, params=None, headers=None, timeout=None):
+            captured['ua'] = (headers or {}).get('User-Agent', '')
+            return _R()
+
+        with patch('core.api.requests.get', side_effect=fake_get):
+            api_module.fetch_wikimedia_candidates('Robin', limit=1)
+
+        assert captured['ua'].startswith('BirdNET-PiPy/')
+        assert 'https://github.com/Suncuss/BirdNET-PiPy' in captured['ua']
+
+    def test_candidates_surfaces_429_with_retry_after(self, candidates_client):
+        """A 429 from Wikimedia becomes a structured error with status + Retry-After."""
+        import requests as _requests
+
+        from core import api as api_module
+        api_module.image_cache.clear()
+
+        class _Resp429:
+            status_code = 429
+            headers = {'Retry-After': '42'}
+
+        def fake_get(url, params=None, headers=None, timeout=None):
+            err = _requests.HTTPError('429 Too Many Requests')
+            err.response = _Resp429()
+            raise err
+
+        with patch('core.api.requests.get', side_effect=fake_get):
+            cands, err = api_module.fetch_wikimedia_candidates('Robin', limit=8)
+        assert cands == []
+        assert err['status'] == 429
+        assert err['retry_after'] == 42.0
+
+    def test_concurrent_misses_share_one_upstream_fetch(self, candidates_client):
+        """Single-flight: two concurrent cache-misses for the same key do one fetch."""
+        import threading as _threading
+        import time as _time
+
+        from core import api as api_module
+        api_module.image_cache.clear()
+        api_module._wikimedia_inflight.clear()
+
+        search_calls = {'n': 0}
+        leader_in_flight = _threading.Event()
+        release = _threading.Event()
+
+        class _R:
+            status_code = 200
+            def __init__(self, payload): self._p = payload
+            def raise_for_status(self): pass
+            def json(self): return self._p
+
+        def fake_get(url, params=None, headers=None, timeout=None):
+            if params.get('list') == 'search':
+                search_calls['n'] += 1
+                leader_in_flight.set()
+                release.wait(timeout=5)  # hold the leader so the follower arrives
+                return _R({'query': {'search': [{'title': 'File:Robin.jpg'}]}})
+            return _R({'query': {'pages': {'1': {
+                'title': 'File:Robin.jpg',
+                'imageinfo': [_imageinfo('https://upload.wikimedia.org/Robin.jpg')],
+            }}}})
+
+        results = {}
+        def worker(name):
+            results[name] = api_module.fetch_wikimedia_candidates('Robin', limit=8)
+
+        with patch('core.api.requests.get', side_effect=fake_get):
+            leader = _threading.Thread(target=worker, args=('leader',))
+            leader.start()
+            assert leader_in_flight.wait(timeout=5)  # leader now owns the in-flight slot
+            follower = _threading.Thread(target=worker, args=('follower',))
+            follower.start()
+            _time.sleep(0.2)  # let the follower reach the wait()
+            release.set()
+            leader.join(timeout=5)
+            follower.join(timeout=5)
+
+        assert search_calls['n'] == 1  # follower did NOT hit upstream
+        assert results['leader'][1] is None and results['follower'][1] is None
+        assert results['leader'][0] == results['follower'][0]
+
 
 class TestWikimediaChoiceSidecar:
     """Test GET|PUT|DELETE /api/bird/<name>/wikimedia_choice."""
@@ -572,6 +703,7 @@ class TestWikimediaChoiceSidecar:
         payload = {
             'fileTitle': 'File:Robin.jpg',
             'imageUrl': 'https://upload.wikimedia.org/Robin.jpg',
+            'thumbUrl': 'https://upload.wikimedia.org/thumb/Robin_400.jpg',
             'pageUrl': 'https://commons.wikimedia.org/wiki/File:Robin.jpg',
             'authorName': 'Alice',
             'authorUrl': 'https://example.com/a',
@@ -586,9 +718,47 @@ class TestWikimediaChoiceSidecar:
         body = response.get_json()
         assert body['fileTitle'] == 'File:Robin.jpg'
         assert body['source'] == 'wikimedia'
-        assert body['schemaVersion'] == 1
+        assert body['schemaVersion'] == 2
+        assert body['thumbUrl'] == 'https://upload.wikimedia.org/thumb/Robin_400.jpg'
         assert 'savedAt' in body
         assert os.path.exists(os.path.join(images_dir, 'American_Robin.choice.json'))
+
+    def test_put_defaults_thumb_to_image_when_omitted(self, choice_client):
+        """Older clients that send no thumbUrl get thumbUrl == imageUrl stored."""
+        client, _ = choice_client
+        payload = {
+            'fileTitle': 'File:Robin.jpg',
+            'imageUrl': 'https://upload.wikimedia.org/Robin.jpg',
+            'pageUrl': 'https://commons.wikimedia.org/wiki/File:Robin.jpg',
+            'authorName': 'Alice',
+            'authorUrl': None,
+            'licenseType': 'CC BY 2.0'
+        }
+        response = client.put(
+            '/api/bird/American Robin/wikimedia_choice',
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        assert response.status_code == 200
+        assert response.get_json()['thumbUrl'] == 'https://upload.wikimedia.org/Robin.jpg'
+
+    def test_put_rejects_non_wikimedia_thumb_url(self, choice_client):
+        client, _ = choice_client
+        payload = {
+            'fileTitle': 'File:Robin.jpg',
+            'imageUrl': 'https://upload.wikimedia.org/Robin.jpg',
+            'thumbUrl': 'https://evil.example.com/thumb.jpg',
+            'pageUrl': 'https://commons.wikimedia.org/wiki/File:Robin.jpg',
+            'authorName': 'Alice',
+            'authorUrl': None,
+            'licenseType': 'CC BY 2.0'
+        }
+        response = client.put(
+            '/api/bird/American Robin/wikimedia_choice',
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        assert response.status_code == 400
 
     def test_put_rejects_non_wikimedia_url(self, choice_client):
         client, _ = choice_client
@@ -695,7 +865,31 @@ class TestWikimediaImageHonorsSidecar:
         assert body['imageUrl'] == 'https://upload.wikimedia.org/saved.jpg'
         assert body['fileTitle'] == 'File:Saved.jpg'
         assert body['source'] == 'sidecar'
+        # Legacy sidecar (no thumbUrl) falls back to the full imageUrl.
+        assert body['thumbUrl'] == 'https://upload.wikimedia.org/saved.jpg'
         # Crucially: do not call upstream when sidecar serves the request.
+        mock_fetch.assert_not_called()
+
+    @patch('core.api.fetch_wikimedia_image')
+    def test_returns_sidecar_thumb_when_present(self, mock_fetch, sidecar_client):
+        client, images_dir = sidecar_client
+        with open(os.path.join(images_dir, 'American_Robin.choice.json'), 'w') as f:
+            json.dump({
+                'schemaVersion': 2,
+                'imageUrl': 'https://upload.wikimedia.org/saved.jpg',
+                'thumbUrl': 'https://upload.wikimedia.org/thumb/saved_400.jpg',
+                'pageUrl': 'https://commons.wikimedia.org/wiki/File:Saved.jpg',
+                'licenseType': 'CC0',
+                'fileTitle': 'File:Saved.jpg',
+                'authorName': 'Saved',
+                'authorUrl': None,
+            }, f)
+
+        response = client.get('/api/wikimedia_image', query_string={'species': 'American Robin'})
+        assert response.status_code == 200
+        body = response.get_json()
+        assert body['thumbUrl'] == 'https://upload.wikimedia.org/thumb/saved_400.jpg'
+        assert body['imageUrl'] == 'https://upload.wikimedia.org/saved.jpg'
         mock_fetch.assert_not_called()
 
     @patch('core.api.fetch_wikimedia_image')

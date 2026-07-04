@@ -1,7 +1,7 @@
 /**
  * Tests for Table.vue view component
  */
-import { mount, flushPromises } from '@vue/test-utils'
+import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import Table from '@/views/Table.vue'
 
@@ -57,6 +57,14 @@ const SpectrogramModalStub = {
   props: ['isVisible', 'imageUrl', 'alt']
 }
 
+// Mock DetectionModal — avoids mounting the audio/spectrogram player; exposes the
+// props so tests can assert which detection it was opened for.
+const DetectionModalStub = {
+  name: 'DetectionModal',
+  template: '<div v-if="isVisible" class="detection-modal" :data-name="name" :data-id="String(id)"></div>',
+  props: ['isVisible', 'name', 'id']
+}
+
 // Mock AppDatePicker component to avoid PrimeVue dependency in tests
 vi.mock('@/components/AppDatePicker.vue', () => ({
   default: {
@@ -66,6 +74,8 @@ vi.mock('@/components/AppDatePicker.vue', () => ({
     emits: ['update:modelValue', 'change']
   }
 }))
+
+enableAutoUnmount(afterEach)
 
 describe('Table.vue', () => {
   beforeEach(() => {
@@ -91,6 +101,7 @@ describe('Table.vue', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+    document.body.style.overflow = ''
   })
 
   const mountTable = async (options = {}) => {
@@ -99,7 +110,8 @@ describe('Table.vue', () => {
         stubs: {
           RouterLink: RouterLinkStub,
           Teleport: TeleportStub,
-          SpectrogramModal: SpectrogramModalStub
+          SpectrogramModal: SpectrogramModalStub,
+          DetectionModal: DetectionModalStub
         }
       },
       ...options
@@ -147,7 +159,8 @@ describe('Table.vue', () => {
           stubs: {
             RouterLink: RouterLinkStub,
             Teleport: TeleportStub,
-            SpectrogramModal: SpectrogramModalStub
+            SpectrogramModal: SpectrogramModalStub,
+            DetectionModal: DetectionModalStub
           }
         }
       })
@@ -562,6 +575,30 @@ describe('Table.vue', () => {
 	      expect(modalContent.exists()).toBe(false)
 	    })
 
+    it('closes delete modal on Escape', async () => {
+      mockApi.get.mockImplementation((url) => {
+        if (url === '/detections') {
+          return Promise.resolve({
+            data: {
+              detections: sampleDetections,
+              pagination: { total_items: 2 }
+            }
+          })
+        }
+        return Promise.resolve({ data: [] })
+      })
+
+      const wrapper = await mountTable()
+
+      const deleteButton = wrapper.find('tbody tr').findAll('button').pop()
+      await deleteButton.trigger('click')
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+      await wrapper.vm.$nextTick()
+
+      const modalContent = wrapper.find('.fixed.inset-0')
+      expect(modalContent.exists()).toBe(false)
+    })
+
 	    it('shows an action error on delete failure without replacing table UI', async () => {
 	      mockApi.get.mockImplementation((url) => {
 	        if (url === '/detections') {
@@ -662,6 +699,70 @@ describe('Table.vue', () => {
       const wrapper = await mountTable()
 
       expect(wrapper.text()).toContain('86%')
+    })
+  })
+
+  describe('detection detail modal', () => {
+    it('opens the detail modal for the clicked row instead of navigating', async () => {
+      mockApi.get.mockImplementation((url) => {
+        if (url === '/detections') {
+          return Promise.resolve({
+            data: {
+              detections: sampleDetections,
+              pagination: { total_items: 2 }
+            }
+          })
+        }
+        return Promise.resolve({ data: [] })
+      })
+
+      const wrapper = await mountTable()
+      expect(wrapper.find('.detection-modal').exists()).toBe(false)
+
+      const infoLink = wrapper.find('tbody tr').find('a[title="Detection info"]')
+      expect(infoLink.exists()).toBe(true)
+      await infoLink.trigger('click')
+
+      const modal = wrapper.find('.detection-modal')
+      expect(modal.exists()).toBe(true)
+      expect(modal.attributes('data-name')).toBe('American Robin')
+      expect(modal.attributes('data-id')).toBe('1')
+    })
+  })
+
+  describe('url state (page in url)', () => {
+    it('seeds the page number from the route query', async () => {
+      mockRoute.query = { page: '3' }
+
+      await mountTable()
+
+      const detectionCall = mockApi.get.mock.calls.find(
+        ([url]) => url === '/detections'
+      )
+      expect(detectionCall[1].params.page).toBe(3)
+    })
+
+    it('writes the page to the route query when paging', async () => {
+      mockApi.get.mockImplementation((url) => {
+        if (url === '/detections') {
+          return Promise.resolve({
+            data: {
+              detections: sampleDetections,
+              pagination: { total_items: 100, page: 1, per_page: 25, total_pages: 4 }
+            }
+          })
+        }
+        return Promise.resolve({ data: [] })
+      })
+
+      const wrapper = await mountTable()
+
+      // Pagination footer nav buttons are [first, prev, next, last].
+      const navButtons = wrapper.find('.bg-gray-50.border-t').findAll('button')
+      await navButtons[2].trigger('click') // next page
+      await flushPromises()
+
+      expect(mockRouter.replace).toHaveBeenCalledWith({ query: { page: 2 } })
     })
   })
 })

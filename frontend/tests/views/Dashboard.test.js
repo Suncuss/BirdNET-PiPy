@@ -31,13 +31,6 @@ vi.mock('chartjs-chart-matrix', () => ({
   MatrixElement: {}
 }))
 
-// Dashboard uses useRouter() to deep-link heatmap-cell clicks to the Table
-// view. router-link in the template is stubbed separately (global stubs).
-const mockRouter = vi.hoisted(() => ({ push: vi.fn() }))
-vi.mock('vue-router', () => ({
-  useRouter: () => mockRouter
-}))
-
 const baseState = () => ({
   hourlyBirdActivityData: ref([]),
   detailedBirdActivityData: ref([]),
@@ -49,9 +42,12 @@ const baseState = () => ({
   latestObservationError: ref(null),
   recentObservationsError: ref(null),
   summaryError: ref(null),
+  summaryLoading: ref({}),
+  summaryErrors: ref({}),
   latestObservationimageUrl: ref('default_bird.webp'),
   hasLoadedOnce: ref(true),
   fetchDashboardData: vi.fn(),
+  fetchSummaryData: vi.fn(),
   setActivityOrder: vi.fn(),
   setRecentObsMode: vi.fn(),
   fetchChartsData: vi.fn()
@@ -204,6 +200,60 @@ describe('Dashboard', () => {
     expect(wrapper.vm.formatSummaryValue('mostActiveHour', '09:00')).toBe('9 AM')
   })
 
+  it('lazy-loads a summary tab when its period has not been fetched', async () => {
+    const state = baseState()
+    state.summaryData.value = {
+      today: { totalObservations: 12 }
+    }
+    useFetchBirdData.mockReturnValue(state)
+
+    const wrapper = mountDashboard()
+    await flushPromises()
+
+    const weekButton = wrapper.findAll('button').find(b => b.text() === '7-Day')
+    expect(weekButton).toBeTruthy()
+
+    await weekButton.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.vm.currentSummaryPeriod).toBe('week')
+    expect(state.fetchSummaryData).toHaveBeenCalledWith('week')
+  })
+
+  it('reuses an already-loaded summary tab without another request', async () => {
+    const state = baseState()
+    state.summaryData.value = {
+      today: { totalObservations: 12 },
+      week: { totalObservations: 34 }
+    }
+    useFetchBirdData.mockReturnValue(state)
+
+    const wrapper = mountDashboard()
+    await flushPromises()
+
+    const weekButton = wrapper.findAll('button').find(b => b.text() === '7-Day')
+    await weekButton.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.vm.currentSummaryPeriod).toBe('week')
+    expect(state.fetchSummaryData).not.toHaveBeenCalled()
+  })
+
+  it('shows the existing loading treatment for a lazy summary tab', async () => {
+    const state = baseState()
+    state.summaryLoading.value = { week: true }
+    useFetchBirdData.mockReturnValue(state)
+
+    const wrapper = mountDashboard()
+    await flushPromises()
+
+    const weekButton = wrapper.findAll('button').find(b => b.text() === '7-Day')
+    await weekButton.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Fetching the latest data...')
+  })
+
   it('shows error messages when set', async () => {
     const state = baseState()
     state.hourlyBirdActivityError.value = 'Hourly fail'
@@ -300,14 +350,27 @@ describe('Dashboard', () => {
       }
     })
     mockCanvasContext.createLinearGradient.mockReturnValue({ addColorStop })
-    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
+    // Capture the rAF callback so the test can drive draw frames with controlled
+    // timestamps (the spectrogram is paced by wall-clock time, not per-frame).
+    let drawFrame = null
+    vi.stubGlobal('requestAnimationFrame', vi.fn((cb) => { drawFrame = cb; return 1 }))
     vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    // happy-dom reports offsetWidth/Height 0 (no layout); give the canvas a real size
+    // so initializeCanvas computes a non-zero backing store and the scroll can advance.
+    vi.spyOn(HTMLCanvasElement.prototype, 'offsetWidth', 'get').mockReturnValue(600)
+    vi.spyOn(HTMLCanvasElement.prototype, 'offsetHeight', 'get').mockReturnValue(200)
     vi.stubGlobal('Audio', vi.fn().mockImplementation(function MockAudio(src) {
       this.src = src
       this.crossOrigin = ''
       this.pause = vi.fn()
-      this.play = vi.fn().mockResolvedValue()
-      this.addEventListener = vi.fn()
+      const listeners = {}
+      this.addEventListener = vi.fn((type, cb) => { listeners[type] = cb })
+      // Fire 'playing' synchronously so the draw gate (audioClockRunning) is open
+      // by the time the test drives the rAF draw frames below.
+      this.play = vi.fn(() => {
+        listeners.playing?.()
+        return Promise.resolve()
+      })
     }))
 
     const analyser = {
@@ -339,6 +402,12 @@ describe('Dashboard', () => {
     await flushPromises()
 
     wrapper.vm.playLatestObservation()
+
+    // Wall-clock pacing: the first frame only establishes the time baseline (draws
+    // nothing); the second, one normal frame later, paints one set of columns. (The
+    // gap must stay below the pacer's stall threshold, or it would be dropped.)
+    drawFrame(0)
+    drawFrame(1000 / 60)
 
     expect(analyser.getFloatFrequencyData).toHaveBeenCalled()
     // 12 kHz cap exceeds available bins at 22050 Hz / fftSize 1024, so loop clamps to 512 bins.

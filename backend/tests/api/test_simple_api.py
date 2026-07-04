@@ -8,6 +8,8 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from tests.api.conftest import insert_detection
+
 
 class TestSimpleAPI:
     """Basic API tests with proper mocking."""
@@ -152,10 +154,12 @@ class TestSimpleAPI:
         assert response.status_code == 200
         species = response.get_json()
         assert len(species) == 3
-        # API returns list of dicts with common_name and scientific_name
+        # API returns dicts with common_name, scientific_name, last_detected
         species_names = [s['common_name'] for s in species]
         assert 'American Robin' in species_names
         assert 'Blue Jay' in species_names
+        # last_detected is returned directly so the catalog needs no N+1 fetch
+        assert all(s.get('last_detected') for s in species)
 
         # Test bird details
         response = api_client.get('/api/bird/American%20Robin')
@@ -612,6 +616,66 @@ class TestSimpleAPI:
                 assert response.status_code == 400
                 mock_save.assert_not_called()
 
+    def test_update_playback_setting(self):
+        """Test update recording-normalization setting endpoint (no restart)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+                 patch('core.db.DatabaseManager') as MockDB, \
+                 patch('core.api.load_user_settings') as mock_load, \
+                 patch('core.api.save_user_settings') as mock_save, \
+                 patch('core.api.write_flag') as mock_flag:
+
+                mock_db_instance = Mock()
+                MockDB.return_value = mock_db_instance
+
+                from core.api import create_app
+                app, _ = create_app()
+                client = app.test_client()
+
+                mock_load.return_value = {
+                    'audio': {'samplerate': 48000}
+                }
+
+                # Test enabling normalization (creates the playback section)
+                response = client.put('/api/settings/playback',
+                                      data=json.dumps({'normalize': True}),
+                                      content_type='application/json')
+                assert response.status_code == 200
+                data = response.get_json()
+                assert data['normalize'] is True
+                mock_save.assert_called_once_with({
+                    'audio': {'samplerate': 48000},
+                    'playback': {'normalize': True}
+                })
+                mock_flag.assert_not_called()  # No restart needed
+
+                # Test disabling normalization
+                mock_save.reset_mock()
+                mock_load.return_value = {'playback': {'normalize': True}}
+                response = client.put('/api/settings/playback',
+                                      data=json.dumps({'normalize': False}),
+                                      content_type='application/json')
+                assert response.status_code == 200
+                assert response.get_json()['normalize'] is False
+
+                # Test invalid value (not boolean)
+                mock_save.reset_mock()
+                response = client.put('/api/settings/playback',
+                                      data=json.dumps({'normalize': 'invalid'}),
+                                      content_type='application/json')
+                assert response.status_code == 400
+                mock_save.assert_not_called()
+
+                # Test missing field
+                mock_save.reset_mock()
+                response = client.put('/api/settings/playback',
+                                      data=json.dumps({}),
+                                      content_type='application/json')
+                assert response.status_code == 400
+                mock_save.assert_not_called()
+
     def test_bird_detail_endpoints(self):
         """Test bird detail endpoints."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -637,7 +701,7 @@ class TestSimpleAPI:
                 assert response.status_code == 200
                 assert response.get_json() == mock_distribution
 
-    def test_bird_recordings_endpoint(self, api_client, real_db_manager):
+    def test_bird_recordings_endpoint(self, api_client, real_db_manager, create_recording_files):
         """Test /api/bird/<species>/recordings endpoint with real database."""
         species = 'American Robin'
 
@@ -655,6 +719,10 @@ class TestSimpleAPI:
                 'sensitivity': 0.75,
                 'overlap': 0.25
             })
+
+        # The endpoint skips records whose media files are missing; this test
+        # exercises sort/limit semantics, so make every record's files present.
+        create_recording_files(real_db_manager, species_name=species)
 
         # Test default sort (recent)
         response = api_client.get(f'/api/bird/{species}/recordings')
@@ -689,6 +757,41 @@ class TestSimpleAPI:
         assert 'audio_filename' in data[0]
         assert 'spectrogram_filename' in data[0]
 
+    def test_bird_recordings_clamps_to_max_limit(self, api_client, real_db_manager, create_recording_files):
+        """An omitted or oversized limit is clamped to RECORDINGS_MAX_LIMIT, so
+        a caller can't pull a species' whole history in one request (the old
+        LIMIT -1 dump path); a small explicit limit is still honored."""
+        from core import api as api_module
+        species = 'American Crow'
+        for i in range(6):
+            real_db_manager.insert_detection({
+                'timestamp': f'2024-03-15T{10 + i:02d}:00:00',
+                'group_timestamp': f'2024-03-15T{10 + i:02d}:00:00',
+                'common_name': species,
+                'scientific_name': 'Corvus brachyrhynchos',
+                'confidence': 0.80 + i * 0.01,
+                'latitude': 40.7128,
+                'longitude': -74.0060,
+                'cutoff': 0.5,
+                'sensitivity': 0.75,
+                'overlap': 0.25,
+            })
+        create_recording_files(real_db_manager, species_name=species)
+
+        with patch.object(api_module, 'RECORDINGS_MAX_LIMIT', 3):
+            # Omitted limit must be bounded, not unlimited.
+            response = api_client.get(f'/api/bird/{species}/recordings')
+            assert response.status_code == 200
+            assert len(response.get_json()) == 3
+
+            # Oversized explicit limit is clamped down.
+            response = api_client.get(f'/api/bird/{species}/recordings?limit=100000')
+            assert len(response.get_json()) == 3
+
+            # A smaller explicit limit is still honored.
+            response = api_client.get(f'/api/bird/{species}/recordings?limit=2')
+            assert len(response.get_json()) == 2
+
     def test_bird_recordings_empty_species(self, api_client, real_db_manager):
         """Test /api/bird/<species>/recordings returns empty list for unknown species."""
         response = api_client.get('/api/bird/Unknown%20Bird/recordings')
@@ -696,8 +799,214 @@ class TestSimpleAPI:
         data = response.get_json()
         assert data == []
 
+    def test_bird_recordings_skips_missing_media(self, api_client, real_db_manager, create_recording_files):
+        """Records missing their audio OR spectrogram file are skipped; only
+        records with BOTH files present are returned."""
+        species = 'Blue Jay'
+        for i in range(4):
+            real_db_manager.insert_detection({
+                'timestamp': f'2024-02-1{i}T08:00:00',
+                'group_timestamp': f'2024-02-1{i}T08:00:00',
+                'common_name': species,
+                'scientific_name': 'Cyanocitta cristata',
+                'confidence': 0.80,
+                'latitude': 40.7128,
+                'longitude': -74.0060,
+                'cutoff': 0.5,
+                'sensitivity': 0.75,
+                'overlap': 0.25
+            })
+
+        # recent order: index 0 is newest (2024-02-13) ... index 3 oldest.
+        # Only index 0 gets both files; the others are missing one or both.
+        recordings = create_recording_files(
+            real_db_manager, species_name=species,
+            choices={0: 'both', 1: 'audio', 2: 'spectrogram', 3: 'none'},
+        )
+
+        response = api_client.get(f'/api/bird/{species}/recordings')
+        assert response.status_code == 200
+        data = response.get_json()
+
+        # Only the record with BOTH files present survives the filter.
+        assert len(data) == 1
+        assert data[0]['audio_filename'] == recordings[0]['audio_filename']
+
+    def test_bird_recordings_overfetch_fills_page(self, api_client, real_db_manager, create_recording_files):
+        """Over-fetch backfills the page from older records when the newest are
+        missing media, so a limit=16 request still returns a full page."""
+        species = 'House Finch'
+        for i in range(20):
+            real_db_manager.insert_detection({
+                'timestamp': f'2024-03-15T{i:02d}:00:00',
+                'group_timestamp': f'2024-03-15T{i:02d}:00:00',
+                'common_name': species,
+                'scientific_name': 'Haemorhous mexicanus',
+                'confidence': 0.80,
+                'latitude': 40.7128,
+                'longitude': -74.0060,
+                'cutoff': 0.5,
+                'sensitivity': 0.75,
+                'overlap': 0.25
+            })
+
+        # Drop media for the 4 newest (indices 0-3); the remaining 16 have both.
+        recordings = create_recording_files(
+            real_db_manager, species_name=species,
+            choices={i: 'none' for i in range(4)},
+        )
+
+        response = api_client.get(f'/api/bird/{species}/recordings?limit=16')
+        assert response.status_code == 200
+        data = response.get_json()
+
+        # Page stays full at 16 despite 4 of the newest being filtered out.
+        assert len(data) == 16
+        returned = {d['audio_filename'] for d in data}
+        for idx in range(4):
+            assert recordings[idx]['audio_filename'] not in returned
+
+    def test_bird_recording_permalink_endpoint(self, api_client, real_db_manager, create_recording_files):
+        """A single recording is resolvable by ID for share/deep-link permalinks,
+        regardless of the recent/best sort window."""
+        species = 'American Robin'
+        for i in range(3):
+            real_db_manager.insert_detection({
+                'timestamp': f'2024-01-15T{10+i:02d}:30:00',
+                'group_timestamp': f'2024-01-15T{10+i:02d}:30:00',
+                'common_name': species,
+                'scientific_name': 'Turdus migratorius',
+                'confidence': 0.80,
+                'latitude': 40.7128,
+                'longitude': -74.0060,
+                'cutoff': 0.5,
+                'sensitivity': 0.75,
+                'overlap': 0.25,
+            })
+        recordings = create_recording_files(real_db_manager, species_name=species)
+        target = recordings[0]
+
+        response = api_client.get(f'/api/bird/{species}/recording/{target["id"]}')
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['id'] == target['id']
+        assert data['audio_filename'] == target['audio_filename']
+        assert data['spectrogram_filename'] == target['spectrogram_filename']
+        assert data['has_media'] is True
+        # This endpoint is public (share permalinks work without login), so the
+        # user's exact station coordinates must never appear in the payload.
+        assert 'latitude' not in data
+        assert 'longitude' not in data
+
+    def test_bird_recording_permalink_group_detections(self, api_client, real_db_manager):
+        """The by-id payload carries same-species sibling detections from the
+        same source recording (group_detections), and exactly the two fields
+        the analysis bar needs. Which rows qualify as siblings is pinned at
+        the DB layer (test_get_group_detection_windows)."""
+        group = '2024-01-15T10:30:00'
+        target_id = insert_detection(
+            real_db_manager, timestamp=group, confidence=0.80)
+        insert_detection(
+            real_db_manager, timestamp='2024-01-15T10:30:03',
+            group_timestamp=group, confidence=0.65)
+
+        response = api_client.get(f'/api/bird/American Robin/recording/{target_id}')
+        assert response.status_code == 200
+        assert response.get_json()['group_detections'] == [
+            {'timestamp': '2024-01-15T10:30:00', 'confidence': 0.8},
+            {'timestamp': '2024-01-15T10:30:03', 'confidence': 0.65},
+        ]
+
+    def test_bird_recording_permalink_not_found(self, api_client, real_db_manager):
+        """An unknown recording ID returns 404."""
+        response = api_client.get('/api/bird/American%20Robin/recording/999999')
+        assert response.status_code == 404
+
+    def test_bird_recording_permalink_species_mismatch(self, api_client, real_db_manager, create_recording_files):
+        """A valid recording ID under the wrong species URL returns 404, so
+        permalinks stay coherent."""
+        species = 'American Robin'
+        real_db_manager.insert_detection({
+            'timestamp': '2024-01-15T10:30:00',
+            'group_timestamp': '2024-01-15T10:30:00',
+            'common_name': species,
+            'scientific_name': 'Turdus migratorius',
+            'confidence': 0.80,
+            'latitude': 40.7128,
+            'longitude': -74.0060,
+            'cutoff': 0.5,
+            'sensitivity': 0.75,
+            'overlap': 0.25,
+        })
+        recordings = create_recording_files(real_db_manager, species_name=species)
+        target = recordings[0]
+
+        response = api_client.get(f'/api/bird/Blue%20Jay/recording/{target["id"]}')
+        assert response.status_code == 404
+
+    def test_bird_recording_permalink_no_existence_oracle(self, api_client, real_db_manager, create_recording_files):
+        """A missing id and a real id under the wrong species return identical
+        404 responses, so the endpoint can't be probed to learn which ids exist
+        (which would leak the DB size / population)."""
+        species = 'American Robin'
+        real_db_manager.insert_detection({
+            'timestamp': '2024-01-15T10:30:00',
+            'group_timestamp': '2024-01-15T10:30:00',
+            'common_name': species,
+            'scientific_name': 'Turdus migratorius',
+            'confidence': 0.80,
+            'latitude': 40.7128,
+            'longitude': -74.0060,
+            'cutoff': 0.5,
+            'sensitivity': 0.75,
+            'overlap': 0.25,
+        })
+        recordings = create_recording_files(real_db_manager, species_name=species)
+        target = recordings[0]
+
+        missing = api_client.get('/api/bird/Blue%20Jay/recording/999999')
+        mismatch = api_client.get(f'/api/bird/Blue%20Jay/recording/{target["id"]}')
+
+        assert missing.status_code == 404
+        assert mismatch.status_code == 404
+        # Identical bodies — no way to tell "absent" from "wrong species".
+        assert missing.get_json() == mismatch.get_json()
+
+    def test_bird_recording_permalink_media_gone(self, api_client, real_db_manager, create_recording_files):
+        """A recording whose media files were cleaned up still resolves, but
+        reports has_media=False so the client can degrade gracefully."""
+        species = 'American Robin'
+        real_db_manager.insert_detection({
+            'timestamp': '2024-01-15T10:30:00',
+            'group_timestamp': '2024-01-15T10:30:00',
+            'common_name': species,
+            'scientific_name': 'Turdus migratorius',
+            'confidence': 0.80,
+            'latitude': 40.7128,
+            'longitude': -74.0060,
+            'cutoff': 0.5,
+            'sensitivity': 0.75,
+            'overlap': 0.25,
+        })
+        # 'none' => create neither the audio nor the spectrogram file on disk.
+        recordings = create_recording_files(
+            real_db_manager, species_name=species, choices={0: 'none'},
+        )
+        target = recordings[0]
+
+        response = api_client.get(f'/api/bird/{species}/recording/{target["id"]}')
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data['id'] == target['id']
+        assert data['has_media'] is False
+
     def test_broadcast_detection_endpoint(self):
-        """Test detection broadcasting."""
+        """Detection broadcast requires the internal shared secret.
+
+        The test client is local (127.0.0.1) so it passes the IP check; the
+        secret is the real gate that closes the nginx-172.x "looks internal"
+        bypass.
+        """
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
@@ -709,28 +1018,46 @@ class TestSimpleAPI:
                 MockDB.return_value = mock_db_instance
 
                 from core.api import create_app
+                from core.internal_auth import (
+                    INTERNAL_SECRET_HEADER,
+                    get_or_create_internal_secret,
+                )
                 app, _ = create_app()
                 client = app.test_client()
 
-                # Test broadcast with valid data
                 detection_data = {
                     'common_name': 'Test Bird',
                     'confidence': 0.95,
                     'timestamp': '2024-01-15 10:00:00'
                 }
+                secret = get_or_create_internal_secret()
 
+                # No secret header -> rejected.
                 response = client.post('/api/broadcast/detection',
                                      data=json.dumps(detection_data),
                                      content_type='application/json')
-                assert response.status_code == 200
-                # API returns the detection data, not a message
+                assert response.status_code == 403
+
+                # Wrong secret -> rejected.
+                response = client.post('/api/broadcast/detection',
+                                     data=json.dumps(detection_data),
+                                     content_type='application/json',
+                                     headers={INTERNAL_SECRET_HEADER: 'nope'})
+                assert response.status_code == 403
+
+                # Correct secret -> broadcast succeeds.
+                response = client.post('/api/broadcast/detection',
+                                     data=json.dumps(detection_data),
+                                     content_type='application/json',
+                                     headers={INTERNAL_SECRET_HEADER: secret})
                 assert response.status_code == 200
 
-                # Test with missing data
+                # Correct secret, empty body -> still succeeds (broadcasts empty).
                 response = client.post('/api/broadcast/detection',
                                      data=json.dumps({}),
-                                     content_type='application/json')
-                assert response.status_code == 200  # Still succeeds but broadcasts empty
+                                     content_type='application/json',
+                                     headers={INTERNAL_SECRET_HEADER: secret})
+                assert response.status_code == 200
 
     def test_stream_config_endpoint(self):
         """Test stream configuration endpoint."""
@@ -939,8 +1266,10 @@ class TestSimpleAPI:
     def test_dashboard_endpoint(self, api_client, real_db_manager):
         """Test /api/dashboard consolidated endpoint with data."""
         from datetime import timedelta
+
+        from core.timezone_service import local_now
         # Use today so activityOverview is populated
-        now = datetime.now()
+        now = local_now()
         base_time = now.replace(hour=10, minute=0, second=0, microsecond=0)
 
         for i in range(5):
@@ -993,11 +1322,9 @@ class TestSimpleAPI:
         assert len(recent['all']) >= 2
         assert len(recent['unique']) >= 2
 
-        # Summary periods
-        assert 'today' in data['summary']
-        assert 'week' in data['summary']
-        assert 'month' in data['summary']
-        assert 'allTime' in data['summary']
+        # Dashboard only ships the visible Summary tab. Other periods
+        # lazy-load through /api/dashboard/summary when their tab is clicked.
+        assert set(data['summary']) == {'today'}
 
         # Hourly activity (24 hours)
         assert len(data['hourlyActivity']) == 24
@@ -1024,9 +1351,40 @@ class TestSimpleAPI:
 
         assert data['latestObservation'] is None
         assert data['recentObservations'] == {'all': [], 'unique': []}
-        assert 'today' in data['summary']
+        assert set(data['summary']) == {'today'}
         assert len(data['hourlyActivity']) == 24
         assert data['activityOverview'] == {'most': [], 'least': []}
+
+    def test_dashboard_summary_endpoint_returns_requested_period(self, api_client, real_db_manager):
+        """Test lazy-loaded dashboard summary periods."""
+        from datetime import timedelta
+
+        now = datetime.now()
+        real_db_manager.insert_detection({
+            'timestamp': (now - timedelta(days=3)).isoformat(),
+            'group_timestamp': (now - timedelta(days=3)).isoformat(),
+            'common_name': 'American Robin',
+            'scientific_name': 'Turdus migratorius',
+            'confidence': 0.85,
+            'latitude': 40.7128,
+            'longitude': -74.0060,
+            'cutoff': 0.5,
+            'sensitivity': 0.75,
+            'overlap': 0.25
+        })
+
+        response = api_client.get('/api/dashboard/summary?period=week')
+        assert response.status_code == 200
+        data = response.get_json()
+
+        assert data['totalObservations'] == 1
+        assert data['uniqueSpecies'] == 1
+        assert data['mostCommonBird'] == 'American Robin'
+
+    def test_dashboard_summary_endpoint_rejects_invalid_period(self, api_client):
+        response = api_client.get('/api/dashboard/summary?period=year')
+        assert response.status_code == 400
+        assert 'Invalid period' in response.get_json()['error']
 
     def test_settings_invalid_model_type(self):
         """Test PUT /api/settings rejects invalid model type."""
