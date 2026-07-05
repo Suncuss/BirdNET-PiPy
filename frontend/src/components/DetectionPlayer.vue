@@ -241,14 +241,21 @@
         <span class="text-[22px] font-bold tabular-nums text-gray-900">{{ formattedTemp }}</span>
         <span class="text-[15px] text-gray-500">{{ weatherDescription.desc }}</span>
       </div>
+      <!-- Wrap-and-grow tiles rather than a fixed grid: the stats are
+           conditional (1–5 visible), so fixed column counts leave gray holes
+           where the divider-colored container shows through. Growing tiles
+           always fill each row; basis-2/5 keeps phones at two per row (a 2×2
+           once pressure is hidden), sm:basis-0 packs every visible stat into
+           a single equal-width row. sm:px-3 lets the five cells compress just
+           past the breakpoint; md restores the roomier padding. -->
       <dl
         v-if="weatherStats.length"
-        class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-px mt-3 bg-gray-200 border border-gray-200 rounded-xl overflow-hidden"
+        class="flex flex-wrap gap-px mt-3 bg-gray-200 border border-gray-200 rounded-xl overflow-hidden"
       >
         <div
           v-for="stat in weatherStats"
           :key="stat.label"
-          class="bg-white px-4 py-2"
+          class="grow basis-2/5 sm:basis-0 bg-white px-4 py-2 sm:px-3 md:px-4"
           :class="{ 'hidden sm:block': stat.hideOnMobile }"
         >
           <dt class="text-[10px] font-semibold uppercase tracking-wider text-gray-400">
@@ -458,9 +465,10 @@ const weatherStats = computed(() => {
   if (w.wind != null) stats.push({ label: 'Wind', value: convertWindSpeed(w.wind).toFixed(1), unit: windSpeedUnit.value })
   if (w.cloud_cover != null) stats.push({ label: 'Clouds', value: `${w.cloud_cover}%`, unit: '' })
   if (w.precip != null) stats.push({ label: 'Precip', value: convertPrecipitation(w.precip).toFixed(prec), unit: precipitationUnit.value })
-  // Pressure is hidden on the 2-col mobile grid so the strip stays a clean 2×2
-  // (5 items would leave the last one orphaned in its own row); shown from sm up.
-  if (w.pressure != null) stats.push({ label: 'Pressure', value: convertPressure(w.pressure).toFixed(prec), unit: pressureUnit.value, hideOnMobile: true })
+  // Whole hPa (vs formatPressure's one decimal) keeps the fifth tile narrow
+  // enough for the five-across row. hideOnMobile drops it below sm, where a
+  // fifth tile would break the 2×2 grid and it's the least essential stat.
+  if (w.pressure != null) stats.push({ label: 'Pressure', value: convertPressure(w.pressure).toFixed(useMetricUnits.value ? 0 : 2), unit: pressureUnit.value, hideOnMobile: true })
   return stats
 })
 const formattedTemp = computed(() => formatTemperature(weatherData.value?.temp))

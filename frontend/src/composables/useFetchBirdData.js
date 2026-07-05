@@ -1,7 +1,7 @@
 import { ref } from "vue";
 import api from "@/services/api";
 import { getBirdImageUrl, getDefaultBirdImageUrl, isDefaultBirdImageUrl } from "@/services/media";
-import { ERR_UNREACHABLE } from "@/utils/errorMessages";
+import { fetchErrorMessage } from "@/utils/errorMessages";
 import { useLogger } from "./useLogger";
 
 export function useFetchBirdData() {
@@ -61,7 +61,7 @@ export function useFetchBirdData() {
         : hourlyBirdActivityResponse.data;
 
       hourlyBirdActivityError.value = hourlyBirdActivityResponse.error
-        ? ERR_UNREACHABLE
+        ? fetchErrorMessage(hourlyBirdActivityResponse.error)
         : null;
 
       detailedBirdActivityData.value = detailedBirdActivityResponse.error
@@ -69,7 +69,7 @@ export function useFetchBirdData() {
         : detailedBirdActivityResponse.data;
 
       detailedBirdActivityError.value = detailedBirdActivityResponse.error
-        ? ERR_UNREACHABLE
+        ? fetchErrorMessage(detailedBirdActivityResponse.error)
         : null;
 
       logger.debug('Charts data fetched successfully', {
@@ -87,7 +87,8 @@ export function useFetchBirdData() {
   // Cached recent observations for both modes (instant toggle)
   let recentObservationsCache = { all: [], unique: [] };
   let currentActivityOrder = 'most';
-  let currentRecentObsMode = 'all';
+  // Matches the Dashboard's Unique-by-default recent-observations filter
+  let currentRecentObsMode = 'unique';
 
   const setSummaryLoading = (period, loading) => {
     summaryLoading.value = { ...summaryLoading.value, [period]: loading };
@@ -203,11 +204,12 @@ export function useFetchBirdData() {
       // data on screen and let the next poll retry. Only surface the error
       // when there is nothing to show yet (the very first load failed).
       if (!hasLoadedOnce.value) {
-        latestObservationError.value = ERR_UNREACHABLE;
-        recentObservationsError.value = ERR_UNREACHABLE;
-        summaryError.value = ERR_UNREACHABLE;
-        hourlyBirdActivityError.value = ERR_UNREACHABLE;
-        detailedBirdActivityError.value = ERR_UNREACHABLE;
+        const message = fetchErrorMessage(error);
+        latestObservationError.value = message;
+        recentObservationsError.value = message;
+        summaryError.value = message;
+        hourlyBirdActivityError.value = message;
+        detailedBirdActivityError.value = message;
         hasLoadedOnce.value = true;
       }
     }
@@ -242,7 +244,7 @@ export function useFetchBirdData() {
       return response.data;
     } catch (error) {
       logger.error('Failed to fetch summary data', error);
-      setSummaryError(period, ERR_UNREACHABLE);
+      setSummaryError(period, fetchErrorMessage(error));
       return null;
     } finally {
       if (showLoading) {
@@ -271,7 +273,7 @@ export function useFetchBirdData() {
       return response.data;
     } catch (error) {
       logger.error('Failed to fetch trends data', error);
-      trendsError.value = ERR_UNREACHABLE;
+      trendsError.value = fetchErrorMessage(error);
       trendsData.value = { labels: [], data: [] };
       return null;
     }

@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { useFetchBirdData } from '@/composables/useFetchBirdData'
+import { httpError } from '../helpers/httpError'
 
 // Mock the api service
 const mockApi = vi.hoisted(() => ({
@@ -528,17 +529,17 @@ describe('useFetchBirdData', () => {
 
       const { fetchDashboardData, recentObservationsData, setRecentObsMode } = useFetchBirdData()
 
-      // Default recentMode='all'
+      // Default recentMode='unique'
       await fetchDashboardData('most')
-      expect(recentObservationsData.value).toEqual(allObs)
-
-      // Instant switch to unique (no network call)
-      setRecentObsMode('unique')
       expect(recentObservationsData.value).toEqual(uniqueObs)
 
-      // Switch back
+      // Instant switch to all (no network call)
       setRecentObsMode('all')
       expect(recentObservationsData.value).toEqual(allObs)
+
+      // Switch back
+      setRecentObsMode('unique')
+      expect(recentObservationsData.value).toEqual(uniqueObs)
     })
 
     it('uses recentMode param to select initial mode', async () => {
@@ -652,6 +653,54 @@ describe('useFetchBirdData', () => {
       expect(hourlyBirdActivityError.value).toBe('Hmm, cannot reach the server')
       expect(detailedBirdActivityError.value).toBe('Hmm, cannot reach the server')
     })
+
+    it('shows the sign-in message, not "unreachable", when the dashboard is auth-gated (401)', async () => {
+      // Axios attaches the response to the error — a 401 means the server
+      // answered fine, so it must never render as "cannot reach the server"
+      mockApi.get.mockRejectedValue(httpError(401))
+
+      const {
+        fetchDashboardData,
+        latestObservationError,
+        recentObservationsError,
+        summaryError,
+        hourlyBirdActivityError,
+        detailedBirdActivityError
+      } = useFetchBirdData()
+
+      await fetchDashboardData()
+
+      expect(latestObservationError.value).toBe('Sign in to view this data')
+      expect(recentObservationsError.value).toBe('Sign in to view this data')
+      expect(summaryError.value).toBe('Sign in to view this data')
+      expect(hourlyBirdActivityError.value).toBe('Sign in to view this data')
+      expect(detailedBirdActivityError.value).toBe('Sign in to view this data')
+    })
+
+    it('keeps "unreachable" for a non-auth server error response (500)', async () => {
+      mockApi.get.mockRejectedValue(httpError(500))
+
+      const { fetchDashboardData, latestObservationError } = useFetchBirdData()
+
+      await fetchDashboardData()
+
+      expect(latestObservationError.value).toBe('Hmm, cannot reach the server')
+    })
+
+    it('classifies a 401 on the charts endpoints as sign-in required', async () => {
+      mockApi.get.mockRejectedValue(httpError(401))
+
+      const {
+        fetchChartsData,
+        hourlyBirdActivityError,
+        detailedBirdActivityError
+      } = useFetchBirdData()
+
+      await fetchChartsData('2025-11-26')
+
+      expect(hourlyBirdActivityError.value).toBe('Sign in to view this data')
+      expect(detailedBirdActivityError.value).toBe('Sign in to view this data')
+    })
   })
 
   describe('fetch race guard', () => {
@@ -667,10 +716,10 @@ describe('useFetchBirdData', () => {
     it('discards stale response when a newer fetch starts', async () => {
       let resolveStale
       const staleData = mockDashboardResponse({
-        recentObservations: { all: [{ common_name: 'Stale Robin' }], unique: [] }
+        recentObservations: { all: [], unique: [{ common_name: 'Stale Robin' }] }
       })
       const freshData = mockDashboardResponse({
-        recentObservations: { all: [{ common_name: 'Fresh Jay' }], unique: [] }
+        recentObservations: { all: [], unique: [{ common_name: 'Fresh Jay' }] }
       })
 
       mockApi.get

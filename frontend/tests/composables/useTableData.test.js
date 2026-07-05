@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { useTableData } from '@/composables/useTableData'
+import { httpError } from '../helpers/httpError'
 
 // Mock the api service
 const mockApi = vi.hoisted(() => ({
@@ -266,6 +267,16 @@ describe('useTableData', () => {
       expect(totalItems.value).toBe(0)
     })
 
+    it('shows the sign-in message when detections are auth-gated (401)', async () => {
+      mockApi.get.mockRejectedValueOnce(httpError(401))
+
+      const { fetchDetections, error } = useTableData()
+
+      await fetchDetections()
+
+      expect(error.value).toBe('Sign in to view this data')
+    })
+
 	    it('sets isLoading during fetch', async () => {
       let resolvePromise
       const pendingPromise = new Promise(resolve => {
@@ -433,7 +444,7 @@ describe('useTableData', () => {
         data: { detections: [], pagination: { total_items: 100 } }
       })
 
-      const { prevPage, currentPage, totalItems, perPage, goToPage } = useTableData()
+      const { prevPage, currentPage, totalItems, perPage } = useTableData()
       totalItems.value = 100
       perPage.value = 25
       currentPage.value = 3

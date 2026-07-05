@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Fixed the dashboard behind the login prompt claiming "Hmm, cannot reach the server" when public access is disabled — it now stays blank like other sign-in-gated pages (auth-gated data elsewhere says "Sign in to view this data" instead of the false connection error), and the dashboard loads right after signing in instead of waiting for the next refresh
+- Fixed dashboard data updates around background tabs: switching away could leave the page quietly polling in the background, and coming back could show stale data; the dashboard now pauses cleanly while hidden and refreshes immediately on return when its data has gone stale
+- Fixed the detection player's weather strip showing an empty gray cell when the visible stats didn't fill the grid — the strip now shows humidity, wind, clouds, precipitation, and pressure in a single row that always fills cleanly; on phones it compacts to a 2×2 grid, dropping the least essential pressure tile
+- Changed Recent Observations to show Unique species by default, with the toggle reordered to Unique | All; a previously chosen All preference is kept
 - Fixed Docker build-cache cleanup never actually reclaiming space after builds and updates — modern Docker silently ignores the age filter the scripts relied on, so stations that build locally accumulated tens of GB of stale cache over time. Cleanup now caps the cache at 5GB (override with `BUILD_CACHE_LIMIT` as an environment variable or `.env` entry), evicting the oldest entries first so recent layers stay warm for fast rebuilds
 - Changed the dashboard's latest observation card (image and names) and the recent observations list's bird names to open that detection's player in place when clicked, instead of navigating to the species page; Ctrl/Cmd/middle-click still opens the detection's own page in a new tab. The card's timestamp is now plain text (it previously opened the detections table)
 - Changed the detection player's scientific name to link to the species page, matching the common name above it, and added a small link icon next to the common name so the navigation is discoverable

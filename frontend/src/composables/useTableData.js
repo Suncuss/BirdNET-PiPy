@@ -2,7 +2,7 @@ import { ref, computed } from 'vue'
 import api from '@/services/api'
 import { useLogger } from './useLogger'
 import { normalizeHour } from '@/utils/inputHelpers'
-import { ERR_UNREACHABLE } from '@/utils/errorMessages'
+import { ERR_UNREACHABLE, fetchErrorMessage } from '@/utils/errorMessages'
 
 /**
  * Composable for managing paginated detection table data.
@@ -108,7 +108,7 @@ export function useTableData() {
       }
     } catch (err) {
       logger.error('Failed to fetch detections', err)
-      error.value = ERR_UNREACHABLE
+      error.value = fetchErrorMessage(err)
       detections.value = []
       totalItems.value = 0
     } finally {

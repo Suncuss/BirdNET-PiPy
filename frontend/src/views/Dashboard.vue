@@ -1,8 +1,10 @@
 <template>
   <div class="dashboard">
-    <!-- Dashboard content (hidden during setup via locationConfigured check) -->
+    <!-- Dashboard content (hidden during setup via locationConfigured check,
+         and while sign-in is required so the login modal sits over a blank
+         shell like any other auth-guarded view) -->
     <div
-      v-if="locationConfigured !== false"
+      v-if="locationConfigured !== false && !authGated"
       class="p-4 grid grid-cols-1 lg:grid-cols-3 gap-4"
     >
       <!-- Bird Activity Overview -->
@@ -445,6 +447,7 @@ import { faPlay, faPause, faCircleInfo } from '@fortawesome/free-solid-svg-icons
 	import { useChartHelpers } from '@/composables/useChartHelpers';
 	import { useAudioPlayer } from '@/composables/useAudioPlayer';
 	import { useAppStatus } from '@/composables/useAppStatus';
+import { useAuth } from '@/composables/useAuth';
 import { useTimeFormat } from '@/composables/useTimeFormat';
 import SpectrogramModal from '@/components/SpectrogramModal.vue';
 import SpectrogramIcon from '@/components/icons/SpectrogramIcon.vue';
@@ -560,6 +563,12 @@ export default {
         // Polling state (Fix 1: single merged interval)
         const POLL_INTERVAL = 9000
         let pollInterval;
+        // Bumped by stopPolling so a poll whose fetch is already in flight
+        // (clearTimeout can't reach it) knows its loop was stopped.
+        let pollGeneration = 0
+        // When the last dashboard refresh finished — lets "user is back"
+        // signals refresh immediately only if the data actually went stale.
+        let lastFetchTime = 0
 
         // Keep-alive state
         let isActive = true
@@ -573,13 +582,14 @@ export default {
         const showLeastCommon = ref(false)
         const isActivityUpdating = ref(false)
 
-        // Recent observations filter: false = All, true = Unique (one per species)
+        // Recent observations filter: true = Unique (one per species, the
+        // default), false = All. Only an explicit stored "false" opts into All.
         const showUniqueSpecies = ref(
-            localStorage.getItem('birdnet_recent_unique') === 'true'
+            localStorage.getItem('birdnet_recent_unique') !== 'false'
         )
         const recentObsFilterOptions = [
-            { label: 'All', shortLabel: 'All', value: false },
-            { label: 'Unique', shortLabel: 'Uniq', value: true }
+            { label: 'Unique', shortLabel: 'Uniq', value: true },
+            { label: 'All', shortLabel: 'All', value: false }
         ]
 
         const isSpectrogramModalVisible = ref(false)
@@ -627,6 +637,12 @@ export default {
         // App status for coordinating with setup flow
         const { locationConfigured } = useAppStatus()
 
+        // authGated blanks the template only — polling deliberately keeps
+        // running while gated: each tick's 401 re-summons a dismissed login
+        // modal and picks up auth/public-access changes, and the server
+        // rejects the requests before any heavy work.
+        const { isAuthenticated, authGated } = useAuth()
+
         // User-configurable time-format helper
         const { formatTime: formatTimeOfDay, formatHourLabel } = useTimeFormat()
 
@@ -652,6 +668,7 @@ export default {
                 }
                 await fetchSummaryData(period, { force: true })
             }
+            lastFetchTime = Date.now()
         }
 
         const selectSummaryPeriod = async (period) => {
@@ -663,39 +680,57 @@ export default {
 
         // Single-in-flight poll loop: waits for the current fetch to
         // finish before scheduling the next one, so slow responses never
-        // pile up and get discarded by the race guard.
-        const startPolling = () => {
+        // pile up and get discarded by the race guard. pollInterval stays
+        // truthy while a fetch is in flight (it keeps the fired timer's id),
+        // so startPolling won't stack a second loop onto a live one.
+        const startPolling = (firstDelay = POLL_INTERVAL) => {
             if (pollInterval) return
+            const myGeneration = pollGeneration
             const poll = async () => {
                 await refreshDashboardData()
-                if (!isActive) return
+                if (myGeneration !== pollGeneration) return  // stopped while fetching
+                if (document.hidden) {
+                    // Tabs opened in the background never fire visibilitychange,
+                    // so the loop must also pause itself.
+                    stopPolling()
+                    return
+                }
                 redrawCharts()
                 pollInterval = setTimeout(poll, POLL_INTERVAL)
             }
-            pollInterval = setTimeout(poll, POLL_INTERVAL)
+            pollInterval = setTimeout(poll, firstDelay)
         }
 
         const stopPolling = () => {
+            pollGeneration++
             if (pollInterval) {
                 clearTimeout(pollInterval)
                 pollInterval = null
             }
         }
 
+        // Delay until the data turns POLL_INTERVAL old: 0 (refresh right away)
+        // when it went stale while polling was paused, but never a pointless
+        // refetch when the user was only away for a couple of seconds.
+        const nextPollDelay = () => Math.min(
+            POLL_INTERVAL,
+            Math.max(0, lastFetchTime + POLL_INTERVAL - Date.now())
+        )
+
         // Start data fetching and charts
         const startDashboard = async () => {
             // Register visibility handler before any await so it's never
             // skipped if the component is deactivated mid-fetch (idempotent)
             if (!visibilityHandler) {
-                visibilityHandler = async () => {
+                visibilityHandler = () => {
                     if (!isActive) return
                     if (document.hidden) {
                         stopPolling()
                     } else {
-                        await refreshDashboardData()
-                        if (!isActive) return
-                        redrawCharts()
-                        startPolling()
+                        // Resume through the poll loop: if the data went stale
+                        // while hidden the first poll fires immediately and
+                        // redraws; a fresh dashboard just resumes cadence.
+                        startPolling(nextPollDelay())
                     }
                 }
                 document.addEventListener('visibilitychange', visibilityHandler)
@@ -735,6 +770,23 @@ export default {
             if (configured === true && !pollInterval) {
                 await startDashboard();
             }
+        });
+
+        // Refetch right after a successful login — otherwise the auth-gated
+        // placeholders would linger until the next poll tick.
+        watch(isAuthenticated, async (authed) => {
+            if (!authed || !isActive || locationConfigured.value !== true) return
+            // Reset the poll loop so its pending tick doesn't repeat this
+            // refetch of the heavy /dashboard aggregation moments later.
+            stopPolling()
+            await refreshDashboardData()
+            if (!isActive) return
+            await nextTick()  // error placeholders swap for canvases before drawing
+            await redrawCharts()
+            // The spectrogram canvas first mounts with this data; skip if
+            // startDashboard already initialized it (don't wipe a drawing).
+            if (!spectrogramCanvasCtx) initializeCanvas()
+            startPolling()
         });
 
         onUnmounted(() => {
@@ -797,16 +849,13 @@ export default {
                 freezeChart(hourlyActivityChart)
 
                 // Immediately redraw with stale data + animation to give
-                // the impression of fresh content while we fetch.
+                // the impression of fresh content; if the data went stale
+                // while away, the poll loop below fetches right away and
+                // silently redraws — a quick away-and-back skips the refetch.
                 await nextTick()
                 await redrawCharts(true)
-
-                // Fetch new data in background, then silently update.
-                await refreshDashboardData()
                 if (!isActive || myActivation !== activationId) return
-                startPolling()
-                await nextTick()
-                await redrawCharts(false)
+                startPolling(nextPollDelay())
             }
         })
 
@@ -1057,6 +1106,7 @@ export default {
 
         return {
             locationConfigured,
+            authGated,
             latestObservationData,
             recentObservationsData,
             currentSummaryPeriod,
