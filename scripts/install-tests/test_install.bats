@@ -154,6 +154,81 @@ print(f'all backend services use: {unique.pop()}')
     assert_file_contains "$PROJECT_DIR/data/version.json" "\"commit\""
 }
 
+@test "unit: build.sh works from any cwd without leaving stray files" {
+    rm -f "$PROJECT_DIR/data/version.json"
+    local temp_dir
+    temp_dir=$(mktemp -d)
+
+    run bash -c "cd \"$temp_dir\" && \"$PROJECT_DIR/build.sh\" --version-only"
+    [ "$status" -eq 0 ]
+    # version.json lands in the repo, not in the caller's cwd
+    assert_file_exists "$PROJECT_DIR/data/version.json"
+    [ ! -e "$temp_dir/data" ]
+
+    rm -rf "$temp_dir"
+}
+
+@test "unit: build.sh cleanup reports reclaimed space and falls back for older engines" {
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    local shim_log="$temp_dir/docker-calls.log"
+
+    # Fake docker on PATH: build succeeds instantly; image prune emits the
+    # legacy summary format; builder prune rejects --max-used-space (like a
+    # pre-buildx-0.17 engine) but accepts --keep-storage and emits the modern
+    # "Total:" format. Exercises both parse formats and the fallback chain
+    # without touching the real engine.
+    cat > "$temp_dir/docker" << 'SHIM'
+#!/bin/bash
+echo "docker $*" >> "$DOCKER_SHIM_LOG"
+case "$1 $2" in
+    "compose build")
+        exit 0
+        ;;
+    "image prune")
+        echo "Total reclaimed space: 123MB"
+        exit 0
+        ;;
+    "builder prune")
+        for arg in "$@"; do
+            if [[ "$arg" == --max-used-space=* ]]; then
+                echo "unknown flag: --max-used-space" >&2
+                exit 125
+            fi
+        done
+        printf 'Total:\t1.5GB\n'
+        exit 0
+        ;;
+esac
+exit 0
+SHIM
+    chmod +x "$temp_dir/docker"
+
+    # Neutralize build.sh's low-memory swap setup: on a <1GB-RAM host this
+    # suite's privileged DinD container shares the kernel, so an unshimmed
+    # swapon here would register REAL host swap from inside the test.
+    local tool
+    for tool in fallocate mkswap swapon; do
+        printf '#!/bin/bash\nexit 0\n' > "$temp_dir/$tool"
+        chmod +x "$temp_dir/$tool"
+    done
+
+    run env PATH="$temp_dir:$PATH" DOCKER_SHIM_LOG="$shim_log" BUILD_CACHE_LIMIT=2GB \
+        bash "$PROJECT_DIR/build.sh" --services icecast
+    echo "output: $output"
+    [ "$status" -eq 0 ]
+
+    # Both engine output formats parse into real numbers (not a fallback 0B)
+    [[ "$output" == *"reclaimed 123MB from dangling images"* ]]
+    [[ "$output" == *"reclaimed 1.5GB from build cache (cap: 2GB)"* ]]
+
+    # The cap flag was attempted first, then the fallback engaged
+    assert_file_contains "$shim_log" "max-used-space=2GB"
+    assert_file_contains "$shim_log" "keep-storage=2GB"
+
+    rm -rf "$temp_dir"
+}
+
 @test "unit: --update requires local install" {
     # Create a temporary directory without .git
     local temp_dir=$(mktemp -d)

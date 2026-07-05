@@ -52,6 +52,8 @@
 </template>
 
 <script setup>
+import { watch } from 'vue'
+import { useRoute } from 'vue-router'
 import DetectionPlayer from '@/components/DetectionPlayer.vue'
 import CloseIcon from '@/components/icons/CloseIcon.vue'
 import { useModalDismiss } from '@/composables/useModalDismiss'
@@ -76,4 +78,12 @@ const { requestDismiss } = useModalDismiss(
   () => props.isVisible,
   () => emit('close')
 )
+
+// Links inside the player (species names → bird page) navigate the page UNDER
+// the overlay — the modal doesn't own the route, so a route change while open
+// must dismiss it or it lingers over the destination page.
+const route = useRoute()
+watch(() => route.fullPath, () => {
+  if (props.isVisible) emit('close')
+})
 </script>

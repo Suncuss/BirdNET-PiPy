@@ -172,3 +172,35 @@ describe('DetectionPlayer audio session (iOS mute switch)', () => {
     wrapper.unmount()
   })
 })
+
+describe('DetectionPlayer header links', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    authState.value = true
+    api.get.mockImplementation((url) =>
+      url.includes('/recording/')
+        ? Promise.resolve({ data: recording })
+        : Promise.resolve({ data: {} })
+    )
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('no audio in tests')))
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  it('common and scientific names both link to the BirdDetails page', async () => {
+    const wrapper = mountPlayer()
+    await flushPromises()
+
+    const links = wrapper.findAllComponents(RouterLinkStub)
+    const commonLink = links.find(l => l.text() === 'American Robin')
+    const sciLink = links.find(l => l.text() === 'Turdus migratorius')
+    expect(commonLink).toBeTruthy()
+    expect(sciLink).toBeTruthy()
+    for (const link of [commonLink, sciLink]) {
+      expect(link.props('to')).toEqual({ name: 'BirdDetails', params: { name: 'American Robin' } })
+    }
+  })
+})

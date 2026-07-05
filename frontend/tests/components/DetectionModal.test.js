@@ -4,8 +4,17 @@
  * is stubbed out so this stays focused on the modal shell.
  */
 import { mount, enableAutoUnmount } from '@vue/test-utils'
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { useRoute } from 'vue-router'
 import DetectionModal from '@/components/DetectionModal.vue'
+
+// The modal watches the route to self-dismiss when a link inside the player
+// navigates the page underneath it. Reactive so tests can drive a change.
+vi.mock('vue-router', async () => {
+  const { reactive } = await import('vue')
+  const route = reactive({ fullPath: '/' })
+  return { useRoute: () => route }
+})
 
 enableAutoUnmount(afterEach)
 afterEach(() => { document.body.style.overflow = '' })
@@ -59,5 +68,21 @@ describe('DetectionModal', () => {
     const wrapper = mountModal({ isVisible: false })
 
     expect(wrapper.find('.bg-white').exists()).toBe(false)
+  })
+
+  it('closes when a link inside it navigates the page underneath (species name → bird page)', async () => {
+    const wrapper = mountModal()
+    useRoute().fullPath = '/bird/American Robin'
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.emitted('close')).toBeTruthy()
+  })
+
+  it('ignores route changes while hidden', async () => {
+    const wrapper = mountModal({ isVisible: false })
+    useRoute().fullPath = '/somewhere-else'
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.emitted('close')).toBeFalsy()
   })
 })

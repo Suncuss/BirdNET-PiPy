@@ -46,6 +46,12 @@ export function useAuth() {
     !authStatus.value.authEnabled || authStatus.value.authenticated
   )
 
+  // Sign-in required and no limited public view either: the API 401s
+  // everything, so views render a blank shell behind the login modal.
+  const authGated = computed(() =>
+    needsLogin.value && !authStatus.value.publicAccess
+  )
+
   /**
    * Check current authentication status from API
    * @returns {Promise<boolean>} - True if status was retrieved successfully
@@ -236,6 +242,7 @@ export function useAuth() {
     // Computed
     needsLogin,
     isAuthenticated,
+    authGated,
 
     // Methods
     checkAuthStatus,

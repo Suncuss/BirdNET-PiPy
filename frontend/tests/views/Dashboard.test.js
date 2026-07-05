@@ -1,4 +1,4 @@
-import { mount, flushPromises, RouterLinkStub } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ref, defineComponent, nextTick } from 'vue'
 import Dashboard from '@/views/Dashboard.vue'
@@ -8,6 +8,8 @@ import { useAudioPlayer } from '@/composables/useAudioPlayer'
 import { useBirdCharts } from '@/composables/useBirdCharts'
 import { useSystemUpdate } from '@/composables/useSystemUpdate'
 import { useTimeFormat } from '@/composables/useTimeFormat'
+import { recordingPath } from '@/utils/detectionLinks'
+import { useAuth } from '@/composables/useAuth'
 
 vi.mock('@/composables/useFetchBirdData')
 vi.mock('@/composables/useAppStatus')
@@ -17,6 +19,11 @@ vi.mock('@/composables/useSystemUpdate')
 vi.mock('@/services/media', () => ({
   getAudioUrl: vi.fn((f) => f ? `/audio/${f}` : null),
   getSpectrogramUrl: vi.fn((f) => `/spectrograms/${f}`)
+}))
+// Dashboard itself doesn't read the route, but the real DetectionModal
+// (rendered by most mounts here) watches it to self-dismiss on navigation.
+vi.mock('vue-router', () => ({
+  useRoute: () => ({ fullPath: '/' })
 }))
 
 // Mock chart libraries
@@ -69,22 +76,33 @@ const mockCanvasContext = {
   fillText: vi.fn()
 }
 
+// happy-dom's document.hidden is a prototype getter; shadow it with an own
+// property so tests can simulate tab visibility (removed again in afterEach).
+const setTabHidden = (hidden) => {
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden })
+}
+
+const hideTab = () => {
+  setTabHidden(true)
+  document.dispatchEvent(new Event('visibilitychange'))
+}
+
+// Come back to the tab after awayMs, firing the 0-delay refresh poll if the
+// return scheduled one (stale data).
+const returnToTab = async (awayMs = 0) => {
+  vi.advanceTimersByTime(awayMs)
+  setTabHidden(false)
+  document.dispatchEvent(new Event('visibilitychange'))
+  vi.advanceTimersByTime(0)
+  await flushPromises()
+}
+
 const mountDashboard = () => mount(Dashboard, {
   global: {
     stubs: {
       'font-awesome-icon': true,
       'router-link': true,
       'CenteredMessage': false // render real component for text assertions
-    }
-  }
-})
-
-const mountDashboardWithRouterLinks = () => mount(Dashboard, {
-  global: {
-    stubs: {
-      'font-awesome-icon': true,
-      'router-link': RouterLinkStub,
-      'CenteredMessage': false
     }
   }
 })
@@ -138,6 +156,7 @@ describe('Dashboard', () => {
     vi.useRealTimers()
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+    delete document.hidden  // drop any setTabHidden override (restores the prototype getter)
   })
 
   it('shows loading state before first fetch completes', async () => {
@@ -417,44 +436,84 @@ describe('Dashboard', () => {
     wrapper.unmount()
   })
 
-  describe('Latest Observation card', () => {
-    const populatedState = () => {
-      const state = baseState()
-      state.latestObservationData.value = {
-        common_name: 'Blue Jay',
-        scientific_name: 'Cyanocitta cristata',
-        timestamp: '2024-01-01T12:30:00Z',
-        confidence: 0.93,
-        bird_song_file_name: 'jay.mp3'
-      }
-      return state
+  // The latest observation card (image, common + scientific names, timestamp)
+  // and the recent observations list's names open THIS detection's player in
+  // the in-place DetectionModal on a plain click, while staying real links to
+  // the detection permalink so modified clicks (⌘/Ctrl/middle) open it in a
+  // new tab.
+  describe('detection links → detection detail modal', () => {
+    const observation = {
+      id: 42,
+      common_name: 'Blue Jay',
+      scientific_name: 'Cyanocitta cristata',
+      timestamp: '2024-01-01T12:30:00Z',
+      confidence: 0.93,
+      bird_song_file_name: 'jay.mp3'
     }
 
-    it('scientific name links to BirdDetails with the common name as param', async () => {
-      useFetchBirdData.mockReturnValue(populatedState())
-
-      const wrapper = mountDashboardWithRouterLinks()
-      await flushPromises()
-
-      const sciLink = wrapper.findAllComponents(RouterLinkStub)
-        .find(l => l.text().includes('Cyanocitta cristata'))
-      expect(sciLink).toBeTruthy()
-      expect(sciLink.props('to')).toEqual({
-        name: 'BirdDetails',
-        params: { name: 'Blue Jay' }
-      })
+    const mountWithModalStub = () => mount(Dashboard, {
+      global: {
+        stubs: {
+          'font-awesome-icon': true,
+          'router-link': true,
+          DetectionModal: true,
+          CenteredMessage: false
+        }
+      }
     })
 
-    it('time/confidence row links to the Table view', async () => {
-      useFetchBirdData.mockReturnValue(populatedState())
+    const setup = async () => {
+      const state = baseState()
+      state.latestObservationData.value = { ...observation }
+      state.recentObservationsData.value = [{ ...observation }]
+      useFetchBirdData.mockReturnValue(state)
 
-      const wrapper = mountDashboardWithRouterLinks()
+      const wrapper = mountWithModalStub()
       await flushPromises()
+      return wrapper
+    }
 
-      const tableLink = wrapper.findAllComponents(RouterLinkStub)
-        .find(l => l.text().includes('93%'))
-      expect(tableLink).toBeTruthy()
-      expect(tableLink.props('to')).toEqual({ name: 'Table' })
+    const birdNameLinks = (wrapper) => wrapper.findAll('a')
+      .filter((a) => a.attributes('href') === recordingPath('Blue Jay', 42))
+
+    it('all detection links are real hrefs to the permalink (new-tab clicks work)', async () => {
+      const wrapper = await setup()
+
+      // Latest card: image, common + scientific names; recent observations
+      // row: name. Timestamp/confidence rows are deliberately plain text —
+      // identity elements are the click targets, metadata isn't.
+      const links = birdNameLinks(wrapper)
+      expect(links).toHaveLength(4)
+      expect(links.some(l => l.find('img').exists())).toBe(true)
+      expect(wrapper.text()).toContain('93%')
+      expect(wrapper.findAll('a').some(l => l.text().includes('93%'))).toBe(false)
+    })
+
+    it('a plain click opens the detection modal for that detection instead of navigating', async () => {
+      const wrapper = await setup()
+
+      for (const link of birdNameLinks(wrapper)) {
+        await link.trigger('click')
+
+        const modal = wrapper.findComponent({ name: 'DetectionModal' })
+        expect(modal.props('isVisible')).toBe(true)
+        expect(modal.props('id')).toBe(42)
+        expect(modal.props('name')).toBe('Blue Jay')
+
+        await modal.vm.$emit('close')
+        expect(wrapper.findComponent({ name: 'DetectionModal' }).props('isVisible')).toBe(false)
+      }
+    })
+
+    it('a modified click falls through to the link and does not open the modal', async () => {
+      const wrapper = await setup()
+
+      const preventDefault = vi.fn()
+      wrapper.vm.onInfoClick({ metaKey: true, preventDefault }, observation)
+
+      expect(preventDefault).not.toHaveBeenCalled()
+      await nextTick()
+      expect(wrapper.findComponent({ name: 'DetectionModal' }).props('isVisible')).toBe(false)
     })
   })
 
@@ -484,36 +543,98 @@ describe('Dashboard', () => {
       expect(recentObsGroup.findAll('button').length).toBe(2)
     })
 
-    it('All is selected by default', async () => {
+    it('Unique is selected by default', async () => {
       const wrapper = mountDashboard()
       await flushPromises()
 
       // Find the pill toggle buttons for recent observations filter
       const allButtons = wrapper.findAll('button')
-      const allBtn = allButtons.find(b => b.text().includes('All') && b.classes().some(c => c.includes('bg-white')))
-      expect(allBtn).toBeTruthy()
+      const uniqueBtn = allButtons.find(b => b.text().includes('Uniq') && b.classes().some(c => c.includes('bg-white')))
+      expect(uniqueBtn).toBeTruthy()
     })
 
-    it('clicking Unique calls setRecentObsMode instantly', async () => {
+    it('clicking All calls setRecentObsMode instantly', async () => {
       const state = baseState()
       useFetchBirdData.mockReturnValue(state)
 
       const wrapper = mountDashboard()
       await flushPromises()
 
-      // Find the Unique/Uniq button (not the one already active)
-      const buttons = wrapper.findAll('button')
-      const uniqueBtn = buttons.find(b => {
-        const text = b.text()
-        return (text.includes('Unique') || text.includes('Uniq')) && !b.classes().some(c => c.includes('bg-white'))
-      })
-      expect(uniqueBtn).toBeTruthy()
+      // Find the All button inside the recent-obs pill group ("All" alone
+      // would also match the summary "All Time" pill)
+      const recentObsGroup = wrapper.findAll('.bg-gray-100.rounded-full').find(g =>
+        g.findAll('button').some(b => b.text().includes('Uniq'))
+      )
+      const allBtn = recentObsGroup.findAll('button').find(b => b.text().includes('All'))
+      expect(allBtn).toBeTruthy()
 
-      await uniqueBtn.trigger('click')
+      await allBtn.trigger('click')
       await flushPromises()
 
-      // setRecentObsMode should be called with 'unique' (no network fetch)
-      expect(state.setRecentObsMode).toHaveBeenCalledWith('unique')
+      // setRecentObsMode should be called with 'all' (no network fetch)
+      expect(state.setRecentObsMode).toHaveBeenCalledWith('all')
+    })
+  })
+
+  describe('post-login refetch', () => {
+    // Real (unmocked) useAuth singleton — reset so state can't leak
+    afterEach(() => {
+      useAuth().resetState()
+    })
+
+    const mountLoggedOut = ({ publicAccess = true } = {}) => {
+      const auth = useAuth()
+      auth.resetState()
+      // Auth enabled, visitor not authenticated
+      auth.authStatus.value.authEnabled = true
+      auth.authStatus.value.publicAccess = publicAccess
+      const state = baseState()
+      useFetchBirdData.mockReturnValue(state)
+      const wrapper = mountDashboard()
+      return { auth, state, wrapper }
+    }
+
+    it('refetches dashboard data as soon as login succeeds', async () => {
+      const { auth, state } = mountLoggedOut()
+      await flushPromises()
+      expect(state.fetchDashboardData).toHaveBeenCalledTimes(1)
+
+      // Login flips isAuthenticated — must not wait for the next poll tick
+      auth.authStatus.value.authenticated = true
+      await flushPromises()
+
+      expect(state.fetchDashboardData).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not refetch on auth-state churn while still logged out', async () => {
+      const { auth, state } = mountLoggedOut()
+      await flushPromises()
+      state.fetchDashboardData.mockClear()
+
+      auth.authStatus.value.publicFeatures = ['charts']
+      await flushPromises()
+
+      expect(state.fetchDashboardData).not.toHaveBeenCalled()
+    })
+
+    it('renders a blank shell behind the login modal when public access is off', async () => {
+      const { auth, wrapper } = mountLoggedOut({ publicAccess: false })
+      await flushPromises()
+
+      // No panels, no error text — same empty shell as auth-guarded routes
+      expect(wrapper.text()).not.toContain('Recent Observations')
+
+      // Signing in mounts the dashboard content
+      auth.authStatus.value.authenticated = true
+      await flushPromises()
+      expect(wrapper.text()).toContain('Recent Observations')
+    })
+
+    it('keeps the limited public dashboard visible when public access is on', async () => {
+      const { wrapper } = mountLoggedOut({ publicAccess: true })
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('Recent Observations')
     })
   })
 
@@ -539,21 +660,33 @@ describe('Dashboard', () => {
           stubs: { 'font-awesome-icon': true, 'router-link': true, 'CenteredMessage': false }
         }
       })
-      return { wrapper, showDashboard }
+      // Toggle the keep-alive slot. deactivate() advances awayMs afterwards;
+      // reactivate() fires the 0-delay refresh poll if activation scheduled one.
+      const deactivate = async (awayMs = 0) => {
+        showDashboard.value = false
+        await nextTick()
+        vi.advanceTimersByTime(awayMs)
+      }
+      const reactivate = async () => {
+        showDashboard.value = true
+        await nextTick()
+        await flushPromises()
+        vi.advanceTimersByTime(0)
+        await flushPromises()
+      }
+      return { wrapper, showDashboard, deactivate, reactivate }
     }
 
     it('deactivation stops polling intervals', async () => {
       const state = baseState()
       useFetchBirdData.mockReturnValue(state)
 
-      const { showDashboard } = mountInKeepAlive()
+      const { deactivate } = mountInKeepAlive()
       await flushPromises()
 
       expect(state.fetchDashboardData).toHaveBeenCalledTimes(1)
 
-      // Deactivate
-      showDashboard.value = false
-      await nextTick()
+      await deactivate()
 
       // Advance past polling interval — polling should be stopped
       vi.advanceTimersByTime(20000)
@@ -570,7 +703,7 @@ describe('Dashboard', () => {
         .mockImplementationOnce(() => new Promise(resolve => { resolvePollFetch = resolve }))  // poll tick
       useFetchBirdData.mockReturnValue(state)
 
-      const { showDashboard } = mountInKeepAlive()
+      const { deactivate } = mountInKeepAlive()
       await flushPromises()
 
       // Fire the first poll tick — its fetch is deferred
@@ -578,8 +711,7 @@ describe('Dashboard', () => {
       await flushPromises()
 
       // Deactivate while poll fetch is pending
-      showDashboard.value = false
-      await nextTick()
+      await deactivate()
 
       // Resolve the deferred poll fetch
       resolvePollFetch()
@@ -594,35 +726,54 @@ describe('Dashboard', () => {
     })
 
     it('deactivation stops audio playback', async () => {
-      const { showDashboard } = mountInKeepAlive()
+      const { deactivate } = mountInKeepAlive()
       await flushPromises()
 
-      // Deactivate
-      showDashboard.value = false
-      await nextTick()
+      await deactivate()
 
       expect(mockStopAudio).toHaveBeenCalled()
     })
 
-    it('activation after deactivation triggers data refresh and polling', async () => {
+    it('activation after a stale deactivation refreshes immediately and resumes polling', async () => {
       const state = baseState()
       useFetchBirdData.mockReturnValue(state)
 
-      const { showDashboard } = mountInKeepAlive()
+      const { deactivate, reactivate } = mountInKeepAlive()
       await flushPromises()
 
       expect(state.fetchDashboardData).toHaveBeenCalledTimes(1)
 
-      // Deactivate
-      showDashboard.value = false
-      await nextTick()
+      // Deactivate, then let the data go stale (>= poll interval)
+      await deactivate(9000)
 
-      // Reactivate
-      showDashboard.value = true
-      await nextTick()
+      // Reactivate — the immediate (0-delay) refresh poll should fire
+      await reactivate()
+
+      expect(state.fetchDashboardData).toHaveBeenCalledTimes(2)
+
+      // And the regular cadence continues from there
+      vi.advanceTimersByTime(9000)
+      await flushPromises()
+      expect(state.fetchDashboardData).toHaveBeenCalledTimes(3)
+    })
+
+    it('quick away-and-back reactivation skips the refetch but resumes polling', async () => {
+      const state = baseState()
+      useFetchBirdData.mockReturnValue(state)
+
+      const { deactivate, reactivate } = mountInKeepAlive()
       await flushPromises()
 
-      // Should have fetched again on reactivation
+      // Deactivate for only 2 seconds — data is still fresh
+      await deactivate(2000)
+      await reactivate()
+
+      // No immediate refetch
+      expect(state.fetchDashboardData).toHaveBeenCalledTimes(1)
+
+      // Next poll fires 9s after the last fetch, not 9s after reactivation
+      vi.advanceTimersByTime(7000)
+      await flushPromises()
       expect(state.fetchDashboardData).toHaveBeenCalledTimes(2)
     })
 
@@ -641,14 +792,12 @@ describe('Dashboard', () => {
       const state = baseState()
       useFetchBirdData.mockReturnValue(state)
 
-      const { showDashboard } = mountInKeepAlive()
+      const { deactivate } = mountInKeepAlive()
       await flushPromises()
 
       expect(state.fetchDashboardData).toHaveBeenCalledTimes(1)
 
-      // Deactivate
-      showDashboard.value = false
-      await nextTick()
+      await deactivate()
 
       state.fetchDashboardData.mockClear()
 
@@ -660,25 +809,25 @@ describe('Dashboard', () => {
       expect(state.fetchDashboardData).not.toHaveBeenCalled()
     })
 
-    it('deactivation during in-flight visibility fetch prevents polling restart', async () => {
+    it('deactivation during an in-flight return-refresh prevents polling restart', async () => {
       const state = baseState()
       let resolveFetch
       state.fetchDashboardData
         .mockResolvedValueOnce()  // startDashboard
-        .mockImplementationOnce(() => new Promise(resolve => { resolveFetch = resolve }))  // visibility handler
+        .mockImplementationOnce(() => new Promise(resolve => { resolveFetch = resolve }))  // return refresh
       useFetchBirdData.mockReturnValue(state)
 
-      const { showDashboard } = mountInKeepAlive()
+      const { deactivate } = mountInKeepAlive()
       await flushPromises()
 
-      // Trigger visibility handler (tab becomes visible) — fetch is deferred
-      document.dispatchEvent(new Event('visibilitychange'))
+      // Hide, go stale, return — schedules the immediate refresh poll,
+      // whose fetch is held open
+      hideTab()
+      await returnToTab(9000)
 
-      // Deactivate while visibility fetch is pending
-      showDashboard.value = false
-      await nextTick()
+      // Deactivate while the refresh fetch is pending
+      await deactivate()
 
-      // Resolve the deferred fetch
       resolveFetch()
       await flushPromises()
 
@@ -686,33 +835,29 @@ describe('Dashboard', () => {
       vi.advanceTimersByTime(20000)
       await flushPromises()
 
-      // Only 2 calls: startDashboard + visibility handler, no interval-driven ones
+      // Only 2 calls: startDashboard + the return refresh, no interval-driven ones
       expect(state.fetchDashboardData).toHaveBeenCalledTimes(2)
     })
 
-    it('deactivation during in-flight activation fetch prevents polling restart', async () => {
+    it('deactivation during an in-flight activation refresh prevents polling restart', async () => {
       const state = baseState()
       let resolveFetch
-      // First call (startDashboard) resolves immediately; second (onActivated) is deferred
+      // First call (startDashboard) resolves immediately; the activation refresh is deferred
       state.fetchDashboardData
         .mockResolvedValueOnce()
         .mockImplementationOnce(() => new Promise(resolve => { resolveFetch = resolve }))
       useFetchBirdData.mockReturnValue(state)
 
-      const { showDashboard } = mountInKeepAlive()
+      const { deactivate, reactivate } = mountInKeepAlive()
       await flushPromises()
 
-      // Deactivate then reactivate — onActivated redraws charts then calls fetchDashboardData
-      showDashboard.value = false
-      await nextTick()
-      showDashboard.value = true
-      await nextTick()
-      // Let the animated redraw in onActivated complete so fetchDashboardData starts
-      await flushPromises()
+      // Deactivate, go stale, reactivate — the 0-delay refresh poll fires,
+      // and its fetch is held open
+      await deactivate(9000)
+      await reactivate()
 
-      // Deactivate again while fetch is still pending
-      showDashboard.value = false
-      await nextTick()
+      // Deactivate again while the fetch is still pending
+      await deactivate()
 
       // Now resolve the deferred fetch
       resolveFetch()
@@ -722,48 +867,48 @@ describe('Dashboard', () => {
       vi.advanceTimersByTime(20000)
       await flushPromises()
 
-      // Only the 2 explicit fetchDashboardData calls, no interval-driven ones
+      // Only the 2 fetchDashboardData calls, no interval-driven ones
       expect(state.fetchDashboardData).toHaveBeenCalledTimes(2)
     })
 
-    it('rapid reactivation discards stale activation fetch', async () => {
+    it('rapid reactivation does not start a second poll loop', async () => {
       const state = baseState()
-      let resolveStale
-      state.fetchDashboardData
-        .mockResolvedValueOnce()  // startDashboard
-        .mockImplementationOnce(() => new Promise(resolve => { resolveStale = resolve }))  // stale onActivated
-        .mockResolvedValue()  // fresh onActivated
       useFetchBirdData.mockReturnValue(state)
+      // Hold activation #1 open inside redrawCharts by deferring its first
+      // chart draw (baseState is empty, so startDashboard never draws).
+      let resolveRedraw
+      useBirdCharts().createTotalObservationsChart.mockImplementationOnce(
+        () => new Promise(resolve => { resolveRedraw = resolve })
+      )
 
-      const { showDashboard } = mountInKeepAlive()
+      const { showDashboard, deactivate, reactivate } = mountInKeepAlive()
       await flushPromises()
 
-      // Deactivate then reactivate — onActivated #1 starts (deferred fetch)
-      showDashboard.value = false
-      await nextTick()
-      showDashboard.value = true
-      await nextTick()
+      // Deactivate and let the data go stale
+      await deactivate(9000)
 
-      // Quickly deactivate and reactivate again — onActivated #2 starts and completes
-      showDashboard.value = false
-      await nextTick()
+      // Reactivation #1 — blocked awaiting the deferred chart draw
+      await reactivate()
+
+      // Quickly deactivate and reactivate — #2 completes and starts polling.
+      // Raw reactivation: reactivate()'s trailing 0-advance would fire the
+      // stale refresh before the mockClear below expects it.
+      await deactivate()
       showDashboard.value = true
       await nextTick()
+      await flushPromises()
+
+      // Release #1 — its activation is stale, so it must not start another loop
+      resolveRedraw()
       await flushPromises()
 
       state.fetchDashboardData.mockClear()
 
-      // Resolve stale #1 — it should bail out (activationId changed)
-      resolveStale()
-      await flushPromises()
-
-      // Advance through two poll cycles (setTimeout chain needs interleaved flushing)
-      vi.advanceTimersByTime(9000)
+      // Immediate stale refresh + one regular cycle: exactly one loop's worth
+      vi.advanceTimersByTime(0)
       await flushPromises()
       vi.advanceTimersByTime(9000)
       await flushPromises()
-
-      // Only interval-driven fetches from #2's polling, not doubled by #1
       expect(state.fetchDashboardData.mock.calls.length).toBe(2)
     })
 
@@ -776,28 +921,131 @@ describe('Dashboard', () => {
         .mockResolvedValue()
       useFetchBirdData.mockReturnValue(state)
 
-      const { showDashboard } = mountInKeepAlive()
+      const { deactivate, reactivate } = mountInKeepAlive()
       // startDashboard is awaiting fetchDashboardData — deactivate before it resolves
-      showDashboard.value = false
-      await nextTick()
+      await deactivate()
 
       // Resolve the initial fetch — startDashboard bails out via isActive check
       resolveFetch()
       await flushPromises()
 
-      // Reactivate — onActivated fetches and starts polling
-      showDashboard.value = true
-      await nextTick()
-      await flushPromises()
+      // Reactivate — onActivated resumes polling
+      await reactivate()
 
       state.fetchDashboardData.mockClear()
 
-      // Simulate tab becoming visible — visibility handler should work
-      document.dispatchEvent(new Event('visibilitychange'))
-      await flushPromises()
+      // Hide, go stale, return — the handler registered during
+      // startDashboard must drive the immediate refresh
+      hideTab()
+      await returnToTab(9000)
 
       // Handler was registered before the await, so it should fire
       expect(state.fetchDashboardData).toHaveBeenCalled()
+    })
+
+    it('coincident activation and visibility signals do not double-fetch', async () => {
+      const state = baseState()
+      useFetchBirdData.mockReturnValue(state)
+
+      const { showDashboard, deactivate } = mountInKeepAlive()
+      await flushPromises()
+
+      // Deactivate and let the data go stale
+      await deactivate(9000)
+
+      // Reactivate and fire visibilitychange in the same beat
+      showDashboard.value = true
+      await nextTick()
+      await flushPromises()
+      document.dispatchEvent(new Event('visibilitychange'))
+
+      vi.advanceTimersByTime(0)
+      await flushPromises()
+
+      // Exactly one stale refresh on top of the mount fetch
+      expect(state.fetchDashboardData).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  describe('visibility-based polling', () => {
+    it('hiding the tab stops polling', async () => {
+      const state = baseState()
+      useFetchBirdData.mockReturnValue(state)
+
+      mountDashboard()
+      await flushPromises()
+      expect(state.fetchDashboardData).toHaveBeenCalledTimes(1)
+
+      hideTab()
+
+      vi.advanceTimersByTime(30000)
+      await flushPromises()
+      expect(state.fetchDashboardData).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not keep polling in the background when the tab hides mid-fetch', async () => {
+      const state = baseState()
+      let resolvePollFetch
+      state.fetchDashboardData
+        .mockResolvedValueOnce()  // startDashboard
+        .mockImplementationOnce(() => new Promise(resolve => { resolvePollFetch = resolve }))  // poll tick
+      useFetchBirdData.mockReturnValue(state)
+
+      mountDashboard()
+      await flushPromises()
+
+      // First poll tick starts; its fetch is held open
+      vi.advanceTimersByTime(9000)
+      await flushPromises()
+
+      // Tab hides while the poll fetch is in flight — stopPolling has no
+      // timer left to clear, only the generation bump can stop the loop
+      hideTab()
+
+      resolvePollFetch()
+      await flushPromises()
+
+      vi.advanceTimersByTime(30000)
+      await flushPromises()
+
+      // Only 2 calls: startDashboard + the one poll tick, nothing in the background
+      expect(state.fetchDashboardData).toHaveBeenCalledTimes(2)
+    })
+
+    it('refreshes immediately on return when the data went stale while hidden', async () => {
+      const state = baseState()
+      useFetchBirdData.mockReturnValue(state)
+
+      mountDashboard()
+      await flushPromises()
+
+      hideTab()
+
+      // Away long enough for the data to go stale
+      await returnToTab(60000)
+
+      expect(state.fetchDashboardData).toHaveBeenCalledTimes(2)
+    })
+
+    it('skips the refetch on return when the data is still fresh', async () => {
+      const state = baseState()
+      useFetchBirdData.mockReturnValue(state)
+
+      mountDashboard()
+      await flushPromises()
+
+      hideTab()
+
+      // Back after only 2 seconds
+      await returnToTab(2000)
+
+      // No immediate refetch — the data is only 2s old
+      expect(state.fetchDashboardData).toHaveBeenCalledTimes(1)
+
+      // Polling resumes on the original cadence: 9s after the last fetch
+      vi.advanceTimersByTime(7000)
+      await flushPromises()
+      expect(state.fetchDashboardData).toHaveBeenCalledTimes(2)
     })
   })
 })

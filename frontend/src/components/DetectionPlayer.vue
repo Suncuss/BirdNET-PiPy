@@ -32,16 +32,23 @@
       <div class="min-w-0">
         <router-link
           :to="{ name: 'BirdDetails', params: { name: recording.common_name } }"
-          class="block text-[22px] sm:text-[26px] leading-tight font-bold tracking-tight text-gray-900 hover:text-green-600 transition-colors break-words"
+          class="group block text-[22px] sm:text-[26px] leading-tight font-bold tracking-tight text-gray-900 hover:text-green-600 transition-colors break-words"
         >
+          <!-- Always-visible link glyph (not hover-only): it signals the name
+               navigates to the species page, and touch devices have no hover. -->
           {{ displayName }}
+          <font-awesome-icon
+            :icon="['fas', 'arrow-up-right-from-square']"
+            class="ml-0.5 text-[12px] sm:text-[14px] align-[3px] text-gray-400 group-hover:text-green-600 transition-colors"
+          />
         </router-link>
-        <p
+        <router-link
           v-if="recording.scientific_name"
-          class="italic text-[13px] leading-snug text-gray-500 mt-0.5"
+          :to="{ name: 'BirdDetails', params: { name: recording.common_name } }"
+          class="block italic text-[13px] leading-snug text-gray-500 mt-0.5 hover:text-green-600 transition-colors"
         >
           {{ recording.scientific_name }}
-        </p>
+        </router-link>
         <p class="text-[13px] leading-snug text-gray-500 mt-0.5">
           {{ formattedTimestamp }}
         </p>
@@ -234,14 +241,21 @@
         <span class="text-[22px] font-bold tabular-nums text-gray-900">{{ formattedTemp }}</span>
         <span class="text-[15px] text-gray-500">{{ weatherDescription.desc }}</span>
       </div>
+      <!-- Wrap-and-grow tiles rather than a fixed grid: the stats are
+           conditional (1–5 visible), so fixed column counts leave gray holes
+           where the divider-colored container shows through. Growing tiles
+           always fill each row; basis-2/5 keeps phones at two per row (a 2×2
+           once pressure is hidden), sm:basis-0 packs every visible stat into
+           a single equal-width row. sm:px-3 lets the five cells compress just
+           past the breakpoint; md restores the roomier padding. -->
       <dl
         v-if="weatherStats.length"
-        class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-px mt-3 bg-gray-200 border border-gray-200 rounded-xl overflow-hidden"
+        class="flex flex-wrap gap-px mt-3 bg-gray-200 border border-gray-200 rounded-xl overflow-hidden"
       >
         <div
           v-for="stat in weatherStats"
           :key="stat.label"
-          class="bg-white px-4 py-2"
+          class="grow basis-2/5 sm:basis-0 bg-white px-4 py-2 sm:px-3 md:px-4"
           :class="{ 'hidden sm:block': stat.hideOnMobile }"
         >
           <dt class="text-[10px] font-semibold uppercase tracking-wider text-gray-400">
@@ -302,7 +316,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { library } from '@fortawesome/fontawesome-svg-core'
-import { faPlay, faPause, faDownload, faArrowUpFromBracket, faCheck } from '@fortawesome/free-solid-svg-icons'
+import { faPlay, faPause, faDownload, faArrowUpFromBracket, faArrowUpRightFromSquare, faCheck } from '@fortawesome/free-solid-svg-icons'
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome'
 
 import api from '@/services/api'
@@ -327,7 +341,7 @@ import { recordingShareUrl } from '@/utils/detectionLinks'
 import Spinner from '@/components/Spinner.vue'
 import RangeSlider from '@/components/RangeSlider.vue'
 
-library.add(faPlay, faPause, faDownload, faArrowUpFromBracket, faCheck)
+library.add(faPlay, faPause, faDownload, faArrowUpFromBracket, faArrowUpRightFromSquare, faCheck)
 
 // Identifies the recording to load. Shared by the standalone detail page and the
 // in-table modal, so it takes the species/id as props rather than reading the route.
@@ -451,9 +465,10 @@ const weatherStats = computed(() => {
   if (w.wind != null) stats.push({ label: 'Wind', value: convertWindSpeed(w.wind).toFixed(1), unit: windSpeedUnit.value })
   if (w.cloud_cover != null) stats.push({ label: 'Clouds', value: `${w.cloud_cover}%`, unit: '' })
   if (w.precip != null) stats.push({ label: 'Precip', value: convertPrecipitation(w.precip).toFixed(prec), unit: precipitationUnit.value })
-  // Pressure is hidden on the 2-col mobile grid so the strip stays a clean 2×2
-  // (5 items would leave the last one orphaned in its own row); shown from sm up.
-  if (w.pressure != null) stats.push({ label: 'Pressure', value: convertPressure(w.pressure).toFixed(prec), unit: pressureUnit.value, hideOnMobile: true })
+  // Whole hPa (vs formatPressure's one decimal) keeps the fifth tile narrow
+  // enough for the five-across row. hideOnMobile drops it below sm, where a
+  // fifth tile would break the 2×2 grid and it's the least essential stat.
+  if (w.pressure != null) stats.push({ label: 'Pressure', value: convertPressure(w.pressure).toFixed(useMetricUnits.value ? 0 : 2), unit: pressureUnit.value, hideOnMobile: true })
   return stats
 })
 const formattedTemp = computed(() => formatTemperature(weatherData.value?.temp))

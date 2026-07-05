@@ -3,7 +3,7 @@ import api from '@/services/api'
 import { useLogger } from './useLogger'
 import { useUnitSettings } from './useUnitSettings'
 import { useTimeFormat } from './useTimeFormat'
-import { ERR_UNREACHABLE } from '@/utils/errorMessages'
+import { fetchErrorMessage } from '@/utils/errorMessages'
 import { createCoalescedLoader } from '@/utils/coalescedLoader'
 
 /**
@@ -47,7 +47,7 @@ export function useSettings() {
     } catch (err) {
       // A failed load keeps the last-good payload — never destroy known state.
       logger.error('Failed to load settings', err)
-      error.value = ERR_UNREACHABLE
+      error.value = fetchErrorMessage(err)
       return false
     } finally {
       loading.value = false
