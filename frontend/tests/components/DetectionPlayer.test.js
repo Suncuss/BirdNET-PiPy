@@ -127,3 +127,80 @@ describe('DetectionPlayer share button', () => {
     expect(href).toContain('sig=abc')
   })
 })
+
+describe('DetectionPlayer audio session (iOS mute switch)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    authState.value = true
+    api.get.mockImplementation((url) =>
+      url.includes('/recording/')
+        ? Promise.resolve({ data: recording })
+        : Promise.resolve({ data: {} })
+    )
+    // Real Web Audio doesn't exist in happy-dom. A minimal context whose
+    // decode rejects is enough here: the 'playback' session must be declared
+    // when the context is CREATED — before decoding succeeds or fails —
+    // because pure Web Audio output is otherwise muted by the iPhone ringer
+    // switch (see utils/audioSession.js).
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      arrayBuffer: async () => new ArrayBuffer(8)
+    }))
+    vi.stubGlobal('AudioContext', class {
+      constructor() { this.state = 'suspended' }
+      async decodeAudioData() { throw new Error('decode stubbed out') }
+      close() {}
+    })
+    Object.defineProperty(navigator, 'audioSession', {
+      value: { type: 'auto' }, configurable: true, writable: true
+    })
+    // The stubbed decode failure logs through the component's catch — keep
+    // the test output clean.
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    delete navigator.audioSession
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  it("declares a 'playback' session so the iPhone ringer switch can't mute playback", async () => {
+    const wrapper = mountPlayer()
+    await flushPromises()
+    expect(navigator.audioSession.type).toBe('playback')
+    wrapper.unmount()
+  })
+})
+
+describe('DetectionPlayer header links', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    authState.value = true
+    api.get.mockImplementation((url) =>
+      url.includes('/recording/')
+        ? Promise.resolve({ data: recording })
+        : Promise.resolve({ data: {} })
+    )
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('no audio in tests')))
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  it('common and scientific names both link to the BirdDetails page', async () => {
+    const wrapper = mountPlayer()
+    await flushPromises()
+
+    const links = wrapper.findAllComponents(RouterLinkStub)
+    const commonLink = links.find(l => l.text() === 'American Robin')
+    const sciLink = links.find(l => l.text() === 'Turdus migratorius')
+    expect(commonLink).toBeTruthy()
+    expect(sciLink).toBeTruthy()
+    for (const link of [commonLink, sciLink]) {
+      expect(link.props('to')).toEqual({ name: 'BirdDetails', params: { name: 'American Robin' } })
+    }
+  })
+})

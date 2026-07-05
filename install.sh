@@ -527,14 +527,28 @@ prune_docker_before_update() {
     print_status "Cleaning up Docker artifacts before update..."
 
     local image_reclaimed
-    image_reclaimed=$(docker image prune -f 2>/dev/null | grep "Total reclaimed space:" | awk '{print $NF}') || true
+    image_reclaimed=$(docker image prune -f 2>/dev/null \
+        | grep -E '^Total( reclaimed space)?:' | awk '{print $NF}') || true
     print_status "Cleanup: reclaimed ${image_reclaimed:-0B} from dangling images"
 
-    # Prune only dangling build cache (no -a) so reusable layers survive.
-    # If the pull fails and we fall back to a local build, intact cache speeds it up.
+    # Cap the build cache instead of wiping it (an unfiltered prune removes all
+    # unused cache on modern engines): least-recently-used entries go first, so
+    # if the pull fails and we fall back to a local build, it still runs warm.
+    # Older engines lack --max-used-space; fall back to its pre-buildx-0.17 name
+    # --keep-storage, then to an age filter. The summary line differs across
+    # versions ("Total:" vs "Total reclaimed space:"), so accept both.
+    # Same resolution as build.sh: env var, then .env, then the 5GB default
+    local cache_limit="${BUILD_CACHE_LIMIT:-}"
+    if [ -z "$cache_limit" ] && [ -n "${PROJECT_ROOT:-}" ] && [ -f "$PROJECT_ROOT/.env" ]; then
+        cache_limit=$(grep -E '^BUILD_CACHE_LIMIT=' "$PROJECT_ROOT/.env" | tail -1 | cut -d= -f2 || true)
+    fi
+    cache_limit="${cache_limit:-5GB}"
     local cache_reclaimed
-    cache_reclaimed=$(docker builder prune -f 2>/dev/null | grep "Total reclaimed space:" | awk '{print $NF}') || true
-    print_status "Cleanup: reclaimed ${cache_reclaimed:-0B} from build cache"
+    cache_reclaimed=$( (docker builder prune --max-used-space="$cache_limit" -f 2>/dev/null \
+        || docker builder prune --keep-storage="$cache_limit" -f 2>/dev/null \
+        || docker builder prune --filter "until=168h" -f 2>/dev/null) \
+        | grep -E '^Total( reclaimed space)?:' | awk '{print $NF}') || true
+    print_status "Cleanup: reclaimed ${cache_reclaimed:-0B} from build cache (cap: $cache_limit)"
 }
 
 # Try to pull pre-built images from GHCR, fall back to local build.
@@ -659,7 +673,9 @@ build_application() {
         build_args=(--services "$csv_services")
     fi
 
-    if ! sudo -u "$ACTUAL_USER" UID="$ACTUAL_UID" GID="$ACTUAL_GID" ./build.sh "${build_args[@]}"; then
+    # Forward BUILD_CACHE_LIMIT: sudo's env_reset would strip an operator's override
+    if ! sudo -u "$ACTUAL_USER" UID="$ACTUAL_UID" GID="$ACTUAL_GID" \
+        BUILD_CACHE_LIMIT="${BUILD_CACHE_LIMIT:-}" ./build.sh "${build_args[@]}"; then
         return 1
     fi
     print_status "Application built successfully"

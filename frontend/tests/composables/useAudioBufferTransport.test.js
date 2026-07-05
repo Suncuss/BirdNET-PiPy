@@ -127,6 +127,20 @@ describe('useAudioBufferTransport', () => {
     app.unmount()
   })
 
+  it("play() also resumes iOS Safari's non-standard 'interrupted' state", async () => {
+    // iOS parks the context in 'interrupted' (not 'suspended') after a phone
+    // call or backgrounding; anything other than 'running' must resume().
+    const [t, app] = withSetup(useAudioBufferTransport)
+    t.configure({ context: ctx, buffer, destination })
+    ctx.state = 'interrupted'
+
+    await t.togglePlay()
+
+    expect(ctx.resumeCount).toBe(1)
+    expect(t.isPlaying.value).toBe(true)
+    app.unmount()
+  })
+
   it('derives the playhead from the context clock and pause snapshots the position', async () => {
     const [t, app] = withSetup(useAudioBufferTransport)
     t.configure({ context: ctx, buffer, destination })

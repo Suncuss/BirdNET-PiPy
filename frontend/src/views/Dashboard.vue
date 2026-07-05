@@ -106,13 +106,19 @@
           v-else-if="latestObservationData && !latestObservationError"
           class="flex flex-col lg:flex-row items-center lg:items-stretch lg:space-x-6 w-full h-full"
         >
-          <!-- Bird Profile -->
+          <!-- Bird Profile — the image and both names are real links to THIS
+               detection's standalone page so ⌘/Ctrl/middle-click opens it in a
+               new tab; a plain click opens the in-place modal. The timestamp/
+               confidence row is deliberately plain text: identity elements are
+               the click targets, metadata isn't (matches the recent list and
+               the player header). -->
           <div
             class="flex flex-col items-center lg:flex-row lg:items-center space-y-1.5 lg:space-y-0 lg:space-x-3 lg:w-[250px] lg:pl-1 lg:pr-3 lg:h-full lg:relative lg:after:content-[''] lg:after:absolute lg:after:right-0 lg:after:top-4 lg:after:bottom-4 lg:after:w-px lg:after:bg-gray-200"
           >
-            <router-link
-              :to="{ name: 'BirdDetails', params: { name: latestObservationData.common_name } }"
+            <a
+              :href="recordingPath(latestObservationData.common_name, latestObservationData.id)"
               class="group flex-shrink-0"
+              @click="onInfoClick($event, latestObservationData)"
             >
               <div class="relative">
                 <img
@@ -129,30 +135,29 @@
                   />
                 </div>
               </div>
-            </router-link>
+            </a>
             <div class="flex flex-col items-center lg:items-stretch lg:flex-1 lg:min-w-0 text-center lg:text-left">
-              <router-link
-                :to="{ name: 'BirdDetails', params: { name: latestObservationData.common_name } }"
+              <a
+                :href="recordingPath(latestObservationData.common_name, latestObservationData.id)"
                 class="group block hover:text-blue-600 transition-colors duration-300"
+                @click="onInfoClick($event, latestObservationData)"
               >
                 <h3 class="text-[15px] font-medium group-hover:underline lg:line-clamp-2">
                   {{ getDisplayCommonName(latestObservationData) }}
                 </h3>
-              </router-link>
-              <router-link
-                :to="{ name: 'BirdDetails', params: { name: latestObservationData.common_name } }"
+              </a>
+              <a
+                :href="recordingPath(latestObservationData.common_name, latestObservationData.id)"
                 class="group block transition-colors duration-300"
+                @click="onInfoClick($event, latestObservationData)"
               >
                 <p class="text-[13px] italic text-gray-600 group-hover:text-blue-600 group-hover:underline lg:line-clamp-2">
                   {{ latestObservationData.scientific_name }}
                 </p>
-              </router-link>
-              <router-link
-                :to="{ name: 'Table' }"
-                class="text-[13px] text-gray-600 hover:text-blue-600 hover:underline transition-colors duration-300"
-              >
+              </a>
+              <span class="text-[13px] text-gray-600">
                 {{ formatTimestamp(latestObservationData.timestamp) }} {{ formatConfidence(latestObservationData.confidence) }}
-              </router-link>
+              </span>
             </div>
           </div>
           <!-- Call Player -->
@@ -326,12 +331,15 @@
             class="flex items-center justify-between"
           >
             <div>
-              <router-link
-                :to="{ name: 'BirdDetails', params: { name: observation.common_name } }"
+              <!-- Real link to this detection's standalone page so ⌘/Ctrl/middle-click
+                   opens it in a new tab; a plain click opens the in-place modal. -->
+              <a
+                :href="recordingPath(observation.common_name, observation.id)"
                 class="font-medium hover:text-blue-600 hover:underline transition-colors duration-300"
+                @click="onInfoClick($event, observation)"
               >
                 {{ getDisplayCommonName(observation) }}
-              </router-link>
+              </a>
               <span class="text-xs text-gray-500 ml-2">{{ formatTimestamp(observation.timestamp) }}</span>
               <span class="text-xs text-gray-500 ml-2 hidden lg:inline">
                 {{ formatConfidence(observation.confidence) }}
@@ -408,6 +416,18 @@
       alt="Spectrogram"
       @close="isSpectrogramModalVisible = false"
     />
+
+    <!-- Detection Detail Modal — clicking a bird name (latest observation card,
+         recent observations list) opens the full player here in place instead of
+         navigating. detailObservation is kept (not
+         nulled) on close so the player props stay stable through the leave
+         transition; only the visibility flag toggles. -->
+    <DetectionModal
+      :id="detailObservation?.id"
+      :is-visible="isDetailModalVisible"
+      :name="detailObservation?.common_name"
+      @close="isDetailModalVisible = false"
+    />
   </div>
 </template>
 
@@ -431,8 +451,10 @@ import SpectrogramIcon from '@/components/icons/SpectrogramIcon.vue';
 import CenteredMessage from '@/components/CenteredMessage.vue';
 import SpeciesAxisLinks from '@/components/SpeciesAxisLinks.vue';
 import TimeAxisLinks from '@/components/TimeAxisLinks.vue';
+import DetectionModal from '@/components/DetectionModal.vue';
 import { getAudioUrl, getSpectrogramUrl } from '@/services/media'
 import { getDisplayCommonName } from '@/utils/birdNames'
+import { recordingPath } from '@/utils/detectionLinks'
 import { formatConfidence } from '@/utils/format'
 import { createScrollPacer } from '@/utils/scrollPacer'
 import { SPECTROGRAM_MAX_HZ } from '@/utils/spectrogram'
@@ -448,7 +470,8 @@ export default {
         SpectrogramIcon,
         CenteredMessage,
         SpeciesAxisLinks,
-        TimeAxisLinks
+        TimeAxisLinks,
+        DetectionModal
     },
     setup() {
         const {
@@ -561,6 +584,12 @@ export default {
 
         const isSpectrogramModalVisible = ref(false)
         const currentSpectrogramUrl = ref('')
+        // Detection detail modal (opened by clicking a bird name in the latest
+        // observation card or recent observations list). The observation
+        // is kept (not nulled) on close so the player props stay stable through the
+        // leave transition; only the visibility flag toggles.
+        const isDetailModalVisible = ref(false)
+        const detailObservation = ref(null)
         const hourlyActivityChart = ref(null)
 
         const totalObservationsChart = ref(null)
@@ -992,6 +1021,19 @@ export default {
 	            isSpectrogramModalVisible.value = true
 	        }
 
+        const showDetectionDetail = (observation) => {
+            detailObservation.value = observation
+            isDetailModalVisible.value = true
+        }
+
+        // Let modified clicks fall through to the real link (open in a new
+        // tab/window); a plain click opens the in-place detail modal instead.
+        const onInfoClick = (event, observation) => {
+            if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+            event.preventDefault()
+            showDetectionDetail(observation)
+        }
+
         const toggleActivityOrder = async () => {
             if (isActivityUpdating.value) return
             showLeastCommon.value = !showLeastCommon.value
@@ -1026,6 +1068,10 @@ export default {
             hourlyActivityChart,
             isSpectrogramModalVisible,
             currentSpectrogramUrl,
+            isDetailModalVisible,
+            detailObservation,
+            recordingPath,
+            onInfoClick,
             formatTimestamp,
             formatSummaryKey,
             formatSummaryValue,

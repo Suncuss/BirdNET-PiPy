@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- Fixed Docker build-cache cleanup never actually reclaiming space after builds and updates — modern Docker silently ignores the age filter the scripts relied on, so stations that build locally accumulated tens of GB of stale cache over time. Cleanup now caps the cache at 5GB (override with `BUILD_CACHE_LIMIT` as an environment variable or `.env` entry), evicting the oldest entries first so recent layers stay warm for fast rebuilds
+- Changed the dashboard's latest observation card (image and names) and the recent observations list's bird names to open that detection's player in place when clicked, instead of navigating to the species page; Ctrl/Cmd/middle-click still opens the detection's own page in a new tab. The card's timestamp is now plain text (it previously opened the detections table)
+- Changed the detection player's scientific name to link to the species page, matching the common name above it, and added a small link icon next to the common name so the navigation is discoverable
+- Fixed the detection modal staying open when clicking the species name inside it — the page behind changed while the modal lingered on top; it now closes on any in-app navigation
+- Fixed the setup wizard's address search always failing ("Search failed. Please try again or enter coordinates manually.") — the 0.8.2 security policy blocked the browser's request to the OpenStreetMap geocoding service; it is now explicitly allowed
+- Fixed clicks on species and page links doing nothing in browser tabs loaded before an update ("Failed to fetch dynamically imported module" in the console) — the app now recovers by reloading itself onto the intended page, and the web server tells browsers to always revalidate the app shell so a stale build doesn't linger in cache after an update
+
 ## [0.8.2] - 2026-07-02
 
 - Added an analysis-window bar under the detection player's spectrogram showing which 3-second slice of the clip the model actually flagged (the rest is context audio around it); click a tile to jump playback there. When the same species also fired in neighboring slices of the same recording, those windows are marked too, so a clip with back-to-back calls doesn't read as one detection surrounded by silence

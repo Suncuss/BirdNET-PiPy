@@ -1,4 +1,4 @@
-import { mount, flushPromises, RouterLinkStub } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ref, defineComponent, nextTick } from 'vue'
 import Dashboard from '@/views/Dashboard.vue'
@@ -8,6 +8,7 @@ import { useAudioPlayer } from '@/composables/useAudioPlayer'
 import { useBirdCharts } from '@/composables/useBirdCharts'
 import { useSystemUpdate } from '@/composables/useSystemUpdate'
 import { useTimeFormat } from '@/composables/useTimeFormat'
+import { recordingPath } from '@/utils/detectionLinks'
 
 vi.mock('@/composables/useFetchBirdData')
 vi.mock('@/composables/useAppStatus')
@@ -17,6 +18,11 @@ vi.mock('@/composables/useSystemUpdate')
 vi.mock('@/services/media', () => ({
   getAudioUrl: vi.fn((f) => f ? `/audio/${f}` : null),
   getSpectrogramUrl: vi.fn((f) => `/spectrograms/${f}`)
+}))
+// Dashboard itself doesn't read the route, but the real DetectionModal
+// (rendered by most mounts here) watches it to self-dismiss on navigation.
+vi.mock('vue-router', () => ({
+  useRoute: () => ({ fullPath: '/' })
 }))
 
 // Mock chart libraries
@@ -75,16 +81,6 @@ const mountDashboard = () => mount(Dashboard, {
       'font-awesome-icon': true,
       'router-link': true,
       'CenteredMessage': false // render real component for text assertions
-    }
-  }
-})
-
-const mountDashboardWithRouterLinks = () => mount(Dashboard, {
-  global: {
-    stubs: {
-      'font-awesome-icon': true,
-      'router-link': RouterLinkStub,
-      'CenteredMessage': false
     }
   }
 })
@@ -417,44 +413,84 @@ describe('Dashboard', () => {
     wrapper.unmount()
   })
 
-  describe('Latest Observation card', () => {
-    const populatedState = () => {
-      const state = baseState()
-      state.latestObservationData.value = {
-        common_name: 'Blue Jay',
-        scientific_name: 'Cyanocitta cristata',
-        timestamp: '2024-01-01T12:30:00Z',
-        confidence: 0.93,
-        bird_song_file_name: 'jay.mp3'
-      }
-      return state
+  // The latest observation card (image, common + scientific names, timestamp)
+  // and the recent observations list's names open THIS detection's player in
+  // the in-place DetectionModal on a plain click, while staying real links to
+  // the detection permalink so modified clicks (⌘/Ctrl/middle) open it in a
+  // new tab.
+  describe('detection links → detection detail modal', () => {
+    const observation = {
+      id: 42,
+      common_name: 'Blue Jay',
+      scientific_name: 'Cyanocitta cristata',
+      timestamp: '2024-01-01T12:30:00Z',
+      confidence: 0.93,
+      bird_song_file_name: 'jay.mp3'
     }
 
-    it('scientific name links to BirdDetails with the common name as param', async () => {
-      useFetchBirdData.mockReturnValue(populatedState())
-
-      const wrapper = mountDashboardWithRouterLinks()
-      await flushPromises()
-
-      const sciLink = wrapper.findAllComponents(RouterLinkStub)
-        .find(l => l.text().includes('Cyanocitta cristata'))
-      expect(sciLink).toBeTruthy()
-      expect(sciLink.props('to')).toEqual({
-        name: 'BirdDetails',
-        params: { name: 'Blue Jay' }
-      })
+    const mountWithModalStub = () => mount(Dashboard, {
+      global: {
+        stubs: {
+          'font-awesome-icon': true,
+          'router-link': true,
+          DetectionModal: true,
+          CenteredMessage: false
+        }
+      }
     })
 
-    it('time/confidence row links to the Table view', async () => {
-      useFetchBirdData.mockReturnValue(populatedState())
+    const setup = async () => {
+      const state = baseState()
+      state.latestObservationData.value = { ...observation }
+      state.recentObservationsData.value = [{ ...observation }]
+      useFetchBirdData.mockReturnValue(state)
 
-      const wrapper = mountDashboardWithRouterLinks()
+      const wrapper = mountWithModalStub()
       await flushPromises()
+      return wrapper
+    }
 
-      const tableLink = wrapper.findAllComponents(RouterLinkStub)
-        .find(l => l.text().includes('93%'))
-      expect(tableLink).toBeTruthy()
-      expect(tableLink.props('to')).toEqual({ name: 'Table' })
+    const birdNameLinks = (wrapper) => wrapper.findAll('a')
+      .filter((a) => a.attributes('href') === recordingPath('Blue Jay', 42))
+
+    it('all detection links are real hrefs to the permalink (new-tab clicks work)', async () => {
+      const wrapper = await setup()
+
+      // Latest card: image, common + scientific names; recent observations
+      // row: name. Timestamp/confidence rows are deliberately plain text —
+      // identity elements are the click targets, metadata isn't.
+      const links = birdNameLinks(wrapper)
+      expect(links).toHaveLength(4)
+      expect(links.some(l => l.find('img').exists())).toBe(true)
+      expect(wrapper.text()).toContain('93%')
+      expect(wrapper.findAll('a').some(l => l.text().includes('93%'))).toBe(false)
+    })
+
+    it('a plain click opens the detection modal for that detection instead of navigating', async () => {
+      const wrapper = await setup()
+
+      for (const link of birdNameLinks(wrapper)) {
+        await link.trigger('click')
+
+        const modal = wrapper.findComponent({ name: 'DetectionModal' })
+        expect(modal.props('isVisible')).toBe(true)
+        expect(modal.props('id')).toBe(42)
+        expect(modal.props('name')).toBe('Blue Jay')
+
+        await modal.vm.$emit('close')
+        expect(wrapper.findComponent({ name: 'DetectionModal' }).props('isVisible')).toBe(false)
+      }
+    })
+
+    it('a modified click falls through to the link and does not open the modal', async () => {
+      const wrapper = await setup()
+
+      const preventDefault = vi.fn()
+      wrapper.vm.onInfoClick({ metaKey: true, preventDefault }, observation)
+
+      expect(preventDefault).not.toHaveBeenCalled()
+      await nextTick()
+      expect(wrapper.findComponent({ name: 'DetectionModal' }).props('isVisible')).toBe(false)
     })
   })
 

@@ -32,16 +32,23 @@
       <div class="min-w-0">
         <router-link
           :to="{ name: 'BirdDetails', params: { name: recording.common_name } }"
-          class="block text-[22px] sm:text-[26px] leading-tight font-bold tracking-tight text-gray-900 hover:text-green-600 transition-colors break-words"
+          class="group block text-[22px] sm:text-[26px] leading-tight font-bold tracking-tight text-gray-900 hover:text-green-600 transition-colors break-words"
         >
+          <!-- Always-visible link glyph (not hover-only): it signals the name
+               navigates to the species page, and touch devices have no hover. -->
           {{ displayName }}
+          <font-awesome-icon
+            :icon="['fas', 'arrow-up-right-from-square']"
+            class="ml-0.5 text-[12px] sm:text-[14px] align-[3px] text-gray-400 group-hover:text-green-600 transition-colors"
+          />
         </router-link>
-        <p
+        <router-link
           v-if="recording.scientific_name"
-          class="italic text-[13px] leading-snug text-gray-500 mt-0.5"
+          :to="{ name: 'BirdDetails', params: { name: recording.common_name } }"
+          class="block italic text-[13px] leading-snug text-gray-500 mt-0.5 hover:text-green-600 transition-colors"
         >
           {{ recording.scientific_name }}
-        </p>
+        </router-link>
         <p class="text-[13px] leading-snug text-gray-500 mt-0.5">
           {{ formattedTimestamp }}
         </p>
@@ -302,7 +309,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { library } from '@fortawesome/fontawesome-svg-core'
-import { faPlay, faPause, faDownload, faArrowUpFromBracket, faCheck } from '@fortawesome/free-solid-svg-icons'
+import { faPlay, faPause, faDownload, faArrowUpFromBracket, faArrowUpRightFromSquare, faCheck } from '@fortawesome/free-solid-svg-icons'
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome'
 
 import api from '@/services/api'
@@ -327,7 +334,7 @@ import { recordingShareUrl } from '@/utils/detectionLinks'
 import Spinner from '@/components/Spinner.vue'
 import RangeSlider from '@/components/RangeSlider.vue'
 
-library.add(faPlay, faPause, faDownload, faArrowUpFromBracket, faCheck)
+library.add(faPlay, faPause, faDownload, faArrowUpFromBracket, faArrowUpRightFromSquare, faCheck)
 
 // Identifies the recording to load. Shared by the standalone detail page and the
 // in-table modal, so it takes the species/id as props rather than reading the route.

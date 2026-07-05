@@ -59,6 +59,29 @@ const router = createRouter({
   routes
 })
 
+// A deploy replaces every hashed chunk, so a tab loaded before an update
+// fails its next lazy route import and the click dies silently. Recover with
+// a full page load of the intended route — that picks up the new index.html
+// and its chunk names. Matched by message because each browser words the
+// TypeError differently (Chrome/Firefox/Safari), plus Vite's CSS-preload
+// failure for the same root cause.
+const STALE_CHUNK_RE = /failed to fetch dynamically imported module|error loading dynamically imported module|importing a module script failed|unable to preload css/i
+const RELOAD_GUARD_KEY = 'staleChunkReloadAt'
+const RELOAD_GUARD_MS = 10000
+
+export function recoverFromStaleChunk(error, to) {
+  if (!STALE_CHUNK_RE.test(error?.message || '')) return false
+  // If a fresh page failed the same import moments ago, the build itself is
+  // broken — surface the error instead of looping reloads.
+  const lastReload = Number(sessionStorage.getItem(RELOAD_GUARD_KEY)) || 0
+  if (Date.now() - lastReload < RELOAD_GUARD_MS) return false
+  sessionStorage.setItem(RELOAD_GUARD_KEY, String(Date.now()))
+  window.location.assign(router.resolve(to.fullPath).href)
+  return true
+}
+
+router.onError(recoverFromStaleChunk)
+
 // Shared auth state — the single source of truth, kept current by every
 // mutation in useAuth. The guard reads it; it keeps no copy of its own.
 // This runs at module load, so useAuth() must stay free of component-

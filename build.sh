@@ -7,6 +7,11 @@
 
 set -e  # Exit on any error
 
+# Run from the repo root regardless of the caller's cwd — everything below
+# (docker compose, backend/, frontend/, data/) uses paths relative to it.
+# readlink -f follows a symlinked script; empty CDPATH keeps the cd literal.
+CDPATH='' cd -- "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+
 # Colors for output
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -20,6 +25,14 @@ if touch "$LOG_FILE" 2>/dev/null; then
     echo "========== Build started: $(date) ==========" >> "$LOG_FILE"
     exec > >(tee -a "$LOG_FILE") 2>&1
 fi
+
+# Build cache size cap for post-build cleanup. Resolution order: environment
+# variable, then .env (the persistent home — UI-triggered updates have no
+# operator shell for an env override to come from), then the 5GB default.
+if [ -z "${BUILD_CACHE_LIMIT:-}" ] && [ -f .env ]; then
+    BUILD_CACHE_LIMIT=$(grep -E '^BUILD_CACHE_LIMIT=' .env | tail -1 | cut -d= -f2)
+fi
+BUILD_CACHE_LIMIT="${BUILD_CACHE_LIMIT:-5GB}"
 
 # Low memory threshold (1GB in KB) - systems with <1GB RAM need special handling
 LOW_MEMORY_THRESHOLD_KB=1048576
@@ -38,6 +51,26 @@ print_warning() {
 
 print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Reclaim Docker disk space: dangling images, then build cache down to
+# BUILD_CACHE_LIMIT. Eviction is least-recently-used first, so the newest
+# build's layers stay warm for the next rebuild. Older engines lack
+# --max-used-space; fall back to its pre-buildx-0.17 name --keep-storage,
+# then to an age filter as a last resort. The summary line differs across
+# versions ("Total:" vs "Total reclaimed space:"), so accept both.
+prune_docker_artifacts() {
+    local img_reclaimed
+    img_reclaimed=$(docker image prune -f 2>/dev/null \
+        | grep -E '^Total( reclaimed space)?:' | awk '{print $NF}')
+    print_status "Cleanup: reclaimed ${img_reclaimed:-0B} from dangling images"
+
+    local cache_reclaimed
+    cache_reclaimed=$( (docker builder prune --max-used-space="$BUILD_CACHE_LIMIT" -f 2>/dev/null \
+        || docker builder prune --keep-storage="$BUILD_CACHE_LIMIT" -f 2>/dev/null \
+        || docker builder prune --filter "until=168h" -f 2>/dev/null) \
+        | grep -E '^Total( reclaimed space)?:' | awk '{print $NF}')
+    print_status "Cleanup: reclaimed ${cache_reclaimed:-0B} from build cache (cap: $BUILD_CACHE_LIMIT)"
 }
 
 # Detect total RAM in KB
@@ -74,7 +107,7 @@ setup_build_swap() {
     # Check if we can create swap (need sudo/root)
     if [ "$EUID" -ne 0 ]; then
         print_warning "Cannot create swap without root privileges."
-        print_warning "For low-memory systems, run: sudo ./build.sh"
+        print_warning "Run 'sudo ./install.sh' once to provision swap for this system."
         print_warning "Continuing without additional swap (build may fail)..."
         return 1
     fi
@@ -117,26 +150,13 @@ build_sequential() {
 
     # Note: api and main share model-server's image (no build: directive)
 
-    # Filter to requested services if specified
+    # Filter to requested services if specified, preserving the build order.
+    # Args are pre-validated against all_services by the CLI parsing.
     local services=()
     if [ $# -gt 0 ]; then
         local requested=" $* "
         for svc in "${all_services[@]}"; do
             if [[ "$requested" == *" $svc "* ]]; then
-                services+=("$svc")
-            fi
-        done
-        # Also include any requested services not in the default list
-        # (e.g., "api" or "main" — they share the backend image with model-server)
-        for svc in "$@"; do
-            local found=false
-            for existing in "${services[@]}"; do
-                if [ "$svc" = "$existing" ]; then
-                    found=true
-                    break
-                fi
-            done
-            if [ "$found" = false ]; then
                 services+=("$svc")
             fi
         done
@@ -154,14 +174,8 @@ build_sequential() {
             exit 1
         fi
 
-        # Prune dangling images to free disk space
-        local img_reclaimed
-        img_reclaimed=$(docker image prune -f 2>/dev/null | grep "Total reclaimed space:" | awk '{print $NF}')
-        print_status "Cleanup: reclaimed ${img_reclaimed:-0B} from dangling images"
-        # Prune build cache older than 7 days to prevent unbounded growth
-        local cache_reclaimed
-        cache_reclaimed=$(docker builder prune --filter "until=168h" -f 2>/dev/null | grep "Total reclaimed space:" | awk '{print $NF}')
-        print_status "Cleanup: reclaimed ${cache_reclaimed:-0B} from build cache"
+        # Reclaim space between builds — matters most on small SD cards
+        prune_docker_artifacts
     done
 
     print_status "All requested images built"
@@ -179,7 +193,8 @@ generate_version_info() {
     COMMIT_DATE=$(git log -1 --pretty=%cI 2>/dev/null || echo "unknown")
     BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
     REMOTE_URL=$(git config --get remote.origin.url 2>/dev/null || echo "unknown")
-    VERSION=$(grep '"version"' frontend/package.json | sed 's/.*"version": *"\([^"]*\)".*/\1/' 2>/dev/null || echo "unknown")
+    VERSION=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' frontend/package.json 2>/dev/null | head -1)
+    VERSION="${VERSION:-unknown}"
     BUILD_TIME=$(date -Iseconds)
 
     # Convert SSH URL to HTTPS for display
@@ -216,19 +231,22 @@ show_usage() {
     echo ""
     echo "Options:"
     echo "  --test                Run backend tests before building"
-    echo "  --low-memory          Force low-memory build mode (sequential, no BuildKit)"
+    echo "  --low-memory          Force low-memory build mode (sequential builds)"
     echo "  --services SVC,...    Build only specified services (comma-separated)"
     echo "  --version-only        Only generate version.json, skip Docker build"
     echo "  --help                Show this help message"
     echo ""
     echo "Default: Builds all Docker images (no deployment)"
     echo ""
+    echo "Environment:"
+    echo "  BUILD_CACHE_LIMIT     Docker build cache kept after cleanup (default: 5GB;"
+    echo "                        set as an env var or a .env entry)"
+    echo ""
     echo "Note: Frontend is built inside Docker (no Node.js needed on host)"
     echo "For frontend dev with hot-reload: cd frontend && npm run dev"
     echo ""
     echo "Low-memory mode is auto-enabled on systems with <1GB RAM."
-    echo "For Pi Zero 2W, run with sudo to enable automatic swap creation:"
-    echo "  sudo ./build.sh"
+    echo "(install.sh provisions swap on such systems; builds reuse it)"
     echo ""
     echo "Valid services for --services: model-server, icecast, frontend"
 }
@@ -359,13 +377,9 @@ else
         fi
     fi
 
-    # Prune dangling images left behind when 'latest' tag is reassigned
+    # Prune images orphaned by the tag reassignment and cap the build cache
     # (low-memory path already does this between builds)
-    IMG_RECLAIMED=$(docker image prune -f 2>/dev/null | grep "Total reclaimed space:" | awk '{print $NF}')
-    print_status "Cleanup: reclaimed ${IMG_RECLAIMED:-0B} from dangling images"
-    # Prune build cache older than 7 days to prevent unbounded growth
-    CACHE_RECLAIMED=$(docker builder prune --filter "until=168h" -f 2>/dev/null | grep "Total reclaimed space:" | awk '{print $NF}')
-    print_status "Cleanup: reclaimed ${CACHE_RECLAIMED:-0B} from build cache"
+    prune_docker_artifacts
 fi
 
 print_status "Docker images built successfully!"
