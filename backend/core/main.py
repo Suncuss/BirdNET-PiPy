@@ -36,12 +36,12 @@ from core.internal_auth import INTERNAL_SECRET_HEADER, get_or_create_internal_se
 from core.logging_config import get_logger, setup_logging
 from core.notification_service import get_notification_service
 from core.runtime_config import get_runtime_settings, resolve_source_label
+from core.spectrogram import generate_spectrogram
 from core.storage_manager import storage_monitor_loop
 from core.timezone_service import get_timezone_str
 from core.utils import (
     build_detection_filenames,
     convert_wav_to_mp3,
-    generate_spectrogram,
     sanitize_source_label,
     sanitize_url,
     select_audio_chunks,

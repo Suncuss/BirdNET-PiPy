@@ -14,7 +14,6 @@ bcrypt==4.2.1
 
 # Data processing and analysis
 numpy==1.26.4  # Keep 1.26.x for compatibility with TensorFlow Lite
-scipy==1.15.3
 
 # Audio processing
 
@@ -32,8 +31,7 @@ paho-mqtt>=2.0.0
 # Timezone utilities
 timezonefinder>=6.2.0
 
-# Visualization
-matplotlib==3.10.3
+# Visualization (spectrogram rendering)
 Pillow>=10.4.0
 
 # File system monitoring

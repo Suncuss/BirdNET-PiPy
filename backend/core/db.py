@@ -33,7 +33,7 @@ _SPECIES_KEY = _species_key()
 # detection dicts are private-by-default; the api layer imports this same tuple
 # for its endpoint-level guard, keeping a single source of truth. The
 # authenticated CSV export builds rows from its own query
-# (get_all_detections_for_export), not _normalize_detection, so it keeps coords.
+# (get_detections_for_export_batch), not _normalize_detection, so it keeps coords.
 PRIVATE_DETECTION_FIELDS = ('latitude', 'longitude')
 
 
@@ -1265,72 +1265,97 @@ class DatabaseManager:
 
         return {row['common_name']: row['count'] for row in results}
 
-    def get_cleanup_candidates(self, keep_per_species=60, keep_recent_per_species=16, limit=None):
-        """Get detections eligible for cleanup, oldest first.
+    def get_cleanup_protected_ids(self, keep_per_species=60, keep_recent_per_species=16):
+        """Ids protected from storage cleanup, plus the total detection count.
 
         For each species, protects the union of two sets:
         - Top N by confidence (keep_per_species)
         - Most recent N by timestamp (keep_recent_per_species)
-        A recording is a candidate only if it falls outside both sets.
+        A recording is a cleanup candidate only if it is outside both sets;
+        candidate count = total - len(protected).
 
-        Args:
-            keep_per_species: Top recordings to keep per species by confidence
-            keep_recent_per_species: Most recent recordings to keep per species
-            limit: Optional max number of records to return
+        Species are keyed like _SPECIES_KEY: by scientific name, so a Turdus
+        merula history split between V2's "Eurasian Blackbird" and V3's
+        "Common Blackbird" is protected once, with blank-sci legacy rows
+        falling back to common_name. Each set is a short covering-index query
+        (idx_detections_scientific_confidence / _timestamp) per species —
+        the previous implementation ranked every species with window
+        functions over the whole table (two full-table temp b-tree sorts,
+        ~10s per call on a million-row table).
 
         Returns:
-            List of dicts with: id, common_name, confidence, timestamp,
-                audio_source, extra (raw JSON string)
-            Ordered by timestamp ASC (oldest first)
+            tuple: (set of protected detection ids, total detection count)
         """
-        # Partition on the species key so retention is per-species rather than
-        # per-English-string: a Turdus merula history split between V2's
-        # "Eurasian Blackbird" and V3's "Common Blackbird" is protected once
-        # (top-N + recent-N total), not twice. Blank-sci legacy rows fall
-        # back to common_name so two unrelated legacy birds remain distinct.
+        protected = set()
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+
+            cur.execute("SELECT COUNT(*) FROM detections")
+            total = cur.fetchone()[0]
+
+            cur.execute("SELECT DISTINCT scientific_name FROM detections "
+                        "WHERE scientific_name != ''")
+            groups = [("scientific_name = ?", row[0]) for row in cur.fetchall()]
+            cur.execute("SELECT DISTINCT common_name FROM detections "
+                        "WHERE scientific_name = ''")
+            groups += [("scientific_name = '' AND common_name = ?", row[0])
+                       for row in cur.fetchall()]
+
+            for where, name in groups:
+                for order_by, keep in (('confidence DESC', keep_per_species),
+                                       ('timestamp DESC', keep_recent_per_species)):
+                    if keep <= 0:
+                        continue
+                    cur.execute(
+                        f"SELECT id FROM detections WHERE {where} "
+                        f"ORDER BY {order_by}, id DESC LIMIT ?",
+                        (name, keep))
+                    protected.update(row[0] for row in cur.fetchall())
+
+        logger.debug("Cleanup protected set computed", extra={
+            'keep_per_species': keep_per_species,
+            'keep_recent_per_species': keep_recent_per_species,
+            'protected_count': len(protected),
+            'total_count': total,
+        })
+
+        return protected, total
+
+    def get_cleanup_scan_batch(self, after_timestamp=None, after_id=None,
+                                *, limit):
+        """One oldest-first keyset batch of the fields cleanup needs.
+
+        Walks detections by (timestamp, id) ascending off
+        idx_detections_timestamp; pass the last row's values back as
+        after_timestamp/after_id for the next batch. The caller filters out
+        protected ids and rows whose files are already gone — this stays a
+        plain index walk with no window functions and never holds more than
+        ``limit`` rows, where the previous implementation materialized every
+        candidate row (~1M dicts on a large table) at once.
+
+        Returns:
+            List of dicts with id, common_name, confidence, timestamp,
+            extra (raw JSON string); fewer than ``limit`` rows signals
+            the end of the table.
+        """
+        where = "1=1"
+        params = []
+        if after_id is not None:
+            where = "(timestamp > ? OR (timestamp = ? AND id > ?))"
+            params = [after_timestamp, after_timestamp, after_id]
+
         query = f"""
-        WITH RankedDetections AS (
-            SELECT
-                id,
-                common_name,
-                confidence,
-                timestamp,
-                audio_source,
-                extra,
-                ROW_NUMBER() OVER (
-                    PARTITION BY {_SPECIES_KEY}
-                    ORDER BY confidence DESC
-                ) as confidence_rank,
-                ROW_NUMBER() OVER (
-                    PARTITION BY {_SPECIES_KEY}
-                    ORDER BY timestamp DESC
-                ) as recency_rank
-            FROM detections
-        )
-        SELECT id, common_name, confidence, timestamp, audio_source, extra
-        FROM RankedDetections
-        WHERE confidence_rank > ? AND recency_rank > ?
-        ORDER BY timestamp ASC
+        SELECT id, common_name, confidence, timestamp, extra
+        FROM detections
+        WHERE {where}
+        ORDER BY timestamp ASC, id ASC
         LIMIT ?
         """
 
-        # Use -1 for unlimited (SQLite treats negative LIMIT as no limit)
-        limit_param = limit if limit is not None else -1
-
         with self.get_db_connection() as conn:
             cur = conn.cursor()
-            cur.execute(query, (keep_per_species, keep_recent_per_species, limit_param))
-            results = cur.fetchall()
-
-        candidates = [dict(row) for row in results]
-
-        logger.debug("Cleanup candidates retrieved", extra={
-            'keep_per_species': keep_per_species,
-            'keep_recent_per_species': keep_recent_per_species,
-            'candidates_count': len(candidates)
-        })
-
-        return candidates
+            cur.execute(query, params + [limit])
+            return [dict(row) for row in cur.fetchall()]
 
     def get_paginated_detections(self, page=1, per_page=25, start_date=None,
                                   end_date=None, species=None, sort='timestamp',
@@ -1430,20 +1455,85 @@ class DatabaseManager:
 
         return detections, total_count
 
-    def get_all_detections(self, start_date=None, end_date=None, species=None,
-                            *, scientific_name=None, hour=None):
-        """Get all matching detections with normalized fields and filenames.
+    def get_distinct_species_pairs(self):
+        """Distinct scientific names across the table, as (scientific_name,
+        common_name) pairs with one representative common_name each.
 
-        Used for in-memory localized sorting where database ordering no longer
-        matches the names rendered in the UI. Filter by ``scientific_name``
-        when known; falls back to ``species`` (English) for legacy callers.
+        Feeds the localized common_name sort: the API orders these few hundred
+        names by localized display name and hands the order to
+        get_paginated_detections_localized, so no query ever materializes the
+        full table. Deliberately unfiltered — the page walk applies the
+        filters, and species outside them just yield empty buckets — so the
+        request's filters live in exactly one query.
+
+        The DISTINCT is a recursive skip-scan (each step index-seeks the next
+        distinct name — ~ms, where a flat DISTINCT scan of a million-row
+        index costs ~130ms); common_name (only a fallback for species
+        without a translation) is a single-row peek per species.
         """
+        query = """
+        WITH RECURSIVE names(scientific_name) AS (
+            SELECT MIN(scientific_name) FROM detections
+            UNION ALL
+            SELECT (SELECT MIN(scientific_name) FROM detections
+                    WHERE scientific_name > names.scientific_name)
+            FROM names WHERE names.scientific_name IS NOT NULL
+        )
+        SELECT scientific_name,
+               (SELECT common_name FROM detections
+                WHERE scientific_name = names.scientific_name
+                LIMIT 1) AS common_name
+        FROM names
+        WHERE scientific_name IS NOT NULL
+        """
+
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(query)
+            return [(row['scientific_name'], row['common_name'])
+                    for row in cur.fetchall()]
+
+    def get_paginated_detections_localized(self, ordered_species, page=1,
+                                            per_page=25, start_date=None,
+                                            end_date=None, species=None, *,
+                                            scientific_name=None, hour=None):
+        """Paginated detections following a caller-supplied species order.
+
+        ``ordered_species`` lists scientific_name values in final display
+        order (localized name sort, asc/desc already applied by the API); it
+        may be a superset of the species matching the filters — species
+        without matching rows just yield empty buckets. The page is
+        assembled species-bucket by species-bucket — newest first within a
+        species — off idx_detections_scientific_timestamp: covering index
+        counts to skip whole buckets before the requested offset, then
+        index-served fetches for just the page rows. Nothing beyond the page
+        is ever materialized, and no full-table sort runs.
+
+        Returns:
+            tuple: (list of detections with filenames, total_count)
+        """
+        per_page = min(max(1, per_page), 100)
+        page = max(1, page)
+        offset = (page - 1) * per_page
+
         where_clause, params = self._build_detection_filters(
             start_date, end_date, species, scientific_name=scientific_name,
             hour=hour,
         )
 
-        query = f"""
+        count_query = f"""
+        SELECT COUNT(*) as total
+        FROM detections
+        WHERE {where_clause}
+        """
+
+        bucket_count_query = f"""
+        SELECT COUNT(*) as total
+        FROM detections
+        WHERE {where_clause} AND scientific_name = ?
+        """
+
+        bucket_page_query = f"""
         SELECT
             id,
             timestamp,
@@ -1460,52 +1550,72 @@ class DatabaseManager:
             extra,
             audio_source
         FROM detections
-        WHERE {where_clause}
+        WHERE {where_clause} AND scientific_name = ?
         ORDER BY timestamp DESC, id DESC
+        LIMIT ? OFFSET ?
         """
 
+        rows = []
         with self.get_db_connection() as conn:
             cur = conn.cursor()
-            cur.execute(query, params)
-            rows = cur.fetchall()
 
-        detections = [self._normalize_detection(row, include_filenames=True) for row in rows]
+            cur.execute(count_query, params)
+            total_count = cur.fetchone()['total']
 
-        logger.debug("All detections retrieved", extra={
-            'count': len(detections),
-            'filters': {
-                'start_date': start_date,
-                'end_date': end_date,
-                'species': species
-            }
-        })
+            remaining_offset = offset
+            for sci in ordered_species:
+                if len(rows) >= per_page:
+                    break
+                if remaining_offset:
+                    # Cheap covering-index count to skip buckets that lie
+                    # entirely before the requested offset without reading rows.
+                    cur.execute(bucket_count_query, params + [sci])
+                    bucket_total = cur.fetchone()['total']
+                    if remaining_offset >= bucket_total:
+                        remaining_offset -= bucket_total
+                        continue
+                cur.execute(bucket_page_query,
+                            params + [sci, per_page - len(rows),
+                                      remaining_offset])
+                rows.extend(cur.fetchall())
+                remaining_offset = 0
 
-        return detections
+        detections = [self._normalize_detection(row, include_filenames=True)
+                      for row in rows]
+        return detections, total_count
 
-    def get_all_detections_for_export(self, start_date=None, end_date=None,
-                                       species=None, *, scientific_name=None):
-        """Get all detection records for CSV export.
+    def get_detections_for_export_batch(self, start_date=None, end_date=None,
+                                         species=None, *, scientific_name=None,
+                                         before_timestamp=None, before_id=None,
+                                         limit):
+        """One batch of raw detection rows for the streaming CSV export.
 
-        Fetches all matching rows in a single query. This is simpler and avoids
-        consistency issues with batched LIMIT/OFFSET (where concurrent inserts
-        can cause skipped or duplicate rows).
-
-        For typical Raspberry Pi deployments with thousands of detections,
-        this approach is efficient and the memory footprint is minimal.
+        Rows come back newest-first (timestamp DESC, id DESC) with ``extra``
+        kept as its raw JSON string. Pass the last row's timestamp and id as
+        ``before_timestamp``/``before_id`` to fetch the next batch: unlike
+        LIMIT/OFFSET batching, the keyset walk never skips or duplicates
+        pre-existing rows when detections are inserted mid-export — new rows
+        sort ahead of the cursor and simply fall outside the walk.
 
         Args:
             start_date: Start date filter (YYYY-MM-DD)
             end_date: End date filter (YYYY-MM-DD)
             species: Filter by common_name (English fallback)
             scientific_name: Filter by scientific_name (preferred when known)
+            before_timestamp: Keyset cursor — timestamp of the previous
+                batch's last row (None for the first batch)
+            before_id: Keyset cursor — id of the previous batch's last row
+            limit: Maximum rows per batch
 
         Returns:
-            list: All detection records matching the filters
+            list: Up to ``limit`` detection dicts; fewer signals the last batch
         """
-        # Build WHERE conditions
         where_clause, params = self._build_detection_filters(
             start_date, end_date, species, scientific_name=scientific_name,
         )
+        if before_id is not None:
+            where_clause += " AND (timestamp < ? OR (timestamp = ? AND id < ?))"
+            params += [before_timestamp, before_timestamp, before_id]
 
         query = f"""
         SELECT
@@ -1526,26 +1636,13 @@ class DatabaseManager:
         FROM detections
         WHERE {where_clause}
         ORDER BY timestamp DESC, id DESC
+        LIMIT ?
         """
 
         with self.get_db_connection() as conn:
             cur = conn.cursor()
-            cur.execute(query, params)
-            rows = cur.fetchall()
-
-        # For export, keep extra as raw JSON string (not parsed)
-        detections = [dict(row) for row in rows]
-
-        logger.debug("Detections exported", extra={
-            'count': len(detections),
-            'filters': {
-                'start_date': start_date,
-                'end_date': end_date,
-                'species': species
-            }
-        })
-
-        return detections
+            cur.execute(query, params + [limit])
+            return [dict(row) for row in cur.fetchall()]
 
     def get_detection_by_id(self, detection_id):
         """Get a single detection by ID.

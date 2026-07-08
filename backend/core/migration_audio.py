@@ -15,8 +15,9 @@ import threading
 from config.settings import BASE_DIR, EXTRACTED_AUDIO_DIR, SPECTROGRAM_DIR
 from core.bird_name_utils import get_spectrogram_common_name_from_english
 from core.logging_config import get_logger
+from core.spectrogram import generate_spectrogram
 from core.storage_manager import get_disk_usage
-from core.utils import build_detection_filenames, generate_spectrogram
+from core.utils import build_detection_filenames
 
 logger = get_logger(__name__)
 

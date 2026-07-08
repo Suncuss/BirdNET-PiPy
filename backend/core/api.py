@@ -144,6 +144,11 @@ _tz_finder_lock = threading.Lock()
 # the worst case at the SQL level — but the caller stops waiting.
 _DB_JOB_TIMEOUT_SECONDS = 90
 
+# Rows per DB batch for the streaming CSV export: small enough that a batch
+# is a quick lane job holding ~1MB, large enough that a million-row export
+# stays a few thousand round trips rather than a million.
+_EXPORT_BATCH_ROWS = 1000
+
 
 def _run_db(func, *args, **kwargs):
     return db_executor.submit(func, *args, **kwargs).result(
@@ -1905,7 +1910,7 @@ def get_detections():
     # recent window — consistent with the rest of the public view, so table_public
     # can't expose the full historical archive and every visible row's media stays
     # playable (its signature is minted). Owners see the full table. Applies to
-    # both query paths below (and so also caps the in-memory full-table sort).
+    # both query paths below.
     if get_request_tier() == 'public':
         cutoff_date = _public_window_cutoff_date()
         if not start_date or start_date < cutoff_date:
@@ -1916,28 +1921,29 @@ def get_detections():
     sci, common = _resolve_species_filter(species)
 
     if sort == 'common_name' and bird_name_language != DEFAULT_BIRD_NAME_LANGUAGE:
-        # Sort the fully localized labels in memory so the rendered order matches
-        # what the user sees, even across paginated results.
-        detections = _localize_detection_list(
-            _run_db(
-                db_manager.get_all_detections,
-                start_date=start_date,
-                end_date=end_date,
-                species=common,
-                scientific_name=sci,
-                hour=hour,
-            ),
-            settings=settings,
+        # Localized labels don't follow database ordering, so order the
+        # distinct species by display name here (a few hundred keys) and let
+        # SQL assemble just the requested page from that order — materializing
+        # every matching row for an in-memory sort OOMs small devices once
+        # the table reaches hundreds of thousands of rows. The species list
+        # is unfiltered on purpose: the page query below applies the filters,
+        # and species outside them just yield empty buckets.
+        ordered_species = _localized_species_order(
+            _run_db(db_manager.get_distinct_species_pairs),
+            settings,
+            descending=order.lower() != 'asc',
         )
-        detections.sort(
-            key=lambda detection: (
-                detection.get('display_common_name', detection.get('common_name', '')).casefold()
-            ),
-            reverse=order.lower() != 'asc',
+        detections, total_count = _run_db(
+            db_manager.get_paginated_detections_localized,
+            ordered_species,
+            page=page,
+            per_page=per_page,
+            start_date=start_date,
+            end_date=end_date,
+            species=common,
+            scientific_name=sci,
+            hour=hour,
         )
-        total_count = len(detections)
-        offset = (page - 1) * per_page
-        detections = detections[offset:offset + per_page]
     else:
         detections, total_count = _run_db(
             db_manager.get_paginated_detections,
@@ -1951,7 +1957,7 @@ def get_detections():
             scientific_name=sci,
             hour=hour,
         )
-        detections = _localize_detection_list(detections, settings=settings)
+    detections = _localize_detection_list(detections, settings=settings)
 
     total_pages = (total_count + per_page - 1) // per_page if per_page > 0 else 0
 
@@ -1973,9 +1979,10 @@ def get_detections():
 @require_auth
 @handle_api_errors
 def export_detections_csv():
-    """Export all detections as CSV file.
+    """Export all detections as a CSV file, streamed in batches.
 
-    Requires authentication.
+    Requires authentication. The response is generated batch by batch so an
+    export of a very large table holds only one batch in memory at a time.
 
     Query params (optional):
     - start_date: Start date filter (YYYY-MM-DD)
@@ -1995,57 +2002,74 @@ def export_detections_csv():
                 return jsonify({'error': f'Invalid {date_param} format. Use YYYY-MM-DD'}), 400
 
     sci, common = _resolve_species_filter(species)
-    # Full result is buffered into the CSV below before responding (not
-    # streamed), so this is safe to route through the executor lane.
-    detections = _run_db(
-        db_manager.get_all_detections_for_export,
-        start_date=start_date,
-        end_date=end_date,
-        species=common,
-        scientific_name=sci,
-    )
 
-    # Build CSV in memory
-    output = io.StringIO()
-    writer = csv.writer(output)
-
-    # Write header
-    writer.writerow([
-        'id', 'timestamp', 'group_timestamp', 'scientific_name', 'common_name',
-        'confidence', 'latitude', 'longitude', 'cutoff', 'sensitivity', 'overlap',
-        'week', 'extra', 'audio_source'
-    ])
-
-    # Write data rows
-    for detection in detections:
-        # Handle extra field - ensure NULL/None becomes '{}'
-        extra_value = detection.get('extra')
-        if extra_value is None:
-            extra_value = '{}'
-
+    def generate():
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
         writer.writerow([
-            detection.get('id', ''),
-            detection.get('timestamp', ''),
-            detection.get('group_timestamp', ''),
-            detection.get('scientific_name', ''),
-            detection.get('common_name', ''),
-            detection.get('confidence', ''),
-            detection.get('latitude', ''),
-            detection.get('longitude', ''),
-            detection.get('cutoff', ''),
-            detection.get('sensitivity', ''),
-            detection.get('overlap', ''),
-            detection.get('week', ''),
-            extra_value,
-            detection.get('audio_source', '')
+            'id', 'timestamp', 'group_timestamp', 'scientific_name', 'common_name',
+            'confidence', 'latitude', 'longitude', 'cutoff', 'sensitivity', 'overlap',
+            'week', 'extra', 'audio_source'
         ])
+
+        before_timestamp = before_id = None
+        try:
+            while True:
+                # Each batch is its own short executor-lane job, so a long
+                # export shares the single DB lane with live requests instead
+                # of holding it (and every row in memory) for the download.
+                batch = _run_db(
+                    db_manager.get_detections_for_export_batch,
+                    start_date=start_date,
+                    end_date=end_date,
+                    species=common,
+                    scientific_name=sci,
+                    before_timestamp=before_timestamp,
+                    before_id=before_id,
+                    limit=_EXPORT_BATCH_ROWS,
+                )
+                for detection in batch:
+                    # Handle extra field - ensure NULL/None becomes '{}'
+                    extra_value = detection.get('extra')
+                    if extra_value is None:
+                        extra_value = '{}'
+
+                    writer.writerow([
+                        detection.get('id', ''),
+                        detection.get('timestamp', ''),
+                        detection.get('group_timestamp', ''),
+                        detection.get('scientific_name', ''),
+                        detection.get('common_name', ''),
+                        detection.get('confidence', ''),
+                        detection.get('latitude', ''),
+                        detection.get('longitude', ''),
+                        detection.get('cutoff', ''),
+                        detection.get('sensitivity', ''),
+                        detection.get('overlap', ''),
+                        detection.get('week', ''),
+                        extra_value,
+                        detection.get('audio_source', '')
+                    ])
+                yield buffer.getvalue()
+                buffer.seek(0)
+                buffer.truncate(0)
+                if len(batch) < _EXPORT_BATCH_ROWS:
+                    return
+                before_timestamp = batch[-1]['timestamp']
+                before_id = batch[-1]['id']
+        except Exception:
+            # Response headers are already sent; log why the download broke
+            # off and let the stream abort so the client sees a failed
+            # transfer rather than a silently complete-looking file.
+            logger.exception("CSV export aborted mid-stream")
+            raise
 
     # Generate filename with timestamp
     timestamp = local_now().strftime('%Y%m%d_%H%M%S')
     filename = f'birdnet_detections_{timestamp}.csv'
 
     return Response(
-        output.getvalue(),
+        generate(),
         mimetype='text/csv',
         headers={'Content-Disposition': f'attachment; filename={filename}'}
     )
@@ -2274,6 +2298,25 @@ def _localize_detection_list(detections, settings=None, public_only=False):
                             cutoff=cutoff)
         for detection in detections
     ]
+
+
+def _localized_species_order(species_pairs, settings=None, *, descending=False):
+    """Order scientific names by their localized display name.
+
+    Takes get_distinct_species_pairs output and produces the species order
+    that get_paginated_detections_localized pages by, so the species-column
+    sort never materializes detection rows. Species sharing a display name
+    get a deterministic scientific_name tiebreak.
+    """
+    language = get_bird_name_language(settings)
+    return [sci for _, sci in sorted(
+        (
+            (get_localized_common_name(sci, common, language=language,
+                                       settings=settings).casefold(), sci)
+            for sci, common in species_pairs
+        ),
+        reverse=descending,
+    )]
 
 
 def _localize_species_list(species_list, settings=None):

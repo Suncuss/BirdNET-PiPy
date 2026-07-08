@@ -32,6 +32,10 @@ logger = get_logger(__name__)
 # Average: ~270KB audio + ~30KB spectrogram = ~300KB per detection
 ESTIMATED_SIZE_PER_DETECTION = 300 * 1024  # 300 KB
 
+# Rows per keyset batch of the oldest-first cleanup walk: bounds cleanup
+# memory to one batch of light dicts regardless of table size.
+_SCAN_BATCH_ROWS = 1000
+
 def _get_storage_config() -> dict:
     """Load current storage settings with defaults."""
     storage = get_runtime_settings().get('storage', {})
@@ -90,6 +94,28 @@ def _resolve_path_with_legacy_fallback(filename, directory):
     return path  # Return original path even if it doesn't exist
 
 
+def _detection_filenames(detection):
+    """Build the dash-pattern filenames for a detection record."""
+    extra = detection.get('extra', {})
+    if isinstance(extra, str):
+        # Only the source_label matters here, and most rows don't have one —
+        # the substring check skips a JSON parse per row on million-row walks.
+        if 'source_label' in extra:
+            try:
+                extra = json.loads(extra)
+            except (json.JSONDecodeError, TypeError):
+                extra = {}
+        else:
+            extra = {}
+    source_label = extra.get('source_label')
+    return build_detection_filenames(
+        detection['common_name'],
+        detection['confidence'],
+        detection['timestamp'],
+        audio_source=source_label or None
+    )
+
+
 def get_detection_files(detection):
     """Get full file paths for a detection record.
 
@@ -102,19 +128,7 @@ def get_detection_files(detection):
     Returns:
         dict with audio_path and spectrogram_path
     """
-    extra = detection.get('extra', {})
-    if isinstance(extra, str):
-        try:
-            extra = json.loads(extra)
-        except (json.JSONDecodeError, TypeError):
-            extra = {}
-    source_label = extra.get('source_label')
-    filenames = build_detection_filenames(
-        detection['common_name'],
-        detection['confidence'],
-        detection['timestamp'],
-        audio_source=source_label or None
-    )
+    filenames = _detection_filenames(detection)
 
     return {
         'audio_path': _resolve_path_with_legacy_fallback(filenames['audio_filename'], EXTRACTED_AUDIO_DIR),
@@ -122,26 +136,35 @@ def get_detection_files(detection):
     }
 
 
-def get_file_size(detection):
-    """Calculate total file size for a detection's files.
+def _disk_filename_sets():
+    """Snapshot the filenames in the audio and spectrogram directories.
 
-    Args:
-        detection: dict with common_name, confidence, timestamp
+    One directory read apiece replaces per-candidate stat calls: DB rows are
+    preserved after their files are deleted, so on an old station most rows
+    the cleanup walk visits have no files left — stat-ing every one of them
+    (millions of lookups per run) dominated cleanup cost.
 
-    Returns:
-        Total size in bytes of audio + spectrogram files
+    Legacy colon-pattern names are normalized to the dash pattern (the
+    inverse of utils.get_legacy_filename — colons only ever appear in a
+    legacy name's time portion), so membership checks need only the dash
+    name instead of converting per row.
     """
-    paths = get_detection_files(detection)
-    size = 0
+    def scan(directory):
+        try:
+            with os.scandir(directory) as entries:
+                return {entry.name.replace(':', '-') for entry in entries}
+        except OSError:
+            return set()
 
-    for path in paths.values():
-        if path and os.path.exists(path):
-            try:
-                size += os.path.getsize(path)
-            except OSError:
-                pass
+    return scan(EXTRACTED_AUDIO_DIR), scan(SPECTROGRAM_DIR)
 
-    return size
+
+def _has_files_on_disk(detection, audio_names, spectrogram_names):
+    """Whether any of the detection's files (dash or legacy pattern) exist
+    in the normalized directory snapshots from _disk_filename_sets()."""
+    filenames = _detection_filenames(detection)
+    return (filenames['audio_filename'] in audio_names
+            or filenames['spectrogram_filename'] in spectrogram_names)
 
 
 def delete_detection_files(detection):
@@ -208,16 +231,41 @@ def estimate_deletable_size(db_manager, keep_per_species=None, keep_recent_per_s
     if keep_recent_per_species is None:
         keep_recent_per_species = config['keep_recent_per_species']
 
-    candidates = db_manager.get_cleanup_candidates(
+    protected, total_count = db_manager.get_cleanup_protected_ids(
         keep_per_species=keep_per_species,
         keep_recent_per_species=keep_recent_per_species,
     )
+    candidate_count = max(0, total_count - len(protected))
 
-    estimated_bytes = len(candidates) * ESTIMATED_SIZE_PER_DETECTION
-    return estimated_bytes, len(candidates)
+    return candidate_count * ESTIMATED_SIZE_PER_DETECTION, candidate_count
 
 
-def cleanup_storage(db_manager, target_percent=None, keep_per_species=None, keep_recent_per_species=None):
+def _scan_detections(db_manager, start_cursor=None, stop_cursor=None):
+    """Yield detections oldest-first, starting after start_cursor and
+    stopping once past stop_cursor.
+
+    Fetches keyset batches of _SCAN_BATCH_ROWS light rows off the timestamp
+    index, so only one batch is ever held regardless of table size. Callers
+    track their own position from the yielded rows' (timestamp, id).
+    """
+    cursor = start_cursor
+    while True:
+        after_timestamp, after_id = cursor if cursor else (None, None)
+        batch = db_manager.get_cleanup_scan_batch(
+            after_timestamp=after_timestamp, after_id=after_id,
+            limit=_SCAN_BATCH_ROWS)
+        for detection in batch:
+            if (stop_cursor is not None
+                    and (detection['timestamp'], detection['id']) > stop_cursor):
+                return
+            yield detection
+        if len(batch) < _SCAN_BATCH_ROWS:
+            return
+        cursor = (batch[-1]['timestamp'], batch[-1]['id'])
+
+
+def cleanup_storage(db_manager, target_percent=None, keep_per_species=None,
+                    keep_recent_per_species=None, resume_cursor=None):
     """Run storage cleanup to free disk space.
 
     Deletes oldest audio and spectrogram files until disk usage drops
@@ -233,9 +281,17 @@ def cleanup_storage(db_manager, target_percent=None, keep_per_species=None, keep
         target_percent: Target disk usage percentage (default from settings)
         keep_per_species: Top recordings per species by confidence (default from settings)
         keep_recent_per_species: Latest recordings per species (default from settings)
+        resume_cursor: ``result['resume_cursor']`` from the previous run, or
+            None for a full walk. Rows at or before it were deleted, already
+            file-less, or protected when last seen — DB rows are kept forever
+            while their files age out, so resuming spares each run an
+            ever-growing prefix of long-dead rows. When the resumed walk
+            can't reach the target, the prefix is re-checked once (catching
+            rows that lost protection or regained files).
 
     Returns:
-        dict with files_deleted, bytes_freed, target_achievable, etc.
+        dict with files_deleted, bytes_freed, resume_cursor,
+        target_achievable, etc.
     """
     config = _get_storage_config()
     if target_percent is None:
@@ -250,7 +306,8 @@ def cleanup_storage(db_manager, target_percent=None, keep_per_species=None, keep
         'bytes_freed': 0,
         'skipped_missing': 0,
         'target_achievable': True,
-        'target_reached': False
+        'target_reached': False,
+        'resume_cursor': resume_cursor
     }
 
     # Get current disk usage
@@ -268,11 +325,11 @@ def cleanup_storage(db_manager, target_percent=None, keep_per_species=None, keep
     # Calculate how much we need to free
     bytes_to_free = usage['used_bytes'] - (usage['total_bytes'] * target_percent / 100)
 
-    candidates = db_manager.get_cleanup_candidates(
+    protected, total_count = db_manager.get_cleanup_protected_ids(
         keep_per_species=keep_per_species,
         keep_recent_per_species=keep_recent_per_species,
     )
-    candidate_count = len(candidates)
+    candidate_count = max(0, total_count - len(protected))
 
     # SAFETY CHECK: Estimate if we can actually reach the target
     estimated_deletable = candidate_count * ESTIMATED_SIZE_PER_DETECTION
@@ -298,39 +355,47 @@ def cleanup_storage(db_manager, target_percent=None, keep_per_species=None, keep
         'keep_recent_per_species': keep_recent_per_species
     })
 
-    if not candidates:
+    if candidate_count == 0:
         logger.info("No cleanup candidates found - all recordings within keep limits", extra={
             'keep_per_species': keep_per_species,
             'keep_recent_per_species': keep_recent_per_species
         })
         return result
 
-    # Delete files until we've freed enough space
-    bytes_freed = 0
+    audio_names, spectrogram_names = _disk_filename_sets()
 
-    for detection in candidates:
-        if bytes_freed >= bytes_to_free:
-            result['target_reached'] = True
-            break
+    def delete_pass(start_cursor, stop_cursor=None):
+        """Delete unprotected rows' files along one walk segment; returns
+        the (timestamp, id) of the last row it looked at."""
+        cursor = start_cursor
+        for detection in _scan_detections(db_manager, start_cursor, stop_cursor):
+            if result['bytes_freed'] >= bytes_to_free:
+                break  # leave the cursor before the unprocessed rows
+            cursor = (detection['timestamp'], detection['id'])
 
-        # Check if files exist before attempting deletion
-        file_size = get_file_size(detection)
-        if file_size == 0:
-            result['skipped_missing'] += 1
-            continue
+            if detection['id'] in protected:
+                continue
+            if not _has_files_on_disk(detection, audio_names, spectrogram_names):
+                result['skipped_missing'] += 1
+                continue
 
-        # Delete the files
-        delete_result = delete_detection_files(detection)
+            delete_result = delete_detection_files(detection)
+            if delete_result['deleted_audio'] or delete_result['deleted_spectrogram']:
+                result['files_deleted'] += 1
+                result['bytes_freed'] += delete_result['bytes_freed']
+        return cursor
 
-        if delete_result['deleted_audio'] or delete_result['deleted_spectrogram']:
-            result['files_deleted'] += 1
-            bytes_freed += delete_result['bytes_freed']
+    result['resume_cursor'] = delete_pass(resume_cursor)
+    if result['bytes_freed'] < bytes_to_free and resume_cursor is not None:
+        # The resumed tail is exhausted without reaching the target — walk
+        # the prefix behind the cursor once to catch rows that lost
+        # protection or regained files since it advanced. The tail cursor
+        # from the first pass stays the resume point.
+        logger.info("Resumed cleanup walk exhausted, re-checking rows behind the cursor")
+        delete_pass(None, stop_cursor=resume_cursor)
 
-    # Check if target was reached by final deletion
-    if not result['target_reached'] and bytes_freed >= bytes_to_free:
+    if result['bytes_freed'] >= bytes_to_free:
         result['target_reached'] = True
-
-    result['bytes_freed'] = bytes_freed
 
     # Log summary
     log_extra = {
@@ -358,6 +423,10 @@ def storage_monitor_loop(stop_flag, db_manager):
         db_manager: DatabaseManager instance
     """
     last_logged_config = None
+    # Carried between cleanup runs so each run resumes the oldest-first walk
+    # past rows already handled; in-memory only — a restart just means the
+    # next cleanup does one full walk.
+    resume_cursor = None
 
     while not stop_flag.is_set():
         try:
@@ -381,12 +450,14 @@ def storage_monitor_loop(stop_flag, db_manager):
                         'percent_used': usage['percent_used'],
                         'trigger_percent': config['trigger_percent']
                     })
-                    cleanup_storage(
+                    cleanup_result = cleanup_storage(
                         db_manager,
                         target_percent=config['target_percent'],
                         keep_per_species=config['keep_per_species'],
-                        keep_recent_per_species=config['keep_recent_per_species']
+                        keep_recent_per_species=config['keep_recent_per_species'],
+                        resume_cursor=resume_cursor
                     )
+                    resume_cursor = cleanup_result['resume_cursor']
 
         except Exception as e:
             logger.error("Error in storage monitor", extra={
