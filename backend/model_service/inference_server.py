@@ -21,9 +21,9 @@ warnings.filterwarnings('ignore', category=UserWarning, module='numpy.core.getli
 import os
 import sys
 import time
+import wave
 
 from flask import Flask, jsonify, request
-from scipy.io import wavfile
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.logging_config import get_logger, log_execution_time, setup_logging
@@ -106,10 +106,19 @@ def split_audio(path, chunk_length, sample_rate, total_duration, overlap=0.0, mi
     """
     file_name = os.path.basename(path)
 
-    # Load audio using scipy (fast, no JIT warmup needed)
-    # Audio files are already 48kHz mono WAV from the recorder
+    # Load audio with stdlib wave — the recorder only ever produces 16-bit
+    # mono PCM WAV, and pulling in scipy (~22MB resident) just to read it is
+    # not worth it. The format check makes the old implicit int16 assumption
+    # (the /32768 below) explicit and fails loudly on anything unexpected.
     load_start = time.time()
-    rate, sig = wavfile.read(path)
+    with wave.open(path, 'rb') as wav_file:
+        if wav_file.getsampwidth() != 2 or wav_file.getnchannels() != 1:
+            raise ValueError(
+                f"Expected 16-bit mono PCM WAV, got sample width "
+                f"{wav_file.getsampwidth()} bytes, {wav_file.getnchannels()} channel(s): {file_name}"
+            )
+        rate = wav_file.getframerate()
+        sig = np.frombuffer(wav_file.readframes(wav_file.getnframes()), dtype=np.int16)
     # Convert int16 to float32 in range [-1, 1] (same as librosa output)
     sig = sig.astype(np.float32) / 32768.0
     load_time = time.time() - load_start

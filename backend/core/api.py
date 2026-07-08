@@ -20,7 +20,6 @@ from flask import (
     session,
 )
 from flask_socketio import SocketIO, emit, join_room
-from timezonefinder import TimezoneFinder
 
 from config.constants import (
     OVERLAP_OPTIONS,
@@ -130,8 +129,11 @@ api = Blueprint('api', __name__)
 db_manager = DatabaseManager()
 db_executor = create_db_executor('threading')
 
-# Singleton TimezoneFinder (loads ~40MB shape data on first use)
-_timezone_finder: TimezoneFinder | None = None
+# Singleton TimezoneFinder (loads ~40MB shape data on first use). The import
+# itself is deferred into _get_timezone_finder(): it drags numpy/cffi/h3 into
+# the worker, and the only caller is the settings handler resolving a newly
+# saved location — a station that never edits its location never pays for it.
+_timezone_finder = None
 _tz_finder_lock = threading.Lock()
 
 
@@ -158,11 +160,12 @@ def load_user_settings():
     return get_runtime_settings(force_reload=True)
 
 
-def _get_timezone_finder() -> TimezoneFinder:
-    """Lazy-load TimezoneFinder (loads ~40MB shape data)."""
+def _get_timezone_finder():
+    """Lazy-import and lazy-load TimezoneFinder (loads ~40MB shape data)."""
     global _timezone_finder
     with _tz_finder_lock:
         if _timezone_finder is None:
+            from timezonefinder import TimezoneFinder
             _timezone_finder = TimezoneFinder()
         return _timezone_finder
 

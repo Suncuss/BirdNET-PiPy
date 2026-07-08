@@ -281,6 +281,159 @@ EOF
     rm -rf "$temp_dir"
 }
 
+@test "unit: apply_gpu_mem_to_config reopens [all] when last section is board-filtered" {
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    printf '[pi4]\nx=1\n\n[cm5]\ndtoverlay=dwc2\n' > "$temp_dir/config.txt"
+
+    run run_install_function "$temp_dir" apply_gpu_mem_to_config "$temp_dir/config.txt"
+    [ "$status" -eq 0 ]
+    assert_file_contains "$temp_dir/config.txt" "gpu_mem=16"
+
+    # The last three lines must be: [all], marker comment, gpu_mem=16 —
+    # otherwise the setting would be scoped to the [cm5] section
+    local tail3
+    tail3=$(tail -3 "$temp_dir/config.txt" | tr '\n' '|')
+    [[ "$tail3" == "[all]|#"*"|gpu_mem=16|" ]]
+
+    rm -rf "$temp_dir"
+}
+
+@test "unit: apply_gpu_mem_to_config is idempotent and adds no duplicate [all] header" {
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    printf 'enable_uart=1\n\n[all]\nenable_uart=1\n' > "$temp_dir/config.txt"
+
+    run run_install_function "$temp_dir" apply_gpu_mem_to_config "$temp_dir/config.txt"
+    [ "$status" -eq 0 ]
+    run run_install_function "$temp_dir" apply_gpu_mem_to_config "$temp_dir/config.txt"
+    [ "$status" -eq 0 ]
+
+    local gpu_count all_count
+    gpu_count=$(grep -c '^gpu_mem=16$' "$temp_dir/config.txt")
+    all_count=$(grep -cx '\[all\]' "$temp_dir/config.txt")
+    [ "$gpu_count" -eq 1 ]
+    [ "$all_count" -eq 1 ]
+
+    rm -rf "$temp_dir"
+}
+
+@test "unit: apply_gpu_mem_to_config respects an existing gpu_mem setting" {
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    printf 'gpu_mem=128\n[all]\nenable_uart=1\n' > "$temp_dir/config.txt"
+
+    run run_install_function "$temp_dir" apply_gpu_mem_to_config "$temp_dir/config.txt"
+    [ "$status" -eq 0 ]
+    assert_file_contains "$temp_dir/config.txt" "gpu_mem=128"
+    assert_file_not_contains "$temp_dir/config.txt" "gpu_mem=16"
+
+    rm -rf "$temp_dir"
+}
+
+@test "unit: setup_gpu_mem is a safe no-op outside a low-RAM headless Pi" {
+    # In the test container at least one gate (Pi hardware / RAM / headless /
+    # boot config presence) fails, so the function must return 0 untouched
+    local temp_dir
+    temp_dir=$(mktemp -d)
+
+    run run_install_function "$temp_dir" setup_gpu_mem
+    [ "$status" -eq 0 ]
+
+    rm -rf "$temp_dir"
+}
+
+@test "unit: uninstall removes only the BirdNET gpu_mem block" {
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    printf 'enable_uart=1\n\n[all]\nenable_uart=1\n' > "$temp_dir/config.txt"
+
+    run run_install_function "$temp_dir" apply_gpu_mem_to_config "$temp_dir/config.txt"
+    [ "$status" -eq 0 ]
+    assert_file_contains "$temp_dir/config.txt" "gpu_mem=16"
+
+    run run_uninstall_function remove_gpu_mem_from_config "$temp_dir/config.txt"
+    [ "$status" -eq 0 ]
+    assert_file_not_contains "$temp_dir/config.txt" "gpu_mem=16"
+    assert_file_not_contains "$temp_dir/config.txt" "BirdNET-PiPy:"
+    assert_file_contains "$temp_dir/config.txt" "enable_uart=1"
+
+    rm -rf "$temp_dir"
+}
+
+@test "unit: uninstall leaves a user-set gpu_mem line untouched" {
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    printf 'gpu_mem=128\n[all]\nenable_uart=1\n' > "$temp_dir/config.txt"
+
+    run run_uninstall_function remove_gpu_mem_from_config "$temp_dir/config.txt"
+    [ "$status" -eq 1 ]
+    assert_file_contains "$temp_dir/config.txt" "gpu_mem=128"
+
+    rm -rf "$temp_dir"
+}
+
+@test "unit: uninstall preserves a user-edited gpu_mem value below our marker" {
+    # raspi-config edits an existing gpu_mem line in place, leaving our marker
+    # comment above the user's new value — only the marker may be removed
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    printf 'enable_uart=1\n# BirdNET-PiPy: headless low-RAM device, reclaim GPU memory for the OS\ngpu_mem=128\ndtparam=audio=on\n' > "$temp_dir/config.txt"
+
+    run run_uninstall_function remove_gpu_mem_from_config "$temp_dir/config.txt"
+    [ "$status" -eq 0 ]
+    assert_file_not_contains "$temp_dir/config.txt" "BirdNET-PiPy:"
+    assert_file_contains "$temp_dir/config.txt" "gpu_mem=128"
+    assert_file_contains "$temp_dir/config.txt" "dtparam=audio=on"
+
+    rm -rf "$temp_dir"
+}
+
+@test "unit: uninstall never deletes an unrelated line after a lone marker" {
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    printf '# BirdNET-PiPy: headless low-RAM device, reclaim GPU memory for the OS\ndtoverlay=disable-wifi\n' > "$temp_dir/config.txt"
+
+    run run_uninstall_function remove_gpu_mem_from_config "$temp_dir/config.txt"
+    [ "$status" -eq 0 ]
+    assert_file_not_contains "$temp_dir/config.txt" "BirdNET-PiPy:"
+    assert_file_contains "$temp_dir/config.txt" "dtoverlay=disable-wifi"
+
+    rm -rf "$temp_dir"
+}
+
+@test "unit: uninstall handles CRLF line endings from Windows-edited configs" {
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    printf 'enable_uart=1\r\n# BirdNET-PiPy: headless low-RAM device, reclaim GPU memory for the OS\r\ngpu_mem=16\r\n' > "$temp_dir/config.txt"
+
+    run run_uninstall_function remove_gpu_mem_from_config "$temp_dir/config.txt"
+    [ "$status" -eq 0 ]
+    assert_file_not_contains "$temp_dir/config.txt" "gpu_mem=16"
+    assert_file_not_contains "$temp_dir/config.txt" "BirdNET-PiPy:"
+    assert_file_contains "$temp_dir/config.txt" "enable_uart=1"
+
+    rm -rf "$temp_dir"
+}
+
+@test "unit: uninstall cleans up the [all] header it added once the section is empty" {
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    printf '[pi4]\nx=1\n\n[cm5]\ndtoverlay=dwc2\n' > "$temp_dir/config.txt"
+
+    run run_install_function "$temp_dir" apply_gpu_mem_to_config "$temp_dir/config.txt"
+    [ "$status" -eq 0 ]
+    assert_file_contains "$temp_dir/config.txt" "gpu_mem=16"
+
+    run run_uninstall_function remove_gpu_mem_from_config "$temp_dir/config.txt"
+    [ "$status" -eq 0 ]
+    assert_file_not_contains "$temp_dir/config.txt" "gpu_mem=16"
+    assert_file_not_contains "$temp_dir/config.txt" "\[all\]"
+    assert_file_contains "$temp_dir/config.txt" "dtoverlay=dwc2"
+
+    rm -rf "$temp_dir"
+}
+
 # ============================================================================
 # Integration Tests (full installation flow)
 # ============================================================================

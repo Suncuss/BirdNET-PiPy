@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Improved backend memory use, especially on small devices (~60MB less resident across the services): the inference service reads recordings with the standard-library WAV reader instead of scipy, the location meta-model now loads only for its roughly-weekly refresh instead of staying resident, and the timezone-lookup library no longer loads at API startup — it's pulled in only when a saved location changes
+- Added installer support for reclaiming unused GPU memory on headless Raspberry Pis with under 1GB of usable memory (e.g. Pi Zero 2W): `gpu_mem=16` returns ~48MB (~11% of a Zero 2W's RAM) to the system, which field testing showed takes a 512MB station from constant swap-thrash timeouts to a responsive dashboard. Applied conservatively — headless low-memory Pis only, never overriding an existing `gpu_mem` setting or a legacy camera stack — reapplied on updates (set your own `gpu_mem` value to opt out), and removed cleanly by `uninstall.sh`
+- Fixed the Bird Activity Overview rows getting slightly taller with each larger species limit — cells are now the same height whether showing 10, 20, 30, or All species (days with fewer than 10 species still stretch to fill the minimum chart height)
+
 ## [0.8.3] - 2026-07-05
 
 - Fixed the dashboard behind the login prompt claiming "Hmm, cannot reach the server" when public access is disabled — it now stays blank like other sign-in-gated pages (auth-gated data elsewhere says "Sign in to view this data" instead of the false connection error), and the dashboard loads right after signing in instead of waiting for the next refresh
