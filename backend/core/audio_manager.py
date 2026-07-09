@@ -274,11 +274,40 @@ class BaseRecorder(ABC):
                 logger.error(f"Recording error: {e}")
                 time.sleep(self._get_retry_delay() * 2)
 
+    def _cleanup_stale_temp_files(self) -> None:
+        """Remove orphaned ``.tmp.wav`` files left in output_dir by a prior run.
+
+        Temp recordings are normally deleted in _record_chunk's finally block,
+        but a SIGKILL mid-recording (e.g. an OOM kill) bypasses it and orphans
+        the file. output_dir is exclusive to this recorder and no recording is
+        in flight at start(), so any ``.tmp.wav`` present here is stale debris.
+        """
+        try:
+            names = os.listdir(self.output_dir)
+        except OSError:
+            return
+
+        removed = 0
+        for name in names:
+            if name.endswith('.tmp.wav'):
+                try:
+                    os.unlink(os.path.join(self.output_dir, name))
+                    removed += 1
+                except OSError:
+                    pass  # already gone or inaccessible; nothing to do
+
+        if removed:
+            logger.info("Cleaned up stale temp recordings", extra={
+                'output_dir': self.output_dir,
+                'count': removed,
+            })
+
     def start(self):
         """Start recording in background thread"""
         if self.is_running:
             return
 
+        self._cleanup_stale_temp_files()
         self.is_running = True
         self.recording_thread = threading.Thread(
             target=self._recording_loop,

@@ -9,7 +9,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    sox \
     ffmpeg \
     curl \
     tzdata \
@@ -24,7 +23,7 @@ COPY requirements.txt .
 # Split install: heavy packages first (better caching), then rest
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --extra-index-url https://www.piwheels.org/simple \
-    numpy==1.26.4 scipy==1.15.3 matplotlib==3.10.3 && \
+    numpy==1.26.4 && \
     pip install --extra-index-url https://www.piwheels.org/simple \
     -r requirements.txt
 

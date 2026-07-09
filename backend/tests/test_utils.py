@@ -250,162 +250,112 @@ class TestSelectAudioChunks:
         assert result2 == (0, 1)
 
 
-class TestTrimAudio:
-    """Tests for trim_audio() function"""
+class TestExtractAudioSegment:
+    """Tests for extract_audio_segment() — single-ffmpeg trim + MP3 encode."""
 
-    def test_trim_audio_calls_sox_subprocess(self):
-        """Test that trim_audio uses subprocess with correct sox command"""
+    def _extract(self, mock_run, **kwargs):
+        from core.utils import extract_audio_segment
+        extract_audio_segment('/input/file.wav', '/output/file.mp3', 3.0, 9.0, **kwargs)
+        return mock_run
+
+    def test_single_ffmpeg_call_with_atrim_filter(self):
+        """One ffmpeg invocation; trim happens in the filter graph.
+
+        atrim's end= is an absolute position (like sox's =end) and clamps at
+        EOF the same way — verified bit-identical to the old sox+ffmpeg
+        pipeline on PCM WAV, including fractional bounds.
+        """
         from unittest.mock import patch
 
         with patch('core.utils.subprocess.run') as mock_run:
-            from core.utils import trim_audio
-
-            trim_audio('/input/file.wav', '/output/file.wav', 0.0, 3.0)
+            self._extract(mock_run)
 
             mock_run.assert_called_once()
             call_args = mock_run.call_args[0][0]
-
-            # Verify sox command structure
-            assert call_args[0] == 'sox'
-            assert call_args[1] == '/input/file.wav'
-            assert call_args[2] == '/output/file.wav'
-            assert call_args[3] == 'trim'
-            assert call_args[4] == '0.0'
-            assert call_args[5] == '=3.0'  # = prefix for absolute position
-
-            # Verify timeout is set
-            assert mock_run.call_args[1]['timeout'] == 30
-            assert mock_run.call_args[1]['check'] is True
-
-    def test_trim_audio_with_different_times(self):
-        """Test trim_audio with various start/end times"""
-        from unittest.mock import patch
-
-        with patch('core.utils.subprocess.run') as mock_run:
-            from core.utils import trim_audio
-
-            trim_audio('/input/test.wav', '/output/trimmed.wav', 1.5, 4.5)
-
-            call_args = mock_run.call_args[0][0]
-            assert call_args[4] == '1.5'
-            assert call_args[5] == '=4.5'
-
-    def test_trim_audio_custom_timeout(self):
-        """Test trim_audio with custom timeout"""
-        from unittest.mock import patch
-
-        with patch('core.utils.subprocess.run') as mock_run:
-            from core.utils import trim_audio
-
-            trim_audio('/input/test.wav', '/output/trimmed.wav', 0, 10, timeout=60)
+            assert call_args[0] == 'ffmpeg'
+            assert '-y' in call_args
+            assert '/input/file.wav' in call_args
+            assert '/output/file.mp3' in call_args
+            af_index = call_args.index('-af')
+            assert call_args[af_index + 1] == 'atrim=start=3.0:end=9.0,asetpts=PTS-STARTPTS'
+            assert not any('sox' in str(a) for a in call_args)
 
             assert mock_run.call_args[1]['timeout'] == 60
+            assert mock_run.call_args[1]['check'] is True
 
-
-class TestConvertWavToMp3:
-    """Tests for convert_wav_to_mp3() function"""
-
-    def test_converts_with_correct_ffmpeg_command(self):
-        """Test that correct ffmpeg command is built"""
+    def test_fractional_times_in_filter(self):
+        """Fractional bounds (overlap configs) pass through unchanged."""
         from unittest.mock import patch
 
         with patch('core.utils.subprocess.run') as mock_run:
-            from core.utils import convert_wav_to_mp3
+            from core.utils import extract_audio_segment
+            extract_audio_segment('/in.wav', '/out.mp3', 1.5, 4.5)
 
-            convert_wav_to_mp3('/tmp/input.wav', '/tmp/output.mp3')
-
-            mock_run.assert_called_once()
             call_args = mock_run.call_args[0][0]
+            af_index = call_args.index('-af')
+            assert call_args[af_index + 1].startswith('atrim=start=1.5:end=4.5,')
 
-            # Verify command structure
-            assert call_args[0] == 'ffmpeg'
-            assert '-y' in call_args  # Overwrite flag
-            assert '-i' in call_args
-            assert '/tmp/input.wav' in call_args
-            assert '/tmp/output.mp3' in call_args
-            assert '-codec:a' in call_args
-            assert 'libmp3lame' in call_args
+    def test_custom_timeout(self):
+        from unittest.mock import patch
+
+        with patch('core.utils.subprocess.run') as mock_run:
+            self._extract(mock_run, timeout=120)
+            assert mock_run.call_args[1]['timeout'] == 120
 
     def test_uses_default_320k_bitrate(self):
-        """Test that default bitrate is 320k"""
         from unittest.mock import patch
 
         with patch('core.utils.subprocess.run') as mock_run:
-            from core.utils import convert_wav_to_mp3
-
-            convert_wav_to_mp3('/tmp/input.wav', '/tmp/output.mp3')
+            self._extract(mock_run)
 
             call_args = mock_run.call_args[0][0]
-            assert '-b:a' in call_args
             bitrate_index = call_args.index('-b:a')
             assert call_args[bitrate_index + 1] == '320k'
+            assert 'libmp3lame' in call_args
 
     def test_custom_bitrate(self):
-        """Test that custom bitrate can be specified"""
         from unittest.mock import patch
 
         with patch('core.utils.subprocess.run') as mock_run:
-            from core.utils import convert_wav_to_mp3
-
-            convert_wav_to_mp3('/tmp/input.wav', '/tmp/output.mp3', bitrate='128k')
+            self._extract(mock_run, bitrate='128k')
 
             call_args = mock_run.call_args[0][0]
             bitrate_index = call_args.index('-b:a')
             assert call_args[bitrate_index + 1] == '128k'
 
     def test_converts_to_mono(self):
-        """Test that output is mono (-ac 1)"""
         from unittest.mock import patch
 
         with patch('core.utils.subprocess.run') as mock_run:
-            from core.utils import convert_wav_to_mp3
-
-            convert_wav_to_mp3('/tmp/input.wav', '/tmp/output.mp3')
+            self._extract(mock_run)
 
             call_args = mock_run.call_args[0][0]
-            assert '-ac' in call_args
             ac_index = call_args.index('-ac')
             assert call_args[ac_index + 1] == '1'
 
-    def test_check_true_for_error_handling(self):
-        """Test that subprocess.run is called with check=True"""
-        from unittest.mock import patch
-
-        with patch('core.utils.subprocess.run') as mock_run:
-            from core.utils import convert_wav_to_mp3
-
-            convert_wav_to_mp3('/tmp/input.wav', '/tmp/output.mp3')
-
-            # Verify check=True is passed for error handling
-            call_kwargs = mock_run.call_args[1]
-            assert call_kwargs.get('check') is True
-
     def test_no_loudnorm_filter_by_default(self):
-        """Test that no audio filter is applied unless normalization is requested"""
         from unittest.mock import patch
 
         with patch('core.utils.subprocess.run') as mock_run:
-            from core.utils import convert_wav_to_mp3
-
-            convert_wav_to_mp3('/tmp/input.wav', '/tmp/output.mp3')
+            self._extract(mock_run)
 
             call_args = mock_run.call_args[0][0]
-            assert '-af' not in call_args
             assert not any('loudnorm' in str(arg) for arg in call_args)
 
-    def test_normalize_adds_loudnorm_filter(self):
-        """Test that normalize=True inserts the loudnorm filter at the -18 LUFS target"""
+    def test_normalize_appends_loudnorm_after_trim(self):
+        """normalize=True adds loudnorm at -18 LUFS, after the trim so the
+        filter analyzes only the extracted clip (same as the old pipeline)."""
         from unittest.mock import patch
 
         with patch('core.utils.subprocess.run') as mock_run:
-            from core.utils import convert_wav_to_mp3
-
-            convert_wav_to_mp3('/tmp/input.wav', '/tmp/output.mp3', normalize=True)
+            self._extract(mock_run, normalize=True)
 
             call_args = mock_run.call_args[0][0]
-            assert '-af' in call_args
             af_index = call_args.index('-af')
-            assert call_args[af_index + 1] == 'loudnorm=I=-18:LRA=11:TP=-1.5'
+            assert call_args[af_index + 1] == (
+                'atrim=start=3.0:end=9.0,asetpts=PTS-STARTPTS,'
+                'loudnorm=I=-18:LRA=11:TP=-1.5'
+            )
 
     def test_falls_back_to_unnormalized_when_loudnorm_fails(self):
         """A failed loudnorm pass retries without the filter instead of raising."""
@@ -413,18 +363,18 @@ class TestConvertWavToMp3:
         from unittest.mock import patch
 
         with patch('core.utils.subprocess.run') as mock_run:
-            from core.utils import convert_wav_to_mp3
-
-            # First call (with loudnorm) fails; second (no filter) succeeds.
+            # First call (with loudnorm) fails; second (no loudnorm) succeeds.
             mock_run.side_effect = [sp.CalledProcessError(1, 'ffmpeg'), None]
 
-            convert_wav_to_mp3('/tmp/input.wav', '/tmp/output.mp3', normalize=True)
+            self._extract(mock_run, normalize=True)
 
             assert mock_run.call_count == 2
-            first_cmd = mock_run.call_args_list[0][0][0]
-            second_cmd = mock_run.call_args_list[1][0][0]
-            assert any('loudnorm' in str(a) for a in first_cmd)
-            assert not any('loudnorm' in str(a) for a in second_cmd)
+            first_af = mock_run.call_args_list[0][0][0]
+            second_af = mock_run.call_args_list[1][0][0]
+            assert any('loudnorm' in str(a) for a in first_af)
+            assert not any('loudnorm' in str(a) for a in second_af)
+            # The trim must survive the fallback
+            assert any('atrim' in str(a) for a in second_af)
 
     def test_genuine_ffmpeg_failure_still_propagates(self):
         """If even the un-normalized conversion fails, the error is not swallowed."""
@@ -434,12 +384,49 @@ class TestConvertWavToMp3:
         import pytest
 
         with patch('core.utils.subprocess.run') as mock_run:
-            from core.utils import convert_wav_to_mp3
-
             mock_run.side_effect = sp.CalledProcessError(1, 'ffmpeg')
 
             with pytest.raises(sp.CalledProcessError):
-                convert_wav_to_mp3('/tmp/input.wav', '/tmp/output.mp3', normalize=True)
+                self._extract(mock_run, normalize=True)
+
+    def test_real_ffmpeg_produces_correct_duration(self, tmp_path):
+        """End-to-end with real ffmpeg: 3s cut from a 5s WAV, EOF clamp checked.
+
+        (Bit-exact equivalence with the old sox pipeline was verified once at
+        design time; this guards the command shape against regressions.)
+        """
+        import subprocess as sp
+        import wave
+
+        import numpy as np
+
+        from core.utils import extract_audio_segment
+
+        src = tmp_path / 'src.wav'
+        rate = 48000
+        samples = (np.sin(np.linspace(0, 4000, rate * 5)) * 20000).astype(np.int16)
+        with wave.open(str(src), 'wb') as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(rate)
+            wav_file.writeframes(samples.tobytes())
+
+        def mp3_duration(path):
+            out = sp.run(
+                ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                 '-of', 'csv=p=0', str(path)],
+                capture_output=True, text=True, check=True,
+            )
+            return float(out.stdout.strip())
+
+        clip = tmp_path / 'clip.mp3'
+        extract_audio_segment(str(src), str(clip), 1.0, 4.0)
+        assert abs(mp3_duration(clip) - 3.0) < 0.1
+
+        # End past EOF clamps to the file's real end (sox =end semantics)
+        clamped = tmp_path / 'clamped.mp3'
+        extract_audio_segment(str(src), str(clamped), 3.0, 9.0)
+        assert abs(mp3_duration(clamped) - 2.0) < 0.1
 
 
 class TestSanitizeUrl:

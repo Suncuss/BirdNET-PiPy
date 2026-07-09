@@ -125,18 +125,16 @@ def mock_detection_with_metadata():
 def mock_utils_functions():
     """Pre-configured mocks for all utils functions."""
     with patch('core.main.select_audio_chunks') as mock_select, \
-         patch('core.main.trim_audio') as mock_trim, \
-         patch('core.main.generate_spectrogram') as mock_spec, \
-         patch('core.main.convert_wav_to_mp3') as mock_convert:
+         patch('core.main.extract_audio_segment') as mock_extract, \
+         patch('core.main.generate_spectrogram') as mock_spec:
 
         # Returns (start_chunk, end_chunk) inclusive - represents 3 chunks (0, 1, 2)
         mock_select.return_value = (0, 2)
 
         yield {
             'select_audio_chunks': mock_select,
-            'trim_audio': mock_trim,
-            'generate_spectrogram': mock_spec,
-            'convert_wav_to_mp3': mock_convert
+            'extract_audio_segment': mock_extract,
+            'generate_spectrogram': mock_spec
         }
 
 
@@ -267,25 +265,19 @@ def mock_birdnet_multiple_detections():
 @pytest.fixture
 def mock_audio_processing(pipeline_temp_dirs):
     """Mock audio processing that creates real dummy output files."""
-    def _mock_trim_audio(input_path, output_path, start, end):
-        # Create dummy WAV file
+    def _mock_extract_audio_segment(input_path, output_path, start, end, **kwargs):
+        # Create dummy MP3 file
         with open(output_path, 'wb') as f:
-            f.write(b'RIFF' + b'\x00' * 100)
+            f.write(b'ID3' + b'\x00' * 100)
 
     def _mock_generate_spectrogram(input_path, output_path, title, **kwargs):
         # Create dummy WEBP file
         with open(output_path, 'wb') as f:
             f.write(b'RIFF' + b'\x00' * 100)
 
-    def _mock_convert_wav_to_mp3(input_path, output_path, **kwargs):
-        # Create dummy MP3 file
-        with open(output_path, 'wb') as f:
-            f.write(b'ID3' + b'\x00' * 100)
-
     return {
-        'trim_audio': _mock_trim_audio,
-        'generate_spectrogram': _mock_generate_spectrogram,
-        'convert_wav_to_mp3': _mock_convert_wav_to_mp3
+        'extract_audio_segment': _mock_extract_audio_segment,
+        'generate_spectrogram': _mock_generate_spectrogram
     }
 
 

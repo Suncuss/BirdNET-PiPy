@@ -83,32 +83,57 @@ def build_detection_filenames(common_name, confidence, timestamp, audio_extensio
     }
 
 
-def trim_audio(source_file_path, output_audio_path, start, end, timeout=30):
-    """
-    Trim audio file to specified time range.
+def extract_audio_segment(source_file_path, output_mp3_path, start, end,
+                          bitrate="320k", normalize=False, timeout=60):
+    """Extract [start, end] from a WAV and encode it to MP3 in one ffmpeg run.
+
+    Replaces the former sox-trim + ffmpeg-encode pair: one process spawn and
+    no intermediate WAV on disk — both matter on slow SD-card devices. The
+    trim runs in the filter graph (atrim's end= is an absolute position, like
+    sox's =end, and clamps at EOF the same way), which reproduces the old
+    pipeline's output byte-for-byte, including under loudnorm.
+
+    Loudness normalization is for human listening so faint/distant birds are
+    audible; it runs after BirdNET analysis, so it never changes detections.
 
     Args:
         source_file_path: Path to source audio file
-        output_audio_path: Path to output audio file
-        start: Start time in seconds
-        end: End time in seconds
-        timeout: Maximum time to wait in seconds (default: 30)
+        output_mp3_path: Path to output MP3 file
+        start: Segment start in seconds
+        end: Segment end in seconds (absolute position; clamped at EOF)
+        bitrate: MP3 bitrate (default: 320k)
+        normalize: Apply loudness normalization (falls back to a plain
+            conversion if the loudnorm pass fails, rather than lose the clip)
+        timeout: Maximum time to wait in seconds (default: 60)
 
     Raises:
-        subprocess.TimeoutExpired: If sox command exceeds timeout
-        subprocess.CalledProcessError: If sox command fails
+        subprocess.TimeoutExpired: If ffmpeg exceeds timeout
+        subprocess.CalledProcessError: If ffmpeg fails
     """
-    # Use subprocess directly instead of pysox to enable timeout
-    # sox input.wav output.wav trim start =end
-    command = [
-        "sox",
-        source_file_path,
-        output_audio_path,
-        "trim",
-        str(start),
-        f"={end}"  # = prefix means absolute position, not relative duration
-    ]
-    subprocess.run(command, check=True, timeout=timeout, capture_output=True)
+    def _run(use_normalize):
+        filters = f"atrim=start={start}:end={end},asetpts=PTS-STARTPTS"
+        if use_normalize:
+            filters += ",loudnorm=I=-18:LRA=11:TP=-1.5"
+        command = [
+            "ffmpeg",
+            "-y",  # Overwrite output file if it exists
+            "-loglevel", "error",  # Suppress most of the output
+            "-i", source_file_path,
+            "-af", filters,
+            "-ac", "1",  # Convert to mono
+            "-codec:a", "libmp3lame",
+            "-b:a", bitrate,
+            output_mp3_path,
+        ]
+        subprocess.run(command, check=True, timeout=timeout, capture_output=True)
+
+    if normalize:
+        try:
+            _run(True)
+            return
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            logger.warning("Loudness normalization failed (%s); saving un-normalized clip", e)
+    _run(False)
 
 
 def select_audio_chunks(detected_chunk_index, total_chunks):
@@ -151,35 +176,6 @@ def select_audio_chunks(detected_chunk_index, total_chunks):
         start = detected_chunk_index - 1
         end = detected_chunk_index + 1
         return (start, end)
-
-
-def convert_wav_to_mp3(input_file_name, output_file_name, bitrate="320k", normalize=False):
-    # Loudness-normalize the clip for human listening so faint/distant birds are
-    # audible. Runs AFTER BirdNET analysis, so it never changes detections.
-    def _run(use_normalize):
-        normalize_filter = ["-af", "loudnorm=I=-18:LRA=11:TP=-1.5"] if use_normalize else []
-        command = [
-            "ffmpeg",
-            "-y",  # Overwrite output file if it exists
-            "-loglevel", "error",  # Suppress most of the output
-            "-i", input_file_name,
-            *normalize_filter,
-            "-ac", "1",  # Convert to mono
-            "-codec:a", "libmp3lame",
-            "-b:a", bitrate,
-            output_file_name,
-        ]
-        subprocess.run(command, check=True, timeout=30)
-
-    if normalize:
-        try:
-            _run(True)
-            return
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-            # Don't lose the clip just because the optional loudnorm pass failed —
-            # fall back to an un-normalized conversion.
-            logger.warning("Loudness normalization failed (%s); saving un-normalized clip", e)
-    _run(False)
 
 
 def get_legacy_filename(filename):
