@@ -323,6 +323,44 @@ class TestPulseAudioRecorderLifecycle:
             finally:
                 recorder.is_running = False
 
+    def test_start_sweeps_orphaned_temp_files(self, temp_output_dir):
+        """start() removes .tmp.wav debris left by a SIGKILLed prior run,
+        while leaving completed recordings and unrelated files untouched."""
+        orphan1 = os.path.join(temp_output_dir, '.20260511_120126.tmp.wav')
+        orphan2 = os.path.join(temp_output_dir, '.20260709_091948.tmp.wav')
+        completed = os.path.join(temp_output_dir, '20260709_091845.wav')
+        for path in (orphan1, orphan2, completed):
+            with open(path, 'w') as f:
+                f.write('x')
+
+        recorder = PulseAudioRecorder(
+            source_name='default',
+            chunk_duration=3.0,
+            output_dir=temp_output_dir,
+            target_sample_rate=48000
+        )
+
+        with patch.object(recorder, '_recording_loop'):
+            recorder.start()
+            try:
+                assert not os.path.exists(orphan1)
+                assert not os.path.exists(orphan2)
+                assert os.path.exists(completed)
+            finally:
+                recorder.is_running = False
+
+    def test_cleanup_stale_temp_files_tolerates_missing_dir(self, temp_output_dir):
+        """A missing output_dir must not raise — startup should be robust."""
+        recorder = PulseAudioRecorder(
+            source_name='default',
+            chunk_duration=3.0,
+            output_dir=os.path.join(temp_output_dir, 'does_not_exist'),
+            target_sample_rate=48000
+        )
+
+        # Should be a no-op, not an exception
+        recorder._cleanup_stale_temp_files()
+
     def test_is_healthy_returns_false_when_not_running(self, temp_output_dir):
         """Test is_healthy() returns False when recorder is stopped."""
         recorder = PulseAudioRecorder(

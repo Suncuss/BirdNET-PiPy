@@ -41,11 +41,10 @@ from core.storage_manager import storage_monitor_loop
 from core.timezone_service import get_timezone_str
 from core.utils import (
     build_detection_filenames,
-    convert_wav_to_mp3,
+    extract_audio_segment,
     sanitize_source_label,
     sanitize_url,
     select_audio_chunks,
-    trim_audio,
 )
 from core.weather_service import get_weather_service
 from version import DISPLAY_NAME, __version__
@@ -515,21 +514,12 @@ def extract_detection_audio(detection: dict[str, Any], input_file_path: str) -> 
     start_time = audio_segments_indices[0] * step_seconds
     end_time = audio_segments_indices[1] * step_seconds + analysis_chunk_length
 
-    wav_path = os.path.join(EXTRACTED_AUDIO_DIR, detection['bird_song_file_name'])
-    mp3_path = wav_path.replace('.wav', '.mp3')
+    mp3_path = os.path.join(
+        EXTRACTED_AUDIO_DIR, detection['bird_song_file_name']).replace('.wav', '.mp3')
 
     normalize = get_runtime_settings().get('playback', {}).get('normalize', False)
-    trim_audio(input_file_path, wav_path, start_time, end_time)
-    try:
-        convert_wav_to_mp3(wav_path, mp3_path, normalize=normalize)
-    finally:
-        # Always drop the intermediate WAV — without this, a conversion failure
-        # would orphan it in EXTRACTED_AUDIO_DIR with no DB row to ever clean up.
-        try:
-            os.remove(wav_path)
-        except OSError:
-            pass
-
+    extract_audio_segment(input_file_path, mp3_path, start_time, end_time,
+                          normalize=normalize)
     return mp3_path
 
 

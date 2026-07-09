@@ -36,6 +36,3 @@ Pillow>=10.4.0
 
 # File system monitoring
 watchdog==6.0.0
-
-# Audio conversion (system dependency, not installable via pip)
-sox==1.5.0

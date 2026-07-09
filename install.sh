@@ -844,7 +844,8 @@ $ACTUAL_USER ALL=(ALL) NOPASSWD: $(_bin pulseaudio) --system *
 $ACTUAL_USER ALL=(ALL) NOPASSWD: $(_bin pulseaudio) --kill
 
 # Mount operations for PulseAudio socket bind mount
-$ACTUAL_USER ALL=(ALL) NOPASSWD: $(_bin mount) --bind /run/user/*/pulse /run/pulse
+# UID is pinned, not globbed: sudo-rs (Ubuntu 25.10+) rejects wildcards in command arguments
+$ACTUAL_USER ALL=(ALL) NOPASSWD: $(_bin mount) --bind /run/user/$ACTUAL_UID/pulse /run/pulse
 $ACTUAL_USER ALL=(ALL) NOPASSWD: $(_bin umount) /run/pulse
 
 # Directory operations in /run/pulse
@@ -866,13 +867,19 @@ EOF
     chmod 440 "$SUDOERS_FILE"
     chown root:root "$SUDOERS_FILE"
 
-    # Validate sudoers syntax
-    if visudo -c -f "$SUDOERS_FILE" >/dev/null 2>&1; then
+    # Validate sudoers syntax. An invalid file must never be left behind, but
+    # report what visudo actually said - without it the only visible symptom is
+    # birdnet-pipy.service crash-looping on "a terminal is required".
+    local visudo_output
+    if visudo_output=$(visudo -c -f "$SUDOERS_FILE" 2>&1); then
         print_status "Sudoers configuration created: $SUDOERS_FILE"
     else
-        print_error "Sudoers syntax error - removing invalid file"
+        print_error "Sudoers validation failed - removing invalid file"
+        printf '%s\n' "$visudo_output" | while IFS= read -r line; do
+            print_error "  visudo: $line"
+        done
         rm -f "$SUDOERS_FILE"
-        print_warning "Service may require manual sudo password entry for audio"
+        print_warning "Audio service will fail to start without these rules"
     fi
 }
 

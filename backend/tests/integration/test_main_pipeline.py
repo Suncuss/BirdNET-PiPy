@@ -434,9 +434,8 @@ class TestHandleDetection:
              patch('core.main.API_PORT', 5002), \
              patch('core.main.BROADCAST_TIMEOUT', 5), \
              patch('core.main.select_audio_chunks') as mock_select, \
-             patch('core.main.trim_audio') as mock_trim, \
+             patch('core.main.extract_audio_segment') as mock_extract, \
              patch('core.main.generate_spectrogram') as mock_spec, \
-             patch('core.main.convert_wav_to_mp3') as mock_convert, \
              patch('core.main.db_manager') as mock_db, \
              patch('core.main.requests.post') as mock_post, \
              patch('core.main.os.remove') as mock_remove, \
@@ -459,21 +458,17 @@ class TestHandleDetection:
             # Verify all operations called in correct order
             mock_select.assert_called_once_with(1, 3)  # chunk_index=1, total_chunks=3
 
-            mock_trim.assert_called_once()
-            trim_args = mock_trim.call_args[0]
-            assert trim_args[0] == input_file  # source file
-            assert trim_args[2] == 0  # start time (0 * 3 seconds)
-            assert trim_args[3] == 9  # end time (2 * 3 + 3 = 9 seconds)
+            mock_extract.assert_called_once()
+            extract_args = mock_extract.call_args[0]
+            assert extract_args[0] == input_file  # source file
+            assert extract_args[1].endswith('.mp3')  # clip goes straight to MP3
+            assert extract_args[2] == 0  # start time (0 * 3 seconds)
+            assert extract_args[3] == 9  # end time (2 * 3 + 3 = 9 seconds)
 
             mock_spec.assert_called_once()
             spec_args = mock_spec.call_args[0]
             assert spec_args[0] == input_file  # input file
             assert 'American Robin' in spec_args[2]  # title contains species name
-
-            mock_convert.assert_called_once()
-            convert_args = mock_convert.call_args[0]
-            assert convert_args[0].endswith('.wav')  # input is WAV
-            assert convert_args[1].endswith('.mp3')  # output is MP3
 
             # Verify database insertion
             mock_db.insert_detection.assert_called_once()
@@ -490,10 +485,8 @@ class TestHandleDetection:
             assert broadcast_data['common_name'] == 'American Robin'
             assert broadcast_data['bird_song_file_name'].endswith('.mp3')
 
-            # Verify WAV file cleanup
-            assert mock_remove.call_count == 1
-            remove_args = mock_remove.call_args[0][0]
-            assert remove_args.endswith('.wav')
+            # No intermediate WAV exists anymore, so nothing to clean up
+            mock_remove.assert_not_called()
 
             # Verify user-facing log
             mock_logger.info.assert_called()
@@ -521,9 +514,8 @@ class TestHandleDetection:
              patch('core.main.API_HOST', 'localhost'), \
              patch('core.main.API_PORT', 5002), \
              patch('core.main.select_audio_chunks') as mock_select, \
-             patch('core.main.trim_audio'), \
+             patch('core.main.extract_audio_segment'), \
              patch('core.main.generate_spectrogram'), \
-             patch('core.main.convert_wav_to_mp3'), \
              patch('core.main.db_manager'), \
              patch('core.main.requests.post'), \
              patch('core.main.os.remove'), \
@@ -555,9 +547,8 @@ class TestHandleDetection:
              patch('core.main.API_HOST', 'localhost'), \
              patch('core.main.API_PORT', 5002), \
              patch('core.main.select_audio_chunks') as mock_select, \
-             patch('core.main.trim_audio'), \
+             patch('core.main.extract_audio_segment'), \
              patch('core.main.generate_spectrogram'), \
-             patch('core.main.convert_wav_to_mp3'), \
              patch('core.main.db_manager'), \
              patch('core.main.requests.post'), \
              patch('core.main.os.remove'), \
@@ -591,9 +582,8 @@ class TestHandleDetection:
              patch('core.main.API_HOST', 'localhost'), \
              patch('core.main.API_PORT', 5002), \
              patch('core.main.select_audio_chunks') as mock_select, \
-             patch('core.main.trim_audio'), \
+             patch('core.main.extract_audio_segment'), \
              patch('core.main.generate_spectrogram'), \
-             patch('core.main.convert_wav_to_mp3'), \
              patch('core.main.db_manager'), \
              patch('core.main.requests.post'), \
              patch('core.main.os.remove'), \
@@ -610,10 +600,10 @@ class TestHandleDetection:
             # Verify select_audio_chunks called with last chunk
             mock_select.assert_called_once_with(2, 3)
 
-    def test_trim_audio_called_with_correct_parameters(
+    def test_extract_audio_segment_called_with_correct_parameters(
         self, temp_recording_dir, temp_extraction_dirs, mock_detection_with_metadata
     ):
-        """Test that trim_audio is called with correct paths and time parameters."""
+        """Test that extract_audio_segment gets correct paths and time parameters."""
 
         input_file = os.path.join(temp_recording_dir, 'recording.wav')
 
@@ -624,9 +614,8 @@ class TestHandleDetection:
              patch('core.main.API_HOST', 'localhost'), \
              patch('core.main.API_PORT', 5002), \
              patch('core.main.select_audio_chunks') as mock_select, \
-             patch('core.main.trim_audio') as mock_trim, \
+             patch('core.main.extract_audio_segment') as mock_extract, \
              patch('core.main.generate_spectrogram'), \
-             patch('core.main.convert_wav_to_mp3'), \
              patch('core.main.db_manager'), \
              patch('core.main.requests.post'), \
              patch('core.main.os.remove'), \
@@ -640,15 +629,15 @@ class TestHandleDetection:
 
             handle_detection(mock_detection_with_metadata, input_file, mock_logger)
 
-            # Verify trim_audio called with correct parameters
-            mock_trim.assert_called_once()
-            args = mock_trim.call_args[0]
+            # Verify extract_audio_segment called with correct parameters
+            mock_extract.assert_called_once()
+            args = mock_extract.call_args[0]
 
             # Check source file
             assert args[0] == input_file
 
-            # Check output file path
-            assert args[1].endswith('American_Robin_95_test.wav')
+            # Check output file path — the clip goes straight to MP3
+            assert args[1].endswith('American_Robin_95_test.mp3')
             assert temp_extraction_dirs['extracted'] in args[1]
 
             # Check start and end times
@@ -669,9 +658,8 @@ class TestHandleDetection:
              patch('core.main.API_HOST', 'localhost'), \
              patch('core.main.API_PORT', 5002), \
              patch('core.main.select_audio_chunks') as mock_select, \
-             patch('core.main.trim_audio'), \
+             patch('core.main.extract_audio_segment'), \
              patch('core.main.generate_spectrogram') as mock_spec, \
-             patch('core.main.convert_wav_to_mp3'), \
              patch('core.main.db_manager'), \
              patch('core.main.requests.post'), \
              patch('core.main.os.remove'), \
@@ -707,86 +695,6 @@ class TestHandleDetection:
             assert kwargs['start_time'] == 3  # ANALYSIS_CHUNK_LENGTH * chunk_index (1)
             assert kwargs['end_time'] == 6  # ANALYSIS_CHUNK_LENGTH * (chunk_index + 1)
 
-    def test_wav_to_mp3_conversion(
-        self, temp_recording_dir, temp_extraction_dirs, mock_detection_with_metadata
-    ):
-        """Test that WAV to MP3 conversion is called correctly."""
-
-        input_file = os.path.join(temp_recording_dir, 'recording.wav')
-
-        with patch('core.main.RECORDING_DIR', temp_recording_dir), \
-             patch('core.main.EXTRACTED_AUDIO_DIR', temp_extraction_dirs['extracted']), \
-             patch('core.main.SPECTROGRAM_DIR', temp_extraction_dirs['spectrogram']), \
-             patch('core.main.ANALYSIS_CHUNK_LENGTH', 3), \
-             patch('core.main.API_HOST', 'localhost'), \
-             patch('core.main.API_PORT', 5002), \
-             patch('core.main.select_audio_chunks') as mock_select, \
-             patch('core.main.trim_audio'), \
-             patch('core.main.generate_spectrogram'), \
-             patch('core.main.convert_wav_to_mp3') as mock_convert, \
-             patch('core.main.db_manager'), \
-             patch('core.main.requests.post'), \
-             patch('core.main.os.remove'), \
-             patch('core.main.get_logger') as mock_get_logger:
-
-            mock_select.return_value = (0, 2)  # inclusive range
-            mock_logger = Mock()
-            mock_get_logger.return_value = mock_logger
-
-            from core.main import handle_detection
-
-            handle_detection(mock_detection_with_metadata, input_file, mock_logger)
-
-            # Verify conversion called
-            mock_convert.assert_called_once()
-            args = mock_convert.call_args[0]
-
-            # Check input is WAV
-            assert args[0].endswith('American_Robin_95_test.wav')
-            assert temp_extraction_dirs['extracted'] in args[0]
-
-            # Check output is MP3
-            assert args[1].endswith('American_Robin_95_test.mp3')
-            assert temp_extraction_dirs['extracted'] in args[1]
-
-    def test_wav_file_deleted_after_conversion(
-        self, temp_recording_dir, temp_extraction_dirs, mock_detection_with_metadata
-    ):
-        """Test that WAV file is deleted after MP3 conversion."""
-
-        input_file = os.path.join(temp_recording_dir, 'recording.wav')
-
-        with patch('core.main.RECORDING_DIR', temp_recording_dir), \
-             patch('core.main.EXTRACTED_AUDIO_DIR', temp_extraction_dirs['extracted']), \
-             patch('core.main.SPECTROGRAM_DIR', temp_extraction_dirs['spectrogram']), \
-             patch('core.main.ANALYSIS_CHUNK_LENGTH', 3), \
-             patch('core.main.API_HOST', 'localhost'), \
-             patch('core.main.API_PORT', 5002), \
-             patch('core.main.select_audio_chunks') as mock_select, \
-             patch('core.main.trim_audio'), \
-             patch('core.main.generate_spectrogram'), \
-             patch('core.main.convert_wav_to_mp3'), \
-             patch('core.main.db_manager'), \
-             patch('core.main.requests.post'), \
-             patch('core.main.os.remove') as mock_remove, \
-             patch('core.main.get_logger') as mock_get_logger:
-
-            mock_select.return_value = (0, 2)  # inclusive range
-            mock_logger = Mock()
-            mock_get_logger.return_value = mock_logger
-
-            from core.main import handle_detection
-
-            handle_detection(mock_detection_with_metadata, input_file, mock_logger)
-
-            # Verify WAV file deleted
-            mock_remove.assert_called_once()
-            removed_file = mock_remove.call_args[0][0]
-
-            # Check it's the WAV file
-            assert removed_file.endswith('American_Robin_95_test.wav')
-            assert temp_extraction_dirs['extracted'] in removed_file
-
     def test_database_insertion_with_all_fields(
         self, temp_recording_dir, temp_extraction_dirs, mock_detection_with_metadata
     ):
@@ -801,9 +709,8 @@ class TestHandleDetection:
              patch('core.main.API_HOST', 'localhost'), \
              patch('core.main.API_PORT', 5002), \
              patch('core.main.select_audio_chunks') as mock_select, \
-             patch('core.main.trim_audio'), \
+             patch('core.main.extract_audio_segment'), \
              patch('core.main.generate_spectrogram'), \
-             patch('core.main.convert_wav_to_mp3'), \
              patch('core.main.db_manager') as mock_db, \
              patch('core.main.requests.post'), \
              patch('core.main.os.remove'), \
@@ -848,9 +755,8 @@ class TestHandleDetection:
              patch('core.main.API_PORT', 5002), \
              patch('core.main.BROADCAST_TIMEOUT', 5), \
              patch('core.main.select_audio_chunks') as mock_select, \
-             patch('core.main.trim_audio'), \
+             patch('core.main.extract_audio_segment'), \
              patch('core.main.generate_spectrogram'), \
-             patch('core.main.convert_wav_to_mp3'), \
              patch('core.main.db_manager'), \
              patch('core.main.requests.post') as mock_post, \
              patch('core.main.os.remove'), \
@@ -897,12 +803,10 @@ class TestHandleDetection:
              patch('core.main.API_HOST', 'localhost'), \
              patch('core.main.API_PORT', 5002), \
              patch('core.main.select_audio_chunks') as mock_select, \
-             patch('core.main.trim_audio') as mock_trim, \
+             patch('core.main.extract_audio_segment') as mock_extract, \
              patch('core.main.generate_spectrogram') as mock_spec, \
-             patch('core.main.convert_wav_to_mp3') as mock_convert, \
              patch('core.main.db_manager') as mock_db, \
              patch('core.main.requests.post') as mock_post, \
-             patch('core.main.os.remove') as mock_remove, \
              patch('core.main.get_logger') as mock_get_logger:
 
             # Broadcast fails with exception
@@ -918,11 +822,9 @@ class TestHandleDetection:
             handle_detection(mock_detection_with_metadata, input_file, mock_logger)
 
             # Verify all other operations still completed
-            mock_trim.assert_called_once()
+            mock_extract.assert_called_once()
             mock_spec.assert_called_once()
-            mock_convert.assert_called_once()
             mock_db.insert_detection.assert_called_once()
-            mock_remove.assert_called_once()
 
             # Verify warning logged
             mock_logger.warning.assert_called()
@@ -941,9 +843,8 @@ class TestHandleDetection:
              patch('core.main.API_HOST', 'localhost'), \
              patch('core.main.API_PORT', 5002), \
              patch('core.main.select_audio_chunks') as mock_select, \
-             patch('core.main.trim_audio'), \
+             patch('core.main.extract_audio_segment'), \
              patch('core.main.generate_spectrogram'), \
-             patch('core.main.convert_wav_to_mp3'), \
              patch('core.main.db_manager'), \
              patch('core.main.requests.post'), \
              patch('core.main.os.remove'), \
@@ -1020,9 +921,8 @@ class TestFullPipelineIntegration:
              patch('core.main.API_PORT', 5002), \
              patch('core.main.db_manager', pipeline_db_manager), \
              patch('core.main.requests.post') as mock_birdnet_api, \
-             patch('core.main.trim_audio', side_effect=mock_audio_processing['trim_audio']), \
+             patch('core.main.extract_audio_segment', side_effect=mock_audio_processing['extract_audio_segment']), \
              patch('core.main.generate_spectrogram', side_effect=mock_audio_processing['generate_spectrogram']), \
-             patch('core.main.convert_wav_to_mp3', side_effect=mock_audio_processing['convert_wav_to_mp3']), \
              patch('core.main.select_audio_chunks') as mock_select, \
              patch('core.main.stop_flag') as mock_stop, \
              patch('time.sleep'):
@@ -1149,9 +1049,8 @@ class TestFullPipelineIntegration:
              patch('core.main.API_PORT', 5002), \
              patch('core.main.db_manager', pipeline_db_manager), \
              patch('core.main.requests.post') as mock_birdnet_api, \
-             patch('core.main.trim_audio', side_effect=mock_audio_processing['trim_audio']), \
+             patch('core.main.extract_audio_segment', side_effect=mock_audio_processing['extract_audio_segment']), \
              patch('core.main.generate_spectrogram', side_effect=mock_audio_processing['generate_spectrogram']), \
-             patch('core.main.convert_wav_to_mp3', side_effect=mock_audio_processing['convert_wav_to_mp3']), \
              patch('core.main.select_audio_chunks') as mock_select, \
              patch('core.main.stop_flag') as mock_stop, \
              patch('time.sleep'):
@@ -1209,9 +1108,8 @@ class TestFullPipelineIntegration:
              patch('core.main.API_PORT', 5002), \
              patch('core.main.db_manager', pipeline_db_manager), \
              patch('core.main.requests.post') as mock_birdnet_api, \
-             patch('core.main.trim_audio', side_effect=mock_audio_processing['trim_audio']), \
+             patch('core.main.extract_audio_segment', side_effect=mock_audio_processing['extract_audio_segment']), \
              patch('core.main.generate_spectrogram', side_effect=mock_audio_processing['generate_spectrogram']), \
-             patch('core.main.convert_wav_to_mp3', side_effect=mock_audio_processing['convert_wav_to_mp3']), \
              patch('core.main.select_audio_chunks') as mock_select, \
              patch('core.main.stop_flag') as mock_stop, \
              patch('time.sleep'):
@@ -1274,9 +1172,8 @@ class TestFullPipelineIntegration:
              patch('core.main.API_PORT', 5002), \
              patch('core.main.db_manager', pipeline_db_manager), \
              patch('core.main.requests.post') as mock_birdnet_api, \
-             patch('core.main.trim_audio', side_effect=mock_audio_processing['trim_audio']), \
+             patch('core.main.extract_audio_segment', side_effect=mock_audio_processing['extract_audio_segment']), \
              patch('core.main.generate_spectrogram', side_effect=mock_audio_processing['generate_spectrogram']), \
-             patch('core.main.convert_wav_to_mp3', side_effect=mock_audio_processing['convert_wav_to_mp3']), \
              patch('core.main.select_audio_chunks') as mock_select, \
              patch('core.main.stop_flag') as mock_stop, \
              patch('time.sleep'):
@@ -1358,9 +1255,8 @@ class TestFullPipelineIntegration:
              patch('core.main.API_PORT', 5002), \
              patch('core.main.db_manager', pipeline_db_manager), \
              patch('core.main.requests.post') as mock_birdnet_api, \
-             patch('core.main.trim_audio', side_effect=mock_audio_processing['trim_audio']), \
+             patch('core.main.extract_audio_segment', side_effect=mock_audio_processing['extract_audio_segment']), \
              patch('core.main.generate_spectrogram', side_effect=mock_audio_processing['generate_spectrogram']), \
-             patch('core.main.convert_wav_to_mp3', side_effect=mock_audio_processing['convert_wav_to_mp3']), \
              patch('core.main.select_audio_chunks') as mock_select, \
              patch('core.main.stop_flag') as mock_stop, \
              patch('time.sleep'):
@@ -1419,9 +1315,8 @@ class TestFullPipelineIntegration:
              patch('core.main.API_PORT', 5002), \
              patch('core.main.db_manager', pipeline_db_manager), \
              patch('core.main.requests.post') as mock_birdnet_api, \
-             patch('core.main.trim_audio', side_effect=mock_audio_processing['trim_audio']), \
+             patch('core.main.extract_audio_segment', side_effect=mock_audio_processing['extract_audio_segment']), \
              patch('core.main.generate_spectrogram', side_effect=mock_audio_processing['generate_spectrogram']), \
-             patch('core.main.convert_wav_to_mp3', side_effect=mock_audio_processing['convert_wav_to_mp3']), \
              patch('core.main.select_audio_chunks') as mock_select, \
              patch('core.main.stop_flag') as mock_stop, \
              patch('time.sleep'):
@@ -1479,9 +1374,8 @@ class TestFullPipelineIntegration:
              patch('core.main.API_PORT', 5002), \
              patch('core.main.db_manager', pipeline_db_manager), \
              patch('core.main.requests.post') as mock_birdnet_api, \
-             patch('core.main.trim_audio', side_effect=mock_audio_processing['trim_audio']), \
+             patch('core.main.extract_audio_segment', side_effect=mock_audio_processing['extract_audio_segment']), \
              patch('core.main.generate_spectrogram', side_effect=mock_audio_processing['generate_spectrogram']), \
-             patch('core.main.convert_wav_to_mp3', side_effect=mock_audio_processing['convert_wav_to_mp3']), \
              patch('core.main.select_audio_chunks') as mock_select, \
              patch('core.main.stop_flag') as mock_stop, \
              patch('time.sleep'):
@@ -1794,10 +1688,10 @@ class TestHandleDetectionErrors:
     the function. This is documented behavior that should be improved in the future.
     """
 
-    def test_trim_audio_subprocess_failure_crashes(
+    def test_extract_audio_segment_subprocess_failure_crashes(
         self, temp_recording_dir, temp_extraction_dirs, mock_detection_with_metadata
     ):
-        """Document that trim_audio() subprocess failure currently crashes (no error handling)."""
+        """Document that extract_audio_segment() subprocess failure currently crashes (no error handling)."""
         import subprocess
 
         import pytest
@@ -1809,11 +1703,11 @@ class TestHandleDetectionErrors:
              patch('core.main.SPECTROGRAM_DIR', temp_extraction_dirs['spectrogram']), \
              patch('core.main.ANALYSIS_CHUNK_LENGTH', 3), \
              patch('core.main.select_audio_chunks', return_value=(0, 3)), \
-             patch('core.main.trim_audio') as mock_trim, \
+             patch('core.main.extract_audio_segment') as mock_extract, \
              patch('core.main.get_logger') as mock_logger:
 
-            # Mock trim_audio to raise subprocess error
-            mock_trim.side_effect = subprocess.CalledProcessError(1, 'sox', stderr=b'sox error')
+            # Mock extract_audio_segment to raise subprocess error
+            mock_extract.side_effect = subprocess.CalledProcessError(1, 'ffmpeg', stderr=b'ffmpeg error')
 
             mock_logger_instance = Mock()
             mock_logger.return_value = mock_logger_instance
@@ -1824,8 +1718,8 @@ class TestHandleDetectionErrors:
             with pytest.raises(subprocess.CalledProcessError):
                 handle_detection(mock_detection_with_metadata, input_file, mock_logger_instance)
 
-            # Verify trim_audio was called before crash
-            mock_trim.assert_called_once()
+            # Verify extract_audio_segment was called before crash
+            mock_extract.assert_called_once()
 
     def test_generate_spectrogram_failure_crashes(
         self, temp_recording_dir, temp_extraction_dirs, mock_detection_with_metadata
@@ -1840,8 +1734,7 @@ class TestHandleDetectionErrors:
              patch('core.main.SPECTROGRAM_DIR', temp_extraction_dirs['spectrogram']), \
              patch('core.main.ANALYSIS_CHUNK_LENGTH', 3), \
              patch('core.main.select_audio_chunks', return_value=(0, 3)), \
-             patch('core.main.trim_audio'), \
-             patch('core.main.convert_wav_to_mp3'), \
+             patch('core.main.extract_audio_segment'), \
              patch('os.remove'), \
              patch('core.main.generate_spectrogram') as mock_spec, \
              patch('core.main.get_logger') as mock_logger:
@@ -1860,42 +1753,6 @@ class TestHandleDetectionErrors:
 
             # Verify generate_spectrogram was called before crash
             mock_spec.assert_called_once()
-
-    def test_convert_wav_to_mp3_subprocess_failure_crashes(
-        self, temp_recording_dir, temp_extraction_dirs, mock_detection_with_metadata
-    ):
-        """Document that convert_wav_to_mp3() subprocess failure currently crashes (no error handling)."""
-        import subprocess
-
-        import pytest
-
-        input_file = os.path.join(temp_recording_dir, 'test.wav')
-
-        with patch('core.main.RECORDING_DIR', temp_recording_dir), \
-             patch('core.main.EXTRACTED_AUDIO_DIR', temp_extraction_dirs['extracted']), \
-             patch('core.main.SPECTROGRAM_DIR', temp_extraction_dirs['spectrogram']), \
-             patch('core.main.ANALYSIS_CHUNK_LENGTH', 3), \
-             patch('core.main.select_audio_chunks', return_value=(0, 3)), \
-             patch('core.main.trim_audio'), \
-             patch('core.main.generate_spectrogram'), \
-             patch('core.main.convert_wav_to_mp3') as mock_convert, \
-             patch('core.main.get_logger') as mock_logger:
-
-            # Mock convert_wav_to_mp3 to raise subprocess error
-            mock_convert.side_effect = subprocess.CalledProcessError(1, 'ffmpeg', stderr=b'ffmpeg error')
-
-            mock_logger_instance = Mock()
-            mock_logger.return_value = mock_logger_instance
-
-            from core.main import handle_detection
-
-            # Verify that exception propagates (no error handling)
-            with pytest.raises(subprocess.CalledProcessError):
-                handle_detection(mock_detection_with_metadata, input_file, mock_logger_instance)
-
-            # Verify convert_wav_to_mp3 was called before crash
-            mock_convert.assert_called_once()
-
 
 class TestEdgeCasesAndResilience:
     """Test edge cases and resilience in process_audio_files()."""
@@ -1924,9 +1781,8 @@ class TestEdgeCasesAndResilience:
              patch('core.main.API_PORT', 5002), \
              patch('core.main.db_manager', pipeline_db_manager), \
              patch('core.main.requests.post') as mock_birdnet_api, \
-             patch('core.main.trim_audio', side_effect=mock_audio_processing['trim_audio']), \
+             patch('core.main.extract_audio_segment', side_effect=mock_audio_processing['extract_audio_segment']), \
              patch('core.main.generate_spectrogram', side_effect=mock_audio_processing['generate_spectrogram']), \
-             patch('core.main.convert_wav_to_mp3', side_effect=mock_audio_processing['convert_wav_to_mp3']), \
              patch('core.main.select_audio_chunks', return_value=(0, 3)), \
              patch('core.main.stop_flag') as mock_stop, \
              patch('time.sleep'):
@@ -2046,9 +1902,8 @@ class TestEdgeCasesAndResilience:
              patch('core.main.API_PORT', 5002), \
              patch('core.main.db_manager', pipeline_db_manager), \
              patch('core.main.requests.post') as mock_birdnet_api, \
-             patch('core.main.trim_audio', side_effect=mock_audio_processing['trim_audio']), \
+             patch('core.main.extract_audio_segment', side_effect=mock_audio_processing['extract_audio_segment']), \
              patch('core.main.generate_spectrogram', side_effect=mock_audio_processing['generate_spectrogram']), \
-             patch('core.main.convert_wav_to_mp3', side_effect=mock_audio_processing['convert_wav_to_mp3']), \
              patch('core.main.select_audio_chunks', return_value=(0, 3)), \
              patch('core.main.stop_flag') as mock_stop, \
              patch('time.sleep'):
@@ -2118,9 +1973,8 @@ class TestEdgeCasesAndResilience:
              patch('core.main.SPECTROGRAM_DIR', temp_extraction_dirs['spectrogram']), \
              patch('core.main.ANALYSIS_CHUNK_LENGTH', 3), \
              patch('core.main.select_audio_chunks', return_value=(0, 3)), \
-             patch('core.main.trim_audio'), \
+             patch('core.main.extract_audio_segment'), \
              patch('core.main.generate_spectrogram'), \
-             patch('core.main.convert_wav_to_mp3'), \
              patch('core.main.db_manager') as mock_db, \
              patch('core.main.get_logger') as mock_logger, \
              patch('core.main.requests.post'), \
