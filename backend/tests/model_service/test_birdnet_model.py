@@ -2,7 +2,7 @@
 
 import threading
 from collections import OrderedDict
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -229,7 +229,8 @@ class TestBirdNetModelFilterByLocation:
     def test_filter_by_location_caches_raw_probabilities(self, mock_birdnet_model_with_meta):
         """Test repeated calls reuse cached raw probabilities for one location/week."""
         meta_output = np.array([0.5, 0.1, 0.05])
-        mock_birdnet_model_with_meta._meta_model.get_tensor.return_value = np.array([meta_output])
+        meta_mock = mock_birdnet_model_with_meta._meta_model
+        meta_mock.get_tensor.return_value = np.array([meta_output])
 
         # First call - should invoke meta model
         result1 = mock_birdnet_model_with_meta.filter_by_location(42.0, -76.0, 25)
@@ -240,13 +241,16 @@ class TestBirdNetModelFilterByLocation:
         # Results should be the same
         assert result1 == result2
 
-        # Meta model invoke should only be called once due to caching
-        assert mock_birdnet_model_with_meta._meta_model.invoke.call_count == 1
+        # Meta model invoke should only be called once due to caching,
+        # and the interpreter is released after the miss
+        assert meta_mock.invoke.call_count == 1
+        assert mock_birdnet_model_with_meta._meta_model is None
 
     def test_filter_by_location_reuses_cache_across_thresholds(self, mock_birdnet_model_with_meta):
         """Test that different thresholds reuse the same raw probability cache entry."""
         meta_output = np.array([0.5, 0.1, 0.05])
-        mock_birdnet_model_with_meta._meta_model.get_tensor.return_value = np.array([meta_output])
+        meta_mock = mock_birdnet_model_with_meta._meta_model
+        meta_mock.get_tensor.return_value = np.array([meta_output])
 
         # Call with default threshold
         result1 = mock_birdnet_model_with_meta.filter_by_location(42.0, -76.0, 25, threshold=0.03)
@@ -255,7 +259,7 @@ class TestBirdNetModelFilterByLocation:
         result2 = mock_birdnet_model_with_meta.filter_by_location(42.0, -76.0, 25, threshold=0.08)
 
         # Meta model should be invoked only once
-        assert mock_birdnet_model_with_meta._meta_model.invoke.call_count == 1
+        assert meta_mock.invoke.call_count == 1
 
         # Results should differ: threshold=0.08 excludes Blue Jay (0.05)
         assert "Cyanocitta cristata_Blue Jay" in result1
@@ -264,7 +268,8 @@ class TestBirdNetModelFilterByLocation:
     def test_get_location_probabilities_returns_cached_scores(self, mock_birdnet_model_with_meta):
         """Test get_location_probabilities returns raw scores and caches them."""
         meta_output = np.array([0.5, 0.1, 0.05])
-        mock_birdnet_model_with_meta._meta_model.get_tensor.return_value = np.array([meta_output])
+        meta_mock = mock_birdnet_model_with_meta._meta_model
+        meta_mock.get_tensor.return_value = np.array([meta_output])
 
         result1 = mock_birdnet_model_with_meta.get_location_probabilities(42.0, -76.0, 25)
         result2 = mock_birdnet_model_with_meta.get_location_probabilities(42.0, -76.0, 25)
@@ -273,15 +278,41 @@ class TestBirdNetModelFilterByLocation:
         assert result1["Turdus migratorius_American Robin"] == 0.5
         assert result1["Cardinalis cardinalis_Northern Cardinal"] == 0.1
         assert result1["Cyanocitta cristata_Blue Jay"] == 0.05
-        assert mock_birdnet_model_with_meta._meta_model.invoke.call_count == 1
+        assert meta_mock.invoke.call_count == 1
 
-    def test_filter_by_location_raises_if_not_loaded(self):
-        """Test filter_by_location raises RuntimeError if meta model not loaded."""
+    def test_meta_model_lazy_loaded_and_released(self):
+        """Meta model is created on cache miss and released right after.
+
+        Steady state (cache hits) must serve from the cached dict with no
+        interpreter resident — the ~20MB arena only exists during the miss.
+        """
         from model_service.birdnet_v2_model import BirdNetModel
 
         model = BirdNetModel.__new__(BirdNetModel)
+        model.meta_model_path = "/fake/meta_model.tflite"
         model._meta_model = None
+        model._labels = [
+            "Turdus migratorius_American Robin",
+            "Cardinalis cardinalis_Northern Cardinal",
+            "Cyanocitta cristata_Blue Jay",
+        ]
+        model._meta_probs_cache = OrderedDict()
+        model._meta_probs_cache_max_size = 128
         model._inference_lock = threading.Lock()
 
-        with pytest.raises(RuntimeError, match="Meta model not loaded"):
-            model.filter_by_location(42.0, -76.0, 25)
+        mock_interpreter = MagicMock()
+        mock_interpreter.get_input_details.return_value = [{'index': 0}]
+        mock_interpreter.get_output_details.return_value = [{'index': 1}]
+        mock_interpreter.get_tensor.return_value = np.array([[0.5, 0.1, 0.05]])
+
+        with patch('model_service.birdnet_v2_model.tflite.Interpreter',
+                   return_value=mock_interpreter) as mock_interpreter_cls:
+            result1 = model.get_location_probabilities(42.0, -76.0, 25)
+            # Released after the miss
+            assert model._meta_model is None
+            # Cache hit: must not create a new interpreter
+            result2 = model.get_location_probabilities(42.0, -76.0, 25)
+
+        assert result1 == result2
+        mock_interpreter_cls.assert_called_once_with(model_path="/fake/meta_model.tflite")
+        assert mock_interpreter.invoke.call_count == 1

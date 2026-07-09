@@ -156,12 +156,12 @@ class TestExtraFieldInQueries:
         assert len(results) == 1
         assert results[0]['extra'] == {'quality': 'excellent'}
 
-    def test_get_all_detections_for_export_includes_extra(self, test_db_manager, sample_detection):
-        """Test get_all_detections_for_export includes extra as raw JSON string."""
+    def test_get_detections_for_export_batch_includes_extra(self, test_db_manager, sample_detection):
+        """Test get_detections_for_export_batch includes extra as raw JSON string."""
         sample_detection['extra'] = {'export_test': True}
         test_db_manager.insert_detection(sample_detection)
 
-        results = test_db_manager.get_all_detections_for_export()
+        results = test_db_manager.get_detections_for_export_batch(limit=100)
         assert len(results) == 1
         # Export keeps raw JSON string
         assert results[0]['extra'] == '{"export_test": true}'

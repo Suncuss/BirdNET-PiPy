@@ -110,3 +110,23 @@ class TestTimezoneFinderSingleton:
         assert len(instances) == 10
         # All should be the same instance
         assert all(i is instances[0] for i in instances)
+
+
+class TestTimezoneFinderLazyImport:
+    """The timezonefinder import must stay out of the API's startup path."""
+
+    def test_importing_api_does_not_import_timezonefinder(self):
+        """core.api pulls timezonefinder (and its numpy/cffi/h3 stack, ~15-25MB
+        resident) only when a location lookup actually runs, never at import."""
+        import subprocess
+        import sys
+
+        code = (
+            "import sys; import core.api; "
+            "sys.exit(1 if 'timezonefinder' in sys.modules else 0)"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True, text=True, timeout=120,
+        )
+        assert result.returncode == 0, result.stderr

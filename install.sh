@@ -507,6 +507,73 @@ setup_swap() {
     print_status "Swap enabled (${needed_mb}MB)"
 }
 
+# Marker comment identifying the gpu_mem line we add, so uninstall.sh can
+# remove exactly what we wrote. Keep in sync with uninstall.sh.
+GPU_MEM_MARKER="# BirdNET-PiPy: headless low-RAM device, reclaim GPU memory for the OS"
+
+# Append gpu_mem=16 to a boot config file. config.txt is section-filtered
+# ([pi4], [cm5], ...), so re-open [all] when the file's last section header
+# would otherwise scope our setting to one board. Idempotent: any existing
+# gpu_mem line (the user's or ours) wins.
+apply_gpu_mem_to_config() {
+    local cfg="$1"
+
+    if grep -Eq '^[[:space:]]*gpu_mem' "$cfg"; then
+        return 0
+    fi
+
+    # `|| true` keeps set -e/pipefail from aborting when the file has no section headers
+    local last_section
+    last_section=$(grep -E '^\[' "$cfg" | tail -1 || true)
+    {
+        echo ""
+        if [ -n "$last_section" ] && [ "$last_section" != "[all]" ]; then
+            echo "[all]"
+        fi
+        echo "$GPU_MEM_MARKER"
+        echo "gpu_mem=16"
+    } >> "$cfg"
+}
+
+# Reclaim GPU memory on headless low-RAM Raspberry Pis (e.g. Pi Zero 2W, 512MB).
+# The modern KMS graphics stack and libcamera allocate from ARM memory, so a
+# headless station wastes the default 64MB firmware split; gpu_mem=16 returns
+# ~48MB (~11% of a Zero 2W's RAM) to Linux. Takes effect at the next reboot.
+# Deliberately conservative: skips non-Pi hardware, desktop systems, existing
+# gpu_mem settings, and legacy-camera (start_x=1) configs.
+# Runs on install and update, so deleting our block gets re-applied; the
+# supported opt-out is setting your own gpu_mem value, which is always respected.
+setup_gpu_mem() {
+    grep -aq "Raspberry Pi" /proc/device-tree/model 2>/dev/null || return 0
+
+    # Only low-memory systems (same threshold as setup_swap)
+    local ram_kb
+    ram_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+    [ "$ram_kb" -lt 1048576 ] || return 0
+
+    # Only headless systems — a desktop may want the GPU split
+    [ "$(systemctl get-default 2>/dev/null)" = "multi-user.target" ] || return 0
+
+    local cfg="/boot/firmware/config.txt"
+    [ -f "$cfg" ] || cfg="/boot/config.txt"
+    [ -f "$cfg" ] || return 0
+
+    if grep -Eq '^[[:space:]]*gpu_mem' "$cfg"; then
+        print_status "GPU memory split already configured in $cfg (leaving as is)"
+        return 0
+    fi
+
+    # Legacy camera stack requires gpu_mem >= 128 — don't break it
+    if grep -Eq '^[[:space:]]*start_x[[:space:]]*=[[:space:]]*1' "$cfg"; then
+        print_info "Legacy camera stack detected (start_x=1) — keeping default GPU memory split"
+        return 0
+    fi
+
+    # Propagate append failure (e.g. read-only /boot) so the call-site warning fires
+    apply_gpu_mem_to_config "$cfg" || return 1
+    print_status "Headless low-memory device: set gpu_mem=16 in $cfg (reclaims ~48MB RAM at next reboot)"
+}
+
 # Update a single key in .env without overwriting other settings.
 # Uses grep -v + append to avoid sed metacharacter issues.
 set_env_var() {
@@ -929,6 +996,7 @@ perform_update() {
 
     # Step 6: Ensure swap on low-memory systems, then pull or build
     setup_swap || print_warning "Swap setup failed (continuing without swap)"
+    setup_gpu_mem || print_warning "GPU memory setup failed (continuing with default split)"
     if ! pull_or_build; then
         print_error "Failed to pull or build images!"
         restart_containers_on_failure
@@ -1159,6 +1227,7 @@ main() {
     # Application setup
     fix_data_permissions
     setup_swap || print_warning "Swap setup failed (continuing without swap)"
+    setup_gpu_mem || print_warning "GPU memory setup failed (continuing with default split)"
     pull_or_build
     chmod +x "$PROJECT_ROOT/deployment/birdnet-service.sh"
 

@@ -85,8 +85,11 @@ class BirdNetModel(BirdDetectionModel):
         return self.CHUNK_LENGTH_SECONDS
 
     def load(self) -> None:
+        # The meta-model is deliberately NOT loaded here: its output is cached
+        # per (lat, lon, week), so it runs about once a week. It is created on
+        # cache miss in get_location_probabilities() and released right after,
+        # keeping its ~20MB tensor arena out of steady-state memory.
         self._load_model()
-        self._load_meta_model()
         self._load_labels()
 
     def predict_chunk(
@@ -155,9 +158,13 @@ class BirdNetModel(BirdDetectionModel):
         ]
 
     def get_location_probabilities(self, lat: float, lon: float, week: int) -> dict[str, float] | None:
-        """Return raw meta-model probabilities for one location/week."""
-        if self._meta_model is None:
-            raise RuntimeError("Meta model not loaded. Call load() first.")
+        """Return raw meta-model probabilities for one location/week.
+
+        The meta-model interpreter only exists for the duration of a cache
+        miss — roughly once per week, when the ISO week (or the station
+        location) changes. Between misses the cached dict serves every call
+        and the interpreter's ~20MB stays freed.
+        """
         if self._labels is None:
             self._load_labels()
 
@@ -180,12 +187,18 @@ class BirdNetModel(BirdDetectionModel):
                 'week': week,
             })
 
-            meta_model_input = np.expand_dims(
-                np.array([lat, lon, week], dtype='float32'), 0)
-            self._meta_model.set_tensor(self.meta_input_layer_index, meta_model_input)
-            self._meta_model.invoke()
-            meta_model_output = self._meta_model.get_tensor(
-                self.meta_output_layer_index)[0].copy()
+            try:
+                self._load_meta_model()
+                meta_model_input = np.expand_dims(
+                    np.array([lat, lon, week], dtype='float32'), 0)
+                self._meta_model.set_tensor(self.meta_input_layer_index, meta_model_input)
+                self._meta_model.invoke()
+                meta_model_output = self._meta_model.get_tensor(
+                    self.meta_output_layer_index)[0].copy()
+            finally:
+                # Dropping the reference frees the interpreter's tensor arena
+                # immediately (refcount, not GC); reloading next week costs ~1-2s.
+                self._meta_model = None
 
             probabilities = {
                 label: float(p)

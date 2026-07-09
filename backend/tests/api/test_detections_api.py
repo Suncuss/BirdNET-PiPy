@@ -398,6 +398,65 @@ class TestDetectionsAPI:
         finally:
             clear_bird_name_caches()
 
+    def test_localized_sort_paginates_across_species(self, api_client, real_db_manager):
+        """Localized sort pages correctly across species boundaries.
+
+        The page assembly walks species buckets in display order (skipping
+        whole buckets before the offset), so a page that straddles two
+        species and a matching total count are the load-bearing assertions.
+        """
+        # German: Blauhäher (Blue Jay) < Wanderdrossel (American Robin)
+        for common, scientific in [('American Robin', 'Turdus migratorius'),
+                                   ('Blue Jay', 'Cyanocitta cristata')]:
+            for i in range(3):
+                real_db_manager.insert_detection({
+                    'timestamp': f'2024-01-15T10:3{i}:00',
+                    'group_timestamp': f'2024-01-15T10:3{i}:00',
+                    'common_name': common,
+                    'scientific_name': scientific,
+                    'confidence': 0.85,
+                    'latitude': 40.7128,
+                    'longitude': -74.0060,
+                    'cutoff': 0.5,
+                    'sensitivity': 0.75,
+                    'overlap': 0.25
+                })
+
+        from core.bird_name_utils import clear_bird_name_caches
+
+        clear_bird_name_caches()
+        try:
+            with patch('core.api.load_user_settings', return_value={
+                'model': {'type': 'birdnet'},
+                'display': {'bird_name_language': 'de'}
+            }):
+                pages = [
+                    api_client.get(
+                        f'/api/detections?sort=common_name&order=asc&per_page=2&page={page}'
+                    ).get_json()
+                    for page in (1, 2, 3)
+                ]
+                desc_first = api_client.get(
+                    '/api/detections?sort=common_name&order=desc&per_page=2&page=1'
+                ).get_json()
+
+            names = [[d['display_common_name'] for d in p['detections']] for p in pages]
+            assert names == [
+                ['Blauhäher', 'Blauhäher'],
+                ['Blauhäher', 'Wanderdrossel'],  # page straddles the buckets
+                ['Wanderdrossel', 'Wanderdrossel'],
+            ]
+            # newest first within a species
+            times = [d['timestamp'] for p in pages for d in p['detections']
+                     if d['display_common_name'] == 'Blauhäher']
+            assert times == sorted(times, reverse=True)
+            assert all(p['pagination']['total_items'] == 6 for p in pages)
+
+            assert [d['display_common_name'] for d in desc_first['detections']] == \
+                ['Wanderdrossel', 'Wanderdrossel']
+        finally:
+            clear_bird_name_caches()
+
     def test_get_detections_invalid_date_format(self, api_client, real_db_manager):
         """Test that invalid date format returns 400."""
         response = api_client.get('/api/detections?start_date=invalid')
@@ -790,12 +849,45 @@ class TestExportDetectionsAPI:
         data = response.get_json()
         assert 'error' in data
 
+    def test_export_csv_streams_in_batches(self, api_client, real_db_manager):
+        """A multi-batch export returns every row exactly once, in order.
+
+        All rows share one timestamp so batch boundaries depend on the id
+        tiebreak of the keyset walk.
+        """
+        for i in range(5):
+            real_db_manager.insert_detection({
+                'timestamp': '2024-01-15T10:30:00',
+                'group_timestamp': '2024-01-15T10:30:00',
+                'common_name': 'American Robin',
+                'scientific_name': 'Turdus migratorius',
+                'confidence': 0.80 + i * 0.01,
+                'latitude': 40.7128,
+                'longitude': -74.0060,
+                'cutoff': 0.5,
+                'sensitivity': 0.75,
+                'overlap': 0.25
+            })
+
+        with patch('core.api._EXPORT_BATCH_ROWS', 2):
+            response = api_client.get('/api/detections/export')
+            # Drain the stream inside the patch — the generator reads the
+            # batch size lazily, chunk by chunk.
+            payload = response.data
+        assert response.status_code == 200
+
+        lines = payload.decode('utf-8').strip().split('\n')
+        assert len(lines) == 6  # Header + 5 data rows
+        ids = [int(line.split(',')[0]) for line in lines[1:]]
+        assert len(set(ids)) == 5
+        assert ids == sorted(ids, reverse=True)  # id DESC within the tied timestamp
+
 
 class TestExportDetectionsDatabaseMethods:
-    """Tests for the get_all_detections_for_export database method."""
+    """Tests for the get_detections_for_export_batch database method."""
 
-    def test_get_all_detections_for_export_basic(self, real_db_manager):
-        """Test basic fetch of all detections."""
+    def test_export_batch_basic(self, real_db_manager):
+        """A single batch returns all rows, newest first, with all fields."""
         for i in range(5):
             real_db_manager.insert_detection({
                 'timestamp': f'2024-01-15T10:{i:02d}:00',
@@ -810,8 +902,11 @@ class TestExportDetectionsDatabaseMethods:
                 'overlap': 0.25
             })
 
-        detections = real_db_manager.get_all_detections_for_export()
+        detections = real_db_manager.get_detections_for_export_batch(limit=100)
         assert len(detections) == 5
+
+        timestamps = [d['timestamp'] for d in detections]
+        assert timestamps == sorted(timestamps, reverse=True)
 
         # Check all expected fields are present
         for detection in detections:
@@ -820,7 +915,44 @@ class TestExportDetectionsDatabaseMethods:
             assert 'group_timestamp' in detection
             assert 'common_name' in detection
 
-    def test_get_all_detections_for_export_with_filters(self, real_db_manager):
+    def test_export_batch_keyset_walk(self, real_db_manager):
+        """Walking with before_timestamp/before_id covers every row exactly
+        once — including rows that tie on timestamp and need the id tiebreak
+        across a batch boundary."""
+        # 5 rows share one timestamp, 2 are newer
+        rows = ['2024-01-15T10:00:00'] * 5 + ['2024-01-16T10:00:00'] * 2
+        for ts in rows:
+            real_db_manager.insert_detection({
+                'timestamp': ts,
+                'group_timestamp': ts,
+                'common_name': 'Robin',
+                'scientific_name': 'Turdus migratorius',
+                'confidence': 0.85,
+                'latitude': 40.7128,
+                'longitude': -74.0060,
+                'cutoff': 0.5,
+                'sensitivity': 0.75,
+                'overlap': 0.25
+            })
+
+        seen = []
+        before_timestamp = before_id = None
+        while True:
+            batch = real_db_manager.get_detections_for_export_batch(
+                before_timestamp=before_timestamp, before_id=before_id,
+                limit=3)
+            seen.extend(batch)
+            if len(batch) < 3:
+                break
+            before_timestamp = batch[-1]['timestamp']
+            before_id = batch[-1]['id']
+
+        assert len(seen) == 7
+        assert len({d['id'] for d in seen}) == 7
+        keys = [(d['timestamp'], d['id']) for d in seen]
+        assert keys == sorted(keys, reverse=True)
+
+    def test_export_batch_with_filters(self, real_db_manager):
         """Test fetch with filters."""
         for date in ['2024-01-10', '2024-01-15']:
             for species in ['Robin', 'Jay']:
@@ -838,15 +970,15 @@ class TestExportDetectionsDatabaseMethods:
                 })
 
         # Filter by species
-        robin_detections = real_db_manager.get_all_detections_for_export(species='Robin')
+        robin_detections = real_db_manager.get_detections_for_export_batch(species='Robin', limit=100)
         assert len(robin_detections) == 2
 
         # Filter by date
-        jan15_detections = real_db_manager.get_all_detections_for_export(
-            start_date='2024-01-14', end_date='2024-01-16')
+        jan15_detections = real_db_manager.get_detections_for_export_batch(
+            start_date='2024-01-14', end_date='2024-01-16', limit=100)
         assert len(jan15_detections) == 2
 
-    def test_get_all_detections_for_export_empty(self, real_db_manager):
+    def test_export_batch_empty(self, real_db_manager):
         """Test fetch on empty database."""
-        detections = real_db_manager.get_all_detections_for_export()
+        detections = real_db_manager.get_detections_for_export_batch(limit=100)
         assert len(detections) == 0

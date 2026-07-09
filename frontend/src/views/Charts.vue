@@ -1,9 +1,6 @@
 <template>
   <div class="charts-view p-4">
-    <div
-      class="bg-white rounded-lg shadow p-4 flex flex-col transition-[height] duration-500 ease-in-out overflow-hidden"
-      :style="{ height: activityChartHeight }"
-    >
+    <div class="bg-white rounded-lg shadow p-4">
       <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between mb-4">
         <h2 class="text-lg font-semibold mb-2">
           Bird Activity Overview
@@ -87,7 +84,10 @@
         </div>
       </div>
 
-      <div class="flex-1 min-h-0">
+      <div
+        class="transition-[height] duration-500 ease-in-out overflow-hidden"
+        :style="{ height: activityChartHeight }"
+      >
         <CenteredMessage
           v-if="!chartsLoadedOnce"
           variant="loading"
@@ -585,17 +585,20 @@ export default {
             return selectedDate.value < maxDate.value
         })
 
+        // The explicit height sits on the chart region, not the card, so the
+        // header and card padding can't eat into the rows: only Chart.js's
+        // own fixed canvas overhead (top layout padding + x-axis band, both
+        // constant) shares the region with the species rows, keeping the
+        // per-row height the same across the 10/20/30/All limits. Below
+        // BASE_SPECIES_COUNT the region is pinned to a 10-row height and the
+        // rows stretch to fill it.
         const BASE_SPECIES_COUNT = 10
-        const BASE_CHART_HEIGHT = 375
-        const CHART_OVERHEAD = 80  // title, axis labels, padding
-        const ROW_HEIGHT = (BASE_CHART_HEIGHT - CHART_OVERHEAD) / BASE_SPECIES_COUNT
+        const ROW_HEIGHT = 26
+        const CHART_AXIS_OVERHEAD = 60  // canvas top padding + x-axis ticks and title
 
         const activityChartHeight = computed(() => {
-            const speciesCount = limitedBirdActivityData.value.length
-            const height = speciesCount <= BASE_SPECIES_COUNT
-                ? BASE_CHART_HEIGHT
-                : speciesCount * ROW_HEIGHT + CHART_OVERHEAD
-            return `${height}px`
+            const rows = Math.max(limitedBirdActivityData.value.length, BASE_SPECIES_COUNT)
+            return `${rows * ROW_HEIGHT + CHART_AXIS_OVERHEAD}px`
         })
 
         const canGoForwardTrends = computed(() => {

@@ -1061,7 +1061,7 @@ class TestFullPipelineIntegration:
             # but must still be persisted to the row — verify via the export path.
             assert 'latitude' not in detection
             assert 'longitude' not in detection
-            export_rows = pipeline_db_manager.get_all_detections_for_export()
+            export_rows = pipeline_db_manager.get_detections_for_export_batch(limit=100)
             assert export_rows[0]['latitude'] == 40.7128
             assert export_rows[0]['longitude'] == -74.0060
 
@@ -1317,7 +1317,7 @@ class TestFullPipelineIntegration:
             # detections (private-by-default) — verify via the export path.
             assert 'latitude' not in detection
             assert 'longitude' not in detection
-            export_rows = pipeline_db_manager.get_all_detections_for_export()
+            export_rows = pipeline_db_manager.get_detections_for_export_batch(limit=100)
             assert export_rows[0]['latitude'] == 40.7128
             assert export_rows[0]['longitude'] == -74.0060
 

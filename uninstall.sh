@@ -134,6 +134,7 @@ confirm_uninstall() {
     fi
 
     echo "  ✓ Swapfile (/swapfile-birdnet-pipy) if exists"
+    echo "  ✓ GPU memory setting (gpu_mem=16 added by install.sh) if exists"
     echo "  ✓ Install logs"
 
     if [ "$REMOVE_DATA" = true ]; then
@@ -275,6 +276,77 @@ remove_swapfile() {
     print_status "Swapfile removed: $swap_file"
 }
 
+# Marker comment written by install.sh's setup_gpu_mem. Keep in sync with install.sh.
+GPU_MEM_MARKER="# BirdNET-PiPy: headless low-RAM device, reclaim GPU memory for the OS"
+
+# Remove our marker comment — and the gpu_mem=16 line we wrote after it — from
+# one boot config file. Only the exact pair we wrote is removed: a user-edited
+# value after the marker (e.g. raspi-config rewriting it to gpu_mem=128) is
+# preserved. Comparisons tolerate trailing CR/whitespace because the FAT boot
+# partition is routinely edited from Windows. A bare [all] header left dangling
+# at the end of the file by our removal is cleaned up too (an empty trailing
+# section has no effect on the firmware).
+remove_gpu_mem_from_config() {
+    local cfg="$1"
+
+    if ! grep -Fq "$GPU_MEM_MARKER" "$cfg"; then
+        return 1
+    fi
+
+    local tmp
+    tmp=$(mktemp) || return 1
+    awk -v marker="$GPU_MEM_MARKER" '
+        function trim(s) { sub(/[[:space:]\r]+$/, "", s); return s }
+        { raw[NR] = $0 }
+        END {
+            n = 0
+            for (i = 1; i <= NR; i++) {
+                if (trim(raw[i]) == marker) {
+                    if (i < NR && trim(raw[i + 1]) == "gpu_mem=16") i++
+                    continue
+                }
+                out[++n] = raw[i]
+            }
+            last = n
+            while (last > 0 && trim(out[last]) == "") last--
+            if (last > 0 && trim(out[last]) == "[all]") {
+                last--
+                while (last > 0 && trim(out[last]) == "") last--
+                n = last
+            }
+            for (i = 1; i <= n; i++) print out[i]
+        }
+    ' "$cfg" > "$tmp" || { rm -f "$tmp"; return 1; }
+
+    # cat (not mv) so permissions and any symlinked boot path stay intact
+    cat "$tmp" > "$cfg"
+    rm -f "$tmp"
+
+    # Only report success if the marker is actually gone
+    if grep -Fq "$GPU_MEM_MARKER" "$cfg"; then
+        print_warning "Could not remove the BirdNET gpu_mem entry from $cfg — please remove it manually"
+        return 1
+    fi
+    return 0
+}
+
+# Remove the gpu_mem=16 setting added by install.sh (identified by marker).
+# The default GPU memory split returns at the next reboot.
+remove_gpu_mem_setting() {
+    local cfg removed=false
+    for cfg in /boot/firmware/config.txt /boot/config.txt; do
+        [ -f "$cfg" ] || continue
+        if remove_gpu_mem_from_config "$cfg"; then
+            print_status "GPU memory setting removed from $cfg (default split returns at next reboot)"
+            removed=true
+        fi
+    done
+
+    if [ "$removed" = false ]; then
+        print_info "No BirdNET GPU memory setting found"
+    fi
+}
+
 # Remove installation log
 remove_install_log() {
     local log_file="/var/log/birdnet-pipy-install.log"
@@ -384,6 +456,7 @@ main() {
     remove_containers
     remove_images
     remove_swapfile
+    remove_gpu_mem_setting
     remove_install_log
     remove_data
     remove_project

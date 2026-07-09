@@ -6,10 +6,20 @@ different overlap values for BirdNET-Pi compatibility.
 """
 import os
 import tempfile
+import wave
 
 import numpy as np
 import pytest
-from scipy.io import wavfile
+
+
+def write_wav(path, sample_rate, samples):
+    """Write int16 PCM samples (mono or (n, channels) stereo) via stdlib wave."""
+    channels = samples.shape[1] if samples.ndim > 1 else 1
+    with wave.open(path, 'wb') as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(samples.astype('<i2').tobytes())
 
 
 class TestSplitAudioOverlap:
@@ -34,7 +44,7 @@ class TestSplitAudioOverlap:
             # Write to temp file
             fd, path = tempfile.mkstemp(suffix='.wav')
             os.close(fd)
-            wavfile.write(path, sample_rate, audio)
+            write_wav(path, sample_rate, audio)
             return path
         return _create
 
@@ -196,3 +206,20 @@ class TestSplitAudioOverlap:
                         f"Chunk {i} with overlap {overlap} has {len(chunk)} samples, expected {expected_samples}"
         finally:
             os.remove(wav_path)
+
+    def test_rejects_non_mono_16bit_wav(self, sample_rate, chunk_length):
+        """split_audio must fail loudly on anything but 16-bit mono PCM."""
+        from model_service.inference_server import split_audio
+
+        t = np.linspace(0, 3, sample_rate * 3)
+        mono = (np.sin(2 * np.pi * 440 * t) * 32767).astype(np.int16)
+        stereo = np.column_stack([mono, mono])
+
+        fd, path = tempfile.mkstemp(suffix='.wav')
+        os.close(fd)
+        try:
+            write_wav(path, sample_rate, stereo)
+            with pytest.raises(ValueError, match="16-bit mono PCM"):
+                split_audio(path, chunk_length, sample_rate, 9)
+        finally:
+            os.remove(path)

@@ -198,6 +198,22 @@ run_install_function() {
     )
 }
 
+# Source uninstall.sh as a library in a subshell and invoke one of its functions.
+# uninstall.sh parses arguments at top level, so positional parameters must be
+# cleared before sourcing or the arg loop rejects the function name.
+# Usage: run_uninstall_function <function_name> [args...]
+run_uninstall_function() {
+    local fn_args=("$@")
+    (
+        set -e
+        cd "$PROJECT_DIR"
+        set --
+        # shellcheck disable=SC1091
+        source <(grep -v '^main$' uninstall.sh)
+        "${fn_args[@]}"
+    )
+}
+
 # Check if Docker images with a specific prefix exist
 # Usage: assert_docker_images_exist <prefix>
 assert_docker_images_exist() {
