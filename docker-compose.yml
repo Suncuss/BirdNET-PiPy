@@ -1,3 +1,12 @@
+# Bound container log size on SD cards: the `local` driver compresses rotated
+# files and writes fewer bytes than json-file. App INFO logs live in
+# ./data/logs/ (RotatingFileHandler); container logs only carry warnings/errors.
+x-logging: &default-logging
+  driver: local
+  options:
+    max-size: 5m
+    max-file: "2"
+
 services:
   model-server:
     image: ghcr.io/suncuss/birdnet-pipy-backend:${BIRDNET_CHANNEL:-main}
@@ -9,6 +18,7 @@ services:
         GID: ${GID:-1000}
     command: python -m model_service.inference_server
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - ./backend:/app
       - ./data:/app/data
@@ -35,9 +45,9 @@ services:
       --timeout 120
       --graceful-timeout 30
       --keep-alive 65
-      --access-logfile -
       --error-logfile -
     restart: unless-stopped
+    logging: *default-logging
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5002/api/health"]
       interval: 30s
@@ -63,6 +73,7 @@ services:
     # No build: — shares image built by model-server service
     command: python -m core.main
     restart: unless-stopped
+    logging: *default-logging
     ulimits:
       nofile:
         soft: 8192
@@ -96,6 +107,7 @@ services:
         UID: ${UID:-1000}
         GID: ${GID:-1000}
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       # PulseAudio socket for audio access
       # birdnet-service.sh ensures /run/pulse/native exists (system-wide or symlink to user socket)
@@ -118,6 +130,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "80:80"
     environment:

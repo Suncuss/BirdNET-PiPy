@@ -173,8 +173,16 @@ def setup_logging(service_name, log_level=None, format_type=None):
             )
             file_handler.setFormatter(StructuredFormatter(service_name))
             logger.addHandler(file_handler)
+
+            # The rotating file is the full-detail sink, so keep stdout (and
+            # the Docker log capturing it) to warnings/errors by default.
+            # CONSOLE_LOG_LEVEL=INFO restores verbose stdout, e.g. for the
+            # Home Assistant add-on where stdout is the visible log.
+            console_level = os.getenv('CONSOLE_LOG_LEVEL', 'WARNING')
+            handler.setLevel(getattr(logging, console_level.upper()))
         except (OSError, PermissionError) as e:
-            # Don't fail startup if log directory is not writable
+            # Don't fail startup if log directory is not writable; stdout
+            # stays at the root level as the only sink
             print(f"Warning: could not set up file logging for {service_name}: {e}")
 
     # Mark as configured to prevent duplicate setup
@@ -233,35 +241,38 @@ def log_execution_time(func):
             raise
     return wrapper
 
+def _response_status(result):
+    """Best-effort status code from a Flask view return value."""
+    if isinstance(result, tuple) and len(result) > 1 and isinstance(result[1], int):
+        return result[1]
+    return getattr(result, 'status_code', 200)
+
+
 def log_api_request(func):
-    """Decorator to log API requests"""
+    """Decorator to log API requests as a single line per request"""
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         from flask import request
         logger = logging.getLogger(func.__module__)
-
-        # Generate request ID
-        request_id = request.headers.get('X-Request-ID',
-                                       datetime.utcnow().strftime('%Y%m%d%H%M%S%f'))
-
-        logger.info(f"API request: {request.method} {request.path}", extra={
-            'request_id': request_id,
-            'method': request.method,
-            'path': request.path,
-            'remote_addr': request.remote_addr
-        })
+        start_time = time.time()
 
         try:
             result = func(*args, **kwargs)
-            logger.info(f"API response: {request.method} {request.path}", extra={
-                'request_id': request_id,
-                'status': 200
+            logger.info(f"API {request.method} {request.path}", extra={
+                'method': request.method,
+                'path': request.path,
+                'remote_addr': request.remote_addr,
+                'status': _response_status(result),
+                'duration_ms': round((time.time() - start_time) * 1000, 1)
             })
             return result
         except Exception as e:
             logger.error(f"API error: {request.method} {request.path}", extra={
-                'request_id': request_id,
-                'error': str(e)
+                'method': request.method,
+                'path': request.path,
+                'remote_addr': request.remote_addr,
+                'error': str(e),
+                'duration_ms': round((time.time() - start_time) * 1000, 1)
             }, exc_info=True)
             raise
     return wrapper

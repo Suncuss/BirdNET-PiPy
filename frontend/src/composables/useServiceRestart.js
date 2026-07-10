@@ -2,6 +2,8 @@ import { ref } from 'vue'
 import api from '@/services/api'
 import { useLogger } from './useLogger'
 
+const PROGRESS_INTERVAL_MS = 5000
+
 /**
  * Detect errors that likely mean restart was accepted but HTTP response was cut off.
  */
@@ -55,6 +57,10 @@ export function useServiceRestart() {
   const restartMessage = ref('')
   const restartError = ref('')
 
+  // Set while a waitForRestart() is pending; reset() calls it to stop the
+  // poll loop and progress timer and settle the promise with false.
+  let cancelActiveWait = null
+
   /**
    * Monitor service reconnection after a restart-triggering action
    * @param {Object} options
@@ -64,7 +70,8 @@ export function useServiceRestart() {
    * @param {number} options.postConnectDelay - Extra delay after connection before reload (default: 15000)
    * @param {boolean} options.autoReload - Whether to reload page on success (default: true)
    * @param {string} options.timeoutMessage - restartError text shown when the wait times out
-   * @returns {Promise<boolean>} - Resolves true when service is back, rejects on timeout
+   * @returns {Promise<boolean>} - Resolves true when service is back, false
+   *   when reset() cancelled the wait; rejects on timeout
    */
   const waitForRestart = async (options = {}) => {
     const {
@@ -84,10 +91,44 @@ export function useServiceRestart() {
     const startTime = Date.now()
 
     return new Promise((resolve, reject) => {
+      let progressTimer = null
+      let pendingTimer = null
+      let cancelled = false
+      let lastDisplayedElapsedSec = 0
+
+      const stopProgressTimer = () => {
+        if (progressTimer !== null) {
+          clearInterval(progressTimer)
+          progressTimer = null
+        }
+      }
+
+      cancelActiveWait = () => {
+        cancelled = true
+        cancelActiveWait = null
+        stopProgressTimer()
+        clearTimeout(pendingTimer)
+        // Resolve, don't reject: every caller's catch turns unexpected
+        // errors into user-facing failure banners, and a reset() usually
+        // means the user just dismissed one.
+        resolve(false)
+      }
+
+      const updateProgressMessage = () => {
+        const elapsedIntervals = Math.floor((Date.now() - startTime) / PROGRESS_INTERVAL_MS)
+        const elapsedSec = elapsedIntervals * (PROGRESS_INTERVAL_MS / 1000)
+        if (elapsedSec <= lastDisplayedElapsedSec) return
+
+        lastDisplayedElapsedSec = elapsedSec
+        restartMessage.value = `${message}... (${elapsedSec}s)`
+      }
+
       const checkConnection = async () => {
         const elapsedMs = Date.now() - startTime
 
         if (elapsedMs >= maxWaitSeconds * 1000) {
+          stopProgressTimer()
+          cancelActiveWait = null
           logger.warn('Service restart taking longer than expected')
           restartMessage.value = ''
           restartError.value = timeoutMessage
@@ -102,13 +143,16 @@ export function useServiceRestart() {
           // useSettings would let its coalescing return stale cached data
           // and never detect the reconnect.
           await api.get('/settings')
+          if (cancelled) return // reset() fired while the probe was in flight
 
           // If we get here, the request succeeded
+          stopProgressTimer()
           logger.info('API reconnected, waiting for all services to initialize...')
           restartMessage.value = 'Waiting for services to initialize...'
 
           // Wait extra time for all services (BirdNet inference, etc.) to fully start
-          setTimeout(() => {
+          pendingTimer = setTimeout(() => {
+            cancelActiveWait = null
             logger.info('Service restart complete')
             restartMessage.value = 'Services ready!'
 
@@ -123,23 +167,27 @@ export function useServiceRestart() {
             resolve(true)
           }, postConnectDelay)
         } catch (_error) {
-          // Recompute after the probe: a hanging request (up to the axios
-          // timeout) would otherwise leave a stale count on screen.
-          const elapsedSec = Math.floor((Date.now() - startTime) / 1000)
-          restartMessage.value = `${message}... (${elapsedSec}s)`
-          setTimeout(checkConnection, pollInterval)
+          if (cancelled) return
+          pendingTimer = setTimeout(checkConnection, pollInterval)
         }
       }
 
+      progressTimer = setInterval(updateProgressMessage, PROGRESS_INTERVAL_MS)
+
       // Start checking after initial delay (allow time for shutdown)
-      setTimeout(checkConnection, initialDelay)
+      pendingTimer = setTimeout(checkConnection, initialDelay)
     })
   }
 
   /**
-   * Reset the restart state
+   * Reset the restart state, cancelling any in-flight waitForRestart():
+   * its timers stop, its promise resolves false, and no later probe
+   * completion can resurrect banner messages or trigger the auto-reload.
    */
   const reset = () => {
+    if (cancelActiveWait) {
+      cancelActiveWait()
+    }
     isRestarting.value = false
     restartMessage.value = ''
     restartError.value = ''

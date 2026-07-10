@@ -248,17 +248,11 @@ def test_concurrent_dashboard_misses_share_one_job(
         api_module.invalidate_dashboard_cache()
 
 
-def test_invalidation_during_compute_skips_cache_write(
-    api_client, real_db_manager, monkeypatch
-):
-    """If invalidate_dashboard_cache() fires while a compute is in flight,
-    the current caller still gets their result (we don't drop the request),
-    but the result must NOT be written into the cache — otherwise a stale
-    snapshot from before the invalidation would mask the new state."""
+def _dashboard_get_with_midflight(api_client, monkeypatch, midflight_fn):
+    """GET /api/dashboard on a worker thread, run `midflight_fn` while the
+    compute is parked mid-flight, then release the compute and return the
+    response. Shared harness for the invalidate-vs-expire mid-flight tests."""
     import core.api as api_module
-
-    _insert_detection(real_db_manager)
-    api_module.invalidate_dashboard_cache()
 
     executor = BlockingRecordingExecutor()
     monkeypatch.setattr(api_module, 'db_executor', executor)
@@ -273,20 +267,97 @@ def test_invalidation_during_compute_skips_cache_write(
         worker = threading.Thread(target=call)
         worker.start()
         # Wait for the worker to reach the blocking .result() call.
+        # 200ms is generous on any reasonable CI; raise if flaky.
         time.sleep(0.2)
-        # Bump version + clear inflight while the compute is parked.
-        api_module.invalidate_dashboard_cache()
-        # Let the (now stale-snapshot) compute complete.
+        midflight_fn()
+        # Let the parked compute complete.
         executor.release.set()
         worker.join(timeout=5)
+    finally:
+        executor.release.set()  # safety: don't leave threads parked on shutdown
 
-        assert responses[0].status_code == 200
-        # Cache must be empty: the version mismatch should have caused the
-        # post-compute write block to be skipped.
+    return responses[0]
+
+
+def test_invalidation_during_compute_skips_cache_write(
+    api_client, real_db_manager, monkeypatch
+):
+    """If invalidate_dashboard_cache() fires while a compute is in flight,
+    the current caller still gets their result (we don't drop the request),
+    but the result must NOT be written into the cache — otherwise a stale
+    snapshot from before the invalidation would mask the new state."""
+    import core.api as api_module
+
+    _insert_detection(real_db_manager)
+    api_module.invalidate_dashboard_cache()
+
+    try:
+        response = _dashboard_get_with_midflight(
+            api_client, monkeypatch, api_module.invalidate_dashboard_cache,
+        )
+
+        assert response.status_code == 200
+        # Cache must be empty: the invalidation cleared 'inflight', so the
+        # post-compute write block was skipped.
         assert api_module._dashboard_cache['payload'] is None
         assert api_module._dashboard_cache['expires_at'] == 0.0
     finally:
-        executor.release.set()
+        api_module.invalidate_dashboard_cache()
+
+
+def test_soft_expiry_during_compute_serves_result_but_stays_expired(
+    api_client, real_db_manager, monkeypatch
+):
+    """expire_dashboard_cache() — the per-detection freshness path — must
+    NOT discard an in-flight rebuild: the job keeps its 'inflight' slot and
+    its result is served to the callers already waiting (the old hard
+    invalidation threw away a multi-second compute no client ever received).
+    But the entry must stay expired: the job's DB snapshot may predate the
+    detection that fired the expiry, so granting it a fresh TTL would serve
+    a pre-detection payload for a full TTL. The next poll rebuilds instead."""
+    import core.api as api_module
+
+    _insert_detection(real_db_manager)
+    api_module.invalidate_dashboard_cache()
+
+    try:
+        response = _dashboard_get_with_midflight(
+            api_client, monkeypatch, api_module.expire_dashboard_cache,
+        )
+
+        assert response.status_code == 200
+        # The completed rebuild landed in the cache but earned no TTL.
+        assert api_module._dashboard_cache['payload'] is not None
+        assert api_module._dashboard_cache['expires_at'] == 0.0
+        assert api_module._dashboard_cache['inflight'] is None
+
+        # Behavioral check: the next poll recomputes rather than being
+        # served the possibly pre-detection snapshot.
+        recorder = RecordingExecutor()
+        monkeypatch.setattr(api_module, 'db_executor', recorder)
+        assert api_client.get('/api/dashboard').status_code == 200
+        assert ('submit', '_build_dashboard_payload') in recorder.calls
+    finally:
+        api_module.invalidate_dashboard_cache()
+
+
+def test_soft_expiry_before_compute_does_not_stick(api_client, real_db_manager):
+    """A soft expiry with nothing in flight must not linger: the next rebuild
+    is submitted after the expiry, so its snapshot already includes the
+    detection and earns a normal TTL. If the dirty mark stuck, every rebuild
+    after a quiet-period detection would come out pre-expired — degrading the
+    dashboard to a rebuild on every poll."""
+    import core.api as api_module
+
+    _insert_detection(real_db_manager)
+    api_module.invalidate_dashboard_cache()
+
+    try:
+        api_module.expire_dashboard_cache()  # detection with no rebuild running
+        _prime_dashboard_cache(api_client)
+
+        assert api_module._dashboard_cache['expires_at'] > time.time()
+    finally:
         api_module.invalidate_dashboard_cache()
 
 
@@ -336,6 +407,10 @@ def test_db_job_timeout_clears_inflight_and_returns_500(api_client, monkeypatch)
 # disagree with the source of truth — a freshly-deleted detection still
 # shows up in "today's total" for up to 10s, settings changes don't take
 # effect on the dashboard until the next miss, etc.
+#
+# New detections are deliberately NOT one of these paths: they soft-expire
+# only the dashboard/today entries (freshness, not correctness), leaving
+# week/month/allTime warm — see the broadcast_detection tests.
 # -----------------------------------------------------------------------------
 
 def _prime_dashboard_cache(api_client):
@@ -351,24 +426,52 @@ def _prime_dashboard_cache(api_client):
     return resp
 
 
-def test_broadcast_detection_invalidates_cache(api_client, real_db_manager):
+def test_broadcast_detection_expires_dashboard_and_today_only(
+    api_client, real_db_manager, monkeypatch
+):
+    """A new detection is a freshness event, not a correctness event: the
+    dashboard payload and 'today' summary get expired (recomputed on the next
+    poll) but keep their payloads, while week/month/allTime — which one
+    detection only nudges by +1 — keep payload AND TTL. Hard-invalidating
+    everything per detection kept every summary permanently cold on active
+    stations (detections arrive faster than the 10s TTL)."""
     import core.api as api_module
 
     _insert_detection(real_db_manager)
     _prime_dashboard_cache(api_client)
-    resp = api_client.get('/api/dashboard/summary?period=week')
-    assert resp.status_code == 200
-    assert api_module._summary_cache['week']['payload'] is not None
+    dashboard_payload = api_module._dashboard_cache['payload']
+    for period in ('today', 'week'):
+        resp = api_client.get(f'/api/dashboard/summary?period={period}')
+        assert resp.status_code == 200
+    week_expiry = api_module._summary_cache['week']['expires_at']
 
-    api_module.broadcast_detection({
-        'common_name': 'Northern Cardinal',
-        'scientific_name': 'Cardinalis cardinalis',
-        'confidence': 0.92,
-        'timestamp': '2026-05-19T10:00:00',
-    })
+    try:
+        api_module.broadcast_detection({
+            'common_name': 'Northern Cardinal',
+            'scientific_name': 'Cardinalis cardinalis',
+            'confidence': 0.92,
+            'timestamp': '2026-05-19T10:00:00',
+        })
 
-    assert api_module._dashboard_cache['payload'] is None
-    assert api_module._summary_cache['week']['payload'] is None
+        # Dashboard + today: expired but not discarded.
+        assert api_module._dashboard_cache['payload'] is dashboard_payload
+        assert api_module._dashboard_cache['expires_at'] == 0.0
+        assert api_module._summary_cache['today']['payload'] is not None
+        assert api_module._summary_cache['today']['expires_at'] == 0.0
+        # week: untouched — payload and TTL survive.
+        assert api_module._summary_cache['week']['payload'] is not None
+        assert api_module._summary_cache['week']['expires_at'] == week_expiry
+
+        # Behavioral check: the next week fetch is a warm hit (no executor
+        # call), the next dashboard fetch recomputes.
+        recorder = RecordingExecutor()
+        monkeypatch.setattr(api_module, 'db_executor', recorder)
+        assert api_client.get('/api/dashboard/summary?period=week').status_code == 200
+        assert recorder.calls == []
+        assert api_client.get('/api/dashboard').status_code == 200
+        assert ('submit', '_build_dashboard_payload') in recorder.calls
+    finally:
+        api_module.invalidate_dashboard_cache()
 
 
 def test_delete_detection_invalidates_cache(api_client, real_db_manager):
@@ -618,7 +721,7 @@ def test_gallery_cache_serves_repeat_request(
 
 
 def test_broadcast_detection_preserves_gallery_cache(api_client, real_db_manager):
-    """broadcast_detection() fires on every new detection and clears the
+    """broadcast_detection() fires on every new detection and expires the
     dashboard cache — but must leave the gallery cache intact, or the gallery
     (opened on demand, not polled) would never get a warm cache."""
     import core.api as api_module
@@ -632,6 +735,7 @@ def test_broadcast_detection_preserves_gallery_cache(api_client, real_db_manager
     gallery_payload = api_module._gallery_cache['species:all']['payload']
     assert gallery_payload is not None
     assert api_module._dashboard_cache['payload'] is not None
+    gallery_expiry = api_module._gallery_cache['species:all']['expires_at']
 
     api_module.broadcast_detection({
         'common_name': 'Northern Cardinal',
@@ -640,9 +744,10 @@ def test_broadcast_detection_preserves_gallery_cache(api_client, real_db_manager
         'timestamp': '2026-05-19T10:00:00',
     })
 
-    # Dashboard cache cleared; gallery cache untouched.
-    assert api_module._dashboard_cache['payload'] is None
+    # Dashboard cache expired; gallery cache untouched.
+    assert api_module._dashboard_cache['expires_at'] == 0.0
     assert api_module._gallery_cache['species:all']['payload'] is gallery_payload
+    assert api_module._gallery_cache['species:all']['expires_at'] == gallery_expiry
 
 
 def test_delete_detection_invalidates_gallery_cache(api_client, real_db_manager):
