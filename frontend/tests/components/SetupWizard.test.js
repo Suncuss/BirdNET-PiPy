@@ -15,15 +15,19 @@ vi.mock('@/services/api', () => ({
   createLongRequest: () => mockApi
 }))
 
-// Mock the useServiceRestart composable
+// Mock the useServiceRestart composable (shared state so tests can inspect it)
 const mockWaitForRestart = vi.hoisted(() => vi.fn().mockResolvedValue(true))
 const mockRequestRestart = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
+const mockRestartState = vi.hoisted(() => ({
+  isRestarting: { value: false },
+  restartMessage: { value: '' },
+  restartError: { value: '' }
+}))
 vi.mock('@/composables/useServiceRestart', () => ({
   requestRestart: mockRequestRestart,
+  isRestartTimeoutError: (error) => error?.message === 'RESTART_TIMEOUT',
   useServiceRestart: () => ({
-    isRestarting: { value: false },
-    restartMessage: { value: '' },
-    restartError: { value: '' },
+    ...mockRestartState,
     waitForRestart: mockWaitForRestart,
     reset: vi.fn()
   })
@@ -46,6 +50,9 @@ describe('SetupWizard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     useSettings().resetState()
+    mockRestartState.isRestarting.value = false
+    mockRestartState.restartMessage.value = ''
+    mockRestartState.restartError.value = ''
     fetchMock = vi.fn()
     global.fetch = fetchMock
   })
@@ -373,6 +380,26 @@ describe('SetupWizard', () => {
 
       expect(captured.settings.model.type).toBe('birdnet_v3')
       expect(captured.settings.detection.species_filter_threshold).toBe(0.15)
+    })
+
+    it('shows timeout notice, not a save error, when the restart outlasts the wait', async () => {
+      setupSaveMocks()
+      // Honor the composable's timeout contract: set restartError from the
+      // caller's timeoutMessage, then reject with RESTART_TIMEOUT.
+      mockWaitForRestart.mockImplementationOnce(({ timeoutMessage }) => {
+        mockRestartState.restartError.value = timeoutMessage
+        return Promise.reject(new Error('RESTART_TIMEOUT'))
+      })
+
+      const wrapper = mountWizard()
+      await goToStep3(wrapper)
+
+      const finishButton = wrapper.findAll('button').find(b => b.text() === 'Finish')
+      await finishButton.trigger('click')
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('Settings saved — the restart is taking longer than expected')
+      expect(wrapper.text()).not.toContain('Failed to save settings')
     })
 
     it('shows error and stays on wizard when timezone lookup fails', async () => {

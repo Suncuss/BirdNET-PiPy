@@ -2,7 +2,7 @@ import { ref, computed } from 'vue'
 import api, { createLongRequest } from '@/services/api'
 import { UPDATE_DISMISSED_UNTIL_KEY } from '@/utils/storageKeys'
 import { useLogger } from './useLogger'
-import { useServiceRestart } from './useServiceRestart'
+import { isRestartTimeoutError, useServiceRestart } from './useServiceRestart'
 import { useAuth } from './useAuth'
 import { useDismissible } from './useDismissible'
 
@@ -150,12 +150,13 @@ export function useSystemUpdate() {
       await serviceRestart.waitForRestart({
         maxWaitSeconds: 600,
         autoReload: true,
-        message: 'System updating'
+        message: 'System updating',
+        timeoutMessage: 'Update taking longer than expected. Try refreshing later.'
       })
     } catch (error) {
       updating.value = false
       // Timeout is not a failure - just taking longer than expected
-      if (error.message === 'RESTART_TIMEOUT') {
+      if (isRestartTimeoutError(error)) {
         logger.warn('Update restart timeout - may still be in progress')
         setStatus('info', 'Update taking longer than expected. Try refreshing later.')
       } else {

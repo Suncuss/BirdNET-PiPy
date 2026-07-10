@@ -45,6 +45,7 @@ const mockServiceRestart = vi.hoisted(() => {
 })
 
 vi.mock('@/composables/useServiceRestart', () => ({
+  isRestartTimeoutError: (error) => error?.message === 'RESTART_TIMEOUT',
   useServiceRestart: () => mockServiceRestart
 }))
 

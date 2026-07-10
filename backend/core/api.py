@@ -1053,26 +1053,40 @@ _dashboard_cache: dict = {
     'payload': None,
     'expires_at': 0.0,
     'inflight': None,  # in-flight job, or None
+    'dirty': False,    # soft-expired while a job was in flight; see _expire_cache_entry
 }
 
-_SUMMARY_PERIODS = ('today', 'week', 'month', 'allTime')
-_SUMMARY_CACHE_TTL_SECONDS = 10
+# Per-period TTLs. 'today' is pinned to the dashboard TTL (the dashboard
+# payload embeds the today summary, so the two must stay in lockstep);
+# week/month/allTime are the most expensive queries the API runs (full-table
+# scans on a Pi Zero) and stay warm for minutes/hours — see
+# expire_dashboard_cache() for why detections don't touch them.
+_SUMMARY_CACHE_TTL_SECONDS = {
+    'today': _DASHBOARD_CACHE_TTL_SECONDS,
+    'week': 300,
+    'month': 3600,
+    'allTime': 3600,
+}
+# The TTL table defines the period set: adding a period means giving it a TTL.
+_SUMMARY_PERIODS = tuple(_SUMMARY_CACHE_TTL_SECONDS)
 _summary_cache_lock = threading.Lock()
 _summary_cache: dict = {
     period: {
         'payload': None,
         'expires_at': 0.0,
         'inflight': None,
+        'dirty': False,
     }
     for period in _SUMMARY_PERIODS
 }
 
 # Bird Gallery response cache. The Most/Least Frequent and Species Catalog
 # tabs run multi-second GROUP BY scans over the whole detections table. The
-# gallery is opened on demand, not polled — so unlike the dashboard cache this
-# one is deliberately NOT cleared by broadcast_detection(): doing that on every
-# new detection would keep it permanently cold. New detections age out via the
-# TTL; bulk changes clear it explicitly (see invalidate_gallery_cache).
+# gallery is opened on demand, not polled — so broadcast_detection() leaves it
+# entirely alone (it doesn't even soft-expire it the way it does the dashboard
+# entry): touching it per detection would keep it permanently cold. New
+# detections age out via the TTL; bulk changes clear it explicitly (see
+# invalidate_gallery_cache).
 _GALLERY_SIGHTINGS_LIMIT = 12
 _GALLERY_CACHE_TTL_SECONDS = 90
 _GALLERY_KEY_FREQUENT = 'sightings:frequent'
@@ -1080,7 +1094,7 @@ _GALLERY_KEY_RARE = 'sightings:rare'
 _GALLERY_KEY_SPECIES = 'species:all'
 _gallery_cache_lock = threading.Lock()
 _gallery_cache: dict = {
-    key: {'payload': None, 'expires_at': 0.0, 'inflight': None}
+    key: {'payload': None, 'expires_at': 0.0, 'inflight': None, 'dirty': False}
     for key in (_GALLERY_KEY_FREQUENT, _GALLERY_KEY_RARE, _GALLERY_KEY_SPECIES)
 }
 
@@ -1102,6 +1116,22 @@ def _reset_cache_entry(entry):
     entry['payload'] = None
     entry['expires_at'] = 0.0
     entry['inflight'] = None
+    entry['dirty'] = False
+
+
+def _expire_cache_entry(entry):
+    """Expire a single-flight cache entry without discarding anything.
+
+    Zeroes 'expires_at' but keeps 'payload' and — crucially — 'inflight': a
+    rebuild already in progress keeps its slot, so it still completes and is
+    served to its waiting callers (contrast _reset_cache_entry, which revokes
+    the in-flight job's write). 'dirty' records that the expiry may predate
+    an in-flight job's DB snapshot: _serve_single_flight's write then leaves
+    the entry expired, so the next poll rebuilds instead of serving a
+    pre-expiry snapshot for a full TTL. Freshness, not correctness.
+    """
+    entry['expires_at'] = 0.0
+    entry['dirty'] = True
 
 
 def invalidate_summary_cache():
@@ -1118,10 +1148,29 @@ def invalidate_dashboard_cache():
     job in flight when invalidate fires loses its slot, so the single-flight
     write (guarded on `inflight is job`) skips, leaving the cache empty for
     the next caller to refresh.
+
+    This is the correctness path — for data that changed out from under the
+    cache (deletes, migration imports, localization changes). New detections
+    are a freshness event and use expire_dashboard_cache() instead.
     """
     with _dashboard_cache_lock:
         _reset_cache_entry(_dashboard_cache)
     invalidate_summary_cache()
+
+
+def expire_dashboard_cache():
+    """Expire the dashboard payload and 'today' summary; leave the rest warm.
+
+    The freshness path for new detections (see _expire_cache_entry for the
+    keep-payload/keep-inflight semantics). week/month/allTime are left alone
+    entirely: one detection moves those counters by +1, and hard-expiring
+    them per detection is what used to keep every summary permanently cold
+    on active stations (detections arrive faster than the poll interval).
+    """
+    with _dashboard_cache_lock:
+        _expire_cache_entry(_dashboard_cache)
+    with _summary_cache_lock:
+        _expire_cache_entry(_summary_cache['today'])
 
 
 def invalidate_gallery_cache():
@@ -1140,10 +1189,13 @@ def _serve_single_flight(entry, lock, ttl, builder, *args):
     """Serve a cached payload from `entry`, recomputing via `builder` under a
     single-flight guard so concurrent misses share one DB job.
 
-    `entry` is a dict with 'payload'/'expires_at'/'inflight'. Only the caller
-    whose job is still the 'inflight' slot writes the cache: if an invalidation
-    cleared 'inflight' mid-compute, the `is job` guard fails and the write is
-    skipped, so a job racing an invalidation cannot poison the cache.
+    `entry` is a dict with 'payload'/'expires_at'/'inflight'/'dirty'. Only the
+    caller whose job is still the 'inflight' slot writes the cache: if an
+    invalidation cleared 'inflight' mid-compute, the `is job` guard fails and
+    the write is skipped, so a job racing an invalidation cannot poison the
+    cache. A soft expiry (_expire_cache_entry) instead keeps the job but marks
+    the entry 'dirty', so the completed payload is served without earning a
+    fresh TTL — its DB snapshot may predate whatever fired the expiry.
     """
     with lock:
         cached = entry['payload']
@@ -1154,6 +1206,8 @@ def _serve_single_flight(entry, lock, ttl, builder, *args):
         if job is None:
             job = _submit_db(builder, *args)
             entry['inflight'] = job
+            # This job's DB snapshot postdates any expiry recorded so far.
+            entry['dirty'] = False
 
     try:
         payload = job.result(timeout=_DB_JOB_TIMEOUT_SECONDS)
@@ -1166,7 +1220,7 @@ def _serve_single_flight(entry, lock, ttl, builder, *args):
     with lock:
         if entry['inflight'] is job:
             entry['payload'] = payload
-            entry['expires_at'] = time.time() + ttl
+            entry['expires_at'] = 0.0 if entry['dirty'] else time.time() + ttl
             entry['inflight'] = None
 
     return payload
@@ -1185,7 +1239,7 @@ def _build_summary_period_payload(period, *, settings=None, now=None):
 def _get_summary_period_payload(period):
     return _serve_single_flight(
         _summary_cache[period], _summary_cache_lock,
-        _SUMMARY_CACHE_TTL_SECONDS, _build_summary_period_payload, period,
+        _SUMMARY_CACHE_TTL_SECONDS[period], _build_summary_period_payload, period,
     )
 
 
@@ -4641,10 +4695,9 @@ def create_app(async_mode='threading'):
 def broadcast_detection(detection_data):
     """Function to broadcast detection to all connected clients"""
     global socketio
-    # A new detection invalidates every counter the dashboard caches:
-    # today/week/month/all-time summaries, hourly activity, and the
-    # recent-observations list.
-    invalidate_dashboard_cache()
+    # Freshness, not correctness: expire only what the new detection changes
+    # (see expire_dashboard_cache); week/month/allTime stay warm.
+    expire_dashboard_cache()
     if socketio:
         detection_payload = _localize_detection(detection_data)
         socketio.emit('bird_detected', detection_payload)

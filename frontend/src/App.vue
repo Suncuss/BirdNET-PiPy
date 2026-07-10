@@ -192,7 +192,7 @@ export default {
     const router = useRouter()
     const auth = useAuth()
     const appSettings = useSettings()
-    const { stationName, setStationName, setLocationConfigured } = useAppStatus()
+    const { stationName, setStationName, locationConfigured, setLocationConfigured } = useAppStatus()
     const systemUpdate = useSystemUpdate()
     const recorderHealth = useRecorderHealth()
     const scrollToTop = useScrollToTop()
@@ -215,17 +215,52 @@ export default {
       document.title = stationName.value ? `${DISPLAY_NAME} — ${stationName.value}` : DISPLAY_NAME
     })
 
+    // Retry a failed bootstrap /settings load with backoff. Without this,
+    // one timeout on a busy station left locationConfigured null forever
+    // and the dashboard never started fetching (eternal spinners).
+    const SETTINGS_RETRY_BASE_MS = 10000
+    const SETTINGS_RETRY_MAX_MS = 60000
+    let settingsRetryTimer = null
+    let settingsRetryDelay = SETTINGS_RETRY_BASE_MS
+
+    const cancelSettingsRetry = () => {
+      if (settingsRetryTimer) {
+        clearTimeout(settingsRetryTimer)
+        settingsRetryTimer = null
+      }
+      settingsRetryDelay = SETTINGS_RETRY_BASE_MS
+    }
+
+    const scheduleSettingsRetry = () => {
+      if (settingsRetryTimer) return
+      settingsRetryTimer = setTimeout(() => {
+        settingsRetryTimer = null
+        checkLocationSetup()
+      }, settingsRetryDelay)
+      settingsRetryDelay = Math.min(settingsRetryDelay * 2, SETTINGS_RETRY_MAX_MS)
+    }
+
     const checkLocationSetup = async () => {
       // useSettings owns the fetch and syncs unit / time-format prefs.
       const ok = await appSettings.ensureLoaded()
       if (!ok) {
         // A network error says nothing about whether location is configured.
-        // Don't downgrade locationConfigured — leave it; the dashboard
-        // renders and shows its own error state, and the next
-        // ensureLoaded() retries.
+        // Assume the common case (configured) so the dashboard starts
+        // fetching — its data doesn't need settings and it shows its own
+        // error states — and retry so prefs eventually sync and a genuinely
+        // unconfigured station still gets the setup wizard.
         logger.error('Failed to check location setup')
+        if (locationConfigured.value === null) {
+          setLocationConfigured(true)
+        }
+        // When login is the known blocker (401s, not a down server) polling
+        // is pointless — onLoginSuccess re-runs this after the user signs in.
+        if (!auth.needsLogin.value) {
+          scheduleSettingsRetry()
+        }
         return
       }
+      cancelSettingsRetry()
       const settings = appSettings.settings.value
       setStationName(settings?.display?.station_name)
       // Show setup modal if location has not been configured
@@ -243,6 +278,9 @@ export default {
       logger.info('Auth required event received')
       await auth.checkAuthStatus()
       if (auth.needsLogin.value) {
+        // The server is up and answering 401s — login is the recovery path
+        // now; a pending settings retry would only re-trigger this event.
+        cancelSettingsRetry()
         showLoginModal.value = true
       }
     }
@@ -322,6 +360,7 @@ export default {
 
     onUnmounted(() => {
       window.removeEventListener('auth:required', handleAuthRequired)
+      cancelSettingsRetry()
     })
 
     return {
