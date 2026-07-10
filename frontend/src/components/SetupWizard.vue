@@ -424,6 +424,14 @@
             </div>
           </div>
 
+          <!-- Restart timeout notice (not a failure - settings were saved) -->
+          <div
+            v-else-if="serviceRestart.restartError.value"
+            class="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-md text-sm text-amber-800"
+          >
+            {{ serviceRestart.restartError.value }}
+          </div>
+
           <!-- Back / Finish buttons -->
           <div class="flex gap-3">
             <button
@@ -449,7 +457,7 @@
 
 <script>
 import { ref, computed } from 'vue'
-import { requestRestart, useServiceRestart } from '@/composables/useServiceRestart'
+import { isRestartTimeoutError, requestRestart, useServiceRestart } from '@/composables/useServiceRestart'
 import { useSettings } from '@/composables/useSettings'
 import { limitDecimals, sanitizeLabel } from '@/utils/inputHelpers'
 import { FILTER_DEFAULTS, MODEL_TYPES, modelTypeOptions } from '@/utils/modelDefaults'
@@ -713,12 +721,16 @@ export default {
         await requestRestart()
         await serviceRestart.waitForRestart({
           autoReload: true,
-          message: 'Applying settings'
+          message: 'Applying settings',
+          // A timeout is not a save failure: the PUT already succeeded.
+          timeoutMessage: 'Settings saved — the restart is taking longer than expected. Refresh the page in a minute.'
         })
       } catch (error) {
-        console.error('Setup save error:', error)
-        errorMessage.value = 'Failed to save settings. Please try again.'
         saving.value = false
+        if (!isRestartTimeoutError(error)) {
+          console.error('Setup save error:', error)
+          errorMessage.value = 'Failed to save settings. Please try again.'
+        }
       }
     }
 

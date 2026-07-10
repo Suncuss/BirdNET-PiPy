@@ -166,6 +166,27 @@ describe('useServiceRestart', () => {
     expect(restartMessage.value).toContain('ready')
   })
 
+  it('rejects with RESTART_TIMEOUT and shows the timeout message when the wait expires', async () => {
+    mockApi.get.mockRejectedValue(new Error('Service down'))
+
+    const { isRestarting, restartMessage, restartError, waitForRestart } = useServiceRestart()
+
+    const promise = waitForRestart({
+      maxWaitSeconds: 1,
+      initialDelay: 100,
+      pollInterval: 100,
+      timeoutMessage: 'Custom timeout notice'
+    })
+    const outcome = promise.catch(error => error)
+
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect((await outcome).message).toBe('RESTART_TIMEOUT')
+    expect(restartError.value).toBe('Custom timeout notice')
+    expect(restartMessage.value).toBe('')
+    expect(isRestarting.value).toBe(false)
+  })
+
   it('resets state correctly', () => {
     const { isRestarting, restartMessage, restartError, reset } = useServiceRestart()
 

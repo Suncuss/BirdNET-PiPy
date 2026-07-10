@@ -23,6 +23,14 @@ export function isLikelyRestartInProgressError(error) {
 }
 
 /**
+ * True when waitForRestart gave up waiting — the restart is presumed still in
+ * progress, so callers should report "slow", not "failed".
+ */
+export function isRestartTimeoutError(error) {
+  return error?.message === 'RESTART_TIMEOUT'
+}
+
+/**
  * Post restart request, tolerating connection errors that indicate the restart was accepted.
  */
 export async function requestRestart() {
@@ -55,6 +63,7 @@ export function useServiceRestart() {
    * @param {number} options.initialDelay - Delay before first check in ms (default: 10000)
    * @param {number} options.postConnectDelay - Extra delay after connection before reload (default: 15000)
    * @param {boolean} options.autoReload - Whether to reload page on success (default: true)
+   * @param {string} options.timeoutMessage - restartError text shown when the wait times out
    * @returns {Promise<boolean>} - Resolves true when service is back, rejects on timeout
    */
   const waitForRestart = async (options = {}) => {
@@ -64,7 +73,8 @@ export function useServiceRestart() {
       initialDelay = 10000,
       postConnectDelay = 15000, // Wait for all services (BirdNet, etc.) to fully initialize
       autoReload = true,
-      message = 'Services restarting'
+      message = 'Services restarting',
+      timeoutMessage = 'Restart is taking longer than expected. Try refreshing the page in a minute.'
     } = options
 
     isRestarting.value = true
@@ -76,12 +86,11 @@ export function useServiceRestart() {
     return new Promise((resolve, reject) => {
       const checkConnection = async () => {
         const elapsedMs = Date.now() - startTime
-        const elapsedSec = Math.floor(elapsedMs / 1000)
 
         if (elapsedMs >= maxWaitSeconds * 1000) {
           logger.warn('Service restart taking longer than expected')
           restartMessage.value = ''
-          restartError.value = 'Update taking longer than expected. Try refreshing later.'
+          restartError.value = timeoutMessage
           isRestarting.value = false
           reject(new Error('RESTART_TIMEOUT'))
           return
@@ -114,6 +123,9 @@ export function useServiceRestart() {
             resolve(true)
           }, postConnectDelay)
         } catch (_error) {
+          // Recompute after the probe: a hanging request (up to the axios
+          // timeout) would otherwise leave a stale count on screen.
+          const elapsedSec = Math.floor((Date.now() - startTime) / 1000)
           restartMessage.value = `${message}... (${elapsedSec}s)`
           setTimeout(checkConnection, pollInterval)
         }

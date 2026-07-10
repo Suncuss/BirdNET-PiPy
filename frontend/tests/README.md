@@ -7,15 +7,14 @@ This directory contains all tests for the BirdNET-PiPy Vue.js frontend, organize
 ```
 tests/
 ├── App.test.js                           # Root App component tests (2 tests)
-├── components/                           # Reusable component tests (8 files)
+├── components/                           # Reusable component tests (7 files)
 │   ├── AddNotificationModal.test.js      # Notification modal (36 tests)
 │   ├── AlertBanner.test.js               # Alert banner component (11 tests)
 │   ├── AppDatePicker.test.js             # Date picker format/width/fluid (8 tests)
 │   ├── DetectionInfoModal.test.js        # Detection info modal (25 tests)
 │   ├── LoginModal.test.js                # Authentication modal (22 tests)
 │   ├── SetupWizard.test.js               # Setup wizard flow (17 tests)
-│   ├── SpeciesFilterModal.test.js        # Species filter modal (3 tests)
-│   └── UpdateManager.test.js             # System update component (5 tests)
+│   └── SpeciesFilterModal.test.js        # Species filter modal (3 tests)
 ├── composables/                          # Vue composition function tests (12 files)
 │   ├── useAudioPlayer.test.js            # Audio playback (23 tests)
 │   ├── useAuth.test.js                   # Authentication composable (35 tests)
@@ -133,7 +132,6 @@ Tests for reusable Vue components.
 | `LoginModal.test.js` | 22 | Login forms, setup flows, password validation, error handling |
 | `SetupWizard.test.js` | 17 | Location and audio source setup flow |
 | `SpeciesFilterModal.test.js` | 3 | Species filter selection |
-| `UpdateManager.test.js` | 5 | Version display, update detection, update application |
 
 ### Composable Tests (`composables/`)
 Tests for Vue composition functions (reusable logic).

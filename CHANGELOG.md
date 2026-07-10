@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fixed the setup wizard reporting "Failed to save settings" when the post-setup restart merely took longer than expected — it now shows a notice that settings were saved and the restart is still in progress, matching how system updates report slow restarts
+- Fixed the restart/update progress banner's elapsed-seconds counter freezing or under-reporting while a connection attempt was still pending
 - Improved per-detection audio clip creation to run as a single ffmpeg step instead of a sox trim followed by a separate ffmpeg encode — one process launch instead of two and no intermediate WAV written to the SD card, which meaningfully lowers the per-detection cost on slow devices (a busy dawn chorus is where stations fall behind). Output clips are byte-identical to before, and sox is no longer needed or installed
 - Fixed abandoned temporary recording files accumulating in the recordings folder: a recorder interrupted mid-write (for example by an out-of-memory kill) left behind a `.tmp.wav` file that was never cleaned up, so debris could build up over time. The recorder now sweeps these stale temp files from its own folder when it starts
 - Fixed automatic storage cleanup straining low-memory devices on stations with long histories: it no longer loads every detection into memory (hundreds of MB on large databases) nor re-checks millions of already-cleaned recordings on every run — deletable files are now found through small indexed queries and bounded batches, resuming where the previous run left off
