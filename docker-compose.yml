@@ -28,6 +28,7 @@ services:
       - BIRDNET_SERVICE_PORT=5001
       - LOG_FORMAT=human
       - LOG_LEVEL=INFO
+      - CONSOLE_LOG_LEVEL=${CONSOLE_LOG_LEVEL:-WARNING}
     ports:
       - "127.0.0.1:5001:5001"
 
@@ -63,6 +64,7 @@ services:
       - API_PORT=5002
       - LOG_FORMAT=human
       - LOG_LEVEL=INFO
+      - CONSOLE_LOG_LEVEL=${CONSOLE_LOG_LEVEL:-WARNING}
     ports:
       # Bind to localhost only - nginx proxies external requests via docker network
       # This prevents direct access to internal endpoints like /api/broadcast/detection
@@ -90,6 +92,7 @@ services:
       - PULSE_SERVER=unix:/run/pulse/native
       - LOG_FORMAT=human
       - LOG_LEVEL=INFO
+      - CONSOLE_LOG_LEVEL=${CONSOLE_LOG_LEVEL:-WARNING}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

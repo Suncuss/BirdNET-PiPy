@@ -82,15 +82,18 @@ def _console_handler(logger):
 
 class TestConsoleLogLevel:
 
-    def test_stdout_demoted_to_warning_when_file_handler_present(
+    def test_stdout_stays_verbose_by_default_with_file_handler(
             self, clean_root_logger, tmp_path, monkeypatch):
+        # Default must stay verbose: in some deployments stdout is the only
+        # log a user sees (HA add-on Log tab, a dev terminal). Compose opts
+        # into quiet container logs via CONSOLE_LOG_LEVEL=WARNING.
         import config.settings as settings
         monkeypatch.setattr(settings, 'LOGS_DIR', str(tmp_path))
         monkeypatch.delenv('CONSOLE_LOG_LEVEL', raising=False)
 
         logger = setup_logging('api')
 
-        assert _console_handler(logger).level == logging.WARNING
+        assert _console_handler(logger).level == logging.NOTSET
         file_handler = next(
             h for h in logger.handlers
             if isinstance(h, logging.handlers.RotatingFileHandler))
@@ -98,15 +101,15 @@ class TestConsoleLogLevel:
         assert file_handler.level == logging.NOTSET
         assert logger.level == logging.INFO
 
-    def test_console_log_level_env_override(
+    def test_console_log_level_env_demotes_stdout(
             self, clean_root_logger, tmp_path, monkeypatch):
         import config.settings as settings
         monkeypatch.setattr(settings, 'LOGS_DIR', str(tmp_path))
-        monkeypatch.setenv('CONSOLE_LOG_LEVEL', 'INFO')
+        monkeypatch.setenv('CONSOLE_LOG_LEVEL', 'WARNING')
 
         logger = setup_logging('api')
 
-        assert _console_handler(logger).level == logging.INFO
+        assert _console_handler(logger).level == logging.WARNING
 
     def test_stdout_stays_verbose_without_file_handler(self, clean_root_logger):
         # Unknown service → no file handler → stdout must remain the full sink

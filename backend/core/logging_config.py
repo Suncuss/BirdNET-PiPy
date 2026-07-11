@@ -174,12 +174,14 @@ def setup_logging(service_name, log_level=None, format_type=None):
             file_handler.setFormatter(StructuredFormatter(service_name))
             logger.addHandler(file_handler)
 
-            # The rotating file is the full-detail sink, so keep stdout (and
-            # the Docker log capturing it) to warnings/errors by default.
-            # CONSOLE_LOG_LEVEL=INFO restores verbose stdout, e.g. for the
-            # Home Assistant add-on where stdout is the visible log.
-            console_level = os.getenv('CONSOLE_LOG_LEVEL', 'WARNING')
-            handler.setLevel(getattr(logging, console_level.upper()))
+            # Stdout stays verbose by default: in some deployments it is the
+            # only log a user sees (HA add-on Log tab, a dev terminal).
+            # Deployments where the rotating file already carries full detail
+            # can demote it — docker-compose.yml sets CONSOLE_LOG_LEVEL=WARNING
+            # so container logs don't duplicate every line to the SD card.
+            console_level = os.getenv('CONSOLE_LOG_LEVEL')
+            if console_level:
+                handler.setLevel(getattr(logging, console_level.upper()))
         except (OSError, PermissionError) as e:
             # Don't fail startup if log directory is not writable; stdout
             # stays at the root level as the only sink
