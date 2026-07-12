@@ -7,7 +7,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timedelta
-from urllib.parse import quote, urlparse
+from urllib.parse import urlparse
 
 import requests
 from flask import (
@@ -118,6 +118,7 @@ from core.runtime_config import (
 from core.share_tokens import mint_share_token, share_token_subject, verify_share_token
 from core.storage_manager import delete_detection_files
 from core.timezone_service import get_timezone_str, local_now
+from core.utils import build_detection_permalink, normalize_site_url
 from model_service.label_utils import get_species_list, resolve_to_scientific_name
 from version import DISPLAY_NAME, __version__
 
@@ -1820,7 +1821,7 @@ def get_recording_og_card(recording_id):
     display = recording.get('display_common_name') or common
     # Canonical SPA permalink. Use common_name (which the SPA route resolves
     # against) for the path segment, properly URL-encoded.
-    share_url = f"{base}/bird/{quote(common, safe='')}/recording/{recording_id}"
+    share_url = build_detection_permalink(base, common, recording_id)
 
     # iMessage's no-image summary card mostly shows the title, so it leads with
     # the app and the species ("BirdNET-PiPy overheard a Northern Cardinal").
@@ -3147,6 +3148,15 @@ def update_settings():
                 return jsonify({
                     'error': f'Invalid bird_name_language. Must be one of: {supported}'
                 }), 400
+
+            if 'site_url' in incoming_settings['display']:
+                site_url = incoming_settings['display']['site_url']
+                if not isinstance(site_url, str):
+                    return jsonify({'error': 'display.site_url must be a string'}), 400
+                try:
+                    new_settings['display']['site_url'] = normalize_site_url(site_url)
+                except ValueError as e:
+                    return jsonify({'error': str(e)}), 400
 
         # Validate notification settings
         if 'notifications' in incoming_settings:

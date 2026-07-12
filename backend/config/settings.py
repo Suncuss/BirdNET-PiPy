@@ -73,6 +73,9 @@ DEFAULT_SETTINGS = {
         "use_metric_units": True,
         "bird_name_language": "en",
         "station_name": "",
+        # Public base URL of this station (e.g. "https://birdnet.example.com").
+        # Used to build "view detection" links in notifications. "" = no links.
+        "site_url": "",
         # null = no explicit choice yet, frontend detects from browser locale.
         # Once the user flips the toggle, this is persisted as "12h" or "24h".
         "time_format": None

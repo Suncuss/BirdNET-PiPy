@@ -14,6 +14,7 @@ from core.bird_name_utils import get_localized_common_name
 from core.logging_config import get_logger
 from core.runtime_config import get_runtime_settings, resolve_source_label
 from core.timezone_service import local_now
+from core.utils import build_detection_permalink
 
 logger = get_logger(__name__)
 
@@ -276,6 +277,44 @@ class NotificationService:
             time_part = dt.strftime('%H:%M:%S')
         return f"{dt.strftime('%Y-%m-%d')} {time_part}"
 
+    def _build_detection_link(self, detection):
+        """Absolute permalink for this detection, or None when unavailable.
+
+        Requires display.site_url (owner-configured — notifications run
+        outside any HTTP request, so there is no external URL to derive) and
+        the detection's DB row id. A share token is appended only when the
+        station is private (auth on, public access off): everywhere else the
+        bare link already works, and skipping the token keeps routine
+        notification emails out of the share-secret mass-revocation blast
+        radius. "Already works" leans on the public recent window
+        (api.RECORDINGS_PUBLIC_WINDOW_DAYS) and the share-token TTL
+        (share_tokens.SHARE_TOKEN_TTL_SECONDS) both being 30 days — if the
+        public window ever shrinks below the token TTL, revisit this gate.
+        """
+        base = (self._settings.get('display', {}).get('site_url') or '').strip()
+        detection_id = detection.get('id')
+        if not base or not detection_id:
+            return None
+
+        # Imported lazily: core.auth drags in flask + bcrypt (~21MB RSS),
+        # which the recording container shouldn't pay at startup for a
+        # feature that is off by default.
+        from core.auth import is_auth_enabled, is_public_access_enabled
+        from core.share_tokens import mint_share_token
+
+        token = None
+        try:
+            if is_auth_enabled() and not is_public_access_enabled():
+                token = mint_share_token(detection_id)
+        except Exception as e:
+            # A private station's bare link dead-ends for logged-out readers,
+            # but the notification is still useful — send it without a token.
+            logger.warning("Could not mint share token for notification link",
+                           extra={'error': str(e)})
+        return build_detection_permalink(
+            base, detection.get('common_name'), detection_id, share_token=token
+        )
+
     @staticmethod
     def _resolve_source_label(source_id):
         """Look up human-readable label for a source ID from runtime settings."""
@@ -331,6 +370,14 @@ class NotificationService:
 
         if reasons:
             lines.append(f"Trigger: {html.escape(', '.join(reasons))}")
+
+        link = self._build_detection_link(detection)
+        if link:
+            # The URL is its own link text so Apprise's HTML→text
+            # downconversion (ntfy etc.) keeps a usable URL instead of a
+            # bare label whose href got stripped.
+            esc_link = html.escape(link, quote=True)
+            lines.append(f'<a href="{esc_link}">{esc_link}</a>')
 
         return '<br>\n'.join(lines)
 

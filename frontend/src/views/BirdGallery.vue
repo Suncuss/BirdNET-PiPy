@@ -131,6 +131,7 @@ import { ref, computed, onMounted, onActivated, onDeactivated, onUnmounted } fro
 import api from '@/services/api'
 import { getBirdImageUrl, getDefaultBirdImageUrl } from '@/services/media'
 import { useSmartCrop } from '@/composables/useSmartCrop'
+import { swapImageWithFade } from '@/utils/imageFade'
 import AppButton from '@/components/AppButton.vue'
 import ScrollToTopButton from '@/components/ScrollToTopButton.vue'
 import Spinner from '@/components/Spinner.vue'
@@ -242,24 +243,25 @@ export default {
     }
 
     // Apply resolved image fields to a card with a brief fade transition.
-    // Once started it always finishes — a hidden card is never left hidden.
-    const applyResolvedImage = async (bird, fields) => {
-      bird.focalPointReady = false  // hide to trigger the fade
-      bird.imageUrl = fields.imageUrl
-      // Clear any prior error here — atomically with the new imageUrl — so the
-      // card never sits in (imageError=false, imageUrl=placeholder), which would
-      // let registerCard re-observe and reload it out from under this apply.
-      bird.imageError = false
-      bird.hasCustomImage = Boolean(fields.hasCustomImage)
-      bird.focalPoint = fields.focalPoint
-      if (!bird.hasCustomImage) {
-        bird.authorName = fields.authorName
-        bird.authorUrl = fields.authorUrl
-        bird.licenseType = fields.licenseType
-      }
-      // Let opacity-0 apply before fading the new image back in
-      await new Promise(r => requestAnimationFrame(r))
-      bird.focalPointReady = true
+    const applyResolvedImage = (bird, fields) => {
+      return swapImageWithFade(
+        (visible) => { bird.focalPointReady = visible },
+        () => {
+          bird.imageUrl = fields.imageUrl
+          // Clear any prior error here — atomically with the new imageUrl — so
+          // the card never sits in (imageError=false, imageUrl=placeholder),
+          // which would let registerCard re-observe and reload it out from
+          // under this apply.
+          bird.imageError = false
+          bird.hasCustomImage = Boolean(fields.hasCustomImage)
+          bird.focalPoint = fields.focalPoint
+          if (!bird.hasCustomImage) {
+            bird.authorName = fields.authorName
+            bird.authorUrl = fields.authorUrl
+            bird.licenseType = fields.licenseType
+          }
+        }
+      )
     }
 
     // Load one card's image. Skips cards already resolved on an earlier visit,

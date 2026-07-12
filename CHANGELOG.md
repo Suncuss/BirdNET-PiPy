@@ -1,7 +1,8 @@
 # Changelog
 
-## [Unreleased]
+## [0.8.4] - 2026-07-12
 
+- Added a Site URL setting (Settings → Personalization): set your station's public address and detection notifications include a link straight to that detection's page. On private stations (public access off) the link carries a 30-day single-detection share token so it works without logging in
 - Improved dashboard responsiveness on busy stations: a new detection no longer throws away every cached dashboard summary. The week, 30-day, and all-time tabs — the heaviest queries on low-power devices — now stay warm and refresh on their own schedule (5 minutes / 1 hour), and a summary computation already in progress is served instead of being discarded and recomputed. Previously, stations detecting faster than every 10 seconds kept these caches permanently cold, recomputing full-table statistics on nearly every dashboard refresh
 - Fixed the dashboard staying on loading spinners forever when the very first settings request failed — common on busy low-power stations where that request can time out. The dashboard now loads its data anyway (showing its normal error state if that also fails), and the settings load retries in the background so display preferences, the station name, and first-run setup still arrive
 - Fixed Docker container logs growing without bound between updates — on SD-card installs they could slowly fill the card. Container logs are now capped per service, and each log line is written to the card once instead of two to three times: full INFO detail lives in the existing size-capped `data/logs/` files (and the in-app log viewer), while container logs carry warnings and errors (set `CONSOLE_LOG_LEVEL=INFO` to restore verbose container logs)

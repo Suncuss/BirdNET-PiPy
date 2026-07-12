@@ -969,6 +969,30 @@
 
         <div class="pt-4 border-t border-gray-100">
           <label
+            for="siteUrl"
+            class="block text-sm text-gray-600 mb-1"
+          >Site URL</label>
+          <input
+            id="siteUrl"
+            v-model="settings.display.site_url"
+            type="text"
+            maxlength="200"
+            placeholder="https://birdnet.example.com"
+            class="block w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+          >
+          <p class="text-xs text-gray-400 mt-1">
+            Public address of this station, used to add "view detection" links to notifications. Leave blank for no links. Save to apply.
+          </p>
+          <p
+            v-if="siteUrlPreview"
+            class="text-xs text-gray-400 mt-1 break-all"
+          >
+            Links will look like: <span class="font-mono">{{ siteUrlPreview }}</span>
+          </p>
+        </div>
+
+        <div class="pt-4 border-t border-gray-100">
+          <label
             for="birdNameLanguage"
             class="block text-sm text-gray-600 mb-1"
           >Bird Name Language</label>
@@ -1505,6 +1529,7 @@ import { useAppStatus } from '@/composables/useAppStatus'
 import { useSettings } from '@/composables/useSettings'
 import { useModalDismiss } from '@/composables/useModalDismiss'
 import { limitDecimals } from '@/utils/inputHelpers'
+import { recordingSegment } from '@/utils/detectionLinks'
 import { FILTER_DEFAULTS, modelTypeOptions } from '@/utils/modelDefaults'
 import { RECORDER_STATES } from '@/utils/recorderStates'
 import api, { createLongRequest } from '@/services/api'
@@ -1703,6 +1728,16 @@ export default {
       description: '',
       list: []
     })
+    // Mirrors the backend's normalize_site_url just enough to show what the
+    // saved link base will be: bare hosts get https://, trailing slashes go.
+    const siteUrlPreview = computed(() => {
+      let base = (settings.value?.display?.site_url || '').trim()
+      if (!base) return ''
+      if (!base.includes('://')) base = `https://${base}`
+      base = base.replace(/\/+$/, '')
+      return `${base}/${recordingSegment('Northern Cardinal', 123)}`
+    })
+
     const birdNameLanguageOptions = [
       { value: 'en', label: 'English (US)' },
       { value: 'en_uk', label: 'English (UK)' },
@@ -1820,7 +1855,11 @@ export default {
         included_species: s.species_filter?.included_species || []
       },
       model: { type: s.model?.type },
-      display: { bird_name_language: s.display?.bird_name_language || 'en', station_name: s.display?.station_name || '' },
+      display: {
+        bird_name_language: s.display?.bird_name_language || 'en',
+        station_name: s.display?.station_name || '',
+        site_url: s.display?.site_url || ''
+      },
       birdweather: { id: s.birdweather?.id }
     })
 
@@ -2101,7 +2140,12 @@ export default {
         return data
       } catch (error) {
         console.error('Error saving settings:', error)
-        settingsSaveError.value = 'Failed to save settings. Please try again.'
+        // 400s carry a user-facing validation message (e.g. a bad Site URL);
+        // other failures get the generic retry message.
+        const validationError = error.response?.status === 400
+          ? error.response.data?.error
+          : null
+        settingsSaveError.value = validationError || 'Failed to save settings. Please try again.'
         return null
       } finally {
         loading.value = false
@@ -2778,6 +2822,7 @@ export default {
       speciesFilterModalConfig,
       speciesList,
       birdNameLanguageOptions,
+      siteUrlPreview,
       openFilterModal,
       closeFilterModal,
       updateFilterList,

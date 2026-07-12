@@ -725,3 +725,68 @@ class TestAudioStatusNotifications:
                 mock_proc.assert_called_once_with(payload)
         finally:
             patcher.stop()
+
+
+class TestDetectionLink:
+    """Detection permalink in the message body, gated on display.site_url."""
+
+    def _detection_with_id(self, **kwargs):
+        detection = make_detection(**kwargs)
+        detection['id'] = 42
+        return detection
+
+    def test_no_link_when_site_url_unset(self, notification_service):
+        service, _ = notification_service
+        message = service._build_message(self._detection_with_id(), ['every_detection'])
+        assert '<a href=' not in message
+
+    def test_no_link_when_detection_has_no_id(self, notification_service):
+        service, set_settings = notification_service
+        set_settings(display={'site_url': 'https://birdnet.example.com'})
+        message = service._build_message(make_detection(), ['every_detection'])
+        assert '<a href=' not in message
+
+    def test_link_included_on_public_station(self, notification_service):
+        """Auth on + public access on → bare permalink, no share token."""
+        service, set_settings = notification_service
+        set_settings(display={'site_url': 'https://birdnet.example.com'})
+        with patch('core.auth.is_auth_enabled', return_value=True), \
+             patch('core.auth.is_public_access_enabled', return_value=True):
+            message = service._build_message(self._detection_with_id(), ['every_detection'])
+        link = 'https://birdnet.example.com/bird/American%20Robin/recording/42'
+        assert f'<a href="{link}">{link}</a>' in message
+        assert '?s=' not in message
+
+    def test_link_has_no_token_when_auth_disabled(self, notification_service):
+        service, set_settings = notification_service
+        set_settings(display={'site_url': 'https://birdnet.example.com'})
+        with patch('core.auth.is_auth_enabled', return_value=False), \
+             patch('core.share_tokens.mint_share_token') as mock_mint:
+            message = service._build_message(self._detection_with_id(), ['every_detection'])
+        mock_mint.assert_not_called()
+        assert '?s=' not in message
+        assert '/recording/42' in message
+
+    def test_link_carries_share_token_on_private_station(self, notification_service):
+        """Auth on + public access off → share token appended so the link works."""
+        service, set_settings = notification_service
+        set_settings(display={'site_url': 'https://birdnet.example.com'})
+        with patch('core.auth.is_auth_enabled', return_value=True), \
+             patch('core.auth.is_public_access_enabled', return_value=False), \
+             patch('core.share_tokens.mint_share_token',
+                   return_value='tok123') as mock_mint:
+            message = service._build_message(self._detection_with_id(), ['every_detection'])
+        mock_mint.assert_called_once_with(42)
+        assert '/recording/42?s=tok123' in message
+
+    def test_token_mint_failure_degrades_to_bare_link(self, notification_service):
+        """A minting error must not lose the notification or the link."""
+        service, set_settings = notification_service
+        set_settings(display={'site_url': 'https://birdnet.example.com'})
+        with patch('core.auth.is_auth_enabled', return_value=True), \
+             patch('core.auth.is_public_access_enabled', return_value=False), \
+             patch('core.share_tokens.mint_share_token',
+                   side_effect=RuntimeError('no secret')):
+            message = service._build_message(self._detection_with_id(), ['every_detection'])
+        assert '/recording/42' in message
+        assert '?s=' not in message

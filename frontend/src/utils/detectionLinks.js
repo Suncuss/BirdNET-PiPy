@@ -22,16 +22,31 @@ export function tableDetectionsLink({ hour, date, species } = {}) {
 }
 
 /**
+ * Bare route segment for a single-recording permalink, with no leading slash
+ * or base prefix — `bird/<name>/recording/<id>`. Single owner of that route
+ * shape; composed by recordingPath (SPA links, BASE-prefixed) and the
+ * Settings page's Site URL preview (appended to the user-entered origin,
+ * which must not carry the SPA BASE).
+ *
+ * @param {string} commonName - Untranslated species common name
+ * @param {number|string} id - Detection (recording) ID
+ * @returns {string}
+ */
+export function recordingSegment(commonName, id) {
+  return `bird/${encodeURIComponent(commonName)}/recording/${id}`
+}
+
+/**
  * Root-relative path to a single-recording permalink — the BirdRecording route
- * `/bird/:name/recording/:id`. Single owner of that route shape; the species is
- * the English common name, matching every in-app link to BirdDetails.
+ * `/bird/:name/recording/:id`; the species is the English common name,
+ * matching every in-app link to BirdDetails.
  *
  * @param {string} commonName - Untranslated species common name
  * @param {number|string} id - Detection (recording) ID
  * @returns {string}
  */
 export function recordingPath(commonName, id) {
-  return `${BASE}bird/${encodeURIComponent(commonName)}/recording/${id}`
+  return `${BASE}${recordingSegment(commonName, id)}`
 }
 
 /**

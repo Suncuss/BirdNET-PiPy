@@ -456,6 +456,56 @@ class TestSimpleAPI:
                 assert response.status_code == 400
                 assert 'Invalid source type' in response.get_json()['error']
 
+    def test_settings_site_url_validation(self):
+        """display.site_url is normalized on save; invalid values are rejected."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+                 patch('core.db.DatabaseManager') as MockDB, \
+                 patch('core.api.load_user_settings') as mock_load, \
+                 patch('core.api.save_user_settings') as mock_save, \
+                 patch('core.api.write_flag'):
+
+                MockDB.return_value = Mock()
+                mock_load.return_value = {}
+
+                from core.api import create_app
+                app, _ = create_app()
+                client = app.test_client()
+
+                # Bare host is normalized to https and trailing slash stripped
+                response = client.put('/api/settings',
+                                      data=json.dumps({'display': {'site_url': 'birdnet.example.com/'}}),
+                                      content_type='application/json')
+                assert response.status_code == 200
+                saved = mock_save.call_args[0][0]
+                assert saved['display']['site_url'] == 'https://birdnet.example.com'
+
+                # Empty string clears the setting (feature off)
+                mock_save.reset_mock()
+                response = client.put('/api/settings',
+                                      data=json.dumps({'display': {'site_url': '  '}}),
+                                      content_type='application/json')
+                assert response.status_code == 200
+                assert mock_save.call_args[0][0]['display']['site_url'] == ''
+
+                # Invalid scheme is rejected without saving
+                mock_save.reset_mock()
+                response = client.put('/api/settings',
+                                      data=json.dumps({'display': {'site_url': 'ftp://example.com'}}),
+                                      content_type='application/json')
+                assert response.status_code == 400
+                assert 'http' in response.get_json()['error']
+                mock_save.assert_not_called()
+
+                # Non-string is rejected
+                response = client.put('/api/settings',
+                                      data=json.dumps({'display': {'site_url': 123}}),
+                                      content_type='application/json')
+                assert response.status_code == 400
+                mock_save.assert_not_called()
+
     def test_update_channel_setting(self):
         """Test update channel setting endpoint (no restart)."""
         with tempfile.TemporaryDirectory() as tmpdir:

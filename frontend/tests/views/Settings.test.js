@@ -134,6 +134,7 @@ const mockSettings = {
   },
   display: {
     station_name: '',
+    site_url: '',
     bird_name_language: 'en',
     use_metric_units: true,
     time_format: null
@@ -419,6 +420,46 @@ describe('Settings', () => {
     })
   })
 
+  describe('Site URL Setting', () => {
+    it('renders the site URL input in Personalization', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      expect(wrapper.find('#siteUrl').exists()).toBe(true)
+    })
+
+    it('hides the example-link preview when site URL is empty', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      expect(wrapper.text()).not.toContain('Links will look like')
+    })
+
+    it('previews the normalized link for a bare host', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      wrapper.vm.settings.display.site_url = 'birdnet.example.com'
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.text()).toContain(
+        'https://birdnet.example.com/bird/Northern%20Cardinal/recording/123'
+      )
+    })
+
+    it('strips trailing slashes and keeps an explicit http scheme in the preview', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      wrapper.vm.settings.display.site_url = 'http://192.168.1.50/'
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.text()).toContain(
+        'http://192.168.1.50/bird/Northern%20Cardinal/recording/123'
+      )
+    })
+  })
+
   describe('Saving Settings', () => {
     it('saves settings when Save button clicked', async () => {
       const wrapper = mountSettings()
@@ -490,6 +531,27 @@ describe('Settings', () => {
       await flushPromises()
 
       expect(wrapper.text()).toContain('Failed to save')
+    })
+
+    it('surfaces the server validation message on a 400 save failure', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      const rejection = new Error('Request failed with status code 400')
+      rejection.response = {
+        status: 400,
+        data: { error: 'Site URL must start with http:// or https://' }
+      }
+      mockApi.put.mockRejectedValueOnce(rejection)
+
+      wrapper.vm.settings.display.site_url = 'ftp://example.com'
+      await wrapper.vm.$nextTick()
+
+      const saveButton = wrapper.findAll('button').find(btn => btn.text() === 'Save' || btn.text() === 'Saving...')
+      await saveButton.trigger('click')
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('Site URL must start with http:// or https://')
     })
 
     it('disables save button while saving', async () => {
