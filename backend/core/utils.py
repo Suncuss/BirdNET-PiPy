@@ -1,8 +1,73 @@
 import logging
 import re
 import subprocess
+from urllib.parse import quote, urlsplit
 
 logger = logging.getLogger(__name__)
+
+MAX_SITE_URL_LENGTH = 200
+
+
+def normalize_site_url(raw):
+    """Normalize and validate a user-entered site URL into a stored base URL.
+
+    Accepts bare hosts (``birdnet.example.com`` → ``https://...``), strips
+    trailing slashes, lowercases scheme/host, and preserves an optional path
+    prefix. Returns '' for empty input (feature off). Raises ValueError with a
+    user-facing message otherwise.
+
+    The result is embedded in notification-email hrefs, so only http(s) is
+    allowed and userinfo/query/fragment are rejected rather than silently
+    dropped — surprising input should be seen, not reinterpreted.
+    """
+    value = (raw or '').strip()
+    if not value:
+        return ''
+    if len(value) > MAX_SITE_URL_LENGTH:
+        raise ValueError(f'Site URL must be at most {MAX_SITE_URL_LENGTH} characters')
+    if '://' not in value:
+        value = f'https://{value}'
+
+    try:
+        parts = urlsplit(value)
+        port = parts.port  # raises ValueError on a malformed/out-of-range port
+    except ValueError:
+        raise ValueError('Site URL is not a valid URL') from None
+    if parts.scheme not in ('http', 'https'):
+        raise ValueError('Site URL must start with http:// or https://')
+    if not parts.hostname:
+        raise ValueError('Site URL must include a hostname')
+    if '@' in parts.netloc:  # userinfo of any form
+        raise ValueError('Site URL must not contain credentials')
+    if parts.query or parts.fragment:
+        raise ValueError('Site URL must not contain a query string or fragment')
+    # Reject characters that could break out of an HTML attribute or a URL
+    # path; normal hosts and path prefixes never contain them.
+    if re.search(r'[\s<>"\'\\]', value):
+        raise ValueError('Site URL contains invalid characters')
+
+    host = parts.hostname  # urlsplit already lowercases scheme and hostname
+    if ':' in host:  # IPv6 literal — urlsplit strips the brackets
+        host = f'[{host}]'
+    if port is not None:
+        host = f'{host}:{port}'
+    path = parts.path.rstrip('/')
+    return f'{parts.scheme}://{host}{path}'
+
+
+def build_detection_permalink(base_url, common_name, detection_id, share_token=None):
+    """Build the canonical SPA permalink for one detection.
+
+    Single owner of the ``/bird/<common name>/recording/<id>`` shape so email
+    links and OG share cards can never drift. The species segment is
+    decorative (the API resolves by id) but kept for readable URLs; it uses
+    the DB common_name, which the SPA route resolves against.
+    """
+    name_segment = quote(common_name or 'Unknown', safe='')
+    url = f"{base_url.rstrip('/')}/bird/{name_segment}/recording/{int(detection_id)}"
+    if share_token:
+        url += f'?s={quote(share_token, safe="")}'
+    return url
 
 
 def sanitize_source_label(label):

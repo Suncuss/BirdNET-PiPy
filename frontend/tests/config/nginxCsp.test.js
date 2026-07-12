@@ -77,6 +77,7 @@ const EXTERNAL_ORIGIN_USAGE = {
   'https://ebird.org': 'exempt', // species-page links
   'https://app.birdweather.com': 'exempt', // station-management link (uploads are backend-side)
   'https://ntfy.sh': 'exempt', // form placeholder text
+  'https://birdnet.example.com': 'exempt', // Site URL form placeholder text
   'https://github.com': 'exempt', // repo links / UA string
   'http://www.w3.org': 'exempt', // SVG xmlns namespace identifiers
   'http://192.168.1.60': 'exempt', // form placeholder text

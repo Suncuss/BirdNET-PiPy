@@ -1,15 +1,26 @@
 import smartcrop from 'smartcrop'
 import { ref } from 'vue'
 import { isDefaultBirdImageUrl } from '@/services/media'
+import { swapImageWithFade } from '@/utils/imageFade'
+
+// Module-level so results survive component remounts (BirdDetails remounts per
+// navigation) and are shared across all consumers of the composable.
+const focalPointCache = new Map()
+
+/**
+ * Reset the module-level cache. Not part of the composable API — in production
+ * the cache lives for the session; tests import this directly to isolate
+ * cached results between cases.
+ */
+export function clearFocalPointCache() {
+  focalPointCache.clear()
+}
 
 /**
  * Composable for smart image cropping using focal point detection.
  * Uses smartcrop.js to find the best crop area for wildlife photos.
  */
 export function useSmartCrop() {
-  // Cache focal points to avoid recalculating
-  const focalPointCache = new Map()
-
   /**
    * Calculate the focal point of an image using smartcrop.js
    * @param {string} imageUrl - URL of the image to analyze
@@ -159,17 +170,10 @@ export function useSmartCrop() {
       // Calculate focal point first (preloads image into browser cache)
       const newFocalPoint = await calculateFocalPoint(url)
 
-      // Brief hide to trigger fade transition
-      isReady.value = false
-
-      // Update focal point
-      focalPoint.value = newFocalPoint
-
-      // Small delay to ensure opacity-0 is applied before fading in
-      await new Promise(r => requestAnimationFrame(r))
-
-      // Fade in
-      isReady.value = true
+      await swapImageWithFade(
+        (visible) => { isReady.value = visible },
+        () => { focalPoint.value = newFocalPoint }
+      )
     }
 
     if (initialUrl) {
@@ -179,38 +183,8 @@ export function useSmartCrop() {
     return { focalPoint, isReady, updateFocalPoint }
   }
 
-  /**
-   * Process an array of bird objects and add focalPoint property to each.
-   * Processes in parallel for better performance.
-   * Sets focalPointReady flag when each image is processed.
-   * @param {Array<{imageUrl: string}>} birds - Array of bird objects with imageUrl
-   * @returns {Promise<void>} Modifies birds in place
-   */
-  const processBirdImages = async (birds) => {
-    await Promise.all(
-      birds.map(async (bird) => {
-        bird.focalPointReady = false
-        if (bird.imageUrl && !isDefaultBirdImageUrl(bird.imageUrl)) {
-          bird.focalPoint = await calculateFocalPoint(bird.imageUrl)
-        } else {
-          bird.focalPoint = '50% 35%'
-        }
-        bird.focalPointReady = true
-      })
-    )
-  }
-
-  /**
-   * Clear the focal point cache (useful for memory management)
-   */
-  const clearCache = () => {
-    focalPointCache.clear()
-  }
-
   return {
     calculateFocalPoint,
-    useFocalPoint,
-    processBirdImages,
-    clearCache
+    useFocalPoint
   }
 }

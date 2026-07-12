@@ -553,10 +553,13 @@ def create_detection_spectrogram(detection: dict[str, Any], input_file_path: str
 def save_detection_to_db(detection: dict[str, Any]) -> None:
     """Insert detection record into database.
 
+    Stamps the new row's id back onto the detection dict so downstream
+    consumers (notification permalinks) can reference it.
+
     Args:
         detection: Detection dictionary from BirdNet analysis
     """
-    db_manager.insert_detection({
+    detection['id'] = db_manager.insert_detection({
         'timestamp': detection['timestamp'],
         'group_timestamp': detection['group_timestamp'],
         'scientific_name': detection['scientific_name'],

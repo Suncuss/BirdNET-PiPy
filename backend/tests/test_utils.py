@@ -7,7 +7,9 @@ import pytest
 
 from core.utils import (
     build_detection_filenames,
+    build_detection_permalink,
     get_legacy_filename,
+    normalize_site_url,
     sanitize_source_label,
 )
 
@@ -584,3 +586,93 @@ class TestBuildDetectionFilenamesWithSourceLabel:
         assert result['audio_filename'] == 'American_Robin_85_2025-11-24-birdnet-10-30-45.mp3'
 
 
+
+
+class TestNormalizeSiteUrl:
+    """Tests for normalize_site_url() validation and normalization"""
+
+    def test_empty_and_none_return_empty(self):
+        assert normalize_site_url('') == ''
+        assert normalize_site_url('   ') == ''
+        assert normalize_site_url(None) == ''
+
+    def test_bare_host_gets_https(self):
+        assert normalize_site_url('birdnet.example.com') == 'https://birdnet.example.com'
+
+    def test_trailing_slash_stripped(self):
+        assert normalize_site_url('https://birdnet.example.com/') == 'https://birdnet.example.com'
+        assert normalize_site_url('https://birdnet.example.com///') == 'https://birdnet.example.com'
+
+    def test_http_with_port_preserved(self):
+        assert normalize_site_url('http://192.168.1.50:8080') == 'http://192.168.1.50:8080'
+
+    def test_path_prefix_preserved_without_trailing_slash(self):
+        assert normalize_site_url('https://example.com/birdnet/') == 'https://example.com/birdnet'
+
+    def test_scheme_and_host_lowercased(self):
+        assert normalize_site_url('HTTPS://BirdNet.Example.COM') == 'https://birdnet.example.com'
+
+    def test_surrounding_whitespace_stripped(self):
+        assert normalize_site_url('  https://example.com  ') == 'https://example.com'
+
+    def test_ipv6_host_preserved(self):
+        assert normalize_site_url('http://[::1]:8080') == 'http://[::1]:8080'
+
+    def test_rejects_non_http_scheme(self):
+        with pytest.raises(ValueError, match='http'):
+            normalize_site_url('ftp://example.com')
+        with pytest.raises(ValueError):
+            normalize_site_url('javascript://alert(1)')
+
+    def test_rejects_credentials(self):
+        with pytest.raises(ValueError, match='credentials'):
+            normalize_site_url('https://user:pass@example.com')
+
+    def test_rejects_query_and_fragment(self):
+        with pytest.raises(ValueError):
+            normalize_site_url('https://example.com?x=1')
+        with pytest.raises(ValueError):
+            normalize_site_url('https://example.com#frag')
+
+    def test_rejects_html_breaking_characters(self):
+        with pytest.raises(ValueError):
+            normalize_site_url('https://example.com/"onmouseover=x')
+        with pytest.raises(ValueError):
+            normalize_site_url('https://example.com/<script>')
+
+    def test_rejects_missing_hostname(self):
+        with pytest.raises(ValueError):
+            normalize_site_url('https://')
+
+    def test_rejects_invalid_port(self):
+        with pytest.raises(ValueError):
+            normalize_site_url('https://example.com:99999')
+
+    def test_rejects_overlong_url(self):
+        with pytest.raises(ValueError, match='at most'):
+            normalize_site_url('https://example.com/' + 'a' * 300)
+
+
+class TestBuildDetectionPermalink:
+    """Tests for build_detection_permalink() URL shape"""
+
+    def test_basic_permalink(self):
+        url = build_detection_permalink('https://x.example', 'American Robin', 42)
+        assert url == 'https://x.example/bird/American%20Robin/recording/42'
+
+    def test_share_token_appended(self):
+        url = build_detection_permalink('https://x.example', 'American Robin', 42,
+                                        share_token='abc.def-ghi')
+        assert url == 'https://x.example/bird/American%20Robin/recording/42?s=abc.def-ghi'
+
+    def test_trailing_slash_base_handled(self):
+        url = build_detection_permalink('https://x.example/', 'Wren', 7)
+        assert url == 'https://x.example/bird/Wren/recording/7'
+
+    def test_missing_common_name_uses_unknown(self):
+        url = build_detection_permalink('https://x.example', None, 7)
+        assert url == 'https://x.example/bird/Unknown/recording/7'
+
+    def test_special_characters_in_name_encoded(self):
+        url = build_detection_permalink('https://x.example', "Anna's Hummingbird & Co/2", 7)
+        assert '/bird/Anna%27s%20Hummingbird%20%26%20Co%2F2/recording/7' in url

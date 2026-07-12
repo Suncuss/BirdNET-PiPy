@@ -2,7 +2,7 @@
  * Tests for useSmartCrop composable
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { useSmartCrop } from '@/composables/useSmartCrop'
+import { useSmartCrop, clearFocalPointCache } from '@/composables/useSmartCrop'
 
 // Mock smartcrop library
 vi.mock('smartcrop', () => ({
@@ -22,7 +22,7 @@ describe('useSmartCrop', () => {
   })
 
   afterEach(() => {
-    helpers.clearCache()
+    clearFocalPointCache()
     vi.restoreAllMocks()
   })
 
@@ -342,106 +342,7 @@ describe('useSmartCrop', () => {
     })
   })
 
-  describe('processBirdImages', () => {
-    it('sets focalPointReady flag on each bird', async () => {
-      const birds = [
-        { name: 'Sparrow', imageUrl: 'default_bird.webp' },
-        { name: 'Robin', imageUrl: 'default_bird.webp' }
-      ]
-
-      await helpers.processBirdImages(birds)
-
-      expect(birds[0].focalPointReady).toBe(true)
-      expect(birds[1].focalPointReady).toBe(true)
-    })
-
-    it('sets default focal point for placeholder images', async () => {
-      const birds = [
-        { name: 'Sparrow', imageUrl: 'default_bird.webp' }
-      ]
-
-      await helpers.processBirdImages(birds)
-
-      expect(birds[0].focalPoint).toBe('50% 35%')
-    })
-
-    it('calculates focal point for real images', async () => {
-      const mockImage = {
-        naturalWidth: 1000,
-        naturalHeight: 1000
-      }
-
-      const originalImage = global.Image
-      global.Image = vi.fn().mockImplementation(() => {
-        const img = {
-          crossOrigin: '',
-          onload: null,
-          onerror: null,
-          src: '',
-          naturalWidth: mockImage.naturalWidth,
-          naturalHeight: mockImage.naturalHeight
-        }
-        setTimeout(() => img.onload?.(), 0)
-        return img
-      })
-
-      smartcrop.crop.mockResolvedValue({
-        topCrop: { x: 400, y: 300, width: 200, height: 200 }
-      })
-
-      const birds = [
-        { name: 'Sparrow', imageUrl: 'https://example.com/sparrow.jpg' }
-      ]
-
-      await helpers.processBirdImages(birds)
-
-      expect(birds[0].focalPoint).toBe('50.0% 40.0%')
-      expect(birds[0].focalPointReady).toBe(true)
-
-      global.Image = originalImage
-    })
-
-    it('processes birds in parallel', async () => {
-      const mockImage = {
-        naturalWidth: 1000,
-        naturalHeight: 1000
-      }
-
-      const originalImage = global.Image
-      global.Image = vi.fn().mockImplementation(() => {
-        const img = {
-          crossOrigin: '',
-          onload: null,
-          onerror: null,
-          src: '',
-          naturalWidth: mockImage.naturalWidth,
-          naturalHeight: mockImage.naturalHeight
-        }
-        setTimeout(() => img.onload?.(), 0)
-        return img
-      })
-
-      smartcrop.crop.mockResolvedValue({
-        topCrop: { x: 450, y: 450, width: 100, height: 100 }
-      })
-
-      const birds = [
-        { name: 'Bird1', imageUrl: 'https://example.com/bird1.jpg' },
-        { name: 'Bird2', imageUrl: 'https://example.com/bird2.jpg' },
-        { name: 'Bird3', imageUrl: 'https://example.com/bird3.jpg' }
-      ]
-
-      await helpers.processBirdImages(birds)
-
-      // All should be processed
-      expect(birds.every(b => b.focalPointReady)).toBe(true)
-      expect(birds.every(b => b.focalPoint)).toBe(true)
-
-      global.Image = originalImage
-    })
-  })
-
-  describe('clearCache', () => {
+  describe('clearFocalPointCache', () => {
     it('clears the focal point cache', async () => {
       const mockImage = {
         naturalWidth: 800,
@@ -477,7 +378,7 @@ describe('useSmartCrop', () => {
       expect(smartcrop.crop).toHaveBeenCalledTimes(1)
 
       // Clear cache
-      helpers.clearCache()
+      clearFocalPointCache()
 
       // Third call - should recalculate
       await helpers.calculateFocalPoint(url)
