@@ -1284,7 +1284,7 @@ class TestSimpleAPI:
                 assert data[0]['displaySpecies'] == 'Wanderdrossel'
 
     def test_available_species_v3(self):
-        """Test /api/species/available returns V3.0 species when model type is 'birdnet_v3'."""
+        """Test /api/species/available returns V3.1 species for birdnet_v3."""
         with tempfile.TemporaryDirectory() as tmpdir:
             fake_species = [
                 {'scientific_name': 'Turdus migratorius', 'common_name': 'American Robin'},

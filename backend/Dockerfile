@@ -27,6 +27,20 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --extra-index-url https://www.piwheels.org/simple \
     -r requirements.txt
 
+# Keep release validation cached across unrelated source edits. Only validator,
+# parser, or bundled-asset changes invalidate these memory-intensive gates.
+COPY model_service/label_utils.py \
+     model_service/model_assets.py \
+     model_service/geomodel_assets.py \
+     model_service/birdnet_v3_assets.py \
+     ./model_service/
+COPY model_service/models/geomodel ./model_service/models/geomodel
+COPY model_service/models/v3.1 ./model_service/models/v3.1
+RUN python -m model_service.geomodel_assets
+RUN python -m model_service.birdnet_v3_assets
+# Compose bind-mounts the checkout over /app, so runtime loaders repeat the
+# authoritative checks against the bytes each service actually reads.
+
 COPY . .
 
 # Create user with matching host UID/GID

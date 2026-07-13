@@ -19,7 +19,7 @@ numpy==1.26.4  # Keep 1.26.x for compatibility with TensorFlow Lite
 
 # Machine Learning
 tflite-runtime==2.14.0  # Keep stable version for model compatibility
-onnxruntime>=1.16.0  # ONNX Runtime for BirdNET V3.0 model
+onnxruntime>=1.16.0  # ONNX Runtime for BirdNET V3.1 model
 
 # Requests
 requests>=2.32.4

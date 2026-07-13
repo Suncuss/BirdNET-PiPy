@@ -35,6 +35,16 @@
       @dismiss="dismissSettingsError"
     />
 
+    <!-- Persistent runtime warning: acoustic detection remains available, but
+         users must know when location filtering has degraded. -->
+    <AlertBanner
+      data-testid="location-filter-warning"
+      :message="locationFilterWarning"
+      variant="error"
+      :dismissible="false"
+      :auto-dismiss="0"
+    />
+
     <!-- Restart/Update Progress (replaces update available banner when active) -->
     <div
       v-if="(serviceRestart.isRestarting.value || systemUpdate.isRestarting.value) && (serviceRestart.restartMessage.value || systemUpdate.restartMessage.value)"
@@ -432,7 +442,7 @@
             </option>
           </select>
           <p class="text-xs text-gray-400 mt-1">
-            V3.0 is a developer preview with 11K species. Model will be downloaded on first use (~541 MB).
+            V3.1 is a bundled FP16 developer preview with 11K species; devices with at least 1 GB RAM are recommended.
           </p>
         </div>
 
@@ -483,7 +493,7 @@
                 Minimum confidence to report
               </p>
             </div>
-            <!-- Location Filter Threshold (V2.4 meta-model / V3.0 geomodel) -->
+            <!-- Location Filter Threshold (V2.4 meta-model / V3.1 geomodel) -->
             <div>
               <div class="flex justify-between items-center mb-2">
                 <label
@@ -1624,8 +1634,11 @@ export default {
 
     // Recorder health status (populated via WebSocket + REST)
     const recorderStatus = ref(null)
+    const modelStatus = ref(null)
     const errorCopied = ref(false)
     let settingsSocket = null
+    let modelStatusRetryTimer = null
+    let modelStatusPollingStopped = false
 
     // Stream source modal state
     const showStreamModal = ref(false)
@@ -1653,6 +1666,13 @@ export default {
       if (serviceRestart.isRestarting.value) return false
       if (recorderStatus.value.state === RECORDER_STATES.RUNNING) return false
       return sourceErrors.value.length > 0
+    })
+
+    const locationFilterWarning = computed(() => {
+      const status = modelStatus.value?.location_filter
+      if (!status || status.state === 'active' || status.state === 'disabled') return ''
+      return status.message ||
+        'Location filtering is unavailable. Acoustic detections are continuing without location filtering; check System Logs for details.'
     })
 
     const recorderDotClass = computed(() => {
@@ -1942,6 +1962,26 @@ export default {
         }
       } catch (error) {
         console.warn('Recorder status fetch failed:', error)
+      }
+    }
+
+    const scheduleModelStatusRetry = () => {
+      if (modelStatusPollingStopped || modelStatusRetryTimer) return
+      modelStatusRetryTimer = setTimeout(() => {
+        modelStatusRetryTimer = null
+        if (!modelStatusPollingStopped) loadModelStatus()
+      }, 5000)
+    }
+
+    const loadModelStatus = async () => {
+      try {
+        const { data } = await api.get('/model/status')
+        if (modelStatusPollingStopped) return
+        modelStatus.value = data
+        if (data?.status === 'unavailable') scheduleModelStatusRetry()
+      } catch (error) {
+        console.warn('Model status fetch failed:', error)
+        scheduleModelStatusRetry()
       }
     }
 
@@ -2747,6 +2787,7 @@ export default {
       loadSettings()
       loadStorageInfo()
       loadRecorderStatus()
+      loadModelStatus()
       loadSpeciesList()
       systemUpdate.loadVersionInfo()
       auth.ensureAuthLoaded()
@@ -2756,8 +2797,13 @@ export default {
 
     // Cleanup on unmount
     onUnmounted(() => {
+      modelStatusPollingStopped = true
       window.removeEventListener('beforeunload', handleBeforeUnload)
       if (errorCopiedTimer) clearTimeout(errorCopiedTimer)
+      if (modelStatusRetryTimer) {
+        clearTimeout(modelStatusRetryTimer)
+        modelStatusRetryTimer = null
+      }
       if (settingsSocket) {
         settingsSocket.disconnect()
         settingsSocket = null
@@ -2830,6 +2876,8 @@ export default {
       getCommonName,
       // Recorder health
       recorderStatus,
+      modelStatus,
+      locationFilterWarning,
       recorderDotClass,
       recorderStateLabel,
       recorderStateLabelClass,

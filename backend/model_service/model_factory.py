@@ -6,7 +6,6 @@ multiple model types (BirdNET, Perch, etc.) through a unified interface.
 """
 
 import logging
-import os
 from typing import TYPE_CHECKING
 
 from config.constants import ModelType
@@ -47,6 +46,7 @@ def create_model(model_type: ModelType = ModelType.BIRDNET) -> "BirdDetectionMod
         return BirdNetV3Model(
             model_path=settings.MODEL_V3_PATH,
             labels_path=settings.LABELS_V3_PATH,
+            manifest_path=settings.MODEL_V3_MANIFEST_PATH,
         )
 
     raise ValueError(f"Unknown model type: {model_type}")
@@ -60,7 +60,7 @@ def create_location_filter(
     """Factory to create a ready-to-use location filter.
 
     Owns load and fallback logic: loads the filter internally, and falls
-    back to NoFilter on any failure (logged as a warning).
+    back to a degraded NoFilter on failure so acoustic inference stays available.
 
     Args:
         model_type: The active model type.
@@ -71,28 +71,40 @@ def create_location_filter(
     Returns:
         A loaded LocationFilter instance, ready to use.
     """
+    from .geomodel_assets import GeoModelAssetError
     from .location_filter import GeoModelFilter, ModelBackedFilter, NoFilter
+
+    unavailable_message = (
+        "Location filtering failed to start. Acoustic detections are continuing "
+        "without location filtering; check System Logs for details."
+    )
 
     if model_type == ModelType.BIRDNET:
         if model is None:
-            logger.warning("V2.4 ModelBackedFilter requires a model instance, falling back to NoFilter")
-            return NoFilter()
-        return ModelBackedFilter(model)
+            logger.error(
+                "V2.4 location filter requires a loaded model; location filtering disabled"
+            )
+            return NoFilter.degraded(
+                code="location_model_missing",
+                message=unavailable_message,
+            )
+        try:
+            model_filter = ModelBackedFilter(model)
+            model_filter.load()
+            return model_filter
+        except Exception as exc:
+            logger.error(
+                "V2.4 location meta-model validation failed; location filtering disabled",
+                extra={'error': str(exc)},
+                exc_info=True,
+            )
+            return NoFilter.degraded(
+                code="meta_model_validation_failed",
+                message=unavailable_message,
+            )
 
     if model_type == ModelType.BIRDNET_V3:
         from config import settings
-
-        if not os.path.exists(settings.GEOMODEL_PATH):
-            logger.info("Geomodel not found, location filtering disabled", extra={
-                'expected_path': settings.GEOMODEL_PATH,
-            })
-            return NoFilter()
-
-        if not os.path.exists(settings.GEOMODEL_LABELS_PATH):
-            logger.warning("Geomodel labels not found, location filtering disabled", extra={
-                'expected_path': settings.GEOMODEL_LABELS_PATH,
-            })
-            return NoFilter()
 
         labels = birdnet_labels if birdnet_labels is not None else (
             model.get_labels() if model is not None else []
@@ -102,16 +114,37 @@ def create_location_filter(
             geo_filter = GeoModelFilter(
                 model_path=settings.GEOMODEL_PATH,
                 labels_path=settings.GEOMODEL_LABELS_PATH,
+                manifest_path=settings.GEOMODEL_MANIFEST_PATH,
                 birdnet_labels=labels,
             )
             geo_filter.load()
             return geo_filter
-        except Exception:
-            logger.warning("Failed to load geomodel, location filtering disabled", exc_info=True)
-            return NoFilter()
+        except GeoModelAssetError as exc:
+            logger.error(
+                "Geomodel validation failed, location filtering disabled",
+                extra={'error': str(exc)},
+                exc_info=True,
+            )
+            return NoFilter.degraded(
+                code="geomodel_validation_failed",
+                message=unavailable_message,
+            )
+        except Exception as exc:
+            logger.error(
+                "Unexpected geomodel load failure, location filtering disabled",
+                extra={'error': str(exc)},
+                exc_info=True,
+            )
+            return NoFilter.degraded(
+                code="geomodel_load_failed",
+                message=unavailable_message,
+            )
 
-    logger.warning(f"No location filter for model type '{model_type}', using NoFilter")
-    return NoFilter()
+    logger.error(f"No location filter for model type '{model_type}', using NoFilter")
+    return NoFilter.degraded(
+        code="location_filter_unsupported",
+        message=unavailable_message,
+    )
 
 
 def get_model_type_from_settings() -> ModelType:

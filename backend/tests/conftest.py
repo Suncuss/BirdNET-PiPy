@@ -48,6 +48,18 @@ def isolate_internal_secret(tmp_path):
         yield
 
 
+@pytest.fixture(autouse=True)
+def isolate_model_startup_status(tmp_path, monkeypatch):
+    """Keep model startup diagnostics out of the mounted development data."""
+    from config import settings
+
+    monkeypatch.setattr(
+        settings,
+        "MODEL_STARTUP_STATUS_PATH",
+        str(tmp_path / "model_service_startup.json"),
+    )
+
+
 @pytest.fixture
 def test_env(monkeypatch):
     """Set up test environment variables."""

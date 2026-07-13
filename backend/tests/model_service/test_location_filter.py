@@ -95,6 +95,24 @@ class TestNoFilter:
         assert result.source == "disabled"
         assert result.allowed_species is None
         assert result.probabilities is None
+        assert f.status.state == "disabled"
+        assert f.status.code is None
+
+    def test_degraded_filter_exposes_reason(self):
+        from model_service.location_filter import NoFilter
+
+        f = NoFilter.degraded(
+            code="geomodel_validation_failed",
+            message="Location filtering failed to start.",
+        )
+
+        assert f.status.as_dict() == {
+            "state": "degraded",
+            "source": "disabled",
+            "version": None,
+            "code": "geomodel_validation_failed",
+            "message": "Location filtering failed to start.",
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -119,10 +137,13 @@ class TestModelBackedFilter:
         result = f.filter(42.0, -76.0, dt, threshold=0.03)
 
         model.get_location_probabilities.assert_called_once_with(42.0, -76.0, 24)
+        model.validate_location_model.assert_called_once_with()
         assert result.source == "meta_model_v2.4"
         assert result.allowed_species == frozenset(["Species A_Common A"])
         assert result.probability_for("Species A_Common A") == 0.2
         assert result.probability_for("Species B_Common B") == 0.01
+        assert f.status.state == "active"
+        assert f.status.source == "meta_model_v2.4"
 
     def test_converts_datetime_to_iso_week(self):
         from model_service.location_filter import ModelBackedFilter
@@ -131,10 +152,18 @@ class TestModelBackedFilter:
         model.get_location_probabilities.return_value = {}
 
         f = ModelBackedFilter(model)
+        f.load()
         # January 1, 2025 → ISO week 1
         f.filter(0.0, 0.0, datetime.datetime(2025, 1, 1))
         _, _, week_arg = model.get_location_probabilities.call_args[0]
         assert week_arg == 1
+
+    def test_status_is_not_active_before_meta_model_validation(self):
+        from model_service.location_filter import ModelBackedFilter
+
+        location_filter = ModelBackedFilter(MagicMock())
+
+        assert location_filter.status.state == "disabled"
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +202,7 @@ class TestGeoModelFilter:
             model_path="/fake/geomodel.onnx",
             labels_path=geomodel_labels_file,
             birdnet_labels=self.BIRDNET_LABELS,
+            manifest_path="/fake/manifest.json",
         )
 
         # Mock the ONNX session (skip actual load)
@@ -286,13 +316,18 @@ class TestGeoModelFilter:
         call_args = mock_geo_filter._session.run.call_args[0]
         input_dict = call_args[1]  # the feed dict
         call_input = input_dict[mock_geo_filter._input_name]
-        assert call_input[0][2] == 23.0  # week column
+        np.testing.assert_array_equal(
+            call_input[0], np.array([42.0, -76.0, 23.0], dtype=np.float32)
+        )
+        assert mock_geo_filter.status.state == "active"
 
     def test_filter_raises_if_not_loaded(self):
         """Filter raises RuntimeError if session not loaded."""
         from model_service.location_filter import GeoModelFilter
 
-        f = GeoModelFilter("/fake.onnx", "/fake.txt", [])
+        f = GeoModelFilter(
+            "/fake.onnx", "/fake.txt", [], "/fake/manifest.json"
+        )
         with pytest.raises(RuntimeError, match="not loaded"):
             f.filter(42.0, -76.0, datetime.datetime.now())
 
@@ -309,7 +344,7 @@ class TestProcessAudioFileWithLocationFilter:
 
         model = MagicMock()
         model.name = "birdnet"
-        model.version = "3.0"
+        model.version = "3.1"
         model.sample_rate = 32000
         model.chunk_length_seconds = 3.0
         model.get_ebird_code.return_value = None

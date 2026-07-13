@@ -201,7 +201,7 @@ describe('DetectionInfoModal', () => {
         extra: {
           ebird_code: 'amerob',
           model: 'birdnet',
-          model_version: '2.4'
+          model_version: '3.1'
         }
       }
       const wrapper = mountModal({ detection })
@@ -209,7 +209,7 @@ describe('DetectionInfoModal', () => {
       expect(wrapper.text()).toContain('Detection Metadata')
       expect(wrapper.text()).toContain('amerob')
       expect(wrapper.text()).toContain('birdnet')
-      expect(wrapper.text()).toContain('2.4')
+      expect(wrapper.text()).toContain('3.1')
     })
 
     it('shows both weather and metadata when both present', () => {

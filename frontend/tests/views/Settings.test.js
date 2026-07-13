@@ -158,6 +158,36 @@ const mockSettings = {
 
 const createMockSettings = () => structuredClone(mockSettings)
 
+const defaultGetResponse = (url) => {
+  if (url === '/settings' || url === '/settings/defaults') {
+    return Promise.resolve({ data: createMockSettings() })
+  }
+  if (url === '/species/available') {
+    return Promise.resolve({ data: { species: [], total: 0, filtered: 0 } })
+  }
+  if (url === '/system/storage') {
+    return Promise.resolve({ data: {} })
+  }
+  if (url === '/recorder/status') {
+    return Promise.resolve({ data: {} })
+  }
+  if (url === '/model/status') {
+    return Promise.resolve({
+      data: {
+        status: 'ok',
+        location_filter: {
+          state: 'active',
+          source: 'meta_model_v2.4',
+          version: '2.4',
+          code: null,
+          message: null
+        }
+      }
+    })
+  }
+  return Promise.resolve({ data: {} })
+}
+
 const mountSettings = () => mount(Settings, {
   global: {
     stubs: {
@@ -188,21 +218,7 @@ describe('Settings', () => {
     mockSystemUpdate.statusType.value = null
     mockSystemUpdate.showUpdateIndicator.value = false
     mockApi.post.mockResolvedValue({ data: { status: 'restart_requested' } })
-    mockApi.get.mockImplementation((url) => {
-      if (url === '/settings' || url === '/settings/defaults') {
-        return Promise.resolve({ data: createMockSettings() })
-      }
-      if (url === '/species/available') {
-        return Promise.resolve({ data: { species: [], total: 0, filtered: 0 } })
-      }
-      if (url === '/system/storage') {
-        return Promise.resolve({ data: {} })
-      }
-      if (url === '/recorder/status') {
-        return Promise.resolve({ data: {} })
-      }
-      return Promise.resolve({ data: {} })
-    })
+    mockApi.get.mockImplementation(defaultGetResponse)
   })
 
   describe('Loading Settings', () => {
@@ -213,6 +229,143 @@ describe('Settings', () => {
       expect(mockApi.get).toHaveBeenCalledWith('/settings')
       expect(wrapper.vm.settings.audio.recording_length).toBe(9)
       expect(wrapper.vm.settings.audio.overlap).toBe(0.0)
+    })
+
+    it('loads model and location-filter status on mount', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      expect(mockApi.get).toHaveBeenCalledWith('/model/status')
+      expect(wrapper.vm.modelStatus.location_filter.state).toBe('active')
+      expect(wrapper.find('[data-testid="location-filter-warning"]').exists()).toBe(false)
+    })
+
+    it('shows a persistent warning when location filtering is degraded', async () => {
+      mockApi.get.mockImplementation((url) => {
+        if (url !== '/model/status') return defaultGetResponse(url)
+        return Promise.resolve({
+          data: {
+            status: 'degraded',
+            location_filter: {
+              state: 'degraded',
+              source: 'disabled',
+              version: null,
+              code: 'geomodel_validation_failed',
+              message: 'Location filtering failed to start. Acoustic detections are continuing without location filtering; check System Logs for details.'
+            }
+          }
+        })
+      })
+
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      const warning = wrapper.find('[data-testid="location-filter-warning"]')
+      expect(warning.exists()).toBe(true)
+      expect(warning.text()).toContain('Acoustic detections are continuing without location filtering')
+      expect(warning.text()).not.toContain('Dismiss')
+    })
+
+    it('does not render intentionally disabled filtering as an error', async () => {
+      mockApi.get.mockImplementation((url) => {
+        if (url !== '/model/status') return defaultGetResponse(url)
+        return Promise.resolve({
+          data: {
+            status: 'ok',
+            location_filter: {
+              state: 'disabled',
+              source: 'disabled',
+              message: 'Location filtering is disabled.'
+            }
+          }
+        })
+      })
+
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="location-filter-warning"]').exists()).toBe(false)
+    })
+
+    it('rechecks a temporarily unavailable model service and clears the warning', async () => {
+      vi.useFakeTimers()
+      let statusCalls = 0
+      mockApi.get.mockImplementation((url) => {
+        if (url !== '/model/status') return defaultGetResponse(url)
+        statusCalls += 1
+        if (statusCalls === 1) {
+          return Promise.resolve({
+            data: {
+              status: 'unavailable',
+              location_filter: {
+                state: 'unavailable',
+                source: 'disabled',
+                message: 'Model service status is unavailable.'
+              }
+            }
+          })
+        }
+        return defaultGetResponse(url)
+      })
+
+      const wrapper = mountSettings()
+      await flushPromises()
+      expect(wrapper.text()).toContain('Model service status is unavailable.')
+
+      await vi.advanceTimersByTimeAsync(5000)
+      await flushPromises()
+
+      expect(statusCalls).toBe(2)
+      expect(wrapper.find('[data-testid="location-filter-warning"]').exists()).toBe(false)
+      vi.useRealTimers()
+    })
+
+    it('retries after a transient model-status fetch failure', async () => {
+      vi.useFakeTimers()
+      let statusCalls = 0
+      mockApi.get.mockImplementation((url) => {
+        if (url !== '/model/status') return defaultGetResponse(url)
+        statusCalls += 1
+        if (statusCalls === 1) return Promise.reject(new Error('nginx restarting'))
+        return defaultGetResponse(url)
+      })
+
+      const wrapper = mountSettings()
+      await flushPromises()
+      expect(statusCalls).toBe(1)
+
+      await vi.advanceTimersByTimeAsync(5000)
+      await flushPromises()
+
+      expect(statusCalls).toBe(2)
+      expect(wrapper.vm.modelStatus.location_filter.state).toBe('active')
+      vi.useRealTimers()
+    })
+
+    it('does not schedule polling when an in-flight fetch resolves after unmount', async () => {
+      vi.useFakeTimers()
+      let resolveStatus
+      let statusCalls = 0
+      mockApi.get.mockImplementation((url) => {
+        if (url !== '/model/status') return defaultGetResponse(url)
+        statusCalls += 1
+        return new Promise((resolve) => { resolveStatus = resolve })
+      })
+
+      const wrapper = mountSettings()
+      await Promise.resolve()
+      wrapper.unmount()
+      resolveStatus({
+        data: {
+          status: 'unavailable',
+          location_filter: { state: 'unavailable', source: 'disabled' }
+        }
+      })
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(5000)
+
+      expect(statusCalls).toBe(1)
+      vi.useRealTimers()
     })
 
     it('retries loading settings on failure', async () => {

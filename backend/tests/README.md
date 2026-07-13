@@ -40,9 +40,11 @@ tests/
 ├── model_service/                           # Model service tests (6 files)
 │   ├── test_api_contract.py                 # API response format stability (10 tests)
 │   ├── test_base_model.py                   # Base model interface and factory (11 tests)
-│   ├── test_birdnet_model.py                # V2.4 prediction and privacy filter (15 tests)
-│   ├── test_birdnet_v3_model.py             # V3.0 ONNX inference (12 tests)
-│   ├── test_location_filter.py              # Location filter abstraction (30 tests)
+│   ├── test_birdnet_model.py                # V2.4 prediction and privacy filter
+│   ├── test_birdnet_v3_model.py             # V3.1 ONNX inference
+│   ├── test_birdnet_v3_assets.py            # V3.1 bundle and tensor validation
+│   ├── test_location_filter.py              # Location filter abstraction
+│   ├── test_service_status.py               # Durable model startup diagnostics
 │   └── test_model_loader.py                 # eBird code functionality (9 tests)
 ├── notification_service/                    # Notification tests (1 file)
 │   ├── conftest.py                          # Notification-specific fixtures
@@ -206,11 +208,13 @@ Tests for BirdNET model inference, factory pattern, and location filtering.
 
 | File | Tests | Description |
 |------|-------|-------------|
-| `test_api_contract.py` | 10 | API response format stability and regression |
+| `test_api_contract.py` | 16 | API response format stability and regression |
 | `test_base_model.py` | 11 | Base model interface, factory pattern, eBird codes |
-| `test_birdnet_model.py` | 15 | V2.4 TFLite prediction and privacy filter |
-| `test_birdnet_v3_model.py` | 12 | V3.0 ONNX inference |
-| `test_location_filter.py` | 30 | Location filter abstraction and implementations |
+| `test_birdnet_model.py` | 16 | V2.4 TFLite prediction, privacy filter, and meta-model validation |
+| `test_birdnet_v3_model.py` | 10 | V3.1 ONNX inference and post-processing |
+| `test_birdnet_v3_assets.py` | 17 | V3.1 artifact, tensor-contract, and cleanup validation |
+| `test_location_filter.py` | 33 | Location filter abstraction and implementations |
+| `test_service_status.py` | 2 | Durable model startup diagnostics |
 | `test_model_loader.py` | 9 | Model loading and eBird code functionality |
 
 ### Notification Service Tests (`tests/notification_service/`)

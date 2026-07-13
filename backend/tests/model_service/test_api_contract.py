@@ -8,6 +8,36 @@ import numpy as np
 import pytest
 
 
+class TestModelServiceStatus:
+    def test_status_route_reports_degraded_location_filter(self, monkeypatch):
+        from config.constants import ModelType
+        from model_service import inference_server
+        from model_service.location_filter import NoFilter
+
+        model = MagicMock()
+        model.name = "BirdNET V3"
+        model.version = "3.1"
+        location_filter = NoFilter.degraded(
+            code="geomodel_validation_failed",
+            message="Location filtering failed to start.",
+        )
+        monkeypatch.setattr(inference_server, "model", model)
+        monkeypatch.setattr(inference_server, "model_type", ModelType.BIRDNET_V3)
+        monkeypatch.setattr(inference_server, "location_filter", location_filter)
+
+        response = inference_server.app.test_client().get("/api/status")
+
+        assert response.status_code == 200
+        payload = response.get_json()
+        assert payload["status"] == "degraded"
+        assert payload["model"] == {
+            "type": "birdnet_v3",
+            "name": "BirdNET V3",
+            "version": "3.1",
+        }
+        assert payload["location_filter"]["code"] == "geomodel_validation_failed"
+
+
 class TestBuildDetectionResult:
     """Test build_detection_result() maintains expected API contract."""
 
@@ -97,6 +127,30 @@ class TestBuildDetectionResult:
         assert result["extra"]["model"] == "birdnet"
         assert result["extra"]["model_version"] == "2.4"
         assert result["extra"]["ebird_code"] == "amerob"
+
+    def test_v31_release_is_persisted_in_detection_metadata(
+        self, mock_model, sample_species, sample_params
+    ):
+        """New V3 detections retain the exact bundled release version."""
+        from model_service.inference_server import build_detection_result
+
+        mock_model.version = "3.1"
+        result = build_detection_result(
+            sample_species,
+            sample_params["chunk_index"],
+            sample_params["total_chunks"],
+            sample_params["step_seconds"],
+            sample_params["file_timestamp"],
+            sample_params["source_file_name"],
+            sample_params["lat"],
+            sample_params["lon"],
+            sample_params["cutoff"],
+            sample_params["sensitivity"],
+            sample_params["overlap"],
+            mock_model,
+        )
+
+        assert result["extra"]["model_version"] == "3.1"
 
     def test_species_parsing(self, mock_model, sample_species, sample_params):
         """Test correct parsing of species label into scientific and common name."""

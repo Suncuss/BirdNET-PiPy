@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "name": "BirdNET V3.1",
+  "version": "3.1",
+  "source": {
+    "repository": "https://github.com/birdnet-team/birdnet-V3.0-dev",
+    "release": "https://zenodo.org/records/20703646",
+    "doi": "10.5281/zenodo.20703646",
+    "upstream_name": "BirdNET+ V3.0 Developer Preview 3.1"
+  },
+  "license": {
+    "spdx": "CC-BY-SA-4.0",
+    "url": "https://creativecommons.org/licenses/by-sa/4.0/"
+  },
+  "artifacts": {
+    "model": {
+      "filename": "BirdNET+_V3.0-preview3.1_Global_11K_FP16_pruned.onnx",
+      "size_bytes": 71528628,
+      "sha256": "69cfc8db3ebec163feb6329e546eb56e1aadac2a309f1ee99aecfabd1aa9bd24"
+    },
+    "labels": {
+      "filename": "BirdNET+_V3.0-preview3.1_Global_11K_Labels.csv",
+      "size_bytes": 809172,
+      "sha256": "8124b0ea2d187104c5e2cd95a0f937165647e20349c8fd34d4d5ef991821f8f0"
+    },
+    "terms": {
+      "filename": "TERMS_OF_USE.txt",
+      "size_bytes": 2290,
+      "sha256": "91b474bddbfdbd7cb2f5d85fd4511eee8af151d899c8450cd0b22000c425bd8f"
+    }
+  },
+  "contract": {
+    "sample_rate_hz": 32000,
+    "input": {
+      "name": "input",
+      "dtype": "tensor(float)",
+      "rank": 2
+    },
+    "predictions": {
+      "name": "predictions",
+      "dtype": "tensor(float)",
+      "classes": 11560,
+      "activation": "sigmoid",
+      "range": [
+        0.0,
+        1.0
+      ]
+    }
+  },
+  "precision": "FP16 pruned weights with FP32 input and output tensors",
+  "label_format": "semicolon-delimited CSV with sci_name and com_name columns"
+}

@@ -19,7 +19,7 @@ Prefer simple, modular code with small focused components.
 ## Architecture
 
 **Microservices Backend:**
-- **Model Inference Server** (`backend/model_service/inference_server.py`) - Port 5001: BirdNET model inference (V2.4 TFLite / V3.0 ONNX via factory pattern)
+- **Model Inference Server** (`backend/model_service/inference_server.py`) - Port 5001: BirdNET model inference (V2.4 TFLite / V3.1 ONNX via factory pattern)
 - **API Server** (`backend/core/api.py`) - Port 5002: REST API and static file serving
 - **Main Processing** (`backend/core/main.py`) - Continuous audio recording and analysis pipeline
 - **Icecast Streaming** (`deployment/audio/`) - Port 8888: Live audio streaming to browsers
@@ -61,7 +61,7 @@ frontend/src/
   router/        # Vue Router config
 backend/
   core/          # App logic (API, DB, recording, notifications, HA mode)
-  model_service/ # Inference (V2.4 TFLite / V3.0 ONNX via factory pattern)
+  model_service/ # Inference (V2.4 TFLite / V3.1 ONNX via factory pattern)
   config/        # Settings and constants
   tests/         # pytest suite
 deployment/      # Runtime service scripts, Icecast streaming

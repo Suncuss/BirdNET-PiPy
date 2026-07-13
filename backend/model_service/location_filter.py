@@ -5,7 +5,7 @@ from the audio detection model. Implementations include:
 
 - NoFilter: passthrough (no filtering)
 - ModelBackedFilter: adapter wrapping a model's get_location_probabilities() (V2.4)
-- GeoModelFilter: standalone ONNX geomodel inference (V3.0+)
+- GeoModelFilter: standalone ONNX geomodel inference (V3.1)
 """
 
 import datetime
@@ -18,16 +18,36 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Literal
 
-import numpy as np
-
 from config.constants import DEFAULT_SPECIES_FILTER_THRESHOLD
 from config.settings import LOCATION_FILTER_CACHE_SIZE
 
-from .label_utils import get_scientific_name, parse_geomodel_labels
+from .geomodel_assets import build_geomodel_input, load_validated_geomodel
+from .label_utils import get_scientific_name
 
 logger = logging.getLogger(__name__)
 
 LocationSource = Literal["disabled", "meta_model_v2.4", "geomodel_v3"]
+FilterState = Literal["active", "disabled", "degraded"]
+
+
+@dataclass(frozen=True, slots=True)
+class LocationFilterStatus:
+    """Serializable runtime state for operator and UI diagnostics."""
+
+    state: FilterState
+    source: LocationSource
+    version: str | None = None
+    code: str | None = None
+    message: str | None = None
+
+    def as_dict(self) -> dict[str, str | None]:
+        return {
+            "state": self.state,
+            "source": self.source,
+            "version": self.version,
+            "code": self.code,
+            "message": self.message,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +107,11 @@ class LocationFilter(ABC):
     def load(self) -> None:
         """Load all resources into memory. Called by the factory."""
 
+    @property
+    @abstractmethod
+    def status(self) -> LocationFilterStatus:
+        """Return the current location-filter health state."""
+
     @abstractmethod
     def filter(
         self,
@@ -113,8 +138,30 @@ class LocationFilter(ABC):
 class NoFilter(LocationFilter):
     """Passthrough filter — no location-based filtering."""
 
+    def __init__(
+        self,
+        *,
+        state: FilterState = "disabled",
+        code: str | None = None,
+        message: str = "Location filtering is disabled.",
+    ):
+        self._status = LocationFilterStatus(
+            state=state,
+            source="disabled",
+            code=code,
+            message=message,
+        )
+
+    @classmethod
+    def degraded(cls, *, code: str, message: str) -> "NoFilter":
+        return cls(state="degraded", code=code, message=message)
+
     def load(self) -> None:
         pass
+
+    @property
+    def status(self) -> LocationFilterStatus:
+        return self._status
 
     def filter(self, lat, lon, dt, threshold=DEFAULT_SPECIES_FILTER_THRESHOLD):
         return LocationContext.disabled(threshold)
@@ -128,12 +175,33 @@ class ModelBackedFilter(LocationFilter):
 
     def __init__(self, model):
         self._model = model
+        self._loaded = False
 
     def load(self) -> None:
-        # Model is already loaded by the time this is created.
-        pass
+        # Validate the lazily-used meta-model now so health never claims active
+        # while every analysis request would fail on a missing/corrupt file.
+        self._model.validate_location_model()
+        self._loaded = True
+
+    @property
+    def status(self) -> LocationFilterStatus:
+        version = str(getattr(self._model, "version", "")) or None
+        if not self._loaded:
+            return LocationFilterStatus(
+                state="disabled",
+                source="meta_model_v2.4",
+                version=version,
+                message="The V2.4 location meta-model has not been validated.",
+            )
+        return LocationFilterStatus(
+            state="active",
+            source="meta_model_v2.4",
+            version=version,
+        )
 
     def filter(self, lat, lon, dt, threshold=DEFAULT_SPECIES_FILTER_THRESHOLD):
+        if not self._loaded:
+            raise RuntimeError("V2.4 location filter not loaded")
         week = dt.isocalendar()[1]
         probabilities = self._model.get_location_probabilities(lat, lon, week)
         if probabilities is None:
@@ -165,15 +233,18 @@ class GeoModelFilter(LocationFilter):
         model_path: str,
         labels_path: str,
         birdnet_labels: list[str],
+        manifest_path: str,
     ):
         self._model_path = model_path
         self._labels_path = labels_path
+        self._manifest_path = manifest_path
         self._birdnet_labels = birdnet_labels
 
         # Populated by load()
         self._session = None
         self._input_name: str | None = None
         self._output_name: str | None = None
+        self._version: str | None = None
 
         # Index mapping: geomodel output index → BirdNET label string
         self._index_to_birdnet_label: dict[int, str] = {}
@@ -186,25 +257,46 @@ class GeoModelFilter(LocationFilter):
 
     def load(self) -> None:
         """Load ONNX session, parse labels, build cross-reference mapping."""
-        import onnxruntime as ort
-
-        self._session = ort.InferenceSession(
-            self._model_path, providers=['CPUExecutionProvider']
+        loaded = load_validated_geomodel(
+            self._model_path,
+            self._labels_path,
+            self._manifest_path,
         )
-        self._input_name = self._session.get_inputs()[0].name
-        self._output_name = self._session.get_outputs()[0].name
-
-        geomodel_labels = parse_geomodel_labels(self._labels_path)
-        self._build_label_mapping(geomodel_labels)
+        self._session = loaded.session
+        self._input_name = loaded.manifest.input_name
+        self._output_name = loaded.manifest.output_name
+        self._version = loaded.manifest.version
+        self._build_label_mapping(loaded.labels)
 
         logger.info(
             "Geomodel loaded",
             extra={
                 'model': self._model_path,
-                'geomodel_species': len(geomodel_labels),
+                'version': self._version,
+                'release': loaded.manifest.release_url,
+                'geomodel_species': len(loaded.labels),
                 'mapped_species': len(self._index_to_birdnet_label),
                 'unmapped_birdnet_species': len(self._unmapped_labels),
             },
+        )
+
+    @property
+    def version(self) -> str | None:
+        """Return the validated upstream geomodel version after loading."""
+        return self._version
+
+    @property
+    def status(self) -> LocationFilterStatus:
+        if self._session is None:
+            return LocationFilterStatus(
+                state="disabled",
+                source="geomodel_v3",
+                message="Geomodel has not been loaded.",
+            )
+        return LocationFilterStatus(
+            state="active",
+            source="geomodel_v3",
+            version=self._version,
         )
 
     def _build_label_mapping(self, geomodel_labels: list[tuple[str, str, str]]) -> None:
@@ -246,7 +338,7 @@ class GeoModelFilter(LocationFilter):
                 })
                 return self._probabilities_cache[cache_key]
 
-            model_input = np.array([[lat, lon, geomodel_week]], dtype=np.float32)
+            model_input = build_geomodel_input(lat, lon, geomodel_week)
             output = self._session.run(
                 [self._output_name], {self._input_name: model_input}
             )

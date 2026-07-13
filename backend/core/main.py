@@ -62,6 +62,10 @@ DEGRADED_FAILURE_THRESHOLD = 3  # Consecutive failures before 'degraded' state
 STATUS_REFRESH_INTERVAL = 60   # Re-broadcast recorder status every N seconds
 AUDIO_STATUS_NOTIFY_COOLDOWN = 600  # Min seconds between repeat audio-degradation alerts
 
+
+class ModelServiceUnavailableError(RuntimeError):
+    """Raised when a recording could not reach the model service at all."""
+
 # Setup logging
 setup_logging('main')
 logger = get_logger(__name__)
@@ -768,8 +772,9 @@ def process_audio_files():
     """Processing thread: scans directory for .wav files and processes them.
 
     The filesystem IS the queue - no in-memory queue needed.
-    Files are deleted after they are accepted for processing so a failed
-    post-analysis step cannot retry the same WAV indefinitely.
+    Files are deleted after a model response is accepted so a failed
+    post-analysis step cannot retry the same WAV indefinitely. Network-level
+    model outages leave recordings queued until analysis is reachable again.
     Collects from root dir (legacy) and per-source subdirs.
     """
     thread_logger = get_logger(f"{__name__}.processing")
@@ -800,6 +805,7 @@ def process_audio_files():
 
                 detections = []
                 processing_failed = False
+                preserve_recording = False
                 try:
                     # Process the audio file via BirdNet
                     detections = process_audio_file(file_path)
@@ -842,6 +848,13 @@ def process_audio_files():
                                     'error': str(e)
                                 }, exc_info=True)
 
+                except ModelServiceUnavailableError as e:
+                    processing_failed = True
+                    preserve_recording = True
+                    thread_logger.warning(
+                        "Model service unavailable; recording remains queued",
+                        extra={'file': file_name, 'error': str(e)},
+                    )
                 except Exception as e:
                     processing_failed = True
                     log_fd_exhaustion_if_needed(e, thread_logger, 'recording_processing', extra={
@@ -852,14 +865,23 @@ def process_audio_files():
                         'error': str(e)
                     }, exc_info=True)
                 finally:
-                    # Clean up processed file. Even when post-analysis handling
-                    # fails, do not leave the same WAV queued for endless retries.
                     thread_logger.debug("Audio file processed", extra={
                         'file': file_name,
                         'detections': len(detections) if detections else 0,
-                        'processing_failed': processing_failed
+                        'processing_failed': processing_failed,
+                        'preserved_for_retry': preserve_recording,
                     })
-                    remove_recording_from_queue(file_path, file_name, thread_logger)
+                    # A network-level model outage means analysis never happened,
+                    # so keep the WAV in the filesystem queue. Post-analysis
+                    # failures still consume it to avoid infinite retries.
+                    if not preserve_recording:
+                        remove_recording_from_queue(
+                            file_path, file_name, thread_logger
+                        )
+
+                if preserve_recording:
+                    time.sleep(FILE_SCAN_INTERVAL)
+                    break
 
             # Sleep before next scan (only if no files were found)
             if not candidates:
@@ -876,7 +898,9 @@ def process_audio_file(audio_file_path: str) -> list[dict[str, Any]]:
     """Send audio file to BirdNet service for analysis.
 
     Includes retry logic with exponential backoff for connection errors,
-    which can occur during server startup (warmup period).
+    which can occur during server startup (warmup period). Raises
+    ModelServiceUnavailableError when analysis never reached the service so
+    the filesystem queue can preserve the recording.
     """
     payload = {'audio_file_path': audio_file_path}
     file_name = os.path.basename(audio_file_path)
@@ -924,7 +948,9 @@ def process_audio_file(audio_file_path: str) -> list[dict[str, Any]]:
                     'attempts': BIRDNET_MAX_RETRIES,
                     'error': str(e)
                 })
-                return []
+                raise ModelServiceUnavailableError(
+                    "BirdNet service unavailable after connection retries"
+                ) from e
 
         except requests.exceptions.Timeout as e:
             log_fd_exhaustion_if_needed(e, logger, 'birdnet_request', extra={
@@ -936,7 +962,9 @@ def process_audio_file(audio_file_path: str) -> list[dict[str, Any]]:
                 'timeout': BIRDNET_REQUEST_TIMEOUT,
                 'error': str(e)
             })
-            return []
+            raise ModelServiceUnavailableError(
+                "BirdNet service request timed out"
+            ) from e
 
         except requests.RequestException as e:
             log_fd_exhaustion_if_needed(e, logger, 'birdnet_request', extra={
@@ -946,7 +974,9 @@ def process_audio_file(audio_file_path: str) -> list[dict[str, Any]]:
                 'file': file_name,
                 'error': str(e)
             })
-            return []
+            raise ModelServiceUnavailableError(
+                "BirdNet service request failed"
+            ) from e
 
         except Exception as e:
             log_fd_exhaustion_if_needed(e, logger, 'birdnet_request', extra={

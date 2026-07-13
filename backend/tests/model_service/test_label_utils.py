@@ -13,6 +13,7 @@ from model_service.label_utils import (
     get_localized_name,
     get_localized_name_from_english,
     get_species_list,
+    parse_geomodel_labels,
     resolve_to_scientific_name,
 )
 
@@ -49,6 +50,19 @@ class TestSpeciesTableLayout:
         v2 = get_species_list('birdnet')
         v3 = get_species_list('birdnet_v3')
         assert len(v3) > len(v2)
+
+
+class TestGeoModelLabels:
+    def test_parser_accepts_utf8_bom(self, tmp_path):
+        labels_path = tmp_path / "labels.txt"
+        labels_path.write_text(
+            "amerob\tTurdus migratorius\tAmerican Robin\n",
+            encoding="utf-8-sig",
+        )
+
+        assert parse_geomodel_labels(str(labels_path)) == [
+            ("amerob", "Turdus migratorius", "American Robin")
+        ]
 
 
 class TestResolveToScientificName:

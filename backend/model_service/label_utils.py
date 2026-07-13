@@ -201,7 +201,7 @@ def resolve_to_scientific_name(name: str | None) -> str | None:
     """Resolve an English bird name to its canonical scientific name.
 
     Accepts any English variant carried by the species table: the canonical
-    ``common_name`` (built from V3.0), the V2.4 English label (``label_en``),
+    ``common_name`` (built from V3.1), the V2.4 English label (``label_en``),
     or the UK English variant (``label_en_uk``). Matching is case-insensitive
     and trims surrounding whitespace.
 
@@ -296,7 +296,7 @@ def parse_geomodel_labels(path: str) -> list[tuple[str, str, str]]:
         in model output order (index = position in list).
     """
     labels = []
-    with open(path, encoding='utf-8') as f:
+    with open(path, encoding='utf-8-sig') as f:
         for line in f:
             parts = line.rstrip('\n').split('\t')
             if len(parts) >= 3:
@@ -312,7 +312,7 @@ def parse_geomodel_labels(path: str) -> list[tuple[str, str, str]]:
 
 
 def parse_v3_labels(path: str) -> list[tuple[str, str]]:
-    """Parse V3.0 semicolon-delimited CSV labels file.
+    """Parse V3.1 semicolon-delimited CSV labels file.
 
     CSV format: idx;id;sci_name;com_name;class;order
 

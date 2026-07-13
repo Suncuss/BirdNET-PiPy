@@ -59,7 +59,7 @@ MODEL_SAMPLE_RATES = {
 
 # Species filter default thresholds
 DEFAULT_SPECIES_FILTER_THRESHOLD = 0.03      # V2.4 meta-model
-DEFAULT_GEOMODEL_FILTER_THRESHOLD = 0.15     # V3.0 geomodel
+DEFAULT_GEOMODEL_FILTER_THRESHOLD = 0.15     # V3 geomodel
 
 # Log rotation
 LOG_MAX_BYTES = 5 * 1024 * 1024   # 5 MB per file
