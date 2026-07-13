@@ -7,12 +7,10 @@ import os
 import sys
 import tempfile
 from datetime import datetime, timedelta
-from unittest.mock import patch
 
 import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from fixtures.test_config import TEST_DATABASE_SCHEMA
 
 
 @pytest.fixture
@@ -35,12 +33,9 @@ def test_db_manager():
     with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
         db_path = tmp.name
 
-    # Patch the settings before importing
-    with patch('config.settings.DATABASE_PATH', db_path):
-        with patch('config.settings.DATABASE_SCHEMA', TEST_DATABASE_SCHEMA):
-            from core.db import DatabaseManager
-            manager = DatabaseManager(db_path=db_path)
-            yield manager
+    from core.db import DatabaseManager
+    manager = DatabaseManager(db_path=db_path)
+    yield manager
 
     # Cleanup
     if os.path.exists(db_path):

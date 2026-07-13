@@ -23,6 +23,7 @@ from config.settings import (
     EXTRACTED_AUDIO_DIR,
     SPECTROGRAM_DIR,
 )
+from core.db_maintenance import maybe_run_health_cycle
 from core.logging_config import get_logger
 from core.runtime_config import get_runtime_settings
 from core.utils import build_detection_filenames, get_legacy_filename
@@ -458,6 +459,10 @@ def storage_monitor_loop(stop_flag, db_manager):
                         resume_cursor=resume_cursor
                     )
                     resume_cursor = cleanup_result['resume_cursor']
+
+            # After cleanup, so a nearly-full disk is freed before the
+            # backup's free-space check asks for headroom.
+            maybe_run_health_cycle(db_manager)
 
         except Exception as e:
             logger.error("Error in storage monitor", extra={

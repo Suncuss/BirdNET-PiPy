@@ -763,9 +763,66 @@ class TestMigrateCooperativeYield:
             if os.path.exists(src_path):
                 os.unlink(src_path)
 
-    def test_migrate_yields_per_batch_and_during_key_load(self, real_db_manager):
-        """>batch_size import yields per 500-record batch; _load_existing_keys
-        yields per fetched chunk."""
+    def test_bad_batch_does_not_abort_remaining_batches(self, real_db_manager):
+        """One rejected batch (a row violating a DB constraint fails the
+        whole executemany) must not kill the import: the shared connection
+        gets discarded on the failure, and duplicate probes must reacquire
+        rather than erroring on a closed cursor forever."""
+        from core.migration import BirdNETPiMigrator
+
+        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+            src_path = tmp.name
+        try:
+            records = [
+                ('2024-01-15', f'{(i // 60):02d}:{(i % 60):02d}:00',
+                 'Turdus migratorius', 'American Robin', 0.70 + (i % 30) * 0.001,
+                 40.7128, -74.0060, 0.5, 3, 0.75, 0.25, f'robin_{i}.wav')
+                for i in range(501)
+            ]
+            # Passes transform, violates CHECK(confidence <= 1) at insert —
+            # sinks its whole 500-row batch
+            bad = list(records[10])
+            bad[4] = 9.99
+            records[10] = tuple(bad)
+            create_birdnetpi_database(src_path, records)
+
+            result = BirdNETPiMigrator(real_db_manager).migrate(src_path)
+
+            # First batch (500 rows incl. the bad one) rejected wholesale —
+            # pre-existing batch granularity — but the 501st row imports.
+            assert result['imported'] == 1
+            assert result['errors'] == 500
+        finally:
+            if os.path.exists(src_path):
+                os.unlink(src_path)
+
+    def test_duplicate_check_handles_rounding_ties(self, real_db_manager):
+        """0.53125 rounds to .5313 in SQL (half away from zero) but .5312
+        in Python (half to even); the probe must round the same way the
+        record key does or exact-tie records re-import as duplicates."""
+        from core.migration import BirdNETPiMigrator
+
+        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+            src_path = tmp.name
+        try:
+            records = [('2024-01-15', '10:00:00', 'Turdus migratorius',
+                        'American Robin', 0.53125, 40.7128, -74.0060,
+                        0.5, 3, 0.75, 0.25, 'robin.wav')]
+            create_birdnetpi_database(src_path, records)
+            migrator = BirdNETPiMigrator(real_db_manager)
+
+            first = migrator.migrate(src_path)
+            rerun = migrator.migrate(src_path)
+
+            assert first['imported'] == 1
+            assert rerun['imported'] == 0
+            assert rerun['skipped'] == 1
+        finally:
+            if os.path.exists(src_path):
+                os.unlink(src_path)
+
+    def test_migrate_yields_per_batch(self, real_db_manager):
+        """>batch_size import yields per 500-record batch."""
         from unittest.mock import Mock
 
         from core.migration import BirdNETPiMigrator
@@ -788,10 +845,11 @@ class TestMigrateCooperativeYield:
             # One yield at the 500-record batch boundary + one trailing.
             assert yielder.call_count >= 2
 
-            # Target now holds 600 rows; the duplicate-key preload must yield.
-            loader_yielder = Mock()
-            migrator._load_existing_keys(loader_yielder)
-            assert loader_yielder.called
+            # A re-import of the same source skips everything via the
+            # per-record probes without loading keys into memory.
+            rerun = migrator.migrate(src_path, yield_control=Mock())
+            assert rerun['imported'] == 0
+            assert rerun['skipped'] == 600
         finally:
             if os.path.exists(src_path):
                 os.unlink(src_path)

@@ -29,10 +29,6 @@ CREATE TABLE IF NOT EXISTS detections (
 );
 
 CREATE INDEX IF NOT EXISTS idx_detections_timestamp ON detections(timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_detections_common_name ON detections(common_name);
-CREATE INDEX IF NOT EXISTS idx_detections_scientific_name ON detections(scientific_name);
-CREATE INDEX IF NOT EXISTS idx_detections_week ON detections(week);
-CREATE INDEX IF NOT EXISTS idx_detections_location ON detections(latitude, longitude);
 """
 
 # Sample bird species data

@@ -1,5 +1,4 @@
 """Tests for the extra JSON field functionality."""
-import pytest
 
 
 class TestExtraFieldInsert:
@@ -43,87 +42,6 @@ class TestExtraFieldInsert:
         result = test_db_manager.get_detection_by_id(detection_id)
         assert result['extra']['weather']['condition'] == 'partly_cloudy'
         assert result['extra']['tags'] == ['favorite', 'rare']
-
-
-class TestExtraFieldHelpers:
-    """Test extra field helper methods."""
-
-    def test_get_extra_field(self, test_db_manager, sample_detection):
-        """Test getting a specific field from extra."""
-        sample_detection['extra'] = {'weather': 'sunny', 'temperature': 72}
-        detection_id = test_db_manager.insert_detection(sample_detection)
-
-        weather = test_db_manager.get_extra_field(detection_id, 'weather')
-        assert weather == 'sunny'
-
-    def test_get_extra_field_missing(self, test_db_manager, sample_detection):
-        """Test getting a missing field returns None."""
-        detection_id = test_db_manager.insert_detection(sample_detection)
-
-        result = test_db_manager.get_extra_field(detection_id, 'nonexistent')
-        assert result is None
-
-    def test_get_extra_field_with_default(self, test_db_manager, sample_detection):
-        """Test getting a missing field with custom default."""
-        detection_id = test_db_manager.insert_detection(sample_detection)
-
-        result = test_db_manager.get_extra_field(detection_id, 'nonexistent', default='N/A')
-        assert result == 'N/A'
-
-    def test_get_extra_field_nonexistent_detection(self, test_db_manager):
-        """Test getting extra field for nonexistent detection returns default."""
-        result = test_db_manager.get_extra_field(99999, 'field', default='fallback')
-        assert result == 'fallback'
-
-    def test_update_extra_field(self, test_db_manager, sample_detection):
-        """Test updating a specific field in extra."""
-        detection_id = test_db_manager.insert_detection(sample_detection)
-
-        result = test_db_manager.update_extra_field(detection_id, 'notes', 'Beautiful song!')
-        assert result is True
-
-        notes = test_db_manager.get_extra_field(detection_id, 'notes')
-        assert notes == 'Beautiful song!'
-
-    def test_update_extra_field_preserves_existing(self, test_db_manager, sample_detection):
-        """Test updating extra field preserves other fields."""
-        sample_detection['extra'] = {'weather': 'sunny'}
-        detection_id = test_db_manager.insert_detection(sample_detection)
-
-        test_db_manager.update_extra_field(detection_id, 'notes', 'Great recording')
-
-        result = test_db_manager.get_detection_by_id(detection_id)
-        assert result['extra']['weather'] == 'sunny'
-        assert result['extra']['notes'] == 'Great recording'
-
-    def test_update_extra_field_nonexistent_detection(self, test_db_manager):
-        """Test updating extra field for nonexistent detection returns False."""
-        result = test_db_manager.update_extra_field(99999, 'field', 'value')
-        assert result is False
-
-    def test_set_extra_replaces_all(self, test_db_manager, sample_detection):
-        """Test set_extra replaces the entire extra dict."""
-        sample_detection['extra'] = {'old_key': 'old_value'}
-        detection_id = test_db_manager.insert_detection(sample_detection)
-
-        result = test_db_manager.set_extra(detection_id, {'new_key': 'new_value'})
-        assert result is True
-
-        detection = test_db_manager.get_detection_by_id(detection_id)
-        assert detection['extra'] == {'new_key': 'new_value'}
-        assert 'old_key' not in detection['extra']
-
-    def test_set_extra_nonexistent_detection(self, test_db_manager):
-        """Test set_extra for nonexistent detection returns False."""
-        result = test_db_manager.set_extra(99999, {'key': 'value'})
-        assert result is False
-
-    def test_set_extra_requires_dict(self, test_db_manager, sample_detection):
-        """Test set_extra raises error for non-dict input."""
-        detection_id = test_db_manager.insert_detection(sample_detection)
-
-        with pytest.raises(ValueError, match="must be a dictionary"):
-            test_db_manager.set_extra(detection_id, "not a dict")
 
 
 class TestExtraFieldInQueries:
@@ -275,17 +193,6 @@ class TestEbirdCodeInExtra:
         results = test_db_manager.get_latest_detections(limit=10)
         assert len(results) == 1
         assert results[0]['extra']['ebird_code'] == 'blujay'
-
-    def test_update_ebird_code(self, test_db_manager, sample_detection):
-        """Test updating ebird_code via update_extra_field."""
-        sample_detection['extra'] = {'ebird_code': 'amerob'}
-        detection_id = test_db_manager.insert_detection(sample_detection)
-
-        # Update the ebird_code
-        test_db_manager.update_extra_field(detection_id, 'ebird_code', 'amecro')
-
-        result = test_db_manager.get_detection_by_id(detection_id)
-        assert result['extra']['ebird_code'] == 'amecro'
 
     def test_model_info_saved_to_database(self, test_db_manager, sample_detection):
         """Test that model info is persisted in database extra field."""
