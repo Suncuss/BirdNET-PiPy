@@ -1,0 +1,5 @@
+*.onnx binary
+backend/model_service/models/geomodel/labels.txt -text
+backend/model_service/models/geomodel/MODEL_LICENSE.txt -text
+backend/model_service/models/v3.1/BirdNET+_V3.0-preview3.1_Global_11K_Labels.csv -text
+backend/model_service/models/v3.1/TERMS_OF_USE.txt -text

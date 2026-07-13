@@ -1,5 +1,5 @@
 // The model analyzes recordings in fixed 3-second windows (both BirdNET V2.4
-// and V3.0 — model_service CHUNK_LENGTH_SECONDS); the saved clip is the
+// and V3.1 — model_service CHUNK_LENGTH_SECONDS); the saved clip is the
 // detected window plus neighboring context chunks (backend
 // select_audio_chunks). This is the derivation's assumption about historical
 // rows, not a synced setting: a future model with a different window would

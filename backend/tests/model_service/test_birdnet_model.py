@@ -214,6 +214,13 @@ class TestBirdNetModelFilterByLocation:
         assert "Cardinalis cardinalis_Northern Cardinal" in result
         assert "Cyanocitta cristata_Blue Jay" not in result
 
+    def test_location_model_validation_releases_interpreter(
+        self, mock_birdnet_model_with_meta
+    ):
+        mock_birdnet_model_with_meta.validate_location_model()
+
+        assert mock_birdnet_model_with_meta._meta_model is None
+
     def test_filter_by_location_custom_threshold(self, mock_birdnet_model_with_meta):
         """Test filter_by_location respects custom threshold parameter."""
         meta_output = np.array([0.5, 0.1, 0.01])

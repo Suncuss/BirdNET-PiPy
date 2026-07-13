@@ -67,7 +67,7 @@ DEFAULT_SETTINGS = {
         "channel": "release"  # "release" = main branch, "latest" = staging branch
     },
     "model": {
-        "type": "birdnet"  # "birdnet" (v2.4, 6K species) or "birdnet_v3" (v3.0, 11K species)
+        "type": "birdnet"  # "birdnet" (v2.4, 6K species) or "birdnet_v3" (v3.1, 11K species)
     },
     "display": {
         "use_metric_units": True,
@@ -292,6 +292,8 @@ API_PORT = 5002
 API_HOST = 'api'
 BIRDNET_HOST = 'model-server'
 BIRDNET_SERVER_ENDPOINT = f'http://{BIRDNET_HOST}:{BIRDNET_SERVICE_PORT}/api/analyze_audio_file'
+BIRDNET_STATUS_ENDPOINT = f'http://{BIRDNET_HOST}:{BIRDNET_SERVICE_PORT}/api/status'
+MODEL_STARTUP_STATUS_PATH = f'{BASE_DIR}/data/model_service_startup.json'
 
 # ── Model ─────────────────────────────────────────────────────────────────────
 
@@ -305,14 +307,16 @@ MODEL_PATH = f'{MODELS_DIR}/v2.4/BirdNET_GLOBAL_6K_V2.4_Model_FP32.tflite'
 META_MODEL_PATH = f'{MODELS_DIR}/v2.4/BirdNET_GLOBAL_6K_V2.4_MData_Model_FP16.tflite'
 LABELS_PATH = f'{MODELS_DIR}/v2.4/labels/BirdNET_GLOBAL_6K_V2.4_Labels_en.txt'
 
-# V3.0 (ONNX, downloaded on first use; labels bundled with source)
-MODEL_V3_PATH = f'{MODELS_DIR}/v3.0/BirdNET_V3.0_Global_11K_FP32.onnx'
-MODEL_V3_URL = 'https://zenodo.org/records/18247420/files/BirdNET+_V3.0-preview3_Global_11K_FP32.onnx?download=1'
-LABELS_V3_PATH = f'{MODELS_DIR}/v3.0/BirdNET_V3.0_Global_11K_Labels.csv'
+# V3.1 (bundled pruned FP16 ONNX model with FP32 input/output tensors)
+MODEL_V3_PATH = f'{MODELS_DIR}/v3.1/BirdNET+_V3.0-preview3.1_Global_11K_FP16_pruned.onnx'
+LABELS_V3_PATH = f'{MODELS_DIR}/v3.1/BirdNET+_V3.0-preview3.1_Global_11K_Labels.csv'
+MODEL_V3_MANIFEST_PATH = f'{MODELS_DIR}/v3.1/manifest.json'
+LEGACY_MODEL_V3_PATH = f'{MODELS_DIR}/v3.0/BirdNET_V3.0_Global_11K_FP32.onnx'
 
-# Geomodel (location-based species filter, used with V3.0+)
+# Geomodel (location-based species filter, used with V3.1)
 GEOMODEL_PATH = f'{MODELS_DIR}/geomodel/geomodel_fp16.onnx'
 GEOMODEL_LABELS_PATH = f'{MODELS_DIR}/geomodel/labels.txt'
+GEOMODEL_MANIFEST_PATH = f'{MODELS_DIR}/geomodel/manifest.json'
 LOCATION_FILTER_CACHE_SIZE = _get_positive_int_env('BIRDNET_LOCATION_CACHE_SIZE', 8)
 
 # ── Audio ─────────────────────────────────────────────────────────────────────

@@ -3,7 +3,7 @@
 
 Merges:
   - V2.4 label files (28 languages, ~6K species each)
-  - V3.0 labels CSV (~11K species, English + taxonomy)
+  - V3.1 labels CSV (~11K species, English + taxonomy)
   - eBird codes JSON (~11K mappings)
 
 Output: backend/model_service/models/species_table.csv
@@ -27,8 +27,8 @@ V3_LABELS_CSV = os.path.join(
     "backend",
     "model_service",
     "models",
-    "v3.0",
-    "BirdNET_V3.0_Global_11K_Labels.csv",
+    "v3.1",
+    "BirdNET+_V3.0-preview3.1_Global_11K_Labels.csv",
 )
 EBIRD_CODES_JSON = os.path.join(
     REPO_ROOT, "backend", "model_service", "models", "ebird_codes.json"
@@ -71,7 +71,7 @@ def load_v2_labels(lang):
 
 
 def load_v3_labels():
-    """Load V3.0 labels CSV. Returns list of dicts with sci_name, com_name, class, order."""
+    """Load V3.1 labels CSV. Returns taxonomy rows in model output order."""
     rows = []
     with open(V3_LABELS_CSV, encoding="utf-8-sig") as f:
         reader = csv.DictReader(f, delimiter=";")
@@ -99,8 +99,8 @@ def build_table():
     languages = discover_languages()
     print(f"  Found {len(languages)} languages: {', '.join(languages)}")
 
-    # Start with V3.0 as the base (superset of species)
-    print("Loading V3.0 labels...")
+    # Start with V3.1 as the base (superset of species)
+    print("Loading V3.1 labels...")
     v3_rows = load_v3_labels()
     print(f"  {len(v3_rows)} species")
 
@@ -138,7 +138,7 @@ def build_table():
                 "in_v3": False,
             }
             v2_only_count += 1
-    print(f"  {v2_only_count} species only in V2.4 (not in V3.0)")
+    print(f"  {v2_only_count} species only in V2.4 (not in V3.1)")
 
     # Load eBird codes
     print("Loading eBird codes...")
@@ -225,7 +225,7 @@ def print_stats(species, languages):
     print(f"")
     print(f"Model coverage:")
     print(f"  In V2.4:                {in_v2}")
-    print(f"  In V3.0:                {in_v3}")
+    print(f"  In V3.1:                {in_v3}")
     print(f"  In both:                {both}")
     print(f"  V2-only:                {in_v2 - both}")
     print(f"  V3-only:                {in_v3 - both}")

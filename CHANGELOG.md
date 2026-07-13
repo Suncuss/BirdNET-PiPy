@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+- Improved model startup resilience: recordings remain queued during model-service outages, V2.4 meta-model and V3.1 startup failures are surfaced in Settings, and obsolete V3.0 downloads are reclaimed in either model mode
+- Changed BirdNET V3 to the bundled V3.1 pruned FP16 model, cutting the model from about 541 MB to 72 MB and removing the first-use download while preserving the 11K-species label contract
+- Improved BirdNET V3 location filtering by updating the bundled BirdNET+ Geomodel from v3.0.1 to v3.0.3, expanding acoustic-label coverage and validating the model, labels, tensor contract, and license as one release pair during builds and startup
+- Improved geomodel failure handling by enforcing its complete probability contract and showing a persistent Settings warning when location filtering degrades, while acoustic detection continues uninterrupted
+
 ## [0.8.4] - 2026-07-12
 
 - Added a Site URL setting (Settings → Personalization): set your station's public address and detection notifications include a link straight to that detection's page. On private stations (public access off) the link carries a 30-day single-detection share token so it works without logging in

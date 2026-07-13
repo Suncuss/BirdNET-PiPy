@@ -1,7 +1,5 @@
 """Tests for BirdNetV3Model prediction and ONNX inference."""
 
-import os
-import tempfile
 import threading
 from unittest.mock import MagicMock
 
@@ -18,7 +16,7 @@ class TestBirdNetV3ModelProperties:
 
         model = BirdNetV3Model.__new__(BirdNetV3Model)
         assert model.name == "birdnet"
-        assert model.version == "3.0"
+        assert model.version == "3.1"
         assert model.sample_rate == 32000
         assert model.chunk_length_seconds == 3.0
 
@@ -38,9 +36,9 @@ class TestBirdNetV3ModelPredict:
         # Create mock ONNX session
         model._session = MagicMock()
         model._input_name = "input"
-        model._output_names = ["embeddings", "predictions"]
+        model._prediction_output_name = "predictions"
 
-        # Set labels (no Human class in V3.0)
+        # Set labels (no Human class in V3.1)
         model._labels = [
             "Turdus migratorius_American Robin",
             "Cardinalis cardinalis_Northern Cardinal",
@@ -54,10 +52,9 @@ class TestBirdNetV3ModelPredict:
 
     def test_predict_returns_sorted_results(self, mock_v3_model):
         """Test predict returns results sorted by confidence descending."""
-        # V3.0 outputs (embeddings, predictions) — predictions are already probabilities
-        embeddings = np.zeros((1, 256), dtype=np.float32)
+        # V3.1 predictions are already probabilities.
         predictions = np.array([[0.3, 0.8, 0.1, 0.5]])  # Robin, Cardinal, BlueJay, Crow
-        mock_v3_model._session.run.return_value = [embeddings, predictions]
+        mock_v3_model._session.run.return_value = [predictions]
 
         audio_chunk = np.zeros(96000, dtype=np.float32)  # 3 seconds at 32kHz
         results = mock_v3_model.predict(audio_chunk, sensitivity=1.0, cutoff=0.0)
@@ -69,12 +66,12 @@ class TestBirdNetV3ModelPredict:
 
         # Cardinal should be first (highest prob)
         assert results[0][0] == "Cardinalis cardinalis_Northern Cardinal"
+        assert mock_v3_model._session.run.call_args.args[0] == ["predictions"]
 
     def test_predict_applies_cutoff(self, mock_v3_model):
         """Test predict filters out results below cutoff threshold."""
-        embeddings = np.zeros((1, 256), dtype=np.float32)
         predictions = np.array([[0.9, 0.3, 0.05, 0.1]])
-        mock_v3_model._session.run.return_value = [embeddings, predictions]
+        mock_v3_model._session.run.return_value = [predictions]
 
         audio_chunk = np.zeros(96000, dtype=np.float32)
 
@@ -88,8 +85,8 @@ class TestBirdNetV3ModelPredict:
             assert confidence >= 0.5
 
     def test_predict_no_privacy_filter(self, mock_v3_model):
-        """Test that V3.0 has NO human detection / privacy filter."""
-        # Even if we add a label with "Human", V3.0 should NOT filter it out
+        """Test that V3.1 has NO human detection / privacy filter."""
+        # Even if we add a label with "Human", V3.1 should NOT filter it out
         # (unlike V2.4 which checks for Human and returns empty list)
         mock_v3_model._labels = [
             "Turdus migratorius_American Robin",
@@ -97,24 +94,22 @@ class TestBirdNetV3ModelPredict:
             "Cyanocitta cristata_Blue Jay"
         ]
 
-        embeddings = np.zeros((1, 256), dtype=np.float32)
         predictions = np.array([[0.3, 0.9, 0.1]])  # Human has highest confidence
-        mock_v3_model._session.run.return_value = [embeddings, predictions]
+        mock_v3_model._session.run.return_value = [predictions]
 
         audio_chunk = np.zeros(96000, dtype=np.float32)
         results = mock_v3_model.predict(audio_chunk, sensitivity=1.0, cutoff=0.0)
 
-        # V3.0 should NOT filter out Human - returns all results
+        # V3.1 should NOT filter out Human - returns all results
         assert len(results) == 3
         labels = [r[0] for r in results]
         assert "Homo sapiens_Human" in labels
 
     def test_sensitivity_scaling(self, mock_v3_model):
         """Test probs^(1/sensitivity) math: 1.0 is no-op, >1.0 boosts, <1.0 reduces."""
-        embeddings = np.zeros((1, 256), dtype=np.float32)
         # Use a moderate probability for clear sensitivity effect
         predictions = np.array([[0.5, 0.3, 0.1, 0.05]])
-        mock_v3_model._session.run.return_value = [embeddings, predictions]
+        mock_v3_model._session.run.return_value = [predictions]
 
         audio_chunk = np.zeros(96000, dtype=np.float32)
 
@@ -124,13 +119,13 @@ class TestBirdNetV3ModelPredict:
         assert abs(conf_default - 0.5) < 0.01
 
         # Sensitivity > 1.0 should boost confidence (prob^(1/2) > prob for prob < 1)
-        mock_v3_model._session.run.return_value = [embeddings, predictions.copy()]
+        mock_v3_model._session.run.return_value = [predictions.copy()]
         results_high = mock_v3_model.predict(audio_chunk, sensitivity=2.0, cutoff=0.0)
         conf_high = results_high[0][1]
         assert conf_high > conf_default
 
         # Sensitivity < 1.0 should reduce confidence (prob^2 < prob for prob < 1)
-        mock_v3_model._session.run.return_value = [embeddings, predictions.copy()]
+        mock_v3_model._session.run.return_value = [predictions.copy()]
         results_low = mock_v3_model.predict(audio_chunk, sensitivity=0.5, cutoff=0.0)
         conf_low = results_low[0][1]
         assert conf_low < conf_default
@@ -150,9 +145,8 @@ class TestBirdNetV3ModelPredict:
 
     def test_predict_thread_safety(self, mock_v3_model):
         """Test that predict uses lock for thread-safe inference."""
-        embeddings = np.zeros((1, 256), dtype=np.float32)
         predictions = np.array([[0.5, 0.3, 0.1, 0.05]])
-        mock_v3_model._session.run.return_value = [embeddings, predictions]
+        mock_v3_model._session.run.return_value = [predictions]
 
         audio_chunk = np.zeros(96000, dtype=np.float32)
         results = []
@@ -175,93 +169,23 @@ class TestBirdNetV3ModelPredict:
         assert len(results) == 5
 
 
-class TestBirdNetV3ModelLoadLabels:
-    """Test BirdNetV3Model label loading from CSV."""
-
-    def test_load_labels_csv(self):
-        """Test parsing semicolon-delimited CSV to SciName_CommonName format."""
+class TestBirdNetV3ModelLabels:
+    def test_get_labels_requires_validated_load(self):
+        """Labels cannot bypass the V3.1 release validation path."""
         from model_service.birdnet_v3_model import BirdNetV3Model
 
-        # Create a temp CSV matching V3.0 format
-        csv_content = (
-            "idx;id;sci_name;com_name;class;order\n"
-            "0;3;Turdus migratorius;American Robin;Aves;Passeriformes\n"
-            "1;5;Cardinalis cardinalis;Northern Cardinal;Aves;Passeriformes\n"
-            "2;6;Cyanocitta cristata;Blue Jay;Aves;Passeriformes\n"
-        )
+        model = BirdNetV3Model.__new__(BirdNetV3Model)
+        model._labels = None
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False,
-                                         encoding='utf-8') as f:
-            f.write(csv_content)
-            csv_path = f.name
-
-        try:
-            model = BirdNetV3Model.__new__(BirdNetV3Model)
-            model.labels_path = csv_path
-            model._labels = None
-
-            model._load_labels()
-
-            assert len(model._labels) == 3
-            assert model._labels[0] == "Turdus migratorius_American Robin"
-            assert model._labels[1] == "Cardinalis cardinalis_Northern Cardinal"
-            assert model._labels[2] == "Cyanocitta cristata_Blue Jay"
-        finally:
-            os.unlink(csv_path)
-
-    def test_load_labels_csv_with_bom(self):
-        """Test parsing CSV with UTF-8 BOM (as the real file has)."""
-        from model_service.birdnet_v3_model import BirdNetV3Model
-
-        csv_content = (
-            "\ufeffidx;id;sci_name;com_name;class;order\n"
-            "0;3;Abeillia abeillei;Emerald-chinned Hummingbird;Aves;Apodiformes\n"
-        )
-
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False,
-                                         encoding='utf-8') as f:
-            f.write(csv_content)
-            csv_path = f.name
-
-        try:
-            model = BirdNetV3Model.__new__(BirdNetV3Model)
-            model.labels_path = csv_path
-            model._labels = None
-
-            model._load_labels()
-
-            assert len(model._labels) == 1
-            assert model._labels[0] == "Abeillia abeillei_Emerald-chinned Hummingbird"
-        finally:
-            os.unlink(csv_path)
-
-    def test_load_labels_empty_raises(self):
-        """Test that empty CSV raises ValueError."""
-        from model_service.birdnet_v3_model import BirdNetV3Model
-
-        csv_content = "idx;id;sci_name;com_name;class;order\n"
-
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False,
-                                         encoding='utf-8') as f:
-            f.write(csv_content)
-            csv_path = f.name
-
-        try:
-            model = BirdNetV3Model.__new__(BirdNetV3Model)
-            model.labels_path = csv_path
-            model._labels = None
-
-            with pytest.raises(ValueError, match="No labels found"):
-                model._load_labels()
-        finally:
-            os.unlink(csv_path)
+        with pytest.raises(RuntimeError, match="Call load"):
+            model.get_labels()
 
 
 class TestBirdNetV3ModelFilterByLocation:
     """Test BirdNetV3Model location filtering."""
 
     def test_filter_by_location_returns_none(self):
-        """V3.0 has no meta-model, so filter_by_location should return None."""
+        """V3.1 has no meta-model, so filter_by_location should return None."""
         from model_service.birdnet_v3_model import BirdNetV3Model
 
         model = BirdNetV3Model.__new__(BirdNetV3Model)
@@ -270,7 +194,7 @@ class TestBirdNetV3ModelFilterByLocation:
         assert result is None
 
     def test_filter_by_location_returns_none_with_threshold(self):
-        """V3.0 filter_by_location returns None even with explicit threshold."""
+        """V3.1 filter_by_location returns None even with explicit threshold."""
         from model_service.birdnet_v3_model import BirdNetV3Model
 
         model = BirdNetV3Model.__new__(BirdNetV3Model)

@@ -17,8 +17,8 @@ export const modelTypeOptions = [
   },
   {
     value: MODEL_TYPES.V3,
-    title: 'BirdNET v3.0',
-    description: '11K species. Preview — needs more RAM.',
-    label: 'BirdNET v3.0 (11K species, preview)'
+    title: 'BirdNET v3.1',
+    description: '11K species. Bundled FP16 developer preview; 1 GB+ RAM recommended.',
+    label: 'BirdNET v3.1 (11K species, FP16 preview)'
   }
 ]

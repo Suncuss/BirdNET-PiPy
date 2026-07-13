@@ -64,9 +64,10 @@ AGENTS.md
 venv/
 .venv/
 
-# Large model files (V3.0 model is auto-downloaded, not committed)
+# Large model files (only explicitly reviewed release artifacts are committed)
 backend/model_service/models/**/*.onnx
 !backend/model_service/models/geomodel/*.onnx
+!backend/model_service/models/v3.1/BirdNET+_V3.0-preview3.1_Global_11K_FP16_pruned.onnx
 
 # Local/internal documentation not meant for the repo
 internal_docs/

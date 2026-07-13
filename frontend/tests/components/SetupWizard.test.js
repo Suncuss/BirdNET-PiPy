@@ -222,15 +222,16 @@ describe('SetupWizard', () => {
   })
 
   describe('Step 3: Model', () => {
-    it('shows both model options with preview/RAM note', async () => {
+    it('shows both model options with the FP16 preview and RAM guidance', async () => {
       const wrapper = mountWizard()
       await goToStep3(wrapper)
 
       expect(wrapper.text()).toContain('Detection Model')
       expect(wrapper.text()).toContain('BirdNET v2.4')
-      expect(wrapper.text()).toContain('BirdNET v3.0')
-      expect(wrapper.text()).toContain('Preview')
-      expect(wrapper.text()).toContain('more RAM')
+      expect(wrapper.text()).toContain('BirdNET v3.1')
+      expect(wrapper.text()).toContain('developer preview')
+      expect(wrapper.text()).toContain('Bundled FP16')
+      expect(wrapper.text()).toContain('1 GB+ RAM recommended')
       expect(wrapper.text()).toContain('You can change this later in Settings')
     })
 
@@ -365,13 +366,13 @@ describe('SetupWizard', () => {
       expect(captured.settings.detection.species_filter_threshold).toBe(0.03)
     })
 
-    it('saves v3.0 selection with matching filter threshold', async () => {
+    it('saves v3.1 selection with matching filter threshold', async () => {
       const captured = setupSaveMocks()
 
       const wrapper = mountWizard()
       await goToStep3(wrapper)
 
-      const v3Card = wrapper.findAll('button').find(b => b.text().includes('BirdNET v3.0'))
+      const v3Card = wrapper.findAll('button').find(b => b.text().includes('BirdNET v3.1'))
       await v3Card.trigger('click')
 
       const finishButton = wrapper.findAll('button').find(b => b.text() === 'Finish')

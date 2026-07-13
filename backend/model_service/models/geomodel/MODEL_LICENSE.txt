@@ -1,0 +1,41 @@
+BirdNET Geomodel - Model Weights License
+========================================
+
+The trained model weights distributed with this project are licensed under
+Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0).
+
+You are free to:
+  - Share: copy and redistribute the material in any medium or format
+  - Adapt: remix, transform, and build upon the material for any purpose,
+    including commercially
+
+Under the following terms:
+  - Attribution: You must give appropriate credit, provide a link to the
+    license, and indicate if changes were made.
+  - ShareAlike: If you remix, transform, or build upon the material, you
+    must distribute your contributions under the same license.
+
+Full license text: https://creativecommons.org/licenses/by-sa/4.0/legalcode
+
+PROHIBITED USES
+----------------
+You must NOT use the model weights or any derivative:
+1. For POACHING, wildlife tracking intended to facilitate illegal capture,
+   harm, trade, or exploitation of species.
+2. For ANY MILITARY purpose, including surveillance, targeting, or
+   integration into defense systems.
+
+ATTRIBUTION
+-----------
+Publications, presentations, or derived tools must attribute the use of
+the model either through citation or acknowledgment (e.g., "Powered by
+BirdNET").
+
+NO WARRANTY
+-----------
+THE MODEL WEIGHTS ARE PROVIDED "AS IS" WITHOUT ANY WARRANTY (INCLUDING
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, ACCURACY, OR
+NON-INFRINGEMENT). USE AT YOUR OWN RISK.
+
+Contact: stefan.kahl@cornell.edu
+Project: https://github.com/birdnet-team/geomodel

@@ -30,10 +30,12 @@ from config.constants import (
 from config.settings import (
     API_PORT,
     BASE_DIR,
+    BIRDNET_STATUS_ENDPOINT,
     CUSTOM_BIRD_IMAGES_DIR,
     DEFAULT_AUDIO_PATH,
     DEFAULT_IMAGE_PATH,
     EXTRACTED_AUDIO_DIR,
+    MODEL_STARTUP_STATUS_PATH,
     MODEL_TYPE,
     SPECTROGRAM_DIR,
     USER_SETTINGS_PATH,
@@ -120,6 +122,7 @@ from core.storage_manager import delete_detection_files
 from core.timezone_service import get_timezone_str, local_now
 from core.utils import build_detection_permalink, normalize_site_url
 from model_service.label_utils import get_species_list, resolve_to_scientific_name
+from model_service.service_status import read_startup_failure
 from version import DISPLAY_NAME, __version__
 
 # Setup logging
@@ -2460,7 +2463,7 @@ def get_available_species():
 
     Used for building include/exclude filter lists in the UI.
     Returns list of {scientific_name, common_name} sorted by common_name.
-    Species count depends on model type: ~6K for V2.4, ~11K for V3.0.
+    Species count depends on model type: ~6K for V2.4, ~11K for V3.1.
     """
     settings = load_user_settings()
     search = request.args.get('search', '').lower()
@@ -2561,6 +2564,58 @@ def get_recorder_status():
     Decoupled from live feed so it is not gated by live_feed_public.
     """
     return jsonify(_recorder_status or {})
+
+
+def _unavailable_model_status():
+    startup_failure = read_startup_failure(MODEL_STARTUP_STATUS_PATH)
+    if startup_failure:
+        error_type = startup_failure["error_type"]
+        error_message = startup_failure["message"]
+        code = "model_service_startup_failed"
+        message = (
+            f"Model service failed to start ({error_type}: {error_message}). "
+            "Acoustic detection is unavailable; check System Logs for details."
+        )
+    else:
+        code = "model_service_unavailable"
+        message = (
+            "Model service is unavailable. It may still be starting or may have "
+            "failed; check System Logs if this persists."
+        )
+    return {
+        'status': 'unavailable',
+        'model': None,
+        'location_filter': {
+            'state': 'unavailable',
+            'source': 'disabled',
+            'version': None,
+            'code': code,
+            'message': message,
+        },
+    }
+
+
+@api.route('/api/model/status', methods=['GET'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def get_model_service_status():
+    """Return authenticated model/filter health without exposing port 5001."""
+    try:
+        response = requests.get(BIRDNET_STATUS_ENDPOINT, timeout=3)
+        response.raise_for_status()
+        payload = response.json()
+        filter_status = payload.get('location_filter') if isinstance(payload, dict) else None
+        if not isinstance(filter_status, dict) or filter_status.get('state') not in {
+            'active', 'disabled', 'degraded'
+        }:
+            raise ValueError('Invalid model service status payload')
+        return jsonify(payload), 200
+    except (requests.exceptions.RequestException, ValueError) as exc:
+        logger.warning("Unable to read model service status", extra={
+            'error': str(exc),
+        })
+        return jsonify(_unavailable_model_status()), 200
 
 def write_flag(flag_name, content=None):
     """Write flag file to trigger host action.

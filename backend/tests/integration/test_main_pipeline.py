@@ -191,42 +191,41 @@ class TestProcessAudioFile:
 
             assert result == []
 
-    def test_network_timeout_returns_empty_list(self):
-        """Test that network timeout returns empty list."""
+    def test_network_timeout_preserves_retry_signal(self):
+        """A timeout is distinct from a valid no-detection response."""
         with patch('core.main.requests.post') as mock_post, \
              patch('core.main.logger'):
             mock_post.side_effect = requests.exceptions.Timeout("Connection timed out")
 
-            from core.main import process_audio_file
+            from core.main import ModelServiceUnavailableError, process_audio_file
 
-            result = process_audio_file('/tmp/test.wav')
+            with pytest.raises(ModelServiceUnavailableError, match="timed out"):
+                process_audio_file('/tmp/test.wav')
 
-            assert result == []
-
-    def test_connection_error_returns_empty_list(self):
-        """Test that connection error returns empty list."""
+    def test_connection_error_preserves_retry_signal(self):
+        """Connection exhaustion is distinct from a valid empty result."""
         with patch('core.main.requests.post') as mock_post, \
              patch('core.main.logger'), \
              patch('time.sleep'):
             mock_post.side_effect = requests.exceptions.ConnectionError("Failed to connect")
 
-            from core.main import process_audio_file
+            from core.main import ModelServiceUnavailableError, process_audio_file
 
-            result = process_audio_file('/tmp/test.wav')
+            with pytest.raises(
+                ModelServiceUnavailableError, match="connection retries"
+            ):
+                process_audio_file('/tmp/test.wav')
 
-            assert result == []
-
-    def test_generic_request_exception_returns_empty_list(self):
-        """Test that generic request exception returns empty list."""
+    def test_generic_request_exception_preserves_retry_signal(self):
+        """Transport failures are distinct from a valid empty result."""
         with patch('core.main.requests.post') as mock_post, \
              patch('core.main.logger'):
             mock_post.side_effect = requests.exceptions.RequestException("Unknown error")
 
-            from core.main import process_audio_file
+            from core.main import ModelServiceUnavailableError, process_audio_file
 
-            result = process_audio_file('/tmp/test.wav')
-
-            assert result == []
+            with pytest.raises(ModelServiceUnavailableError, match="request failed"):
+                process_audio_file('/tmp/test.wav')
 
     def test_unexpected_exception_returns_empty_list(self):
         """Test that unexpected exceptions are handled gracefully."""
@@ -345,6 +344,32 @@ class TestDirectoryScanningArchitecture:
 
             # File should be deleted
             assert not os.path.exists(file_path)
+
+    def test_processing_thread_preserves_wav_during_model_outage(
+        self, temp_recording_dir, create_test_wav_file
+    ):
+        """A recording stays queued when it never reaches model inference."""
+        from core.main import ModelServiceUnavailableError, process_audio_files
+
+        valid_size = 6 * 48000 * 2
+        file_path = create_test_wav_file('model_starting.wav', valid_size)
+
+        with patch('core.main.RECORDING_DIR', temp_recording_dir), \
+             patch('core.main.SAMPLE_RATE', 48000), \
+             patch('core.main.MIN_RECORDING_DURATION', 5.0), \
+             patch('core.main.stop_flag') as mock_stop_flag, \
+             patch(
+                 'core.main.process_audio_file',
+                 side_effect=ModelServiceUnavailableError('starting'),
+             ) as mock_process, \
+             patch('core.main.get_logger'), \
+             patch('time.sleep'):
+            mock_stop_flag.is_set.side_effect = [False, False, True]
+
+            process_audio_files()
+
+        mock_process.assert_called_once_with(file_path)
+        assert os.path.exists(file_path)
 
     def test_processing_thread_ignores_non_wav_files(self, temp_recording_dir):
         """Test that processing thread ignores non-WAV files."""
@@ -1999,13 +2024,13 @@ class TestEdgeCasesAndResilience:
             # Verify insert_detection was called
             mock_db.insert_detection.assert_called_once()
 
-    def test_birdnet_api_timeout_doesnt_crash_loop(
+    def test_birdnet_api_timeout_preserves_recording_queue(
         self,
         pipeline_db_manager,
         pipeline_temp_dirs,
         create_valid_wav_file
     ):
-        """Test that BirdNet API timeout doesn't crash the processing loop."""
+        """A model timeout keeps current and later recordings queued."""
         from requests.exceptions import Timeout
 
         # Create 2 WAV files
@@ -2027,7 +2052,7 @@ class TestEdgeCasesAndResilience:
             # Mock BirdNet API to timeout
             mock_birdnet_api.side_effect = Timeout('Request timed out')
 
-            # Run until files processed
+            # Run several scan iterations while the model remains unavailable.
             call_count = [0]
             def stop_after_attempts():
                 call_count[0] += 1
@@ -2036,12 +2061,11 @@ class TestEdgeCasesAndResilience:
 
             from core.main import process_audio_files
 
-            # Execute - should handle timeout gracefully
+            # Execute - should handle timeout without consuming recordings.
             process_audio_files()
 
-            # Verify both files were deleted (attempted processing)
-            assert not os.path.exists(file1)
-            assert not os.path.exists(file2)
+            assert os.path.exists(file1)
+            assert os.path.exists(file2)
 
             # Verify BirdNet API was called (and timed out)
             assert mock_birdnet_api.call_count > 0

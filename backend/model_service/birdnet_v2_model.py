@@ -137,6 +137,16 @@ class BirdNetModel(BirdDetectionModel):
             self._load_labels()
         return self._labels
 
+    def validate_location_model(self) -> None:
+        """Load and allocate the V2.4 meta-model once, then release its arena."""
+        with self._inference_lock:
+            try:
+                self._load_meta_model()
+            finally:
+                # Keep the meta-model out of steady-state memory. Real location
+                # inference reloads it on the first cache miss as before.
+                self._meta_model = None
+
     def filter_by_location(self, lat: float, lon: float, week: int, threshold: float = DEFAULT_SPECIES_FILTER_THRESHOLD) -> list[str] | None:
         """Get species likely at a location using the meta-model.
 

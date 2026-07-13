@@ -31,6 +31,10 @@ from core.runtime_config import get_runtime_settings
 from core.timezone_service import get_timezone_str
 from core.utils import build_detection_filenames
 from model_service.base_model import BirdDetectionModel
+from model_service.birdnet_v3_assets import (
+    BirdNetV3AssetError,
+    remove_legacy_birdnet_v3_files,
+)
 from model_service.label_utils import get_common_name, get_scientific_name
 from model_service.location_filter import (
     GeoModelFilter,
@@ -42,6 +46,7 @@ from model_service.model_factory import (
     create_model,
     get_model_type_from_settings,
 )
+from model_service.service_status import clear_startup_failure, write_startup_failure
 
 app = Flask(__name__)
 
@@ -50,12 +55,12 @@ setup_logging('birdnet')
 logger = get_logger(__name__)
 
 # Load the model using factory pattern
+model_type = get_model_type_from_settings()
 logger.info("Loading bird detection model", extra={
-    'model_type': get_model_type_from_settings().value
+    'model_type': model_type.value
 })
 
 try:
-    model_type = get_model_type_from_settings()
     model = create_model(model_type)
     model.load()
     logger.info("Model loaded successfully", extra={
@@ -63,16 +68,49 @@ try:
         'model_version': model.version,
         'num_species': len(model.get_labels())
     })
-except Exception:
+except Exception as exc:
+    try:
+        write_startup_failure(
+            settings.MODEL_STARTUP_STATUS_PATH,
+            model_type=model_type.value,
+            error=exc,
+        )
+    except OSError:
+        logger.warning("Unable to persist model startup failure", exc_info=True)
     logger.error("Failed to load model", exc_info=True)
     raise
 
+try:
+    clear_startup_failure(settings.MODEL_STARTUP_STATUS_PATH)
+except OSError:
+    logger.warning("Unable to clear stale model startup failure", exc_info=True)
+
+# The V3.0 downloader wrote into the source tree. Cleanup is independent of
+# the selected model so stations that switched back to V2.4 also reclaim it.
+try:
+    _removed_legacy_files = remove_legacy_birdnet_v3_files(
+        settings.LEGACY_MODEL_V3_PATH
+    )
+    if _removed_legacy_files:
+        logger.info(
+            "Removed obsolete BirdNET V3.0 files",
+            extra={"paths": [str(path) for path in _removed_legacy_files]},
+        )
+except BirdNetV3AssetError as exc:
+    logger.warning(
+        "Obsolete BirdNET V3.0 files were not removed",
+        extra={"path": settings.LEGACY_MODEL_V3_PATH, "error": str(exc)},
+    )
+
 # Create location filter (factory owns load + fallback)
 location_filter = create_location_filter(model_type, model=model)
+_location_filter_status = location_filter.status
 
 # Log location filter configuration
-if isinstance(location_filter, GeoModelFilter):
-    _filter_desc = 'standalone geomodel (ONNX)'
+if _location_filter_status.state == 'degraded':
+    _filter_desc = f'degraded ({_location_filter_status.code})'
+elif isinstance(location_filter, GeoModelFilter):
+    _filter_desc = f'standalone geomodel v{location_filter.version} (ONNX)'
 elif isinstance(location_filter, ModelBackedFilter):
     _filter_desc = 'embedded meta model (TFLite)'
 else:
@@ -80,8 +118,29 @@ else:
 
 logger.info("Location filter initialized", extra={
     'filter_type': _filter_desc,
+    'filter_state': _location_filter_status.state,
+    'filter_code': _location_filter_status.code,
     'model_type': model_type.value,
 })
+
+
+def build_service_status() -> dict:
+    """Return model and location-filter state for operator diagnostics."""
+    filter_status = location_filter.status
+    return {
+        'status': 'degraded' if filter_status.state == 'degraded' else 'ok',
+        'model': {
+            'type': model_type.value,
+            'name': model.name,
+            'version': model.version,
+        },
+        'location_filter': filter_status.as_dict(),
+    }
+
+
+@app.route('/api/status', methods=['GET'])
+def get_model_status():
+    return jsonify(build_service_status()), 200
 
 
 def split_audio(path, chunk_length, sample_rate, total_duration, overlap=0.0, minlen=1.5):

@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "name": "BirdNET+ Geomodel",
+  "version": "3.0.3",
+  "source": {
+    "repository": "https://github.com/birdnet-team/geomodel",
+    "release": "https://github.com/birdnet-team/geomodel/releases/tag/v3.0.3",
+    "tag": "v3.0.3",
+    "commit": "62b806d0bf3320a7901dedf63aab19aec98bd9e3"
+  },
+  "artifacts": {
+    "model": {
+      "filename": "geomodel_fp16.onnx",
+      "upstream_filename": "BirdNET+_Geomodel_V3.0.3_Global_12K_FP16.onnx",
+      "size_bytes": 14260107,
+      "sha256": "fecfcdfe90acfe3d033aa6eae58f028656793cfa206efc41b9c7473a2a83caf6"
+    },
+    "labels": {
+      "filename": "labels.txt",
+      "upstream_filename": "BirdNET+_Geomodel_V3.0.3_Global_12K_Labels.txt",
+      "size_bytes": 585766,
+      "sha256": "4ae42247aa4ba500de7dcb5448790c6a91168af7952691e8cd948c145c27e429"
+    },
+    "license": {
+      "filename": "MODEL_LICENSE.txt",
+      "upstream_filename": "MODEL_LICENSE.txt",
+      "size_bytes": 1558,
+      "sha256": "39c2f332863797c8e33d2c5dabcd7b4f7955a96869ce6e7506faac7ded75b1d4"
+    }
+  },
+  "contract": {
+    "input": {
+      "name": "input",
+      "dtype": "tensor(float)",
+      "columns": [
+        "latitude",
+        "longitude",
+        "week"
+      ]
+    },
+    "output": {
+      "name": "probabilities",
+      "dtype": "tensor(float)",
+      "classes": 12314,
+      "activation": "sigmoid",
+      "range": [
+        0.0,
+        1.0
+      ]
+    }
+  },
+  "precision": "FP16 weights with FP32 input and output tensors",
+  "label_format": "speciesCode<TAB>scientificName<TAB>commonName"
+}
