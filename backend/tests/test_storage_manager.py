@@ -10,7 +10,6 @@ Tests cover:
 """
 import os
 import sys
-import tempfile
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
@@ -71,21 +70,6 @@ def mock_disk_usage_needing(bytes_to_free, total_bytes=100 * 1024**3,
         # unrounded so a small bytes_to_free still reads as above-target
         'percent_used': used / total_bytes * 100
     }
-
-
-@pytest.fixture
-def test_db_manager():
-    """Create a DatabaseManager with temporary test database."""
-    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
-        db_path = tmp.name
-
-    from core.db import DatabaseManager
-    manager = DatabaseManager(db_path=db_path)
-    yield manager
-
-    # Cleanup
-    if os.path.exists(db_path):
-        os.unlink(db_path)
 
 
 @pytest.fixture

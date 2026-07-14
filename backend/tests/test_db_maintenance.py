@@ -135,6 +135,27 @@ class TestCreateBackup:
 
         assert not os.path.exists(stray)
 
+    def test_foreign_files_never_touched(self, db_manager):
+        """Users park manual saves next to the backups; rotation and the
+        tmp sweep must only ever delete files this module generated."""
+        backup_dir = _backup_dir(db_manager.db_path)
+        os.makedirs(backup_dir)
+        foreign = [os.path.join(backup_dir, name)
+                   for name in ('archive.db', 'my-notes.tmp',
+                                'birds-important.db')]
+        for path in foreign:
+            open(path, 'w').close()
+        # enough generated backups that rotation must prune something
+        for stamp in ('20250101-000000', '20250201-000000'):
+            open(os.path.join(backup_dir, f'birds-{stamp}.db'), 'w').close()
+
+        create_backup(db_manager)
+
+        for path in foreign:
+            assert os.path.exists(path), path
+        # rotation still works on generated files
+        assert len(_list_backups(backup_dir)) == BACKUPS_TO_KEEP
+
 
 class TestHealthCycle:
 

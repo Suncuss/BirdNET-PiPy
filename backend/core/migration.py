@@ -11,6 +11,7 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime
 
+from core.db_schema import TIMESTAMP_FORMAT
 from core.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -70,7 +71,7 @@ def start_migration_if_not_running(temp_path, total_records):
     with _progress_lock:
         # Check if ANY migration is currently running (not just this ID)
         for existing_id, existing in _migration_progress.items():
-            if existing.get('status') in ('starting', 'loading', 'running'):
+            if existing.get('status') in ('starting', 'running'):
                 return False, existing_id
 
         _migration_progress[temp_path] = {
@@ -395,7 +396,7 @@ class BirdNETPiMigrator:
         held cursor would come back "closed" and abort every remaining
         batch instead of just the bad one.
         """
-        key_confidence = round(record['confidence'], 4)
+        _, _, key_confidence = self._make_record_key(record)
         with self.db_manager.get_db_connection() as conn:
             rows = conn.execute(
                 "SELECT confidence FROM detections"
@@ -481,12 +482,12 @@ class BirdNETPiMigrator:
 
             # Try ISO format first (YYYY-MM-DD)
             dt = datetime.strptime(f"{date_str}T{time_str}", "%Y-%m-%dT%H:%M:%S")
-            return dt.strftime("%Y-%m-%dT%H:%M:%S")
+            return dt.strftime(TIMESTAMP_FORMAT)
         except ValueError:
             try:
                 # Try alternative format (MM/DD/YYYY)
                 dt = datetime.strptime(f"{date_str} {time_str}", "%m/%d/%Y %H:%M:%S")
-                return dt.strftime("%Y-%m-%dT%H:%M:%S")
+                return dt.strftime(TIMESTAMP_FORMAT)
             except ValueError:
                 return None
 

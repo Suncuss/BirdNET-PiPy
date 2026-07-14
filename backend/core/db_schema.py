@@ -1,19 +1,26 @@
 """Schema and versioned migrations for the detections database.
 
-DATABASE_SCHEMA describes the CURRENT shape — what a fresh database looks
-like. MIGRATIONS is the append-only history that brings existing databases
-up to that shape, gated on ``PRAGMA user_version`` so each step runs exactly
-once per database.
+DATABASE_SCHEMA is the complete CURRENT shape — a fresh database gets it
+via ensure_schema() and is stamped at SCHEMA_VERSION without ever running
+a migration. MIGRATIONS is the append-only history that brings EXISTING
+databases up to that shape, gated on ``PRAGMA user_version`` so each step
+runs exactly once per database; migrations 4+ may therefore rely on true
+versioned state.
 
 Databases created before versioning existed report user_version 0 but may
 already have any subset of migrations 1-3 applied (they ran as ad-hoc
-state probes back then), so those migrations stay idempotent. New
-migrations (4+) only ever see databases at version >= 3 and may rely on
-versioned state.
+state probes back then), so those three stay idempotent.
 """
 from core.logging_config import get_logger
 
 logger = get_logger(__name__)
+
+
+# Canonical stored-timestamp layout: T-separated ISO-8601 at second
+# precision, fixed width. Range binds (db.py _iso_ts), the migration
+# importer's transform, and the fixed-offset substr() bucketing in
+# _get_bird_details_from_rollup all depend on this exact layout.
+TIMESTAMP_FORMAT = '%Y-%m-%dT%H:%M:%S'
 
 
 DATABASE_SCHEMA = '''
@@ -30,7 +37,8 @@ CREATE TABLE IF NOT EXISTS detections (
     sensitivity DECIMAL(4,3) CHECK(sensitivity > 0),
     overlap DECIMAL(4,3) CHECK(overlap >= 0 AND overlap <= 1),
     week INT GENERATED ALWAYS AS (strftime('%W', timestamp)) STORED,
-    extra TEXT DEFAULT '{}'
+    extra TEXT DEFAULT '{}',
+    audio_source TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_detections_timestamp ON detections(timestamp DESC);
@@ -96,25 +104,38 @@ MIGRATIONS = [
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
 
-def apply_migrations(cursor):
-    """Bring an existing database up to SCHEMA_VERSION.
+def ensure_schema(cursor):
+    """Create or upgrade the database to the current schema.
 
-    Runs every migration newer than the database's user_version, in order,
-    stamping user_version after each so a crash mid-sequence resumes at the
-    first unapplied step. The caller owns the surrounding commit.
+    A genuinely fresh database (no detections table) gets DATABASE_SCHEMA
+    and is stamped at SCHEMA_VERSION directly — migrations never run
+    against it, so DATABASE_SCHEMA alone must stay the complete current
+    shape and new migrations may rely on versioned state. An existing
+    database replays the migrations newer than its user_version.
 
     Takes the caller's cursor rather than opening its own: a second cursor
     on the same connection hits SQLITE_LOCKED on DROP INDEX/ALTER TABLE
     whenever the first cursor still holds an un-reset statement (e.g. the
-    unfetched row a PRAGMA returns).
+    unfetched row a PRAGMA returns). The caller owns the surrounding commit.
     """
+    cursor.execute("SELECT 1 FROM sqlite_master "
+                   "WHERE type='table' AND name='detections'")
+    is_fresh = cursor.fetchone() is None
+
+    cursor.executescript(DATABASE_SCHEMA)
+
+    if is_fresh:
+        cursor.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        return
+
     cursor.execute("PRAGMA user_version")
     db_version = cursor.fetchone()[0]
-
     for version, description, migrate in MIGRATIONS:
         if version <= db_version:
             continue
         migrate(cursor)
-        # PRAGMA can't take bound parameters; version is a literal int above.
+        # Stamp after each step so a crash mid-sequence resumes at the
+        # first unapplied one. (PRAGMA can't take bound parameters;
+        # version is a literal int from MIGRATIONS.)
         cursor.execute(f"PRAGMA user_version = {version}")
         logger.info(f"Migrated database to version {version}: {description}")

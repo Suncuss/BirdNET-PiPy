@@ -100,6 +100,25 @@ class TestSpeciesInsert:
         assert species_rows(test_db_manager)[
             'Turdus migratorius']['ebird_code'] == 'amerob'
 
+    def test_out_of_order_code_insert_wins_over_older_source(
+            self, test_db_manager):
+        """Code-less latest row, then an older code, then an out-of-order
+        code from a NEWER source than the stored one: the newer source must
+        win, exactly as a rebuild derives it."""
+        test_db_manager.insert_detection(_detection('2024-03-01T10:00:00'))
+        test_db_manager.insert_detection(_detection(
+            '2024-01-01T10:00:00', extra={'ebird_code': 'old'}))
+        test_db_manager.insert_detection(_detection(
+            '2024-02-01T10:00:00', extra={'ebird_code': 'new'}))
+
+        incremental = species_rows(test_db_manager)[
+            'Turdus migratorius']['ebird_code']
+        test_db_manager.rebuild_species_table()
+        rebuilt = species_rows(test_db_manager)[
+            'Turdus migratorius']['ebird_code']
+        assert incremental == 'new'
+        assert incremental == rebuilt
+
     def test_legacy_blank_sci_keys_by_common_name(self, test_db_manager):
         test_db_manager.insert_detection(_detection(
             '2024-01-15T10:00:00', sci='', common='Mystery Bird A'))
@@ -225,6 +244,12 @@ class TestRollupSelfHeal:
                        common='Common Blackbird',
                        extra={'ebird_code': 'combla'}),
             _detection('2024-01-20T12:00:00', sci='', common='Mystery Bird'),
+            # out-of-order code-bearing insert behind a code-less latest
+            _detection('2024-05-01T09:00:00', sci='Sitta europaea',
+                       common='Eurasian Nuthatch'),
+            _detection('2024-04-01T09:00:00', sci='Sitta europaea',
+                       common='Eurasian Nuthatch',
+                       extra={'ebird_code': 'eurnut1'}),
         ]
         ids = [test_db_manager.insert_detection(d) for d in detections]
         test_db_manager.delete_detection(ids[1])

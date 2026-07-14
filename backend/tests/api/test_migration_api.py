@@ -538,7 +538,7 @@ class TestMigrationStatusEndpoint:
             )
             assert response.status_code == 200
             status = response.get_json()
-            assert status['status'] in ('starting', 'loading', 'running', 'completed')
+            assert status['status'] in ('starting', 'running', 'completed')
 
             # Wait for completion
             wait_for_migration(api_client, migration_id)

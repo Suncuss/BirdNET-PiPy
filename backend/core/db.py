@@ -9,29 +9,15 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 
 from config.settings import DATABASE_PATH
-from core.db_schema import DATABASE_SCHEMA, apply_migrations
-
-# Species identity expressions live in core.db_species (with the rollup
-# they power); aliased to the historical private names this module's
-# queries were written against.
-from core.db_species import (
-    SPECIES_KEY as _SPECIES_KEY,
-)
-from core.db_species import (
-    apply_delete as _species_apply_delete,
-)
-from core.db_species import (
-    apply_insert as _species_apply_insert,
-)
-from core.db_species import (
-    ensure_consistent as _species_ensure_consistent,
-)
-from core.db_species import (
-    rebuild as _species_rebuild,
-)
+from core import db_species
+from core.db_schema import TIMESTAMP_FORMAT, ensure_schema
 from core.logging_config import get_logger
 from core.timezone_service import local_now
 from core.utils import build_detection_filenames
+
+# Species identity expression (owned by core.db_species alongside the
+# rollup it powers); short private name for the many f-string query sites.
+_SPECIES_KEY = db_species.SPECIES_KEY
 
 # Detection fields that must never reach a public JSON payload. Exact
 # coordinates pinpoint the user's station. _normalize_detection drops these so
@@ -43,8 +29,8 @@ PRIVATE_DETECTION_FIELDS = ('latitude', 'longitude')
 
 
 def _iso_ts(dt):
-    """Render a datetime as the canonical stored-timestamp format:
-    T-separated ISO-8601 at second precision ('2026-07-12T20:54:01').
+    """Render a datetime in the canonical stored-timestamp layout
+    (db_schema.TIMESTAMP_FORMAT, e.g. '2026-07-12T20:54:01').
 
     Always bind timestamps as strings built by this helper, never as raw
     datetime objects: the sqlite3 default adapter renders datetimes
@@ -52,7 +38,7 @@ def _iso_ts(dt):
     only compare correctly against stored T-format values by the
     lexicographic accident that 'T' sorts above ' '.
     """
-    return dt.isoformat(timespec='seconds')
+    return dt.strftime(TIMESTAMP_FORMAT)
 
 
 def _distribution_spec(view, anchor):
@@ -109,11 +95,17 @@ def _distribution_spec(view, anchor):
         "Invalid view. Use 'day', 'week', 'month', '6month', or 'year'.")
 
 
+# What _build_detection_filters emits when no filters apply. Callers embed
+# it in `WHERE {clause}` compositions; _count_query keys its fast path on
+# it — one shared constant so the contract can't silently drift.
+_NO_FILTERS = "1=1"
+
+
 def _count_query(where_clause):
     """COUNT query for a filter set. An unfiltered count omits the WHERE
     entirely so SQLite serves it from the b-tree row counter instead of
     walking a million-entry covering index (14ms vs 36ms measured)."""
-    if where_clause == "1=1":
+    if where_clause == _NO_FILTERS:
         return "SELECT COUNT(*) as total FROM detections"
     return f"SELECT COUNT(*) as total FROM detections WHERE {where_clause}"
 
@@ -245,13 +237,12 @@ class DatabaseManager:
             # get_db_connection() — no value in setting them here on a
             # connection that's about to be closed.
             cursor.execute("PRAGMA journal_mode = WAL")
-            cursor.executescript(DATABASE_SCHEMA)
-            apply_migrations(cursor)
+            ensure_schema(cursor)
 
             # Self-heal the species rollup: anything that wrote detections
             # without maintaining it (bulk import, a pre-rollup backup)
             # shows up as a count mismatch and triggers a rebuild here.
-            _species_ensure_consistent(cursor)
+            db_species.ensure_consistent(cursor)
 
             # Refresh planner statistics. Without sqlite_stat1 every plan
             # comes from schema-order heuristics, which can flip badly as
@@ -269,8 +260,19 @@ class DatabaseManager:
         """Recompute the species rollup from detections. For writers that
         bypass insert_detection (the BirdNET-Pi bulk import)."""
         with self.get_db_connection() as conn:
-            _species_rebuild(conn.cursor())
+            db_species.rebuild(conn.cursor())
             conn.commit()
+
+    def open_readonly_connection(self):
+        """Fresh read-only connection, bypassing the thread-local cache.
+
+        For probes that must observe the actual database file — e.g. the
+        integrity check, which would otherwise read pages a warm connection
+        cached before any damage, and must not CREATE a missing file the
+        way a default-mode connect silently does. Caller closes it.
+        """
+        return sqlite3.connect(f"file:{self.db_path}?mode=ro",
+                               uri=True, timeout=30)
 
     def database_exists(self):
         with self.get_db_connection() as conn:
@@ -313,8 +315,7 @@ class DatabaseManager:
             detection_id = cur.lastrowid
             # Same transaction: the species rollup can never disagree with
             # a committed detection.
-            _species_apply_insert(cur, detection, detection_id,
-                                  extra_dict.get('ebird_code'))
+            db_species.apply_insert(cur, detection, detection_id, extra_dict)
             conn.commit()
             return detection_id
 
@@ -333,16 +334,7 @@ class DatabaseManager:
             # species dominated the recent window).
             rows = self._fetch_latest_unique_by_species(limit)
         else:
-            # Highest confidence per (group_timestamp, species_key, source).
-            # Partition on the species key (scientific_name, with
-            # common_name as a fallback when sci is empty) so that V2/V3
-            # model history for the same species merges into one entry.
-            # Pre-fetch recent rows so the window function scans ~hundreds
-            # instead of the full table (376K+ rows → 1000ms down to ~1ms).
-            partition = f"PARTITION BY group_timestamp, {_SPECIES_KEY}, audio_source"
-            rank_order = "ORDER BY confidence DESC"
-            rows = self._fetch_deduplicated(
-                partition, rank_order, limit * 50, limit)
+            rows = self._fetch_deduplicated(limit)
 
         detections = []
         for row in rows:
@@ -354,13 +346,17 @@ class DatabaseManager:
 
         return detections
 
-    def _fetch_deduplicated(self, partition, rank_order, pre_fetch, limit):
-        """Run the windowed dedup query, optionally bounded by pre_fetch."""
-        if pre_fetch is not None:
-            source = f"(SELECT * FROM detections ORDER BY timestamp DESC, id DESC LIMIT {pre_fetch})"
-        else:
-            source = "detections"
+    def _fetch_deduplicated(self, limit):
+        """Latest detections, keeping the highest-confidence row per
+        (group_timestamp, species_key, audio_source).
 
+        Partitioning on the species key (scientific_name with a
+        common_name fallback for blank-sci legacy rows) merges V2/V3
+        model history for the same species into one entry. The window
+        function runs over a recent prefetch instead of the full table
+        (376K+ rows → 1000ms down to ~1ms).
+        """
+        pre_fetch = limit * 50
         query = f"""
         SELECT
             id,
@@ -381,10 +377,11 @@ class DatabaseManager:
         WHERE id IN (
             SELECT id FROM (
                 SELECT id, ROW_NUMBER() OVER (
-                    {partition}
-                    {rank_order}
+                    PARTITION BY group_timestamp, {_SPECIES_KEY}, audio_source
+                    ORDER BY confidence DESC
                 ) as rn
-                FROM {source}
+                FROM (SELECT * FROM detections
+                      ORDER BY timestamp DESC, id DESC LIMIT {pre_fetch})
             ) WHERE rn = 1
         )
         ORDER BY timestamp DESC, id DESC
@@ -704,12 +701,8 @@ class DatabaseManager:
                     if row[f'{kind}_{period}_key']
                 }
                 selected_species_names = {
-                    species_key: self._get_latest_species_name_for_key(
-                        cur,
-                        species_key,
-                        all_time_start=params['all_time_start'],
-                        now=params['now'],
-                    )
+                    species_key: self._get_species_display_name(
+                        cur, species_key)
                     for species_key in selected_keys
                 }
 
@@ -746,7 +739,6 @@ class DatabaseManager:
         now = (now or local_now()).isoformat()
         params = {
             'period_start': period_start.isoformat(),
-            'all_time_start': datetime.min.isoformat(),
             'now': now,
         }
 
@@ -797,12 +789,8 @@ class DatabaseManager:
                     if row[key]
                 }
                 selected_species_names = {
-                    species_key: self._get_latest_species_name_for_key(
-                        cur,
-                        species_key,
-                        all_time_start=params['all_time_start'],
-                        now=params['now'],
-                    )
+                    species_key: self._get_species_display_name(
+                        cur, species_key)
                     for species_key in selected_keys
                 }
 
@@ -824,15 +812,9 @@ class DatabaseManager:
             most_common_key, rarest_key, selected_species_names,
         )
 
-    def _get_latest_species_name_for_key(self, cur, species_key, *,
-                                          all_time_start, now):
-        """Return the newest display name for a summary species key.
-
-        The rollup's common_name is already newest-wins, so this is a
-        primary-key read. The time-window arguments are kept for signature
-        compatibility with the summary queries that supply them; a key
-        selected from any window always has a species row.
-        """
+    def _get_species_display_name(self, cur, species_key):
+        """(common, scientific) display names for a summary species key —
+        a primary-key rollup read; its common_name is already newest-wins."""
         cur.execute("SELECT common_name, scientific_name FROM species "
                     "WHERE species_key = ?", (species_key,))
         row = cur.fetchone()
@@ -876,13 +858,10 @@ class DatabaseManager:
         """
         if scientific_name:
             return self._get_bird_details_from_rollup(scientific_name)
-
-        filter_col, filter_value = _resolve_filter_column(species_name)
-        if filter_col is None:
+        if not species_name:
             return None
 
-        # Inline the join column into the query — both options are validated
-        # above so f-string interpolation is safe here.
+        ebird = db_species.ebird_expr('d3.')
         query = f"""
         SELECT
             MIN(common_name) AS common_name,
@@ -893,7 +872,7 @@ class DatabaseManager:
             AVG(confidence) as average_confidence,
             (SELECT strftime('%H:00', timestamp)
             FROM detections d2
-            WHERE d2.{filter_col} = d1.{filter_col}
+            WHERE d2.common_name = d1.common_name
             GROUP BY strftime('%H', timestamp)
             ORDER BY COUNT(*) DESC
             LIMIT 1) as peak_activity_time,
@@ -902,18 +881,18 @@ class DatabaseManager:
                 WHEN COUNT(DISTINCT strftime('%m', timestamp)) >= 6 THEN 'Multi-season'
                 ELSE 'Seasonal'
             END as seasonality,
-            (SELECT json_extract(d3.extra, '$.ebird_code')
+            (SELECT {ebird}
             FROM detections d3
-            WHERE d3.{filter_col} = d1.{filter_col}
-              AND json_extract(d3.extra, '$.ebird_code') IS NOT NULL
+            WHERE d3.common_name = d1.common_name
+              AND {ebird} IS NOT NULL
             LIMIT 1) as ebird_code
         FROM detections d1
-        WHERE {filter_col} = ?
+        WHERE common_name = ?
         GROUP BY scientific_name
         """
         with self.get_db_connection() as conn:
             cur = conn.cursor()
-            cur.execute(query, (filter_value,))
+            cur.execute(query, (species_name,))
             result = cur.fetchone()
             return dict(result) if result else None
 
@@ -937,9 +916,9 @@ class DatabaseManager:
                 return None
 
             # One covering-index pass; at most 12x24 groups come back and
-            # Python folds them into peak hour + distinct months. substr on
-            # the fixed-width 'YYYY-MM-DDTHH:MM:SS' text beats strftime by
-            # ~30% here — no per-row datetime parsing.
+            # Python folds them into peak hour + distinct months. substr at
+            # fixed offsets into db_schema.TIMESTAMP_FORMAT beats strftime
+            # by ~30% here — no per-row datetime parsing.
             cur.execute("""
                 SELECT substr(timestamp, 6, 2) AS month,
                        substr(timestamp, 12, 2) AS hour,
@@ -1217,17 +1196,16 @@ class DatabaseManager:
             total = cur.fetchone()[0]
 
             # Species discovery off the rollup instead of two DISTINCT
-            # scans; legacy blank-sci species are keyed by common_name.
+            # scans; species_where owns the key->filter shape (legacy
+            # blank-sci species are keyed by common_name).
             cur.execute("SELECT species_key, scientific_name FROM species")
             groups = [
-                ("scientific_name = ?", row['scientific_name'])
-                if row['scientific_name']
-                else ("scientific_name = '' AND common_name = ?",
-                      row['species_key'])
+                db_species.species_where(row['scientific_name'],
+                                         row['species_key'])
                 for row in cur.fetchall()
             ]
 
-            for where, name in groups:
+            for where, params in groups:
                 for order_by, keep in (('confidence DESC', keep_per_species),
                                        ('timestamp DESC', keep_recent_per_species)):
                     if keep <= 0:
@@ -1235,7 +1213,7 @@ class DatabaseManager:
                     cur.execute(
                         f"SELECT id FROM detections WHERE {where} "
                         f"ORDER BY {order_by}, id DESC LIMIT ?",
-                        (name, keep))
+                        params + [keep])
                     protected.update(row[0] for row in cur.fetchall())
 
         logger.debug("Cleanup protected set computed", extra={
@@ -1264,7 +1242,7 @@ class DatabaseManager:
             extra (raw JSON string); fewer than ``limit`` rows signals
             the end of the table.
         """
-        where = "1=1"
+        where = _NO_FILTERS
         params = []
         if after_id is not None:
             where = "(timestamp > ? OR (timestamp = ? AND id > ?))"
@@ -1641,7 +1619,7 @@ class DatabaseManager:
             cur.execute(query, (detection_id,))
             rows_deleted = cur.rowcount
             if rows_deleted > 0:
-                _species_apply_delete(cur, detection)
+                db_species.apply_delete(cur, detection)
             conn.commit()
 
         if rows_deleted > 0:
@@ -1779,7 +1757,7 @@ class DatabaseManager:
             conditions.append(f"{filter_col} = ?")
             params.append(filter_value)
 
-        where_clause = " AND ".join(conditions) if conditions else "1=1"
+        where_clause = " AND ".join(conditions) if conditions else _NO_FILTERS
         return where_clause, params
 
     # -------------------------------------------------------------------------

@@ -375,7 +375,9 @@
             v-if="settings.access.public_access"
             class="space-y-2 border-t border-gray-200 pt-2"
           >
-            <p class="text-xs text-gray-500">Also show without login:</p>
+            <p class="text-xs text-gray-500">
+              Also show without login:
+            </p>
             <div
               v-for="feature in accessFeatures"
               :key="feature.key"

@@ -2,10 +2,7 @@
 Database-specific test fixtures and configuration.
 """
 import os
-
-# Import test configuration
 import sys
-import tempfile
 from datetime import datetime, timedelta
 
 import pytest
@@ -25,21 +22,6 @@ def frozen_db_now(monkeypatch):
     fixed = datetime(2026, 5, 20, 12, 0, 0)
     monkeypatch.setattr('core.db.local_now', lambda: fixed)
     return fixed
-
-
-@pytest.fixture
-def test_db_manager():
-    """Create a DatabaseManager with temporary test database."""
-    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
-        db_path = tmp.name
-
-    from core.db import DatabaseManager
-    manager = DatabaseManager(db_path=db_path)
-    yield manager
-
-    # Cleanup
-    if os.path.exists(db_path):
-        os.unlink(db_path)
 
 
 @pytest.fixture

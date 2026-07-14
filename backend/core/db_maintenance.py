@@ -21,6 +21,7 @@ of the newest backup file. A failed quick_check does not touch the
 marker, so it re-runs — and re-alerts — on the next monitor cycle.
 """
 import os
+import re
 import shutil
 import sqlite3
 import time
@@ -41,6 +42,11 @@ _CHECK_MARKER = '.last-quick-check'
 _BACKUP_SUFFIX = '.db'
 _TMP_SUFFIX = '.tmp'
 
+# Housekeeping (rotation, stale-tmp sweep) touches ONLY files this module
+# generated — users park manual saves next to the backups, and deleting
+# a file we didn't create is data loss.
+_OWNED_FILE = re.compile(r'^birds-\d{8}-\d{6}\.db(\.tmp)?$')
+
 
 def _backup_dir(db_path):
     return os.path.join(os.path.dirname(db_path), 'backups')
@@ -59,10 +65,11 @@ def _is_due(path, now):
 
 
 def _list_backups(backup_dir):
-    """Backup files, oldest first (timestamped names sort chronologically)."""
+    """Generated backup files, oldest first (the timestamped names sort
+    chronologically). Foreign files in the directory are not ours to touch."""
     try:
         names = [n for n in os.listdir(backup_dir)
-                 if n.endswith(_BACKUP_SUFFIX) and not n.endswith(_TMP_SUFFIX)]
+                 if _OWNED_FILE.match(n) and n.endswith(_BACKUP_SUFFIX)]
     except OSError:
         return []
     return sorted(os.path.join(backup_dir, n) for n in names)
@@ -71,17 +78,14 @@ def _list_backups(backup_dir):
 def run_quick_check(db_manager):
     """Run PRAGMA quick_check; log CRITICAL and return False on corruption.
 
-    Uses a private READ-ONLY connection rather than the manager's
-    long-lived thread-local one: an integrity check must read the actual
-    file, not pages a warm connection cached before the damage happened —
-    and a default-mode connect would silently CREATE a missing database
-    file, which quick_check then blesses as 'ok'. A missing or
-    foreign/empty file must fail the check, or the backup rotation would
-    happily replace both good backups with snapshots of nothing.
+    Reads through a fresh read-only connection (see
+    open_readonly_connection): the check must observe the actual file, and
+    a missing or foreign/empty file must FAIL — otherwise the backup
+    rotation would happily replace both good backups with snapshots of
+    nothing.
     """
     try:
-        conn = sqlite3.connect(f"file:{db_manager.db_path}?mode=ro",
-                               uri=True, timeout=30)
+        conn = db_manager.open_readonly_connection()
         try:
             rows = [row[0] for row in conn.execute("PRAGMA quick_check")]
             if rows == ['ok'] and conn.execute(
@@ -124,9 +128,9 @@ def create_backup(db_manager, now=None):
     backup_dir = _backup_dir(db_path)
     os.makedirs(backup_dir, exist_ok=True)
 
-    # A leftover .tmp means a previous attempt died mid-copy
+    # A leftover generated .tmp means a previous attempt died mid-copy
     for name in os.listdir(backup_dir):
-        if name.endswith(_TMP_SUFFIX):
+        if _OWNED_FILE.match(name) and name.endswith(_TMP_SUFFIX):
             os.unlink(os.path.join(backup_dir, name))
 
     db_size = os.path.getsize(db_path)

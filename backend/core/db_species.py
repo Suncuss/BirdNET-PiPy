@@ -29,35 +29,13 @@ from core.logging_config import get_logger
 logger = get_logger(__name__)
 
 
-def species_key_expr(alias: str = "") -> str:
-    """SQL expression for the stable species grouping key, optionally
-    qualified with a table alias prefix (e.g. ``"d."``)."""
-    return f"COALESCE(NULLIF({alias}scientific_name, ''), {alias}common_name)"
+# SQL expression for the stable species grouping key.
+SPECIES_KEY = "COALESCE(NULLIF(scientific_name, ''), common_name)"
 
 
-SPECIES_KEY = species_key_expr()
-
-
-# Width of the zero-padded id packed into a "latest key"; comfortably above
-# the 19 digits of a max int64, so the id stays fixed-width and recoverable.
-_LATEST_KEY_ID_WIDTH = 20
-
-
-def latest_key_expr(alias: str = "") -> str:
-    """SQL expression packing a detection's timestamp and id into one
-    lexically sortable string, optionally qualified with a table alias.
-
-    MAX() over it yields the newest row, with id breaking exact-timestamp
-    ties. char(31) sorts below '.' and every digit, so a variable-width
-    (microsecond) timestamp still orders chronologically.
-    """
-    return (f"{alias}timestamp || char(31) || "
-            f"printf('%0{_LATEST_KEY_ID_WIDTH}d', {alias}id)")
-
-
-def latest_key_id_expr(key_expr: str) -> str:
-    """SQL expression recovering the integer id packed by latest_key_expr()."""
-    return f"CAST(substr({key_expr}, -{_LATEST_KEY_ID_WIDTH}) AS INTEGER)"
+def species_key_of(scientific_name, common_name):
+    """Python twin of SPECIES_KEY for one detection's fields."""
+    return scientific_name if scientific_name else common_name
 
 
 def species_where(scientific_name, common_name):
@@ -68,12 +46,37 @@ def species_where(scientific_name, common_name):
     return "scientific_name = '' AND common_name = ?", [common_name]
 
 
-# extra is unconstrained text and Python reads deliberately tolerate
-# malformed JSON (_parse_extra returns {}), so every SQL-side extraction
-# must be json_valid-guarded — a bare json_extract THROWS on the first bad
-# value, which during the startup rebuild would crash-loop the service.
-_EBIRD_EXPR = ("CASE WHEN json_valid(extra) "
-               "THEN json_extract(extra, '$.ebird_code') END")
+# Width of the zero-padded id packed into the latest key; comfortably above
+# the 19 digits of a max int64, so the id stays fixed-width and recoverable.
+_LATEST_KEY_ID_WIDTH = 20
+
+# Packs a detection's timestamp and id into one lexically sortable string:
+# MAX() over it yields the newest row, with id breaking exact-timestamp
+# ties. char(31) sorts below '.' and every digit, so a variable-width
+# (microsecond) timestamp still orders chronologically.
+LATEST_KEY = (f"timestamp || char(31) || "
+              f"printf('%0{_LATEST_KEY_ID_WIDTH}d', id)")
+
+
+def latest_key_id_expr(key_expr: str) -> str:
+    """SQL expression recovering the integer id packed by LATEST_KEY."""
+    return f"CAST(substr({key_expr}, -{_LATEST_KEY_ID_WIDTH}) AS INTEGER)"
+
+
+def ebird_expr(alias: str = "") -> str:
+    """json_valid-guarded extraction of extra's ebird_code, optionally
+    qualified with a table alias prefix (e.g. ``"d."``).
+
+    extra is unconstrained text and Python reads deliberately tolerate
+    malformed JSON (_parse_extra returns {}), so every SQL-side extraction
+    must carry this guard — a bare json_extract THROWS on the first bad
+    value, which during the startup rebuild would crash-loop the service.
+    """
+    return (f"CASE WHEN json_valid({alias}extra) "
+            f"THEN json_extract({alias}extra, '$.ebird_code') END")
+
+
+_EBIRD = ebird_expr()
 
 
 # "The inserted row is newer than the rollup's current latest" — inserts
@@ -108,20 +111,55 @@ ON CONFLICT(species_key) DO UPDATE SET
 """
 
 
-def apply_insert(cursor, detection, detection_id, ebird_code):
+def _rederive_ebird(cursor, where, params, key):
+    """Set the rollup's ebird_code to exactly what rebuild() derives:
+    the latest row's code, else the newest row that has one, else NULL."""
+    cursor.execute(
+        f"""SELECT COALESCE(
+            (SELECT {_EBIRD} FROM detections WHERE {where}
+             ORDER BY timestamp DESC, id DESC LIMIT 1),
+            (SELECT {_EBIRD} FROM detections WHERE {where}
+             AND {_EBIRD} IS NOT NULL
+             ORDER BY timestamp DESC, id DESC LIMIT 1))""",
+        params + params)
+    derived = cursor.fetchone()[0]
+    cursor.execute(
+        "UPDATE species SET ebird_code = ? WHERE species_key = ?",
+        (derived, key))
+
+
+def apply_insert(cursor, detection, detection_id, extra):
     """Roll a just-inserted detection into its species row. Must run on
-    the same cursor/transaction as the detections INSERT."""
+    the same cursor/transaction as the detections INSERT. ``extra`` is the
+    detection's parsed extra dict — this module owns knowing which of its
+    fields the rollup tracks."""
     scientific_name = detection['scientific_name'] or ''
     common_name = detection['common_name']
+    key = species_key_of(scientific_name, common_name)
+    incoming_ebird = extra.get('ebird_code') if isinstance(extra, dict) else None
     cursor.execute(_UPSERT, {
-        'key': scientific_name if scientific_name else common_name,
+        'key': key,
         'sci': scientific_name,
         'common': common_name,
-        'ebird': ebird_code,
+        'ebird': incoming_ebird,
         'conf': detection['confidence'],
         'ts': detection['timestamp'],
         'id': detection_id,
     })
+
+    if incoming_ebird is not None:
+        # The upsert's keep-existing rule is only correct for in-order
+        # inserts: an out-of-order code-bearing row may be newer than the
+        # source of the stored code (which the rollup doesn't record), so
+        # a conflicting stored value is ambiguous — re-derive it. One
+        # primary-key read per code-bearing insert; the probes run only on
+        # the rare conflict.
+        cursor.execute("SELECT latest_id, ebird_code FROM species "
+                       "WHERE species_key = ?", (key,))
+        row = cursor.fetchone()
+        if row[0] != detection_id and row[1] != incoming_ebird:
+            where, params = species_where(scientific_name, common_name)
+            _rederive_ebird(cursor, where, params, key)
 
 
 def apply_delete(cursor, deleted):
@@ -129,13 +167,20 @@ def apply_delete(cursor, deleted):
     the same cursor/transaction as the detections DELETE (the boundary
     recomputes read the post-delete state).
 
+    Incremental on purpose: re-deriving the whole row the way rebuild()
+    does costs a full aggregate over the species' surviving rows — ~2s
+    measured for a 143K-row species, per delete — so count/sum decrement
+    in O(1) and only fields the deleted row could have defined get
+    recomputed. Parity with rebuild() is pinned by
+    test_incremental_matches_rebuild.
+
     ``deleted`` is the detection dict as it was before deletion. A missing
     species row means the rollup already drifted; leave it to the startup
     consistency check rather than guessing here.
     """
     scientific_name = deleted.get('scientific_name') or ''
     common_name = deleted['common_name']
-    key = scientific_name if scientific_name else common_name
+    key = species_key_of(scientific_name, common_name)
 
     cursor.execute(
         "SELECT detection_count, latest_id, first_detected "
@@ -157,10 +202,8 @@ def apply_delete(cursor, deleted):
     where, params = species_where(scientific_name, common_name)
 
     if deleted['id'] == latest_id:
-        # The deleted row defined the rollup's newest-wins fields; recompute
-        # them from the new latest row so incremental state stays identical
-        # to what rebuild() would derive — the deleted row may have carried
-        # a different display name than its predecessor.
+        # The deleted row defined the newest-wins fields; take them from
+        # the new latest row.
         cursor.execute(
             f"SELECT timestamp, id, common_name FROM detections "
             f"WHERE {where} ORDER BY timestamp DESC, id DESC LIMIT 1",
@@ -175,23 +218,10 @@ def apply_delete(cursor, deleted):
         if isinstance(deleted.get('extra'), dict) else None
     if deleted['id'] == latest_id or deleted_ebird is not None:
         # Unlike the other newest-wins fields, ebird_code can be sourced
-        # from ANY row (rebuild's backfill), so deleting a non-latest row
-        # that carried a code can orphan the rollup's value. Re-derive it
-        # exactly as rebuild() would: the latest row's code, else the
-        # newest row that has one, else NULL. A deleted code-less,
-        # non-latest row can't change that derivation — skipped.
-        cursor.execute(
-            f"""SELECT COALESCE(
-                (SELECT {_EBIRD_EXPR} FROM detections WHERE {where}
-                 ORDER BY timestamp DESC, id DESC LIMIT 1),
-                (SELECT {_EBIRD_EXPR} FROM detections WHERE {where}
-                 AND {_EBIRD_EXPR} IS NOT NULL
-                 ORDER BY timestamp DESC, id DESC LIMIT 1))""",
-            params + params)
-        derived_ebird = cursor.fetchone()[0]
-        cursor.execute(
-            "UPDATE species SET ebird_code = ? WHERE species_key = ?",
-            (derived_ebird, key))
+        # from ANY row (the backfill rule), so deleting a non-latest row
+        # that carried a code can orphan the rollup's value. A deleted
+        # code-less, non-latest row can't change the derivation — skipped.
+        _rederive_ebird(cursor, where, params, key)
 
     if deleted['timestamp'] == first_detected:
         cursor.execute(
@@ -206,9 +236,9 @@ def rebuild(cursor):
     """Recompute the whole rollup from detections in one grouped pass.
 
     The aggregate subquery packs each species' newest (timestamp, id) into
-    latest_key; joining back on the recovered id fetches that newest row's
-    display name and ebird code without a second sort. Species whose newest
-    row predates ebird stamping get a bounded per-species backfill probe.
+    a latest key; joining back on the recovered id fetches that newest
+    row's display name and ebird code without a second sort. Species whose
+    newest row predates ebird stamping get a bounded backfill probe.
     """
     cursor.execute("DELETE FROM species")
     cursor.execute(f"""
@@ -218,8 +248,7 @@ def rebuild(cursor):
         SELECT s.species_key,
                s.scientific_name,
                d.common_name,
-               CASE WHEN json_valid(d.extra)
-                    THEN json_extract(d.extra, '$.ebird_code') END,
+               {ebird_expr('d.')},
                s.detection_count,
                s.sum_confidence,
                s.first_detected,
@@ -231,30 +260,27 @@ def rebuild(cursor):
                    COUNT(*) AS detection_count,
                    SUM(confidence) AS sum_confidence,
                    MIN(timestamp) AS first_detected,
-                   MAX({latest_key_expr()}) AS latest_key
+                   MAX({LATEST_KEY}) AS latest_key
             FROM detections
             GROUP BY species_key
         ) s
         JOIN detections d ON d.id = {latest_key_id_expr('s.latest_key')}
     """)
-    ebird = ("CASE WHEN json_valid(d.extra) "
-             "THEN json_extract(d.extra, '$.ebird_code') END")
-    cursor.execute(f"""
-        UPDATE species SET ebird_code = (
-            SELECT {ebird} FROM detections d
-            WHERE d.scientific_name = species.scientific_name
-              AND {ebird} IS NOT NULL
-            ORDER BY d.timestamp DESC, d.id DESC LIMIT 1
-        ) WHERE ebird_code IS NULL AND scientific_name != ''
-    """)
-    cursor.execute(f"""
-        UPDATE species SET ebird_code = (
-            SELECT {ebird} FROM detections d
-            WHERE d.scientific_name = '' AND d.common_name = species.common_name
-              AND {ebird} IS NOT NULL
-            ORDER BY d.timestamp DESC, d.id DESC LIMIT 1
-        ) WHERE ebird_code IS NULL AND scientific_name = ''
-    """)
+    # Backfill: newest row that has a code, per key shape (sci-keyed
+    # species correlate on scientific_name, legacy blank-sci on common)
+    for species_filter, correlation in (
+        ("scientific_name != ''",
+         "d.scientific_name = species.scientific_name"),
+        ("scientific_name = ''",
+         "d.scientific_name = '' AND d.common_name = species.common_name"),
+    ):
+        cursor.execute(f"""
+            UPDATE species SET ebird_code = (
+                SELECT {ebird_expr('d.')} FROM detections d
+                WHERE {correlation} AND {ebird_expr('d.')} IS NOT NULL
+                ORDER BY d.timestamp DESC, d.id DESC LIMIT 1
+            ) WHERE ebird_code IS NULL AND {species_filter}
+        """)
 
 
 def ensure_consistent(cursor):
@@ -264,19 +290,14 @@ def ensure_consistent(cursor):
     audit — apply_insert/apply_delete keep the details right, and anything
     that bypasses them (bulk import, manual edits, a restored backup from
     before this table existed) breaks the count and lands here.
-
-    Returns 'ok' or 'rebuilt'.
     """
     cursor.execute("SELECT COUNT(*) FROM detections")
     detections_total = cursor.fetchone()[0]
     cursor.execute("SELECT COALESCE(SUM(detection_count), 0) FROM species")
     rollup_total = cursor.fetchone()[0]
 
-    if rollup_total == detections_total:
-        return 'ok'
-
-    logger.warning(
-        f"Species rollup out of sync ({rollup_total} rolled up vs "
-        f"{detections_total} detections) — rebuilding")
-    rebuild(cursor)
-    return 'rebuilt'
+    if rollup_total != detections_total:
+        logger.warning(
+            f"Species rollup out of sync ({rollup_total} rolled up vs "
+            f"{detections_total} detections) — rebuilding")
+        rebuild(cursor)
