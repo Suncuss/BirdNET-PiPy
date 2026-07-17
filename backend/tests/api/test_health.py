@@ -14,15 +14,16 @@ def test_create_app_accepts_gevent_async_mode():
     # irreversibly patch the whole test process. Save/restore the module
     # global so the real SocketIO doesn't leak into other tests.
     import core.api as api_module
+    import core.api_infra as api_infra
 
     saved = api_module.socketio
-    saved_db_executor = api_module.db_executor
+    saved_db_executor = api_infra.db_executor
     try:
         app, sio = api_module.create_app(async_mode='gevent')
         assert sio.async_mode == 'gevent'
         assert app is not None
     finally:
         api_module.socketio = saved
-        if api_module.db_executor is not saved_db_executor:
-            api_module.db_executor.shutdown(wait=False)
-        api_module.db_executor = saved_db_executor
+        if api_infra.db_executor is not saved_db_executor:
+            api_infra.db_executor.shutdown(wait=False)
+        api_infra.db_executor = saved_db_executor

@@ -38,9 +38,9 @@ class TestHaVersionEndpoint:
     """Test GET /api/system/version in HA mode."""
 
     def test_returns_ha_version_info(self, api_client):
-        with patch('core.api.is_home_assistant_mode', return_value=True), \
-             patch('core.api.get_runtime_mode', return_value='ha'), \
-             patch('core.api.load_ha_source_commit', return_value='abc1234def'):
+        with patch('core.routes.system.is_home_assistant_mode', return_value=True), \
+             patch('core.routes.system.get_runtime_mode', return_value='ha'), \
+             patch('core.routes.system.load_ha_source_commit', return_value='abc1234def'):
             with patch.dict(os.environ, {'BUILD_VERSION': '2.0.0'}):
                 response = api_client.get('/api/system/version')
                 assert response.status_code == 200
@@ -52,9 +52,9 @@ class TestHaVersionEndpoint:
                 assert 'app_source_commit' not in data
 
     def test_returns_unknown_when_no_source_commit(self, api_client):
-        with patch('core.api.is_home_assistant_mode', return_value=True), \
-             patch('core.api.get_runtime_mode', return_value='ha'), \
-             patch('core.api.load_ha_source_commit', return_value=None):
+        with patch('core.routes.system.is_home_assistant_mode', return_value=True), \
+             patch('core.routes.system.get_runtime_mode', return_value='ha'), \
+             patch('core.routes.system.load_ha_source_commit', return_value=None):
             with patch.dict(os.environ, {'BUILD_VERSION': '2.0.0'}):
                 response = api_client.get('/api/system/version')
                 assert response.status_code == 200
@@ -62,9 +62,9 @@ class TestHaVersionEndpoint:
                 assert data['current_commit'] == 'unknown'
 
     def test_native_mode_returns_runtime_mode(self, api_client):
-        with patch('core.api.is_home_assistant_mode', return_value=False), \
-             patch('core.api.get_runtime_mode', return_value='native'), \
-             patch('core.api.load_version_info') as mock_load:
+        with patch('core.routes.system.is_home_assistant_mode', return_value=False), \
+             patch('core.routes.system.get_runtime_mode', return_value='native'), \
+             patch('core.routes.system.load_version_info') as mock_load:
             mock_load.return_value = {
                 'version': '0.5.0',
                 'commit': '1a081f5',
@@ -87,8 +87,8 @@ class TestHaUpdateCheck:
             'version': '0.6.3',
             'version_latest': '0.6.4',
         }
-        with patch('core.api.is_home_assistant_mode', return_value=True), \
-             patch('core.api._call_supervisor', return_value=(supervisor_info, None)):
+        with patch('core.routes.system.is_home_assistant_mode', return_value=True), \
+             patch('core.routes.system._call_supervisor', return_value=(supervisor_info, None)):
             response = api_client.get('/api/system/update-check')
             assert response.status_code == 200
             data = response.get_json()
@@ -103,16 +103,16 @@ class TestHaUpdateCheck:
             'version': '0.6.4',
             'version_latest': '0.6.4',
         }
-        with patch('core.api.is_home_assistant_mode', return_value=True), \
-             patch('core.api._call_supervisor', return_value=(supervisor_info, None)):
+        with patch('core.routes.system.is_home_assistant_mode', return_value=True), \
+             patch('core.routes.system._call_supervisor', return_value=(supervisor_info, None)):
             response = api_client.get('/api/system/update-check')
             assert response.status_code == 200
             data = response.get_json()
             assert data['update_available'] is False
 
     def test_update_check_supervisor_error_returns_502(self, api_client):
-        with patch('core.api.is_home_assistant_mode', return_value=True), \
-             patch('core.api._call_supervisor', return_value=(None, 'Connection refused')):
+        with patch('core.routes.system.is_home_assistant_mode', return_value=True), \
+             patch('core.routes.system._call_supervisor', return_value=(None, 'Connection refused')):
             response = api_client.get('/api/system/update-check')
             assert response.status_code == 502
             data = response.get_json()
@@ -124,8 +124,8 @@ class TestHaUpdateCheck:
             'version': '0.6.4',
             'version_latest': '0.6.4',
         }
-        with patch('core.api.is_home_assistant_mode', return_value=True), \
-             patch('core.api._call_supervisor', return_value=(supervisor_info, None)) as mock_call:
+        with patch('core.routes.system.is_home_assistant_mode', return_value=True), \
+             patch('core.routes.system._call_supervisor', return_value=(supervisor_info, None)) as mock_call:
             response = api_client.get('/api/system/update-check?force=true')
             assert response.status_code == 200
             calls = mock_call.call_args_list
@@ -139,8 +139,8 @@ class TestHaUpdateCheck:
             'version': '0.6.4',
             'version_latest': '0.6.4',
         }
-        with patch('core.api.is_home_assistant_mode', return_value=True), \
-             patch('core.api._call_supervisor', return_value=(supervisor_info, None)) as mock_call:
+        with patch('core.routes.system.is_home_assistant_mode', return_value=True), \
+             patch('core.routes.system._call_supervisor', return_value=(supervisor_info, None)) as mock_call:
             response = api_client.get('/api/system/update-check')
             assert response.status_code == 200
             mock_call.assert_called_once_with('GET', '/addons/self/info')
@@ -150,7 +150,7 @@ class TestHaUpdateChannel:
     """Test PUT /api/system/update-channel in HA mode."""
 
     def test_rejects_channel_change_in_ha_mode(self, api_client):
-        with patch('core.api.is_home_assistant_mode', return_value=True):
+        with patch('core.routes.settings.is_home_assistant_mode', return_value=True):
             response = api_client.put(
                 '/api/settings/channel',
                 json={'channel': 'latest'},
@@ -176,10 +176,10 @@ def ha_addon_mocks(monkeypatch):
     SUPERVISOR_TOKEN set. Yields the supervisor and lookup mocks so tests can
     override return values for failure-path scenarios."""
     monkeypatch.setenv('SUPERVISOR_TOKEN', 'test-token')
-    with patch('core.api.is_home_assistant_mode', return_value=True), \
-         patch('core.api._call_supervisor',
+    with patch('core.routes.system.is_home_assistant_mode', return_value=True), \
+         patch('core.routes.system._call_supervisor',
                return_value=({'slug': 'a0d7b954_birdnet-pipy'}, None)) as mock_supervisor, \
-         patch('core.api._find_addon_update_entity',
+         patch('core.routes.system._find_addon_update_entity',
                return_value=('update.birdnet_pipy_update', None)) as mock_lookup:
         yield {'supervisor': mock_supervisor, 'lookup': mock_lookup}
 
@@ -195,8 +195,8 @@ class TestHaTriggerUpdate:
         post_resp = MagicMock()
         post_resp.raise_for_status.return_value = None
 
-        with patch('core.api.requests.post', return_value=post_resp) as mock_post, \
-             patch('core.api.requests.get', return_value=_entity_state_resp()) as mock_get:
+        with patch('core.routes.system.requests.post', return_value=post_resp) as mock_post, \
+             patch('core.routes.system.requests.get', return_value=_entity_state_resp()) as mock_get:
             response = api_client.post('/api/system/update')
             assert response.status_code == 200
             assert response.get_json()['status'] == 'update_triggered'
@@ -225,8 +225,8 @@ class TestHaTriggerUpdate:
                 raise requests.ConnectionError('refresh failed')
             return install_resp
 
-        with patch('core.api.requests.post', side_effect=post_side_effect), \
-             patch('core.api.requests.get', return_value=_entity_state_resp()):
+        with patch('core.routes.system.requests.post', side_effect=post_side_effect), \
+             patch('core.routes.system.requests.get', return_value=_entity_state_resp()):
             response = api_client.post('/api/system/update')
             assert response.status_code == 200
             assert response.get_json()['status'] == 'update_triggered'
@@ -235,11 +235,11 @@ class TestHaTriggerUpdate:
         post_resp = MagicMock()
         post_resp.raise_for_status.return_value = None
 
-        with patch('core.api.requests.post', return_value=post_resp), \
-             patch('core.api.requests.get',
+        with patch('core.routes.system.requests.post', return_value=post_resp), \
+             patch('core.routes.system.requests.get',
                    return_value=_entity_state_resp(installed='1.0.0', latest='1.0.0')), \
-             patch('core.api._HA_ENTITY_POLL_TIMEOUT_SECONDS', 0), \
-             patch('core.api.time.sleep'):
+             patch('core.routes.system._HA_ENTITY_POLL_TIMEOUT_SECONDS', 0), \
+             patch('core.routes.system.time.sleep'):
             response = api_client.post('/api/system/update')
             assert response.status_code == 502
             assert 'has not yet refreshed' in response.get_json()['error']
@@ -267,8 +267,8 @@ class TestHaTriggerUpdate:
         mock_resp.status_code = 401
         mock_resp.raise_for_status.side_effect = requests.HTTPError('401 Unauthorized')
 
-        with patch('core.api.requests.post', return_value=mock_resp), \
-             patch('core.api.requests.get', return_value=_entity_state_resp()):
+        with patch('core.routes.system.requests.post', return_value=mock_resp), \
+             patch('core.routes.system.requests.get', return_value=_entity_state_resp()):
             response = api_client.post('/api/system/update')
             assert response.status_code == 502
             assert 'Failed to trigger' in response.get_json()['error']
@@ -276,8 +276,8 @@ class TestHaTriggerUpdate:
     def test_trigger_update_connection_error_treated_as_success(self, api_client, ha_addon_mocks):
         # Self-update kills our process mid-request, so a ConnectionError
         # after dispatch is the expected outcome — not a failure.
-        with patch('core.api.requests.post', side_effect=requests.ConnectionError('Connection refused')), \
-             patch('core.api.requests.get', return_value=_entity_state_resp()):
+        with patch('core.routes.system.requests.post', side_effect=requests.ConnectionError('Connection refused')), \
+             patch('core.routes.system.requests.get', return_value=_entity_state_resp()):
             response = api_client.post('/api/system/update')
             assert response.status_code == 200
             assert response.get_json()['status'] == 'update_triggered'
@@ -285,16 +285,16 @@ class TestHaTriggerUpdate:
     def test_trigger_update_timeout_treated_as_success(self, api_client, ha_addon_mocks):
         # HA Core's REST service call blocks until install finishes; a
         # ReadTimeout after dispatch means the install is running, not failed.
-        with patch('core.api.requests.post', side_effect=requests.Timeout('Request timed out')), \
-             patch('core.api.requests.get', return_value=_entity_state_resp()):
+        with patch('core.routes.system.requests.post', side_effect=requests.Timeout('Request timed out')), \
+             patch('core.routes.system.requests.get', return_value=_entity_state_resp()):
             response = api_client.post('/api/system/update')
             assert response.status_code == 200
             assert response.get_json()['status'] == 'update_triggered'
 
     def test_native_trigger_update_writes_flag(self, api_client):
-        with patch('core.api.is_home_assistant_mode', return_value=False), \
-             patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.write_flag') as mock_flag:
+        with patch('core.routes.system.is_home_assistant_mode', return_value=False), \
+             patch('core.routes.system.load_version_info') as mock_load, \
+             patch('core.routes.system.write_flag') as mock_flag:
             mock_load.return_value = {
                 'version': '0.5.0',
                 'commit': '1a081f5',
@@ -321,7 +321,7 @@ class TestFindAddonUpdateEntity:
         return base + list(extra)
 
     def test_returns_entity_id_on_match(self):
-        from core.api import _find_addon_update_entity
+        from core.update_service import _find_addon_update_entity
         states = self._states({
             'entity_id': 'update.birdnet_pipy_update',
             'attributes': {'entity_picture': '/api/hassio/addons/a0d7b954_birdnet-pipy/icon'},
@@ -329,7 +329,7 @@ class TestFindAddonUpdateEntity:
         mock_resp = MagicMock()
         mock_resp.raise_for_status.return_value = None
         mock_resp.json.return_value = states
-        with patch('core.api.requests.get', return_value=mock_resp) as mock_get:
+        with patch('core.routes.system.requests.get', return_value=mock_resp) as mock_get:
             entity_id, err = _find_addon_update_entity('a0d7b954_birdnet-pipy', 'tok')
             assert entity_id == 'update.birdnet_pipy_update'
             assert err is None
@@ -340,18 +340,18 @@ class TestFindAddonUpdateEntity:
             )
 
     def test_returns_error_when_not_found(self):
-        from core.api import _find_addon_update_entity
+        from core.update_service import _find_addon_update_entity
         mock_resp = MagicMock()
         mock_resp.raise_for_status.return_value = None
         mock_resp.json.return_value = self._states()
-        with patch('core.api.requests.get', return_value=mock_resp):
+        with patch('core.routes.system.requests.get', return_value=mock_resp):
             entity_id, err = _find_addon_update_entity('a0d7b954_birdnet-pipy', 'tok')
             assert entity_id is None
             assert 'Could not find update entity' in err
 
     def test_returns_error_on_http_failure(self):
-        from core.api import _find_addon_update_entity
-        with patch('core.api.requests.get',
+        from core.update_service import _find_addon_update_entity
+        with patch('core.routes.system.requests.get',
                    side_effect=requests.ConnectionError('refused')):
             entity_id, err = _find_addon_update_entity('a0d7b954_birdnet-pipy', 'tok')
             assert entity_id is None
@@ -367,8 +367,8 @@ class TestHaRestart:
         mock_resp.json.return_value = {'data': {}}
         mock_resp.content = b'{}'
 
-        with patch('core.api.is_home_assistant_mode', return_value=True), \
-             patch('core.api.requests.request', return_value=mock_resp) as mock_req:
+        with patch('core.routes.system.is_home_assistant_mode', return_value=True), \
+             patch('core.update_service.requests.request', return_value=mock_resp) as mock_req:
             with patch.dict(os.environ, {'SUPERVISOR_TOKEN': 'test-token'}):
                 response = api_client.post('/api/system/restart')
                 assert response.status_code == 200
@@ -383,8 +383,8 @@ class TestHaRestart:
                 )
 
     def test_restart_returns_502_on_supervisor_error(self, api_client):
-        with patch('core.api.is_home_assistant_mode', return_value=True), \
-             patch('core.api.requests.request') as mock_req:
+        with patch('core.routes.system.is_home_assistant_mode', return_value=True), \
+             patch('core.update_service.requests.request') as mock_req:
             mock_req.side_effect = requests.ConnectionError('Connection refused')
             with patch.dict(os.environ, {'SUPERVISOR_TOKEN': 'test-token'}):
                 response = api_client.post('/api/system/restart')
@@ -396,8 +396,8 @@ class TestHaRestart:
         mock_resp = MagicMock()
         mock_resp.raise_for_status.side_effect = requests.HTTPError('401 Unauthorized')
 
-        with patch('core.api.is_home_assistant_mode', return_value=True), \
-             patch('core.api.requests.request', return_value=mock_resp):
+        with patch('core.routes.system.is_home_assistant_mode', return_value=True), \
+             patch('core.update_service.requests.request', return_value=mock_resp):
             with patch.dict(os.environ, {'SUPERVISOR_TOKEN': 'bad-token'}):
                 response = api_client.post('/api/system/restart')
                 assert response.status_code == 502
@@ -405,8 +405,8 @@ class TestHaRestart:
                 assert 'Failed to restart' in data['error']
 
     def test_native_restart_writes_flag(self, api_client):
-        with patch('core.api.is_home_assistant_mode', return_value=False), \
-             patch('core.api.write_flag') as mock_flag:
+        with patch('core.routes.system.is_home_assistant_mode', return_value=False), \
+             patch('core.routes.system.write_flag') as mock_flag:
             response = api_client.post('/api/system/restart')
             assert response.status_code == 200
             mock_flag.assert_called_once_with('restart-backend')
@@ -417,7 +417,7 @@ class TestLoadHaSourceCommit:
 
     def test_reads_from_env_var(self):
         with patch.dict(os.environ, {'BIRDNET_PIPY_SOURCE_COMMIT': 'abc123'}):
-            from core.api import load_ha_source_commit
+            from core.update_service import load_ha_source_commit
             assert load_ha_source_commit() == 'abc123'
 
     def test_env_var_takes_precedence_over_file(self, tmp_path):
@@ -425,8 +425,8 @@ class TestLoadHaSourceCommit:
         commit_file.write_text('file_commit')
 
         with patch.dict(os.environ, {'BIRDNET_PIPY_SOURCE_COMMIT': 'env_commit'}), \
-             patch('core.api.HA_SOURCE_COMMIT_FILE', str(commit_file)):
-            from core.api import load_ha_source_commit
+             patch('core.update_service.HA_SOURCE_COMMIT_FILE', str(commit_file)):
+            from core.update_service import load_ha_source_commit
             assert load_ha_source_commit() == 'env_commit'
 
     def test_reads_from_file_when_no_env(self, tmp_path):
@@ -434,15 +434,15 @@ class TestLoadHaSourceCommit:
         commit_file.write_text('file_commit\n')
 
         with patch.dict(os.environ, {}, clear=True), \
-             patch('core.api.HA_SOURCE_COMMIT_FILE', str(commit_file)):
+             patch('core.update_service.HA_SOURCE_COMMIT_FILE', str(commit_file)):
             # Clear env var if present
             os.environ.pop('BIRDNET_PIPY_SOURCE_COMMIT', None)
-            from core.api import load_ha_source_commit
+            from core.update_service import load_ha_source_commit
             assert load_ha_source_commit() == 'file_commit'
 
     def test_returns_none_when_no_source(self, tmp_path):
         with patch.dict(os.environ, {}, clear=True), \
-             patch('core.api.HA_SOURCE_COMMIT_FILE', str(tmp_path / 'nonexistent.txt')):
+             patch('core.update_service.HA_SOURCE_COMMIT_FILE', str(tmp_path / 'nonexistent.txt')):
             os.environ.pop('BIRDNET_PIPY_SOURCE_COMMIT', None)
-            from core.api import load_ha_source_commit
+            from core.update_service import load_ha_source_commit
             assert load_ha_source_commit() is None

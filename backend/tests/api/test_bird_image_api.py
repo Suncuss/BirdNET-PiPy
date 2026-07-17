@@ -250,7 +250,7 @@ class TestWikimediaHasCustomImage:
                 for p in patches:
                     p.stop()
 
-    @patch('core.api.fetch_wikimedia_image')
+    @patch('core.routes.images.fetch_wikimedia_image')
     def test_wikimedia_returns_has_custom_image_false(self, mock_fetch, image_client):
         """Wikimedia endpoint returns hasCustomImage: false when no custom image."""
         client, _ = image_client
@@ -267,7 +267,7 @@ class TestWikimediaHasCustomImage:
         data = response.get_json()
         assert data['hasCustomImage'] is False
 
-    @patch('core.api.fetch_wikimedia_image')
+    @patch('core.routes.images.fetch_wikimedia_image')
     def test_wikimedia_returns_has_custom_image_true(self, mock_fetch, image_client):
         """Wikimedia endpoint returns hasCustomImage: true when custom image exists."""
         client, images_dir = image_client
@@ -289,7 +289,7 @@ class TestWikimediaHasCustomImage:
         data = response.get_json()
         assert data['hasCustomImage'] is True
 
-    @patch('core.api.fetch_wikimedia_image')
+    @patch('core.routes.images.fetch_wikimedia_image')
     def test_wikimedia_error_with_custom_image_returns_200(self, mock_fetch, image_client):
         """When wikimedia fails but custom image exists, return 200 with hasCustomImage."""
         client, images_dir = image_client
@@ -305,7 +305,7 @@ class TestWikimediaHasCustomImage:
         data = response.get_json()
         assert data['hasCustomImage'] is True
 
-    @patch('core.api.fetch_wikimedia_image')
+    @patch('core.routes.images.fetch_wikimedia_image')
     def test_for_display_only_skips_fetch_when_custom_exists(self, mock_fetch, image_client):
         """Gallery's for_display_only=1: a custom upload short-circuits the WMF lookup."""
         client, images_dir = image_client
@@ -318,7 +318,7 @@ class TestWikimediaHasCustomImage:
         assert response.get_json()['hasCustomImage'] is True
         mock_fetch.assert_not_called()
 
-    @patch('core.api.fetch_wikimedia_image')
+    @patch('core.routes.images.fetch_wikimedia_image')
     def test_without_for_display_only_still_fetches_with_custom(self, mock_fetch, image_client):
         """Without the flag (e.g. BirdDetails) the WMF lookup still runs for metadata."""
         client, images_dir = image_client
@@ -334,7 +334,7 @@ class TestWikimediaHasCustomImage:
         assert response.status_code == 200
         mock_fetch.assert_called_once()
 
-    @patch('core.api.fetch_wikimedia_image')
+    @patch('core.routes.images.fetch_wikimedia_image')
     def test_429_propagates_status_and_retry_after_header(self, mock_fetch, image_client):
         """A 429 from upstream is surfaced (not collapsed to 500) with Retry-After."""
         client, _ = image_client
@@ -349,22 +349,22 @@ class TestFilenameSanitization:
     """Test filename sanitization for various species names."""
 
     def test_sanitize_basic_name(self):
-        from core.api import _sanitize_species_filename
+        from core.bird_image_service import _sanitize_species_filename
         assert _sanitize_species_filename('American Robin') == 'American_Robin'
 
     def test_sanitize_apostrophe(self):
-        from core.api import _sanitize_species_filename
+        from core.bird_image_service import _sanitize_species_filename
         assert _sanitize_species_filename("Cooper's Hawk") == 'Cooper_s_Hawk'
 
     def test_sanitize_special_chars(self):
-        from core.api import _sanitize_species_filename
+        from core.bird_image_service import _sanitize_species_filename
         result = _sanitize_species_filename('Bird (subspecies) - variant')
         assert '..' not in result
         assert '/' not in result
         assert ' ' not in result
 
     def test_sanitize_multiple_spaces(self):
-        from core.api import _sanitize_species_filename
+        from core.bird_image_service import _sanitize_species_filename
         result = _sanitize_species_filename('Some   Bird   Name')
         assert '__' not in result
 
@@ -412,8 +412,9 @@ def _make_client(tmpdir):
         patch('core.auth.AUTH_CONFIG_DIR', tmpdir),
         patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')),
         patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')),
-        patch('core.api.CUSTOM_BIRD_IMAGES_DIR', images_dir),
-        patch('core.api.db_manager'),
+        patch('core.routes.images.CUSTOM_BIRD_IMAGES_DIR', images_dir),
+        patch('core.bird_image_service.CUSTOM_BIRD_IMAGES_DIR', images_dir),
+        patch('core.api_infra.db_manager'),
         patch('core.api.socketio'),
     )
     for p in patches:
@@ -439,10 +440,10 @@ class TestWikimediaCandidates:
                     p.stop()
                 # Clear the in-process Wikimedia cache between tests so cache-key
                 # assertions and mocked fetches are deterministic.
-                from core.api import image_cache
+                from core.bird_image_service import image_cache
                 image_cache.clear()
 
-    @patch('core.api.fetch_wikimedia_candidates')
+    @patch('core.routes.images.fetch_wikimedia_candidates')
     def test_candidates_returns_list(self, mock_fetch, candidates_client):
         client, _ = candidates_client
         mock_fetch.return_value = ([
@@ -466,7 +467,7 @@ class TestWikimediaCandidates:
         assert body['hasCustomImage'] is False
         mock_fetch.assert_called_once_with('American Robin', limit=8)
 
-    @patch('core.api.fetch_wikimedia_candidates')
+    @patch('core.routes.images.fetch_wikimedia_candidates')
     def test_candidates_clamps_limit(self, mock_fetch, candidates_client):
         client, _ = candidates_client
         mock_fetch.return_value = ([], None)
@@ -475,7 +476,7 @@ class TestWikimediaCandidates:
         # Limit clamped to 20 (upper bound).
         mock_fetch.assert_called_once_with('X', limit=20)
 
-    @patch('core.api.fetch_wikimedia_candidates')
+    @patch('core.routes.images.fetch_wikimedia_candidates')
     def test_candidates_includes_selected_file_title_from_sidecar(self, mock_fetch, candidates_client):
         client, images_dir = candidates_client
         sidecar_path = os.path.join(images_dir, 'American_Robin.choice.json')
@@ -495,7 +496,11 @@ class TestWikimediaCandidates:
 
     def test_candidates_cache_key_is_per_limit(self, candidates_client):
         # Hit the real cache helpers (not a mocked fetcher).
-        from core.api import get_cached_image, image_cache, set_cached_image
+        from core.bird_image_service import (
+            get_cached_image,
+            image_cache,
+            set_cached_image,
+        )
         image_cache.clear()
         set_cached_image('American Robin', [{'a': 1}], limit=1)
         set_cached_image('American Robin', [{'a': 1}, {'b': 2}], limit=8)
@@ -506,7 +511,7 @@ class TestWikimediaCandidates:
 
     def test_candidates_filters_egg_skeleton_titles(self, candidates_client):
         # End-to-end through fetch_wikimedia_candidates with a mocked requests.get.
-        from core import api as api_module
+        from core import bird_image_service as api_module
         api_module.image_cache.clear()
         fake = _fake_wikimedia_get(
             search_results=[
@@ -522,13 +527,13 @@ class TestWikimediaCandidates:
                     'https://upload.wikimedia.org/Another.jpg', author='B')]},
             },
         )
-        with patch('core.api.requests.get', side_effect=fake):
+        with patch('core.bird_image_service.requests.get', side_effect=fake):
             cands, err = api_module.fetch_wikimedia_candidates('Robin', limit=8)
         assert err is None
         assert [c['fileTitle'] for c in cands] == ['File:Robin.jpg', 'File:Another robin.jpg']
 
     def test_candidates_preserve_search_order_after_batched_imageinfo(self, candidates_client):
-        from core import api as api_module
+        from core import bird_image_service as api_module
         api_module.image_cache.clear()
         # imageinfo pages keyed by page-id, returned out of search order.
         fake = _fake_wikimedia_get(
@@ -540,14 +545,14 @@ class TestWikimediaCandidates:
                     'https://upload.wikimedia.org/1.jpg', author='A')]},
             },
         )
-        with patch('core.api.requests.get', side_effect=fake):
+        with patch('core.bird_image_service.requests.get', side_effect=fake):
             cands, err = api_module.fetch_wikimedia_candidates('Robin', limit=8)
         assert err is None
         assert [c['fileTitle'] for c in cands] == ['File:First.jpg', 'File:Second.jpg']
 
     def test_candidates_request_thumbnail_url_and_expose_it(self, candidates_client):
         """imageinfo call sets iiurlwidth and the returned thumburl flows into thumbUrl."""
-        from core import api as api_module
+        from core import bird_image_service as api_module
         api_module.image_cache.clear()
         captured = {}
         fake = _fake_wikimedia_get(
@@ -560,7 +565,7 @@ class TestWikimediaCandidates:
             },
             capture=captured,
         )
-        with patch('core.api.requests.get', side_effect=fake):
+        with patch('core.bird_image_service.requests.get', side_effect=fake):
             cands, err = api_module.fetch_wikimedia_candidates('Robin', limit=8)
 
         assert err is None
@@ -570,7 +575,7 @@ class TestWikimediaCandidates:
 
     def test_candidates_thumbUrl_falls_back_to_imageUrl_when_missing(self, candidates_client):
         """Older or partial Wikimedia responses without `thumburl` should still be usable."""
-        from core import api as api_module
+        from core import bird_image_service as api_module
         api_module.image_cache.clear()
         fake = _fake_wikimedia_get(
             search_results=[{'title': 'File:NoThumb.jpg'}],
@@ -579,7 +584,7 @@ class TestWikimediaCandidates:
                     'https://upload.wikimedia.org/NoThumb.jpg', author='A')]},
             },
         )
-        with patch('core.api.requests.get', side_effect=fake):
+        with patch('core.bird_image_service.requests.get', side_effect=fake):
             cands, err = api_module.fetch_wikimedia_candidates('NoThumb', limit=8)
 
         assert err is None
@@ -587,7 +592,7 @@ class TestWikimediaCandidates:
 
     def test_user_agent_carries_contact_url(self, candidates_client):
         """Wikimedia requests send a compliant UA with a contact URL (200/min tier)."""
-        from core import api as api_module
+        from core import bird_image_service as api_module
         api_module.image_cache.clear()
         captured = {}
 
@@ -600,7 +605,7 @@ class TestWikimediaCandidates:
             captured['ua'] = (headers or {}).get('User-Agent', '')
             return _R()
 
-        with patch('core.api.requests.get', side_effect=fake_get):
+        with patch('core.bird_image_service.requests.get', side_effect=fake_get):
             api_module.fetch_wikimedia_candidates('Robin', limit=1)
 
         assert captured['ua'].startswith('BirdNET-PiPy/')
@@ -610,7 +615,7 @@ class TestWikimediaCandidates:
         """A 429 from Wikimedia becomes a structured error with status + Retry-After."""
         import requests as _requests
 
-        from core import api as api_module
+        from core import bird_image_service as api_module
         api_module.image_cache.clear()
 
         class _Resp429:
@@ -622,7 +627,7 @@ class TestWikimediaCandidates:
             err.response = _Resp429()
             raise err
 
-        with patch('core.api.requests.get', side_effect=fake_get):
+        with patch('core.bird_image_service.requests.get', side_effect=fake_get):
             cands, err = api_module.fetch_wikimedia_candidates('Robin', limit=8)
         assert cands == []
         assert err['status'] == 429
@@ -633,7 +638,7 @@ class TestWikimediaCandidates:
         import threading as _threading
         import time as _time
 
-        from core import api as api_module
+        from core import bird_image_service as api_module
         api_module.image_cache.clear()
         api_module._wikimedia_inflight.clear()
 
@@ -662,7 +667,7 @@ class TestWikimediaCandidates:
         def worker(name):
             results[name] = api_module.fetch_wikimedia_candidates('Robin', limit=8)
 
-        with patch('core.api.requests.get', side_effect=fake_get):
+        with patch('core.bird_image_service.requests.get', side_effect=fake_get):
             leader = _threading.Thread(target=worker, args=('leader',))
             leader.start()
             assert leader_in_flight.wait(timeout=5)  # leader now owns the in-flight slot
@@ -846,7 +851,7 @@ class TestWikimediaImageHonorsSidecar:
                 for p in patches:
                     p.stop()
 
-    @patch('core.api.fetch_wikimedia_image')
+    @patch('core.routes.images.fetch_wikimedia_image')
     def test_returns_sidecar_when_present(self, mock_fetch, sidecar_client):
         client, images_dir = sidecar_client
         with open(os.path.join(images_dir, 'American_Robin.choice.json'), 'w') as f:
@@ -870,7 +875,7 @@ class TestWikimediaImageHonorsSidecar:
         # Crucially: do not call upstream when sidecar serves the request.
         mock_fetch.assert_not_called()
 
-    @patch('core.api.fetch_wikimedia_image')
+    @patch('core.routes.images.fetch_wikimedia_image')
     def test_returns_sidecar_thumb_when_present(self, mock_fetch, sidecar_client):
         client, images_dir = sidecar_client
         with open(os.path.join(images_dir, 'American_Robin.choice.json'), 'w') as f:
@@ -892,7 +897,7 @@ class TestWikimediaImageHonorsSidecar:
         assert body['imageUrl'] == 'https://upload.wikimedia.org/saved.jpg'
         mock_fetch.assert_not_called()
 
-    @patch('core.api.fetch_wikimedia_image')
+    @patch('core.routes.images.fetch_wikimedia_image')
     def test_falls_through_when_sidecar_corrupt(self, mock_fetch, sidecar_client):
         client, images_dir = sidecar_client
         with open(os.path.join(images_dir, 'American_Robin.choice.json'), 'w') as f:

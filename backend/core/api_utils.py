@@ -11,6 +11,7 @@ from flask import jsonify, make_response, request, send_from_directory
 
 from core.logging_config import get_logger
 from core.utils import get_legacy_filename
+from model_service.label_utils import resolve_to_scientific_name
 
 logger = get_logger(__name__)
 
@@ -246,3 +247,22 @@ def log_data_metrics(endpoint_name, data, custom_metrics=None):
         metrics.update(custom_metrics)
 
     logger.debug(f"Data returned from {endpoint_name}", extra=metrics)
+
+
+def _resolve_species_filter(name):
+    """Map a route-supplied English bird name to a DB filter pair.
+
+    Returns ``(scientific_name, common_name)`` where exactly one is populated.
+    When the resolver recognises the input (canonical common_name, V2 label_en,
+    or label_en_uk), we filter the underlying query by ``scientific_name`` —
+    this is what merges V2's "Eurasian Blackbird" and V3's "Common Blackbird"
+    history for the same Turdus merula into a single result.
+
+    When the resolver misses (unknown English string, legacy migration row),
+    we fall back to filtering by ``common_name`` so the user keeps access to
+    data the species table doesn't know about.
+    """
+    if not name:
+        return None, None
+    sci = resolve_to_scientific_name(name)
+    return (sci, None) if sci else (None, name)

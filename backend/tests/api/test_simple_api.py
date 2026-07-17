@@ -240,8 +240,8 @@ class TestSimpleAPI:
             with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
                  patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
-                 patch('core.api.EXTRACTED_AUDIO_DIR', audio_dir), \
-                 patch('core.api.DEFAULT_AUDIO_PATH', default_file), \
+                 patch('core.routes.media.EXTRACTED_AUDIO_DIR', audio_dir), \
+                 patch('core.routes.media.DEFAULT_AUDIO_PATH', default_file), \
                  patch('core.db.DatabaseManager'):
 
                 from core.api import create_app
@@ -375,9 +375,9 @@ class TestSimpleAPI:
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
                  patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
                  patch('core.db.DatabaseManager') as MockDB, \
-                 patch('core.api.load_user_settings') as mock_load, \
-                 patch('core.api.save_user_settings') as mock_save, \
-                 patch('core.api.write_flag') as mock_flag:
+                 patch('core.routes.settings.load_user_settings') as mock_load, \
+                 patch('core.routes.settings.save_user_settings') as mock_save, \
+                 patch('core.update_service.write_flag') as mock_flag:
 
                 mock_db_instance = Mock()
                 MockDB.return_value = mock_db_instance
@@ -414,9 +414,9 @@ class TestSimpleAPI:
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
                  patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
                  patch('core.db.DatabaseManager') as MockDB, \
-                 patch('core.api.load_user_settings') as mock_load, \
-                 patch('core.api.save_user_settings'), \
-                 patch('core.api.write_flag'):
+                 patch('core.routes.settings.load_user_settings') as mock_load, \
+                 patch('core.routes.settings.save_user_settings'), \
+                 patch('core.update_service.write_flag'):
 
                 mock_db_instance = Mock()
                 MockDB.return_value = mock_db_instance
@@ -463,9 +463,9 @@ class TestSimpleAPI:
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
                  patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
                  patch('core.db.DatabaseManager') as MockDB, \
-                 patch('core.api.load_user_settings') as mock_load, \
-                 patch('core.api.save_user_settings') as mock_save, \
-                 patch('core.api.write_flag'):
+                 patch('core.routes.settings.load_user_settings') as mock_load, \
+                 patch('core.routes.settings.save_user_settings') as mock_save, \
+                 patch('core.update_service.write_flag'):
 
                 MockDB.return_value = Mock()
                 mock_load.return_value = {}
@@ -513,9 +513,9 @@ class TestSimpleAPI:
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
                  patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
                  patch('core.db.DatabaseManager') as MockDB, \
-                 patch('core.api.load_user_settings') as mock_load, \
-                 patch('core.api.save_user_settings') as mock_save, \
-                 patch('core.api.write_flag') as mock_flag:
+                 patch('core.routes.settings.load_user_settings') as mock_load, \
+                 patch('core.routes.settings.save_user_settings') as mock_save, \
+                 patch('core.update_service.write_flag') as mock_flag:
 
                 mock_db_instance = Mock()
                 MockDB.return_value = mock_db_instance
@@ -554,9 +554,9 @@ class TestSimpleAPI:
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
                  patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
                  patch('core.db.DatabaseManager') as MockDB, \
-                 patch('core.api.load_user_settings') as mock_load, \
-                 patch('core.api.save_user_settings') as mock_save, \
-                 patch('core.api.write_flag') as mock_flag:
+                 patch('core.settings_store.load_user_settings') as mock_load, \
+                 patch('core.settings_store.save_user_settings') as mock_save, \
+                 patch('core.update_service.write_flag') as mock_flag:
 
                 mock_db_instance = Mock()
                 MockDB.return_value = mock_db_instance
@@ -605,9 +605,9 @@ class TestSimpleAPI:
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
                  patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
                  patch('core.db.DatabaseManager') as MockDB, \
-                 patch('core.api.load_user_settings') as mock_load, \
-                 patch('core.api.save_user_settings') as mock_save, \
-                 patch('core.api.write_flag') as mock_flag:
+                 patch('core.settings_store.load_user_settings') as mock_load, \
+                 patch('core.settings_store.save_user_settings') as mock_save, \
+                 patch('core.update_service.write_flag') as mock_flag:
 
                 mock_db_instance = Mock()
                 MockDB.return_value = mock_db_instance
@@ -673,9 +673,9 @@ class TestSimpleAPI:
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
                  patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
                  patch('core.db.DatabaseManager') as MockDB, \
-                 patch('core.api.load_user_settings') as mock_load, \
-                 patch('core.api.save_user_settings') as mock_save, \
-                 patch('core.api.write_flag') as mock_flag:
+                 patch('core.settings_store.load_user_settings') as mock_load, \
+                 patch('core.settings_store.save_user_settings') as mock_save, \
+                 patch('core.update_service.write_flag') as mock_flag:
 
                 mock_db_instance = Mock()
                 MockDB.return_value = mock_db_instance
@@ -811,7 +811,7 @@ class TestSimpleAPI:
         """An omitted or oversized limit is clamped to RECORDINGS_MAX_LIMIT, so
         a caller can't pull a species' whole history in one request (the old
         LIMIT -1 dump path); a small explicit limit is still honored."""
-        from core import api as api_module
+        from core.routes import media as api_module
         species = 'American Crow'
         for i in range(6):
             real_db_manager.insert_detection({
@@ -1199,9 +1199,9 @@ class TestSimpleAPI:
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
                  patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
                  patch('core.db.DatabaseManager'), \
-                 patch('core.api.load_user_settings', return_value={'model': {'type': 'birdnet'}}), \
-                 patch('core.api.get_species_list', return_value=fake_species), \
-                 patch('core.api._available_species_cache', {}):
+                 patch('core.routes.species.load_user_settings', return_value={'model': {'type': 'birdnet'}}), \
+                 patch('core.routes.species.get_species_list', return_value=fake_species), \
+                 patch('core.routes.species._available_species_cache', {}):
 
                 from core.api import create_app
                 app, _ = create_app()
@@ -1229,12 +1229,12 @@ class TestSimpleAPI:
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
                  patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
                  patch('core.db.DatabaseManager'), \
-                 patch('core.api.load_user_settings', return_value={
+                 patch('core.routes.species.load_user_settings', return_value={
                      'model': {'type': 'birdnet'},
                      'display': {'bird_name_language': 'de'}
                  }), \
-                 patch('core.api.get_species_list', return_value=fake_species), \
-                 patch('core.api._available_species_cache', {}):
+                 patch('core.routes.species.get_species_list', return_value=fake_species), \
+                 patch('core.routes.species._available_species_cache', {}):
 
                 from core.api import create_app
                 from core.bird_name_utils import clear_bird_name_caches
@@ -1257,7 +1257,7 @@ class TestSimpleAPI:
             with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
                  patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
-                 patch('core.api.load_user_settings', return_value={
+                 patch('core.routes.observations.load_user_settings', return_value={
                      'model': {'type': 'birdnet'},
                      'display': {'bird_name_language': 'de'}
                  }):
@@ -1275,7 +1275,7 @@ class TestSimpleAPI:
                 app, _ = create_app()
                 client = app.test_client()
 
-                with patch('core.api.db_manager', mock_db_instance):
+                with patch('core.api_infra.db_manager', mock_db_instance):
                     response = client.get('/api/activity/overview?date=2025-11-24')
 
                 assert response.status_code == 200
@@ -1297,9 +1297,9 @@ class TestSimpleAPI:
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
                  patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
                  patch('core.db.DatabaseManager'), \
-                 patch('core.api.load_user_settings', return_value={'model': {'type': 'birdnet_v3'}}), \
-                 patch('core.api.get_species_list', return_value=fake_species), \
-                 patch('core.api._available_species_cache', {}):
+                 patch('core.routes.species.load_user_settings', return_value={'model': {'type': 'birdnet_v3'}}), \
+                 patch('core.routes.species.get_species_list', return_value=fake_species), \
+                 patch('core.routes.species._available_species_cache', {}):
 
                 from core.api import create_app
                 app, _ = create_app()
@@ -1443,9 +1443,9 @@ class TestSimpleAPI:
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
                  patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
                  patch('core.db.DatabaseManager'), \
-                 patch('core.api.load_user_settings') as mock_load, \
-                 patch('core.api.save_user_settings'), \
-                 patch('core.api.write_flag'):
+                 patch('core.routes.settings.load_user_settings') as mock_load, \
+                 patch('core.routes.settings.save_user_settings'), \
+                 patch('core.update_service.write_flag'):
 
                 mock_load.return_value = {}
 
@@ -1540,8 +1540,8 @@ class TestSimpleAPI:
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
                  patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
                  patch('core.db.DatabaseManager') as MockDB, \
-                 patch('core.api.save_user_settings'), \
-                 patch('core.api.write_flag'):
+                 patch('core.routes.settings.save_user_settings'), \
+                 patch('core.update_service.write_flag'):
 
                 mock_db_instance = Mock()
                 MockDB.return_value = mock_db_instance
@@ -1618,9 +1618,9 @@ class TestSimpleAPI:
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
                  patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
                  patch('core.db.DatabaseManager') as MockDB, \
-                 patch('core.api.load_user_settings') as mock_load, \
-                 patch('core.api.save_user_settings') as mock_save, \
-                 patch('core.api.write_flag') as mock_flag:
+                 patch('core.routes.settings.load_user_settings') as mock_load, \
+                 patch('core.routes.settings.save_user_settings') as mock_save, \
+                 patch('core.update_service.write_flag') as mock_flag:
 
                 mock_db_instance = Mock()
                 MockDB.return_value = mock_db_instance
@@ -1664,7 +1664,7 @@ class TestSimpleAPI:
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
                  patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
                  patch('core.db.DatabaseManager') as MockDB, \
-                 patch('core.api.save_user_settings'):
+                 patch('core.routes.settings.save_user_settings'):
 
                 mock_db_instance = Mock()
                 MockDB.return_value = mock_db_instance
@@ -1686,8 +1686,8 @@ class TestSimpleAPI:
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
                  patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
                  patch('core.db.DatabaseManager') as MockDB, \
-                 patch('core.api.load_user_settings') as mock_load, \
-                 patch('core.api.save_user_settings') as mock_save:
+                 patch('core.routes.settings.load_user_settings') as mock_load, \
+                 patch('core.routes.settings.save_user_settings') as mock_save:
 
                 mock_db_instance = Mock()
                 MockDB.return_value = mock_db_instance

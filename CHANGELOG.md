@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Fixed the dashboard call player's rolling spectrogram scrolling a strip of blank columns in at the right edge when playback ended — the display now stops together with the audio
 - Added a per-species summary table maintained alongside every detection, replacing repeated full-history scans as the source for species facts. It verifies itself at startup and rebuilds automatically if anything drifts
 - Improved the heaviest species queries by serving them from the new summary table: the dashboard's recent-unique-species list drops from up to seconds on busy stations to ~1ms (this was a known cause of intermittent dashboard timeouts), the species catalog and gallery load in ~1ms instead of scanning the full detection history, and the species detail card computes about twice as fast
 - Improved species detail chart loading: the per-species distribution queries now use an indexed time-range scan instead of examining every detection of the species per chart view — up to 7x faster on frequently detected species, most noticeable on low-power devices

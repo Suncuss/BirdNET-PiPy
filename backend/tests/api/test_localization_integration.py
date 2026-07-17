@@ -6,6 +6,7 @@ species merges into single rows, and the bird-detail route resolves either
 English variant to the full combined history for that scientific species.
 """
 
+import contextlib
 from unittest.mock import patch
 
 import pytest
@@ -44,13 +45,17 @@ def _seed_blackbird_mixed_history(db):
     ))
 
 
+@contextlib.contextmanager
 def _patch_settings(language):
-    """Return a patcher for load_user_settings that pins the given language."""
+    """Pin the bird-name language in every route module that loads settings."""
     settings = {
         'model': {'type': 'birdnet'},
         'display': {'bird_name_language': language},
     }
-    return patch('core.api.load_user_settings', return_value=settings)
+    with patch('core.routes.species.load_user_settings', return_value=settings), \
+         patch('core.routes.observations.load_user_settings', return_value=settings), \
+         patch('core.routes.detections.load_user_settings', return_value=settings):
+        yield
 
 
 @pytest.fixture(autouse=True)
