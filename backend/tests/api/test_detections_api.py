@@ -383,7 +383,7 @@ class TestDetectionsAPI:
 
         clear_bird_name_caches()
         try:
-            with patch('core.api.load_user_settings', return_value={
+            with patch('core.routes.detections.load_user_settings', return_value={
                 'model': {'type': 'birdnet'},
                 'display': {'bird_name_language': 'de'}
             }):
@@ -426,7 +426,7 @@ class TestDetectionsAPI:
 
         clear_bird_name_caches()
         try:
-            with patch('core.api.load_user_settings', return_value={
+            with patch('core.routes.detections.load_user_settings', return_value={
                 'model': {'type': 'birdnet'},
                 'display': {'bird_name_language': 'de'}
             }):
@@ -869,7 +869,7 @@ class TestExportDetectionsAPI:
                 'overlap': 0.25
             })
 
-        with patch('core.api._EXPORT_BATCH_ROWS', 2):
+        with patch('core.routes.detections._EXPORT_BATCH_ROWS', 2):
             response = api_client.get('/api/detections/export')
             # Drain the stream inside the patch — the generator reads the
             # batch size lazily, chunk by chunk.

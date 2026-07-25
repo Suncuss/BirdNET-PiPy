@@ -27,7 +27,7 @@ def test_public_window_cutoff_day_aligned_for_table_signature_agreement():
     compares the full cutoff timestamp. They must resolve to the SAME instant,
     or boundary-day rows get shown to anonymous callers with unplayable
     (unsigned) media. Day-flooring the cutoff guarantees it."""
-    from core.api import _public_window_cutoff
+    from core.detection_presenter import _public_window_cutoff
     cutoff = _public_window_cutoff()
     assert cutoff == f'{cutoff[:10]}T00:00:00'
 
@@ -146,7 +146,7 @@ class TestAnonymousRecordingsCap:
         create_recording_files(db_manager, species_name=species)
 
     def test_anonymous_capped_owner_uncapped(self, real_db_manager, create_recording_files):
-        from core import api as api_module
+        from core.routes import media as api_module
         species = 'American Crow'
         self._seed(real_db_manager, create_recording_files, species, 8)
 
@@ -220,7 +220,7 @@ class TestMediaSignedUrls:
         """_add_media_signatures mints sigs only for in-window detections, so old
         clips surfaced by any payload carry no usable media URL (owners play via
         their session; share links carry the token)."""
-        from core import api as api_module
+        from core import detection_presenter as api_module
         from core import media_access
         recent = {'audio_filename': 'r.mp3', 'spectrogram_filename': 'r.webp', 'timestamp': iso_ago(days_ago=1)}
         old = {'audio_filename': 'o.mp3', 'spectrogram_filename': 'o.webp', 'timestamp': iso_ago(days_ago=400)}
@@ -362,7 +362,7 @@ class TestDefaultDenyBackstop:
             assert client.get('/api/recorder/status').status_code == 401
 
     def test_allowlist_has_no_stale_entries(self, real_db_manager):
-        from core import api as api_module
+        from core import api_infra as api_module
         with auth_enabled_app(real_db_manager) as (client, _):
             view_funcs = {name.rsplit('.', 1)[-1] for name in client.application.view_functions}
             missing = api_module._ANON_REACHABLE_ENDPOINTS - view_funcs
@@ -370,7 +370,7 @@ class TestDefaultDenyBackstop:
 
     def test_sensitive_endpoints_not_allowlisted(self):
         """No owner-only/destructive endpoint may be in the anonymous allowlist."""
-        from core import api as api_module
+        from core import api_infra as api_module
         sensitive = {
             'get_settings', 'update_settings', 'save_access_settings', 'export_detections_csv',
             'delete_detection', 'delete_detections_batch', 'create_share_link', 'auth_toggle',
@@ -385,7 +385,7 @@ class TestDefaultDenyBackstop:
         """The boot-time audit passes on the real route map (create_app already
         ran it) and rejects a route with neither a gate marker nor an allowlist
         entry — the drift class that silently 401'd the OG-card route."""
-        from core import api as api_module
+        from core import api_infra as api_module
         with auth_enabled_app(real_db_manager) as (client, _):
             app = client.application
             api_module._assert_route_access_declared(app)
@@ -402,7 +402,7 @@ class TestDefaultDenyBackstop:
     def test_route_access_audit_catches_gate_allowlist_mismatch(self, real_db_manager):
         """Anonymous-reachable gate off the allowlist = dead decorator; the
         audit names it rather than letting the before_request silently 401."""
-        from core import api as api_module
+        from core import api_infra as api_module
         with auth_enabled_app(real_db_manager) as (client, _):
             app = client.application
 
@@ -442,8 +442,8 @@ class TestSystemInfoGating:
         vinfo = {'version': '9.9.9', 'commit': 'deadbeef', 'commit_date': '2026-01-01',
                  'branch': 'main', 'remote_url': 'https://github.com/x/y'}
         with auth_enabled_app(real_db_manager) as (client, _):
-            with patch('core.api.get_runtime_mode', return_value='native'), \
-                 patch('core.api.load_version_info', return_value=vinfo):
+            with patch('core.routes.system.get_runtime_mode', return_value='native'), \
+                 patch('core.routes.system.load_version_info', return_value=vinfo):
                 anon = client.get('/api/system/version').get_json()
                 assert anon['version'] == '9.9.9'
                 assert 'current_commit' not in anon

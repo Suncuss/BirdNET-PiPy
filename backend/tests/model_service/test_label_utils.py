@@ -15,6 +15,7 @@ from model_service.label_utils import (
     get_species_list,
     parse_geomodel_labels,
     resolve_to_scientific_name,
+    resolve_to_scientific_names,
 )
 
 
@@ -120,6 +121,110 @@ class TestResolveToScientificName:
         # rows merged on /api/bird/Shikra; a scientific-name synonym table
         # is the right follow-up but is out of scope for this PR.
         assert resolve_to_scientific_name('Shikra') == 'Tachyspiza badia'
+
+
+class TestResolveToScientificNames:
+    """Plural resolver: every scientific name denoting the same bird.
+
+    Covers the taxonomy genus splits the model label set carries under two
+    scientific names — the singular resolver returns only one, which blanks the
+    detail/recording pages when a station's detections are stored under the
+    other key. Two rows are the same bird when they share an English name *and*
+    an epithet stem; both halves of that rule are pinned below.
+    """
+
+    def test_unique_common_name_returns_single(self):
+        # No duplicate: identical to the singular resolver, one element.
+        assert resolve_to_scientific_names('Common Ringed Plover') == [
+            'Charadrius hiaticula'
+        ]
+        assert resolve_to_scientific_names('Common Blackbird') == ['Turdus merula']
+
+    def test_duplicate_common_name_returns_all_keys(self):
+        # "Little Ringed Plover" is two rows: Charadrius dubius (in_v2, the
+        # commonly-detected bird) and Thinornis dubius (v3-only split). Both
+        # must come back so a rollup keyed on either merges.
+        result = resolve_to_scientific_names('Little Ringed Plover')
+        assert set(result) == {'Charadrius dubius', 'Thinornis dubius'}
+
+    def test_winner_is_listed_first(self):
+        # The singular resolver's answer leads, so callers have a stable
+        # representative that matches prior behavior.
+        result = resolve_to_scientific_names('Little Ringed Plover')
+        assert result[0] == resolve_to_scientific_name('Little Ringed Plover')
+
+    def test_taxonomy_split_via_alias_resolves_all(self):
+        # Shikra: Accipiter badius (V2) + Tachyspiza badia (V3), same bird.
+        # Also pins gender re-agreement of the epithet (badius -> badia).
+        assert set(resolve_to_scientific_names('Shikra')) == {
+            'Accipiter badius',
+            'Tachyspiza badia',
+        }
+
+    def test_split_merges_when_common_names_differ(self):
+        # The pair is linked only by label_en/label_en_uk: Bubulcus ibis is
+        # canonically "Cattle Egret" and Ardea ibis "Western Cattle Egret".
+        # Grouping on canonical common_name alone missed these entirely, so a
+        # station that upgraded V2 -> V3 saw its history split across two pages.
+        for name in ('Cattle Egret', 'Western Cattle Egret'):
+            assert set(resolve_to_scientific_names(name)) == {
+                'Bubulcus ibis',
+                'Ardea ibis',
+            }, name
+
+    def test_split_merges_when_legacy_row_has_no_english_name(self):
+        # Charadrius nivosus carries no English common_name (its common_name is
+        # the scientific name); only label_en ties it to "Snowy Plover".
+        assert set(resolve_to_scientific_names('Snowy Plover')) == {
+            'Anarhynchus nivosus',
+            'Charadrius nivosus',
+        }
+
+    def test_split_merges_across_er_gender_agreement(self):
+        # Cossypha caffra -> Dessonornis caffer: the -er/-ra Latin adjective
+        # syncopates the masculine, so a raw epithet comparison misses it.
+        assert set(resolve_to_scientific_names('Cape Robin-Chat')) == {
+            'Cossypha caffra',
+            'Dessonornis caffer',
+        }
+
+    def test_shared_common_name_alone_does_not_merge_distinct_species(self):
+        # Two genuinely different birds share the label "Black Vulture"
+        # (Coragyps atratus canonically, Aegypius monachus via label_en_uk).
+        # Different epithets, so they must stay apart.
+        assert resolve_to_scientific_names('Black Vulture') == ['Coragyps atratus']
+        assert resolve_to_scientific_names('Cinereous Vulture') == [
+            'Aegypius monachus'
+        ]
+
+    def test_shared_common_name_does_not_merge_split_sister_species(self):
+        # "Gulf Coast Toad" names two live V3 classes that are separate taxa
+        # post-split (Incilius nebulifer / valliceps); merging them would sum
+        # two species into one detail card. Same for Rusty-breasted Whistler.
+        assert len(resolve_to_scientific_names('Gulf Coast Toad')) == 1
+        assert len(resolve_to_scientific_names('Rusty-breasted Whistler')) == 1
+        assert len(resolve_to_scientific_names('Green-winged Teal')) == 1
+
+    def test_group_is_symmetric_from_either_english_name(self):
+        # Both English names of a split resolve to the same set, so which page
+        # a user lands on doesn't change which detections they see.
+        for left, right in (('Cattle Egret', 'Western Cattle Egret'),
+                            ('Northern Goshawk', 'Eurasian Goshawk'),
+                            ('Gray Goshawk', 'Grey Goshawk')):
+            assert set(resolve_to_scientific_names(left)) == set(
+                resolve_to_scientific_names(right)), (left, right)
+
+    def test_result_has_no_duplicates(self):
+        for name in ('Little Ringed Plover', 'Shikra', 'Common Blackbird',
+                     'Cattle Egret', 'Snowy Plover'):
+            result = resolve_to_scientific_names(name)
+            assert len(result) == len(set(result))
+
+    def test_unknown_and_empty_return_empty_list(self):
+        assert resolve_to_scientific_names('Definitely Not A Real Bird') == []
+        assert resolve_to_scientific_names('') == []
+        assert resolve_to_scientific_names(None) == []
+        assert resolve_to_scientific_names('   ') == []
 
 
 def _retained_module_cache_bytes(module: types.ModuleType) -> int:

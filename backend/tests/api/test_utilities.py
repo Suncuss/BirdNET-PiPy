@@ -17,19 +17,19 @@ class TestImageCaching:
 
     def test_cache_miss(self):
         """Test cache miss returns None."""
-        from core.api import get_cached_image
+        from core.bird_image_service import get_cached_image
 
         # Clear any existing cache
-        with patch('core.api.image_cache', {}):
+        with patch('core.bird_image_service.image_cache', {}):
             result = get_cached_image('Unknown Bird')
             assert result is None
 
     def test_cache_hit(self):
         """Test cache hit returns cached data."""
-        from core.api import get_cached_image, set_cached_image
+        from core.bird_image_service import get_cached_image, set_cached_image
 
         # Clear cache and add test data
-        with patch('core.api.image_cache', {}):
+        with patch('core.bird_image_service.image_cache', {}):
             test_data = {'imageUrl': 'http://example.com/bird.jpg'}
             set_cached_image('Test Bird', test_data)
 
@@ -39,7 +39,7 @@ class TestImageCaching:
 
     def test_cache_expiration(self):
         """Test that expired cache entries return None."""
-        from core.api import CACHE_EXPIRATION, get_cached_image
+        from core.bird_image_service import CACHE_EXPIRATION, get_cached_image
 
         # Create expired cache entry
         expired_time = time.time() - CACHE_EXPIRATION - 1
@@ -50,7 +50,7 @@ class TestImageCaching:
             }
         }
 
-        with patch('core.api.image_cache', mock_cache):
+        with patch('core.bird_image_service.image_cache', mock_cache):
             result = get_cached_image('Old Bird')
             assert result is None  # Should return None for expired entry
 
@@ -60,7 +60,7 @@ class TestSettingsManagement:
 
     def test_load_user_settings_default(self):
         """Test loading settings returns defaults when file doesn't exist."""
-        from core.api import load_user_settings
+        from core.settings_store import load_user_settings
 
         with patch('os.path.exists', return_value=False):
             settings = load_user_settings()
@@ -75,7 +75,7 @@ class TestSettingsManagement:
 
     def test_load_user_settings_from_file(self):
         """Test loading settings from existing file."""
-        from core.api import load_user_settings
+        from core.settings_store import load_user_settings
 
         user_settings = {
             'location': {'latitude': 40.0, 'longitude': -70.0},
@@ -94,7 +94,7 @@ class TestSettingsManagement:
 
     def test_save_user_settings_atomic(self):
         """Test atomic save of user settings."""
-        from core.api import save_user_settings
+        from core.settings_store import save_user_settings
 
         test_settings = {'test': 'data'}
 
@@ -121,13 +121,13 @@ class TestFlagFileWriting:
 
     def test_write_flag(self):
         """Test writing flag files."""
-        from core.api import write_flag
+        from core.update_service import write_flag
 
         # Pin local_now: write_flag's default timestamp resolves the timezone
         # via local_now(), which can lazily open the settings file — leaving
         # that stray open() as the "last" call would make the assertion flaky.
         with patch('os.makedirs') as mock_makedirs, \
-             patch('core.api.local_now', return_value=datetime(2024, 1, 1, 12, 0, 0)), \
+             patch('core.update_service.local_now', return_value=datetime(2024, 1, 1, 12, 0, 0)), \
              patch('builtins.open', mock_open()) as mock_file:
             write_flag('test-flag')
 
@@ -180,7 +180,7 @@ class TestSettingsMerge:
 
     def test_deep_merge_preserves_defaults(self):
         """Test that deep merge preserves default values not in user settings."""
-        from core.api import load_user_settings
+        from core.settings_store import load_user_settings
 
         # User only specifies some settings
         partial_settings = {

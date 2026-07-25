@@ -34,8 +34,12 @@ vi.mock('socket.io-client', () => ({
 // Mock the useServiceRestart composable (expose waitForRestart for assertions)
 const mockWaitForRestart = vi.hoisted(() => vi.fn().mockResolvedValue(true))
 const mockRequestRestart = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
+const mockCaptureBaseline = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({ bootId: 'boot-1', commit: 'c1', version: '1.0.0' })
+)
 vi.mock('@/composables/useServiceRestart', () => ({
   requestRestart: mockRequestRestart,
+  captureRestartBaseline: mockCaptureBaseline,
   useServiceRestart: () => ({
     isRestarting: { value: false },
     restartMessage: { value: '' },
@@ -722,6 +726,67 @@ describe('Settings', () => {
 
       expect(wrapper.vm.loading).toBe(true)
       expect(saveButton.attributes('disabled')).toBeDefined()
+    })
+
+    it('disables Save while a system update is in flight', async () => {
+      mockSystemUpdate.updating.value = true
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      const saveButton = wrapper.findAll('button').find(btn => btn.text() === 'Save' || btn.text() === 'Saving...')
+      expect(saveButton.attributes('disabled')).toBeDefined()
+    })
+
+    it('a restart-required save dispatches the restart when no update is in flight', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      mockApi.put.mockResolvedValueOnce({
+        data: {
+          status: 'updated',
+          message: 'Settings saved',
+          settings: createMockSettings(),
+          changes: { full_restart_required: true }
+        }
+      })
+
+      wrapper.vm.settings.location.latitude = 50.0
+      await wrapper.vm.$nextTick()
+      await wrapper.vm.saveSettings()
+      await flushPromises()
+
+      expect(mockRequestRestart).toHaveBeenCalled()
+      expect(mockWaitForRestart).toHaveBeenCalledWith(
+        expect.objectContaining({ expect: 'restart' })
+      )
+    })
+
+    it('a restart-required save during an update defers to the update instead of dispatching a competing restart', async () => {
+      mockSystemUpdate.updating.value = true
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      mockApi.put.mockResolvedValueOnce({
+        data: {
+          status: 'updated',
+          message: 'Settings saved',
+          settings: createMockSettings(),
+          changes: { full_restart_required: true }
+        }
+      })
+
+      wrapper.vm.settings.location.latitude = 50.0
+      await wrapper.vm.$nextTick()
+      // The Save button is disabled during an update, but the guard must
+      // live in the method too: an update can be mid-dispatch before its
+      // wait flips isRestarting, leaving the button briefly clickable.
+      await wrapper.vm.saveSettings()
+      await flushPromises()
+
+      expect(mockApi.put).toHaveBeenCalled()
+      expect(mockRequestRestart).not.toHaveBeenCalled()
+      expect(mockWaitForRestart).not.toHaveBeenCalled()
+      expect(wrapper.text()).toContain('take effect after the update completes')
     })
 
     it('does not render Reset button', async () => {

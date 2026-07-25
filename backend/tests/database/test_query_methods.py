@@ -4,6 +4,8 @@ Additional database query method tests for coverage.
 """
 from datetime import datetime, timedelta
 
+import pytest
+
 from core.timezone_service import local_now
 
 
@@ -48,6 +50,27 @@ class TestDatabaseQueryMethods:
         # Check hourly activity array
         assert overview[0]['hourlyActivity'][6] == 1  # 6 AM
         assert overview[0]['hourlyActivity'][0] == 0  # Midnight
+
+    def test_day_windows_are_half_open(self, test_db_manager):
+        """A detection at exactly the next midnight belongs to the next day —
+        it must not appear in the previous day's hourly activity or overview."""
+        base = {
+            'scientific_name': 'Turdus migratorius',
+            'common_name': 'American Robin',
+            'confidence': 0.8,
+            'latitude': 40.7128, 'longitude': -74.0060,
+            'cutoff': 0.5, 'sensitivity': 0.75, 'overlap': 0.25,
+        }
+        for ts in ('2024-01-15T23:59:59', '2024-01-16T00:00:00'):
+            test_db_manager.insert_detection(
+                dict(base, timestamp=ts, group_timestamp=ts))
+
+        hourly = test_db_manager.get_hourly_activity('2024-01-15')
+        assert sum(entry['count'] for entry in hourly) == 1
+        assert hourly[23]['count'] == 1
+
+        overview = test_db_manager.get_activity_overview('2024-01-15')
+        assert overview[0]['totalObservations'] == 1
 
     def test_get_activity_overview_both(self, test_db_manager):
         """Test get_activity_overview_both() returns correct results for both orders."""
@@ -204,6 +227,69 @@ class TestDatabaseQueryMethods:
         robins = [r for r in result if r['common_name'] == 'American Robin']
         assert len(robins) == 1
 
+    def test_get_detection_distribution_day_view(self, test_db_manager):
+        """Day view buckets by hour; detections on adjacent days stay out."""
+        species = 'American Robin'
+        for ts in ('2024-01-15T06:15:00', '2024-01-15T06:45:00',
+                   '2024-01-15T18:00:00', '2024-01-16T06:00:00'):
+            test_db_manager.insert_detection({
+                'timestamp': ts, 'group_timestamp': ts,
+                'scientific_name': 'Turdus migratorius',
+                'common_name': species, 'confidence': 0.8,
+                'latitude': 40.7128, 'longitude': -74.0060,
+                'cutoff': 0.5, 'sensitivity': 0.75, 'overlap': 0.25,
+            })
+
+        result = test_db_manager.get_detection_distribution(
+            species, 'day', '2024-01-15')
+
+        assert len(result['labels']) == 24
+        assert result['data'][6] == 2
+        assert result['data'][18] == 1
+        assert sum(result['data']) == 3  # next-day detection excluded
+
+    def test_get_detection_distribution_6month_view(self, test_db_manager):
+        """Second-half anchor covers Jul-Dec; first-half months excluded."""
+        species = 'American Robin'
+        for month in (3, 7, 9, 12):
+            ts = f'2024-{month:02d}-10T12:00:00'
+            test_db_manager.insert_detection({
+                'timestamp': ts, 'group_timestamp': ts,
+                'scientific_name': 'Turdus migratorius',
+                'common_name': species, 'confidence': 0.8,
+                'latitude': 40.7128, 'longitude': -74.0060,
+                'cutoff': 0.5, 'sensitivity': 0.75, 'overlap': 0.25,
+            })
+
+        result = test_db_manager.get_detection_distribution(
+            species, '6month', '2024-08-15')
+
+        assert result['labels'] == ['Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+        assert result['data'] == [1, 0, 1, 0, 0, 1]  # March excluded
+
+    def test_get_detection_distribution_scientific_name_path(self, test_db_manager):
+        """The preferred scientific_name filter merges rows across differing
+        English common names for the same species."""
+        for common in ('Eurasian Blackbird', 'Common Blackbird'):
+            ts = '2024-01-15T08:00:00'
+            test_db_manager.insert_detection({
+                'timestamp': ts, 'group_timestamp': ts,
+                'scientific_name': 'Turdus merula',
+                'common_name': common, 'confidence': 0.8,
+                'latitude': 40.7128, 'longitude': -74.0060,
+                'cutoff': 0.5, 'sensitivity': 0.75, 'overlap': 0.25,
+            })
+
+        result = test_db_manager.get_detection_distribution(
+            None, 'day', '2024-01-15', scientific_name='Turdus merula')
+
+        assert result['data'][8] == 2
+
+    def test_get_detection_distribution_invalid_view(self, test_db_manager):
+        with pytest.raises(ValueError, match="Invalid view"):
+            test_db_manager.get_detection_distribution(
+                'American Robin', 'hourly', '2024-01-15')
+
     def test_get_detection_distribution_week_view(self, test_db_manager):
         """Test get_detection_distribution() for week view."""
         # Use Jan 14, 2024 (Sunday) as anchor - this is the start of the week
@@ -357,10 +443,12 @@ class TestDatabaseQueryMethods:
         results = test_db_manager.get_latest_detections(limit=3, unique=True)
         assert len(results) == 3
 
-    def test_get_latest_detections_unique_expands_recent_prefetch(
-        self, test_db_manager, monkeypatch
+    def test_get_latest_detections_unique_survives_dominant_species(
+        self, test_db_manager
     ):
-        """A dominant recent species should not force the full-table fallback."""
+        """A species dominating recent history must not crowd other species
+        out of the unique-latest list (served off the species rollup — the
+        old prefetch-window approach failed exactly this scenario)."""
         base_time = datetime(2024, 1, 20, 12, 0, 0)
 
         for i in range(600):
@@ -389,15 +477,6 @@ class TestDatabaseQueryMethods:
                 'cutoff': 0.5, 'sensitivity': 0.75, 'overlap': 0.25,
             })
 
-        def fail_full_fallback(limit):
-            raise AssertionError("full-table fallback should not be used")
-
-        monkeypatch.setattr(
-            test_db_manager,
-            '_fetch_latest_unique_by_species',
-            fail_full_fallback,
-        )
-
         results = test_db_manager.get_latest_detections(limit=7, unique=True)
 
         assert len(results) == 7
@@ -405,6 +484,8 @@ class TestDatabaseQueryMethods:
             'Dominant Bird', 'Robin', 'Jay', 'Cardinal',
             'Warbler', 'Sparrow', 'Nuthatch',
         }
+        # Newest species first, one row per species
+        assert results[0]['common_name'] == 'Dominant Bird'
 
     def test_get_latest_detections_unique_vs_default(self, test_db_manager):
         """Test unique=True collapses same species, default does not."""

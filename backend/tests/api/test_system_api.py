@@ -16,7 +16,7 @@ class TestSystemAPI:
 
     def test_get_version_info_success(self, api_client):
         """Test GET /api/system/version returns version info"""
-        with patch('core.api.load_version_info') as mock_load:
+        with patch('core.routes.system.load_version_info') as mock_load:
             mock_load.return_value = self.SAMPLE_VERSION_INFO
 
             response = api_client.get('/api/system/version')
@@ -29,7 +29,7 @@ class TestSystemAPI:
 
     def test_get_version_info_missing_file(self, api_client):
         """Test GET /api/system/version handles missing version.json"""
-        with patch('core.api.load_version_info') as mock_load:
+        with patch('core.routes.system.load_version_info') as mock_load:
             mock_load.return_value = None
 
             response = api_client.get('/api/system/version')
@@ -40,10 +40,10 @@ class TestSystemAPI:
 
     def test_check_for_updates_available(self, api_client):
         """Test update check when updates are available"""
-        with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.get_commits_comparison') as mock_compare, \
-             patch('core.api.get_latest_remote_commit') as mock_latest, \
-             patch('core.api.get_channel_branch') as mock_channel:
+        with patch('core.routes.system.load_version_info') as mock_load, \
+             patch('core.routes.system.get_commits_comparison') as mock_compare, \
+             patch('core.routes.system.get_latest_remote_commit') as mock_latest, \
+             patch('core.routes.system.get_channel_branch') as mock_channel:
 
             mock_load.return_value = self.SAMPLE_VERSION_INFO
             mock_channel.return_value = ('release', 'main')
@@ -75,10 +75,10 @@ class TestSystemAPI:
 
     def test_check_for_updates_up_to_date(self, api_client):
         """Test update check when already up to date"""
-        with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.get_commits_comparison') as mock_compare, \
-             patch('core.api.get_latest_remote_commit') as mock_latest, \
-             patch('core.api.get_channel_branch') as mock_channel:
+        with patch('core.routes.system.load_version_info') as mock_load, \
+             patch('core.routes.system.get_commits_comparison') as mock_compare, \
+             patch('core.routes.system.get_latest_remote_commit') as mock_latest, \
+             patch('core.routes.system.get_channel_branch') as mock_channel:
 
             mock_load.return_value = {**self.SAMPLE_VERSION_INFO, 'branch': 'main'}
             mock_channel.return_value = ('release', 'main')
@@ -105,10 +105,10 @@ class TestSystemAPI:
         This happens when switching from latest (staging) back to release (main)
         where main is behind staging. Should still show update available.
         """
-        with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.get_commits_comparison') as mock_compare, \
-             patch('core.api.get_latest_remote_commit') as mock_latest, \
-             patch('core.api.get_channel_branch') as mock_channel:
+        with patch('core.routes.system.load_version_info') as mock_load, \
+             patch('core.routes.system.get_commits_comparison') as mock_compare, \
+             patch('core.routes.system.get_latest_remote_commit') as mock_latest, \
+             patch('core.routes.system.get_channel_branch') as mock_channel:
 
             mock_load.return_value = {**self.SAMPLE_VERSION_INFO, 'branch': 'staging'}
             mock_channel.return_value = ('release', 'main')  # Switching to release
@@ -136,10 +136,10 @@ class TestSystemAPI:
         This can happen if both branches have independent commits.
         Should show update available.
         """
-        with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.get_commits_comparison') as mock_compare, \
-             patch('core.api.get_latest_remote_commit') as mock_latest, \
-             patch('core.api.get_channel_branch') as mock_channel:
+        with patch('core.routes.system.load_version_info') as mock_load, \
+             patch('core.routes.system.get_commits_comparison') as mock_compare, \
+             patch('core.routes.system.get_latest_remote_commit') as mock_latest, \
+             patch('core.routes.system.get_channel_branch') as mock_channel:
 
             mock_load.return_value = self.SAMPLE_VERSION_INFO
             mock_channel.return_value = ('latest', 'staging')
@@ -161,9 +161,9 @@ class TestSystemAPI:
 
     def test_check_for_updates_github_api_failure(self, api_client):
         """Test update check handles GitHub API failure"""
-        with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.get_commits_comparison') as mock_compare, \
-             patch('core.api.get_channel_branch') as mock_channel:
+        with patch('core.routes.system.load_version_info') as mock_load, \
+             patch('core.routes.system.get_commits_comparison') as mock_compare, \
+             patch('core.routes.system.get_channel_branch') as mock_channel:
 
             mock_load.return_value = self.SAMPLE_VERSION_INFO
             mock_channel.return_value = ('release', 'main')
@@ -177,7 +177,7 @@ class TestSystemAPI:
 
     def test_check_for_updates_missing_version(self, api_client):
         """Test update check handles missing version.json"""
-        with patch('core.api.load_version_info') as mock_load:
+        with patch('core.routes.system.load_version_info') as mock_load:
             mock_load.return_value = None
 
             response = api_client.get('/api/system/update-check')
@@ -191,11 +191,13 @@ class TestSystemAPI:
         Note: The trigger endpoint writes the target branch name to the flag file
         so the service script knows which branch to update to.
         """
-        with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.write_flag') as mock_flag, \
-             patch('core.api.get_channel_branch') as mock_channel:
+        with patch('core.routes.system.load_version_info') as mock_load, \
+             patch('core.routes.system.write_flag') as mock_flag, \
+             patch('core.routes.system.reset_update_status') as mock_reset, \
+             patch('core.routes.system.get_channel_branch') as mock_channel:
 
             mock_load.return_value = self.SAMPLE_VERSION_INFO
+            mock_reset.return_value = 'pending'
             mock_channel.return_value = ('release', 'main')
 
             response = api_client.post('/api/system/update')
@@ -205,15 +207,22 @@ class TestSystemAPI:
             assert data['estimated_downtime'] == '2-5 minutes'
             assert data['channel'] == 'release'
             assert data['target_branch'] == 'main'
+            # The responder is the OLD process; its boot_id serves as a late
+            # identity baseline for the frontend's restart poll, and the
+            # read-back status confirms the stale-value reset happened
+            assert len(data['boot_id']) == 36
+            assert data['update_status'] == 'pending'
             mock_flag.assert_called_once_with('update-requested', 'main')
 
     def test_trigger_update_latest_channel(self, api_client):
         """Test POST /api/system/update writes staging branch for latest channel"""
-        with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.write_flag') as mock_flag, \
-             patch('core.api.get_channel_branch') as mock_channel:
+        with patch('core.routes.system.load_version_info') as mock_load, \
+             patch('core.routes.system.write_flag') as mock_flag, \
+             patch('core.routes.system.reset_update_status') as mock_reset, \
+             patch('core.routes.system.get_channel_branch') as mock_channel:
 
             mock_load.return_value = self.SAMPLE_VERSION_INFO
+            mock_reset.return_value = 'pending'
             mock_channel.return_value = ('latest', 'staging')
 
             response = api_client.post('/api/system/update')
@@ -224,15 +233,86 @@ class TestSystemAPI:
             assert data['target_branch'] == 'staging'
             mock_flag.assert_called_once_with('update-requested', 'staging')
 
+    def test_trigger_update_resets_update_status(self, api_client):
+        """POST /api/system/update clears any stale terminal status to 'pending'.
+
+        Without the reset, a 'failed' left by a previous update attempt would be
+        visible to the frontend's restart poll before install.sh overwrites it,
+        producing an instant false "update failed" report.
+        """
+        with patch('core.routes.system.load_version_info') as mock_load, \
+             patch('core.routes.system.write_flag'), \
+             patch('core.routes.system.reset_update_status') as mock_reset, \
+             patch('core.routes.system.get_channel_branch') as mock_channel:
+
+            mock_load.return_value = self.SAMPLE_VERSION_INFO
+            mock_reset.return_value = 'pending'
+            mock_channel.return_value = ('release', 'main')
+
+            response = api_client.post('/api/system/update')
+            assert response.status_code == 200
+            mock_reset.assert_called_once()
+
     def test_trigger_update_missing_version(self, api_client):
         """Test POST /api/system/update handles missing version.json"""
-        with patch('core.api.load_version_info') as mock_load:
+        with patch('core.routes.system.load_version_info') as mock_load:
             mock_load.return_value = None
 
             response = api_client.post('/api/system/update')
             assert response.status_code == 500
             data = response.get_json()
             assert 'Version information not available' in data['error']
+
+    def test_trigger_restart_returns_boot_id(self, api_client):
+        """POST /api/system/restart echoes the current process boot_id.
+
+        The responder is the old process, so the frontend can use this as a
+        late identity baseline when its /system/version capture failed.
+        """
+        with patch('core.routes.system.write_flag') as mock_flag:
+            response = api_client.post('/api/system/restart')
+            assert response.status_code == 200
+            data = response.get_json()
+            assert data['status'] == 'restart_requested'
+            assert len(data['boot_id']) == 36
+            mock_flag.assert_called_once_with('restart-backend')
+
+    def test_version_includes_stable_boot_id(self, api_client):
+        """GET /api/system/version returns a boot_id stable across requests.
+
+        The frontend compares boot_id before/after a restart to detect that it
+        is talking to a NEW server process, not the old one still shutting
+        down. It must be constant for the process lifetime.
+        """
+        with patch('core.routes.system.load_version_info') as mock_load:
+            mock_load.return_value = self.SAMPLE_VERSION_INFO
+
+            first = api_client.get('/api/system/version').get_json()
+            second = api_client.get('/api/system/version').get_json()
+
+            assert first['boot_id']
+            assert len(first['boot_id']) == 36  # uuid4 string form
+            assert first['boot_id'] == second['boot_id']
+
+    def test_version_includes_update_status(self, api_client):
+        """GET /api/system/version surfaces the update-status flag content."""
+        with patch('core.routes.system.load_version_info') as mock_load, \
+             patch('core.routes.system.read_update_status') as mock_status:
+            mock_load.return_value = self.SAMPLE_VERSION_INFO
+            mock_status.return_value = 'failed'
+
+            data = api_client.get('/api/system/version').get_json()
+            assert data['update_status'] == 'failed'
+
+    def test_version_update_status_none_without_flag(self, api_client):
+        """update_status is null when no status flag file exists."""
+        with patch('core.routes.system.load_version_info') as mock_load, \
+             patch('core.routes.system.read_update_status') as mock_status:
+            mock_load.return_value = self.SAMPLE_VERSION_INFO
+            mock_status.return_value = None
+
+            data = api_client.get('/api/system/version').get_json()
+            assert data['update_status'] is None
 
     def test_version_constant_exists(self):
         """Test that version module exists and has required attributes"""
@@ -270,27 +350,27 @@ class TestVersionHelpers:
         version_file = data_dir / 'version.json'
         version_file.write_text(json.dumps(version_data))
 
-        with patch('core.api.BASE_DIR', str(tmp_path)):
-            from core.api import load_version_info
+        with patch('core.update_service.BASE_DIR', str(tmp_path)):
+            from core.update_service import load_version_info
             result = load_version_info()
             assert result == version_data
 
     def test_load_version_info_missing_file(self, tmp_path):
         """Test loading version.json when file doesn't exist"""
-        with patch('core.api.BASE_DIR', str(tmp_path)):
-            from core.api import load_version_info
+        with patch('core.update_service.BASE_DIR', str(tmp_path)):
+            from core.update_service import load_version_info
             result = load_version_info()
             assert result is None
 
     def test_call_github_api_success(self):
         """Test successful GitHub API call"""
-        with patch('core.api.requests.get') as mock_get:
+        with patch('core.update_service.requests.get') as mock_get:
             mock_response = MagicMock()
             mock_response.json.return_value = {'sha': 'abc1234567890'}
             mock_response.raise_for_status.return_value = None
             mock_get.return_value = mock_response
 
-            from core.api import call_github_api
+            from core.update_service import call_github_api
             result, error = call_github_api('commits/main')
 
             assert result == {'sha': 'abc1234567890'}
@@ -300,10 +380,10 @@ class TestVersionHelpers:
         """Test GitHub API timeout handling"""
         import requests
 
-        with patch('core.api.requests.get') as mock_get:
+        with patch('core.update_service.requests.get') as mock_get:
             mock_get.side_effect = requests.exceptions.Timeout()
 
-            from core.api import call_github_api
+            from core.update_service import call_github_api
             result, error = call_github_api('commits/main')
 
             assert result is None
@@ -313,10 +393,10 @@ class TestVersionHelpers:
         """Test GitHub API network error handling"""
         import requests
 
-        with patch('core.api.requests.get') as mock_get:
+        with patch('core.update_service.requests.get') as mock_get:
             mock_get.side_effect = requests.exceptions.ConnectionError('Network unreachable')
 
-            from core.api import call_github_api
+            from core.update_service import call_github_api
             result, error = call_github_api('commits/main')
 
             assert result is None
@@ -339,10 +419,10 @@ class TestVersionHelpers:
             ]
         }
 
-        with patch('core.api.call_github_api') as mock_api:
+        with patch('core.update_service.call_github_api') as mock_api:
             mock_api.return_value = (mock_response, None)
 
-            from core.api import get_commits_comparison
+            from core.update_service import get_commits_comparison
             result, error = get_commits_comparison('1a081f5', 'main')
 
             assert error is None
@@ -361,10 +441,10 @@ class TestVersionHelpers:
             }
         }
 
-        with patch('core.api.call_github_api') as mock_api:
+        with patch('core.update_service.call_github_api') as mock_api:
             mock_api.return_value = (mock_response, None)
 
-            from core.api import get_latest_remote_commit
+            from core.update_service import get_latest_remote_commit
             result, error = get_latest_remote_commit('main')
 
             assert error is None
@@ -378,7 +458,7 @@ class TestUpdateNotes:
     def test_fetch_update_notes_success(self):
         """Test fetching UPDATE_NOTES.json with message"""
 
-        with patch('core.api.requests.get') as mock_get:
+        with patch('core.update_service.requests.get') as mock_get:
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json.return_value = {
@@ -388,7 +468,7 @@ class TestUpdateNotes:
             mock_response.raise_for_status.return_value = None
             mock_get.return_value = mock_response
 
-            from core.api import fetch_update_notes
+            from core.update_service import fetch_update_notes
             result = fetch_update_notes('main')
 
             assert result is not None
@@ -397,7 +477,7 @@ class TestUpdateNotes:
 
     def test_fetch_update_notes_empty_message(self):
         """Test fetching UPDATE_NOTES.json with null/empty message returns None"""
-        with patch('core.api.requests.get') as mock_get:
+        with patch('core.update_service.requests.get') as mock_get:
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json.return_value = {
@@ -407,19 +487,19 @@ class TestUpdateNotes:
             mock_response.raise_for_status.return_value = None
             mock_get.return_value = mock_response
 
-            from core.api import fetch_update_notes
+            from core.update_service import fetch_update_notes
             result = fetch_update_notes('main')
 
             assert result is None
 
     def test_fetch_update_notes_file_not_found(self):
         """Test fetching UPDATE_NOTES.json when file doesn't exist"""
-        with patch('core.api.requests.get') as mock_get:
+        with patch('core.update_service.requests.get') as mock_get:
             mock_response = MagicMock()
             mock_response.status_code = 404
             mock_get.return_value = mock_response
 
-            from core.api import fetch_update_notes
+            from core.update_service import fetch_update_notes
             result = fetch_update_notes('main')
 
             assert result is None
@@ -428,10 +508,10 @@ class TestUpdateNotes:
         """Test fetching UPDATE_NOTES.json handles network errors"""
         import requests
 
-        with patch('core.api.requests.get') as mock_get:
+        with patch('core.update_service.requests.get') as mock_get:
             mock_get.side_effect = requests.exceptions.ConnectionError('Network error')
 
-            from core.api import fetch_update_notes
+            from core.update_service import fetch_update_notes
             result = fetch_update_notes('main')
 
             assert result is None
@@ -440,31 +520,31 @@ class TestUpdateNotes:
         """Test fetching UPDATE_NOTES.json handles invalid JSON"""
         import json
 
-        with patch('core.api.requests.get') as mock_get:
+        with patch('core.update_service.requests.get') as mock_get:
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json.side_effect = json.JSONDecodeError('Invalid JSON', '', 0)
             mock_response.raise_for_status.return_value = None
             mock_get.return_value = mock_response
 
-            from core.api import fetch_update_notes
+            from core.update_service import fetch_update_notes
             result = fetch_update_notes('main')
 
             assert result is None
 
     def test_should_show_update_note_no_data(self):
         """Test should_show_update_note returns False for None data"""
-        from core.api import should_show_update_note
+        from core.update_service import should_show_update_note
         assert should_show_update_note('abc1234', None) is False
 
     def test_should_show_update_note_empty_message(self):
         """Test should_show_update_note returns False for empty message"""
-        from core.api import should_show_update_note
+        from core.update_service import should_show_update_note
         assert should_show_update_note('abc1234', {'message': '', 'show_to_versions_before': None}) is False
 
     def test_should_show_update_note_no_version_targeting(self):
         """Test should_show_update_note returns True when no version targeting"""
-        from core.api import should_show_update_note
+        from core.update_service import should_show_update_note
         result = should_show_update_note('abc1234', {
             'message': 'Important update!',
             'show_to_versions_before': None
@@ -478,7 +558,7 @@ class TestUpdateNotes:
         - status: 'ahead' (target is ahead of current)
         - ahead_by > 0
         """
-        with patch('core.api.get_commits_comparison') as mock_compare:
+        with patch('core.update_service.get_commits_comparison') as mock_compare:
             mock_compare.return_value = ({
                 'status': 'ahead',
                 'behind_by': 0,
@@ -486,7 +566,7 @@ class TestUpdateNotes:
                 'commits': []
             }, None)
 
-            from core.api import should_show_update_note
+            from core.update_service import should_show_update_note
             result = should_show_update_note('old_commit', {
                 'message': 'Port changed!',
                 'show_to_versions_before': 'newer_commit'
@@ -500,7 +580,7 @@ class TestUpdateNotes:
         - status: 'behind' (target is behind current)
         - behind_by > 0
         """
-        with patch('core.api.get_commits_comparison') as mock_compare:
+        with patch('core.update_service.get_commits_comparison') as mock_compare:
             mock_compare.return_value = ({
                 'status': 'behind',
                 'behind_by': 3,
@@ -508,7 +588,7 @@ class TestUpdateNotes:
                 'commits': []
             }, None)
 
-            from core.api import should_show_update_note
+            from core.update_service import should_show_update_note
             result = should_show_update_note('newer_commit', {
                 'message': 'Port changed!',
                 'show_to_versions_before': 'older_commit'
@@ -520,7 +600,7 @@ class TestUpdateNotes:
 
         'show_to_versions_before' means strictly before, not at or before.
         """
-        with patch('core.api.get_commits_comparison') as mock_compare:
+        with patch('core.update_service.get_commits_comparison') as mock_compare:
             mock_compare.return_value = ({
                 'status': 'identical',
                 'behind_by': 0,
@@ -528,7 +608,7 @@ class TestUpdateNotes:
                 'commits': []
             }, None)
 
-            from core.api import should_show_update_note
+            from core.update_service import should_show_update_note
             result = should_show_update_note('abc1234', {
                 'message': 'Port changed!',
                 'show_to_versions_before': 'abc1234'
@@ -537,7 +617,7 @@ class TestUpdateNotes:
 
     def test_should_show_update_note_diverged_commits(self):
         """Test should_show_update_note returns True when commits diverged (safe default)"""
-        with patch('core.api.get_commits_comparison') as mock_compare:
+        with patch('core.update_service.get_commits_comparison') as mock_compare:
             mock_compare.return_value = ({
                 'status': 'diverged',
                 'behind_by': 2,
@@ -545,7 +625,7 @@ class TestUpdateNotes:
                 'commits': []
             }, None)
 
-            from core.api import should_show_update_note
+            from core.update_service import should_show_update_note
             result = should_show_update_note('abc1234', {
                 'message': 'Port changed!',
                 'show_to_versions_before': 'def5678'
@@ -555,10 +635,10 @@ class TestUpdateNotes:
 
     def test_should_show_update_note_comparison_error(self):
         """Test should_show_update_note returns True when comparison fails (safe default)"""
-        with patch('core.api.get_commits_comparison') as mock_compare:
+        with patch('core.update_service.get_commits_comparison') as mock_compare:
             mock_compare.return_value = (None, 'Comparison failed')
 
-            from core.api import should_show_update_note
+            from core.update_service import should_show_update_note
             result = should_show_update_note('abc1234', {
                 'message': 'Port changed!',
                 'show_to_versions_before': 'def5678'
@@ -581,12 +661,12 @@ class TestUpdateCheckWithNotes:
 
     def test_update_check_includes_update_note(self, api_client):
         """Test update-check includes update_note when available"""
-        with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.get_commits_comparison') as mock_compare, \
-             patch('core.api.get_latest_remote_commit') as mock_latest, \
-             patch('core.api.fetch_update_notes') as mock_notes, \
-             patch('core.api.should_show_update_note') as mock_should_show, \
-             patch('core.api.get_channel_branch') as mock_channel:
+        with patch('core.routes.system.load_version_info') as mock_load, \
+             patch('core.routes.system.get_commits_comparison') as mock_compare, \
+             patch('core.routes.system.get_latest_remote_commit') as mock_latest, \
+             patch('core.routes.system.fetch_update_notes') as mock_notes, \
+             patch('core.routes.system.should_show_update_note') as mock_should_show, \
+             patch('core.routes.system.get_channel_branch') as mock_channel:
 
             mock_load.return_value = self.SAMPLE_VERSION_INFO
             mock_channel.return_value = ('release', 'main')
@@ -610,12 +690,12 @@ class TestUpdateCheckWithNotes:
 
     def test_update_check_no_update_note_when_not_applicable(self, api_client):
         """Test update-check has null update_note when note doesn't apply"""
-        with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.get_commits_comparison') as mock_compare, \
-             patch('core.api.get_latest_remote_commit') as mock_latest, \
-             patch('core.api.fetch_update_notes') as mock_notes, \
-             patch('core.api.should_show_update_note') as mock_should_show, \
-             patch('core.api.get_channel_branch') as mock_channel:
+        with patch('core.routes.system.load_version_info') as mock_load, \
+             patch('core.routes.system.get_commits_comparison') as mock_compare, \
+             patch('core.routes.system.get_latest_remote_commit') as mock_latest, \
+             patch('core.routes.system.fetch_update_notes') as mock_notes, \
+             patch('core.routes.system.should_show_update_note') as mock_should_show, \
+             patch('core.routes.system.get_channel_branch') as mock_channel:
 
             mock_load.return_value = self.SAMPLE_VERSION_INFO
             mock_channel.return_value = ('release', 'main')
@@ -639,10 +719,10 @@ class TestUpdateCheckWithNotes:
 
     def test_update_check_no_update_note_when_up_to_date(self, api_client):
         """Test update-check has null update_note when no update available"""
-        with patch('core.api.load_version_info') as mock_load, \
-             patch('core.api.get_commits_comparison') as mock_compare, \
-             patch('core.api.get_latest_remote_commit') as mock_latest, \
-             patch('core.api.get_channel_branch') as mock_channel:
+        with patch('core.routes.system.load_version_info') as mock_load, \
+             patch('core.routes.system.get_commits_comparison') as mock_compare, \
+             patch('core.routes.system.get_latest_remote_commit') as mock_latest, \
+             patch('core.routes.system.get_channel_branch') as mock_channel:
 
             mock_load.return_value = {**self.SAMPLE_VERSION_INFO, 'branch': 'main'}
             mock_channel.return_value = ('release', 'main')
@@ -660,3 +740,78 @@ class TestUpdateCheckWithNotes:
             data = response.get_json()
             assert data['update_available'] is False
             assert data['update_note'] is None
+
+
+class TestUpdateStatusHelpers:
+    """Unit tests for the update-status flag helpers in core.update_service."""
+
+    def _patched_service(self, monkeypatch, tmp_path):
+        import core.update_service as update_service
+        monkeypatch.setattr(update_service, 'BASE_DIR', str(tmp_path))
+        return update_service
+
+    def test_read_update_status_missing_file(self, tmp_path, monkeypatch):
+        update_service = self._patched_service(monkeypatch, tmp_path)
+        assert update_service.read_update_status() is None
+
+    def test_read_update_status_strips_whitespace(self, tmp_path, monkeypatch):
+        update_service = self._patched_service(monkeypatch, tmp_path)
+        flags = tmp_path / 'data' / 'flags'
+        flags.mkdir(parents=True)
+        (flags / 'update-status').write_text('failed\n')
+        assert update_service.read_update_status() == 'failed'
+
+    def test_read_update_status_empty_file(self, tmp_path, monkeypatch):
+        update_service = self._patched_service(monkeypatch, tmp_path)
+        flags = tmp_path / 'data' / 'flags'
+        flags.mkdir(parents=True)
+        (flags / 'update-status').write_text('')
+        assert update_service.read_update_status() is None
+
+    def test_read_update_status_corrupt_bytes(self, tmp_path, monkeypatch):
+        """A file corrupted mid-write (SD power loss) must read as None, not
+        take the whole /system/version response down with a decode error."""
+        update_service = self._patched_service(monkeypatch, tmp_path)
+        flags = tmp_path / 'data' / 'flags'
+        flags.mkdir(parents=True)
+        (flags / 'update-status').write_bytes(b'\xff\xfe\x00garbage\x80')
+        assert update_service.read_update_status() is None
+
+    def test_reset_update_status_overwrites_stale_status(self, tmp_path, monkeypatch):
+        """A leftover terminal status is replaced by 'pending' on dispatch.
+
+        Removes-then-recreates so a root-owned file from install.sh (the flags
+        dir itself is user-writable) cannot block the reset.
+        """
+        update_service = self._patched_service(monkeypatch, tmp_path)
+        flags = tmp_path / 'data' / 'flags'
+        flags.mkdir(parents=True)
+        (flags / 'update-status').write_text('failed')
+
+        update_service.reset_update_status()
+        assert update_service.read_update_status() == 'pending'
+
+    def test_reset_update_status_creates_from_scratch(self, tmp_path, monkeypatch):
+        update_service = self._patched_service(monkeypatch, tmp_path)
+        update_service.reset_update_status()
+        assert update_service.read_update_status() == 'pending'
+
+    def test_reset_update_status_returns_read_back_value(self, tmp_path, monkeypatch):
+        """The dispatch response forwards this so the frontend knows the
+        stale-value reset verifiably happened."""
+        update_service = self._patched_service(monkeypatch, tmp_path)
+        flags = tmp_path / 'data' / 'flags'
+        flags.mkdir(parents=True)
+        (flags / 'update-status').write_text('failed')
+
+        assert update_service.reset_update_status() == 'pending'
+
+    def test_reset_update_status_never_raises(self, tmp_path, monkeypatch):
+        """Status is advisory: reset must not be able to block an update dispatch."""
+        update_service = self._patched_service(monkeypatch, tmp_path)
+        # Point BASE_DIR at a path whose parent is an unwritable *file*, so both
+        # the unlink and the rewrite fail with OSError internally.
+        blocker = tmp_path / 'blocker'
+        blocker.write_text('')
+        monkeypatch.setattr(update_service, 'BASE_DIR', str(blocker / 'nested'))
+        update_service.reset_update_status()  # must simply not raise

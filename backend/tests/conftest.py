@@ -21,6 +21,23 @@ import config.settings  # noqa: F401
 logging.basicConfig(level=logging.INFO)
 
 
+@pytest.fixture
+def test_db_manager():
+    """DatabaseManager on a temporary database — the shared real-SQLite
+    fixture for DB-touching tests."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+        db_path = tmp.name
+
+    from core.db import DatabaseManager
+    manager = DatabaseManager(db_path=db_path)
+    yield manager
+
+    if os.path.exists(db_path):
+        os.unlink(db_path)
+
+
 @pytest.fixture(autouse=True)
 def reset_imports():
     """Reset imports between tests to avoid state pollution."""

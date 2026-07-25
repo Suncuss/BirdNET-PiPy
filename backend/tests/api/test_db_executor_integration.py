@@ -126,12 +126,13 @@ def _insert_detection(db_manager, *, common_name='American Robin',
 def test_species_all_runs_db_call_through_executor(
     api_client, real_db_manager, monkeypatch
 ):
-    import core.api as api_module
+    from core.routes import observations as obs_module
 
     _insert_detection(real_db_manager)
-    api_module.invalidate_gallery_cache()
+    obs_module.invalidate_gallery_cache()
     recorder = RecordingExecutor()
-    monkeypatch.setattr(api_module, 'db_executor', recorder)
+    import core.api_infra as api_infra
+    monkeypatch.setattr(api_infra, 'db_executor', recorder)
 
     try:
         response = api_client.get('/api/species/all')
@@ -139,18 +140,19 @@ def test_species_all_runs_db_call_through_executor(
         assert response.status_code == 200
         assert ('submit', '_build_species_all_payload') in recorder.calls
     finally:
-        api_module.invalidate_gallery_cache()
+        obs_module.invalidate_gallery_cache()
 
 
 def test_dashboard_payload_is_submitted_to_executor(
     api_client, real_db_manager, monkeypatch
 ):
-    import core.api as api_module
+    from core.routes import observations as obs_module
 
     _insert_detection(real_db_manager)
-    api_module.invalidate_dashboard_cache()
+    obs_module.invalidate_dashboard_cache()
     recorder = RecordingExecutor()
-    monkeypatch.setattr(api_module, 'db_executor', recorder)
+    import core.api_infra as api_infra
+    monkeypatch.setattr(api_infra, 'db_executor', recorder)
 
     try:
         response = api_client.get('/api/dashboard')
@@ -158,18 +160,19 @@ def test_dashboard_payload_is_submitted_to_executor(
         assert response.status_code == 200
         assert ('submit', '_build_dashboard_payload') in recorder.calls
     finally:
-        api_module.invalidate_dashboard_cache()
+        obs_module.invalidate_dashboard_cache()
 
 
 def test_dashboard_summary_is_submitted_to_executor(
     api_client, real_db_manager, monkeypatch
 ):
-    import core.api as api_module
+    from core.routes import observations as obs_module
 
     _insert_detection(real_db_manager)
-    api_module.invalidate_dashboard_cache()
+    obs_module.invalidate_dashboard_cache()
     recorder = RecordingExecutor()
-    monkeypatch.setattr(api_module, 'db_executor', recorder)
+    import core.api_infra as api_infra
+    monkeypatch.setattr(api_infra, 'db_executor', recorder)
 
     try:
         response = api_client.get('/api/dashboard/summary?period=week')
@@ -177,7 +180,7 @@ def test_dashboard_summary_is_submitted_to_executor(
         assert response.status_code == 200
         assert ('submit', '_build_summary_period_payload') in recorder.calls
     finally:
-        api_module.invalidate_dashboard_cache()
+        obs_module.invalidate_dashboard_cache()
 
 
 # -----------------------------------------------------------------------------
@@ -204,13 +207,14 @@ def test_concurrent_dashboard_misses_share_one_job(
     """Three concurrent cache-miss requests must result in exactly one
     submit() to the executor — not three. All callers receive the same
     payload from that single job."""
-    import core.api as api_module
+    from core.routes import observations as obs_module
 
     _insert_detection(real_db_manager)
-    api_module.invalidate_dashboard_cache()
+    obs_module.invalidate_dashboard_cache()
 
     executor = BlockingRecordingExecutor()
-    monkeypatch.setattr(api_module, 'db_executor', executor)
+    import core.api_infra as api_infra
+    monkeypatch.setattr(api_infra, 'db_executor', executor)
 
     app = api_client.application
     statuses = []
@@ -245,17 +249,17 @@ def test_concurrent_dashboard_misses_share_one_job(
         )
     finally:
         executor.release.set()  # safety: don't leave threads parked on shutdown
-        api_module.invalidate_dashboard_cache()
+        obs_module.invalidate_dashboard_cache()
 
 
 def _dashboard_get_with_midflight(api_client, monkeypatch, midflight_fn):
     """GET /api/dashboard on a worker thread, run `midflight_fn` while the
     compute is parked mid-flight, then release the compute and return the
     response. Shared harness for the invalidate-vs-expire mid-flight tests."""
-    import core.api as api_module
+    import core.api_infra as api_infra
 
     executor = BlockingRecordingExecutor()
-    monkeypatch.setattr(api_module, 'db_executor', executor)
+    monkeypatch.setattr(api_infra, 'db_executor', executor)
 
     app = api_client.application
     responses = []
@@ -286,23 +290,23 @@ def test_invalidation_during_compute_skips_cache_write(
     the current caller still gets their result (we don't drop the request),
     but the result must NOT be written into the cache — otherwise a stale
     snapshot from before the invalidation would mask the new state."""
-    import core.api as api_module
+    from core.routes import observations as obs_module
 
     _insert_detection(real_db_manager)
-    api_module.invalidate_dashboard_cache()
+    obs_module.invalidate_dashboard_cache()
 
     try:
         response = _dashboard_get_with_midflight(
-            api_client, monkeypatch, api_module.invalidate_dashboard_cache,
+            api_client, monkeypatch, obs_module.invalidate_dashboard_cache,
         )
 
         assert response.status_code == 200
         # Cache must be empty: the invalidation cleared 'inflight', so the
         # post-compute write block was skipped.
-        assert api_module._dashboard_cache['payload'] is None
-        assert api_module._dashboard_cache['expires_at'] == 0.0
+        assert obs_module._dashboard_cache['payload'] is None
+        assert obs_module._dashboard_cache['expires_at'] == 0.0
     finally:
-        api_module.invalidate_dashboard_cache()
+        obs_module.invalidate_dashboard_cache()
 
 
 def test_soft_expiry_during_compute_serves_result_but_stays_expired(
@@ -315,30 +319,31 @@ def test_soft_expiry_during_compute_serves_result_but_stays_expired(
     But the entry must stay expired: the job's DB snapshot may predate the
     detection that fired the expiry, so granting it a fresh TTL would serve
     a pre-detection payload for a full TTL. The next poll rebuilds instead."""
-    import core.api as api_module
+    from core.routes import observations as obs_module
 
     _insert_detection(real_db_manager)
-    api_module.invalidate_dashboard_cache()
+    obs_module.invalidate_dashboard_cache()
 
     try:
         response = _dashboard_get_with_midflight(
-            api_client, monkeypatch, api_module.expire_dashboard_cache,
+            api_client, monkeypatch, obs_module.expire_dashboard_cache,
         )
 
         assert response.status_code == 200
         # The completed rebuild landed in the cache but earned no TTL.
-        assert api_module._dashboard_cache['payload'] is not None
-        assert api_module._dashboard_cache['expires_at'] == 0.0
-        assert api_module._dashboard_cache['inflight'] is None
+        assert obs_module._dashboard_cache['payload'] is not None
+        assert obs_module._dashboard_cache['expires_at'] == 0.0
+        assert obs_module._dashboard_cache['inflight'] is None
 
         # Behavioral check: the next poll recomputes rather than being
         # served the possibly pre-detection snapshot.
         recorder = RecordingExecutor()
-        monkeypatch.setattr(api_module, 'db_executor', recorder)
+        import core.api_infra as api_infra
+        monkeypatch.setattr(api_infra, 'db_executor', recorder)
         assert api_client.get('/api/dashboard').status_code == 200
         assert ('submit', '_build_dashboard_payload') in recorder.calls
     finally:
-        api_module.invalidate_dashboard_cache()
+        obs_module.invalidate_dashboard_cache()
 
 
 def test_soft_expiry_before_compute_does_not_stick(api_client, real_db_manager):
@@ -347,28 +352,29 @@ def test_soft_expiry_before_compute_does_not_stick(api_client, real_db_manager):
     detection and earns a normal TTL. If the dirty mark stuck, every rebuild
     after a quiet-period detection would come out pre-expired — degrading the
     dashboard to a rebuild on every poll."""
-    import core.api as api_module
+    from core.routes import observations as obs_module
 
     _insert_detection(real_db_manager)
-    api_module.invalidate_dashboard_cache()
+    obs_module.invalidate_dashboard_cache()
 
     try:
-        api_module.expire_dashboard_cache()  # detection with no rebuild running
+        obs_module.expire_dashboard_cache()  # detection with no rebuild running
         _prime_dashboard_cache(api_client)
 
-        assert api_module._dashboard_cache['expires_at'] > time.time()
+        assert obs_module._dashboard_cache['expires_at'] > time.time()
     finally:
-        api_module.invalidate_dashboard_cache()
+        obs_module.invalidate_dashboard_cache()
 
 
 def test_failed_compute_clears_inflight(api_client, monkeypatch):
     """A failed dashboard compute must clear the inflight slot so the next
     request retries from scratch — otherwise we'd be stuck returning the
     same exception (or waiting on a never-completing job) forever."""
-    import core.api as api_module
+    from core.routes import observations as obs_module
 
-    api_module.invalidate_dashboard_cache()
-    monkeypatch.setattr(api_module, 'db_executor', FailingExecutor())
+    obs_module.invalidate_dashboard_cache()
+    import core.api_infra as api_infra
+    monkeypatch.setattr(api_infra, 'db_executor', FailingExecutor())
 
     try:
         resp = api_client.get('/api/dashboard')
@@ -377,9 +383,9 @@ def test_failed_compute_clears_inflight(api_client, monkeypatch):
         # Critically: inflight is cleared, not stuck pointing at the
         # failed job. Otherwise the next caller would re-await the same
         # already-failed job forever.
-        assert api_module._dashboard_cache['inflight'] is None
+        assert obs_module._dashboard_cache['inflight'] is None
     finally:
-        api_module.invalidate_dashboard_cache()
+        obs_module.invalidate_dashboard_cache()
 
 
 def test_db_job_timeout_clears_inflight_and_returns_500(api_client, monkeypatch):
@@ -387,17 +393,18 @@ def test_db_job_timeout_clears_inflight_and_returns_500(api_client, monkeypatch)
     dashboard inflight slot pointing at a dead job until the next
     invalidation. _GeventJob.result() now translates it to TimeoutError;
     confirm the dashboard handler treats that like any other failure."""
-    import core.api as api_module
+    from core.routes import observations as obs_module
 
-    api_module.invalidate_dashboard_cache()
-    monkeypatch.setattr(api_module, 'db_executor', TimingOutExecutor())
+    obs_module.invalidate_dashboard_cache()
+    import core.api_infra as api_infra
+    monkeypatch.setattr(api_infra, 'db_executor', TimingOutExecutor())
 
     try:
         resp = api_client.get('/api/dashboard')
         assert resp.status_code == 500
-        assert api_module._dashboard_cache['inflight'] is None
+        assert obs_module._dashboard_cache['inflight'] is None
     finally:
-        api_module.invalidate_dashboard_cache()
+        obs_module.invalidate_dashboard_cache()
 
 
 # -----------------------------------------------------------------------------
@@ -416,11 +423,11 @@ def test_db_job_timeout_clears_inflight_and_returns_500(api_client, monkeypatch)
 def _prime_dashboard_cache(api_client):
     """Fetch /api/dashboard once so a payload lives in the cache, then
     assert it actually got cached. Returns the response for caller checks."""
-    import core.api as api_module
+    from core.routes import observations as obs_module
 
     resp = api_client.get('/api/dashboard')
     assert resp.status_code == 200
-    assert api_module._dashboard_cache['payload'] is not None, (
+    assert obs_module._dashboard_cache['payload'] is not None, (
         "precondition: cache should be primed after a successful fetch"
     )
     return resp
@@ -436,14 +443,15 @@ def test_broadcast_detection_expires_dashboard_and_today_only(
     everything per detection kept every summary permanently cold on active
     stations (detections arrive faster than the 10s TTL)."""
     import core.api as api_module
+    from core.routes import observations as obs_module
 
     _insert_detection(real_db_manager)
     _prime_dashboard_cache(api_client)
-    dashboard_payload = api_module._dashboard_cache['payload']
+    dashboard_payload = obs_module._dashboard_cache['payload']
     for period in ('today', 'week'):
         resp = api_client.get(f'/api/dashboard/summary?period={period}')
         assert resp.status_code == 200
-    week_expiry = api_module._summary_cache['week']['expires_at']
+    week_expiry = obs_module._summary_cache['week']['expires_at']
 
     try:
         api_module.broadcast_detection({
@@ -454,28 +462,29 @@ def test_broadcast_detection_expires_dashboard_and_today_only(
         })
 
         # Dashboard + today: expired but not discarded.
-        assert api_module._dashboard_cache['payload'] is dashboard_payload
-        assert api_module._dashboard_cache['expires_at'] == 0.0
-        assert api_module._summary_cache['today']['payload'] is not None
-        assert api_module._summary_cache['today']['expires_at'] == 0.0
+        assert obs_module._dashboard_cache['payload'] is dashboard_payload
+        assert obs_module._dashboard_cache['expires_at'] == 0.0
+        assert obs_module._summary_cache['today']['payload'] is not None
+        assert obs_module._summary_cache['today']['expires_at'] == 0.0
         # week: untouched — payload and TTL survive.
-        assert api_module._summary_cache['week']['payload'] is not None
-        assert api_module._summary_cache['week']['expires_at'] == week_expiry
+        assert obs_module._summary_cache['week']['payload'] is not None
+        assert obs_module._summary_cache['week']['expires_at'] == week_expiry
 
         # Behavioral check: the next week fetch is a warm hit (no executor
         # call), the next dashboard fetch recomputes.
         recorder = RecordingExecutor()
-        monkeypatch.setattr(api_module, 'db_executor', recorder)
+        import core.api_infra as api_infra
+        monkeypatch.setattr(api_infra, 'db_executor', recorder)
         assert api_client.get('/api/dashboard/summary?period=week').status_code == 200
         assert recorder.calls == []
         assert api_client.get('/api/dashboard').status_code == 200
         assert ('submit', '_build_dashboard_payload') in recorder.calls
     finally:
-        api_module.invalidate_dashboard_cache()
+        obs_module.invalidate_dashboard_cache()
 
 
 def test_delete_detection_invalidates_cache(api_client, real_db_manager):
-    import core.api as api_module
+    from core.routes import observations as obs_module
 
     _insert_detection(real_db_manager)
     detection_id = _insert_detection(real_db_manager, common_name='Blue Jay',
@@ -486,13 +495,13 @@ def test_delete_detection_invalidates_cache(api_client, real_db_manager):
         resp = api_client.delete(f'/api/detections/{detection_id}')
 
     assert resp.status_code == 200
-    assert api_module._dashboard_cache['payload'] is None
+    assert obs_module._dashboard_cache['payload'] is None
 
 
 def test_batch_delete_invalidates_cache_when_anything_deleted(
     api_client, real_db_manager
 ):
-    import core.api as api_module
+    from core.routes import observations as obs_module
 
     ids = [
         _insert_detection(real_db_manager, common_name=f'Robin {i}')
@@ -508,7 +517,7 @@ def test_batch_delete_invalidates_cache_when_anything_deleted(
 
     assert resp.status_code == 200
     assert resp.get_json()['deleted'] == 3
-    assert api_module._dashboard_cache['payload'] is None
+    assert obs_module._dashboard_cache['payload'] is None
 
 
 def test_batch_delete_with_no_successes_does_not_invalidate(
@@ -517,11 +526,11 @@ def test_batch_delete_with_no_successes_does_not_invalidate(
     """If every ID in the batch is missing, the dashboard data hasn't
     actually changed — preserve the cache so we don't pay an unnecessary
     4.5s recompute on the next poll."""
-    import core.api as api_module
+    from core.routes import observations as obs_module
 
     _insert_detection(real_db_manager)
     _prime_dashboard_cache(api_client)
-    cached_payload = api_module._dashboard_cache['payload']
+    cached_payload = obs_module._dashboard_cache['payload']
 
     with patch('core.auth.is_authenticated', return_value=True):
         resp = api_client.delete(
@@ -531,13 +540,13 @@ def test_batch_delete_with_no_successes_does_not_invalidate(
 
     assert resp.status_code == 200
     assert resp.get_json()['deleted'] == 0
-    assert api_module._dashboard_cache['payload'] is cached_payload
+    assert obs_module._dashboard_cache['payload'] is cached_payload
 
 
 def test_update_settings_invalidates_cache_on_display_change(
     api_client, real_db_manager
 ):
-    import core.api as api_module
+    from core.routes import observations as obs_module
 
     _insert_detection(real_db_manager)
     _prime_dashboard_cache(api_client)
@@ -553,7 +562,7 @@ def test_update_settings_invalidates_cache_on_display_change(
         )
 
     assert resp.status_code == 200
-    assert api_module._dashboard_cache['payload'] is None
+    assert obs_module._dashboard_cache['payload'] is None
 
 
 def test_update_settings_preserves_cache_on_non_display_change(
@@ -564,11 +573,11 @@ def test_update_settings_preserves_cache_on_non_display_change(
     local_now() which sets today/week/month boundaries. A change to any
     other section shouldn't drop the cache — that'd cost a 4.5s recompute
     on the next poll for no observable benefit."""
-    import core.api as api_module
+    from core.routes import observations as obs_module
 
     _insert_detection(real_db_manager)
     _prime_dashboard_cache(api_client)
-    cached_payload = api_module._dashboard_cache['payload']
+    cached_payload = obs_module._dashboard_cache['payload']
 
     # Unique rate_limit value (non-display, non-location) so changed_paths is non-empty.
     with patch('core.auth.is_authenticated', return_value=True):
@@ -580,7 +589,7 @@ def test_update_settings_preserves_cache_on_non_display_change(
         )
 
     assert resp.status_code == 200
-    assert api_module._dashboard_cache['payload'] is cached_payload
+    assert obs_module._dashboard_cache['payload'] is cached_payload
 
 
 def test_update_settings_invalidates_cache_on_location_change(
@@ -592,6 +601,7 @@ def test_update_settings_invalidates_cache_on_location_change(
     would keep returning data computed in the old timezone for up to the
     cache TTL after the user moves the station or fixes the timezone."""
     import core.api as api_module
+    from core.routes import observations as obs_module
 
     _insert_detection(real_db_manager)
     _prime_dashboard_cache(api_client)
@@ -613,7 +623,7 @@ def test_update_settings_invalidates_cache_on_location_change(
         )
 
     assert resp.status_code == 200
-    assert api_module._dashboard_cache['payload'] is None
+    assert obs_module._dashboard_cache['payload'] is None
 
 
 def test_migration_import_invalidates_cache_when_records_imported(
@@ -623,7 +633,7 @@ def test_migration_import_invalidates_cache_when_records_imported(
     every dashboard counter (totals, unique species, per-period picks).
     Without invalidation, the dashboard reports pre-import counts for up
     to TTL after the import completes."""
-    import core.api as api_module
+    from core.routes import observations as obs_module
 
     _insert_detection(real_db_manager)
     _prime_dashboard_cache(api_client)
@@ -631,15 +641,16 @@ def test_migration_import_invalidates_cache_when_records_imported(
     temp_path = str(tmp_path / 'migration.db')
     open(temp_path, 'w').close()  # finally-block cleanup removes it
 
-    with patch('core.api.BirdNETPiMigrator') as MockMigrator:
+    from core.routes import migration as migration_routes
+    with patch('core.routes.migration.BirdNETPiMigrator') as MockMigrator:
         MockMigrator.return_value.migrate.return_value = {
             'imported': 5, 'skipped': 0, 'errors': 0
         }
-        api_module._run_migration_background(
+        migration_routes._run_migration_background(
             temp_path, total_records=5, skip_duplicates=True
         )
 
-    assert api_module._dashboard_cache['payload'] is None
+    assert obs_module._dashboard_cache['payload'] is None
 
 
 def test_migration_import_preserves_cache_when_nothing_imported(
@@ -649,24 +660,25 @@ def test_migration_import_preserves_cache_when_nothing_imported(
     actually imported, dashboard data hasn't changed — preserve the cache
     so we don't pay an unnecessary recompute on the next poll. Mirrors
     the batch-delete-with-no-successes semantic."""
-    import core.api as api_module
+    from core.routes import observations as obs_module
 
     _insert_detection(real_db_manager)
     _prime_dashboard_cache(api_client)
-    cached_payload = api_module._dashboard_cache['payload']
+    cached_payload = obs_module._dashboard_cache['payload']
 
     temp_path = str(tmp_path / 'migration.db')
     open(temp_path, 'w').close()
 
-    with patch('core.api.BirdNETPiMigrator') as MockMigrator:
+    from core.routes import migration as migration_routes
+    with patch('core.routes.migration.BirdNETPiMigrator') as MockMigrator:
         MockMigrator.return_value.migrate.return_value = {
             'imported': 0, 'skipped': 3, 'errors': 0
         }
-        api_module._run_migration_background(
+        migration_routes._run_migration_background(
             temp_path, total_records=3, skip_duplicates=True
         )
 
-    assert api_module._dashboard_cache['payload'] is cached_payload
+    assert obs_module._dashboard_cache['payload'] is cached_payload
 
 
 # -----------------------------------------------------------------------------
@@ -677,12 +689,13 @@ def test_migration_import_preserves_cache_when_nothing_imported(
 def test_sightings_payload_is_submitted_to_executor(
     api_client, real_db_manager, monkeypatch
 ):
-    import core.api as api_module
+    from core.routes import observations as obs_module
 
     _insert_detection(real_db_manager)
-    api_module.invalidate_gallery_cache()
+    obs_module.invalidate_gallery_cache()
     recorder = RecordingExecutor()
-    monkeypatch.setattr(api_module, 'db_executor', recorder)
+    import core.api_infra as api_infra
+    monkeypatch.setattr(api_infra, 'db_executor', recorder)
 
     try:
         response = api_client.get('/api/sightings?type=frequent')
@@ -690,7 +703,7 @@ def test_sightings_payload_is_submitted_to_executor(
         assert response.status_code == 200
         assert ('submit', '_build_sightings_payload') in recorder.calls
     finally:
-        api_module.invalidate_gallery_cache()
+        obs_module.invalidate_gallery_cache()
 
 
 def test_gallery_cache_serves_repeat_request(
@@ -698,26 +711,27 @@ def test_gallery_cache_serves_repeat_request(
 ):
     """A second request within the TTL is served from the gallery cache —
     no second executor submit."""
-    import core.api as api_module
+    from core.routes import observations as obs_module
 
     _insert_detection(real_db_manager)
-    api_module.invalidate_gallery_cache()
+    obs_module.invalidate_gallery_cache()
 
     # First request populates the cache through the real executor.
     first = api_client.get('/api/species/all')
     assert first.status_code == 200
-    assert api_module._gallery_cache['species:all']['payload'] is not None
+    assert obs_module._gallery_cache['species:all']['payload'] is not None
 
     # Second request must not touch the executor at all.
     recorder = RecordingExecutor()
-    monkeypatch.setattr(api_module, 'db_executor', recorder)
+    import core.api_infra as api_infra
+    monkeypatch.setattr(api_infra, 'db_executor', recorder)
     try:
         second = api_client.get('/api/species/all')
         assert second.status_code == 200
         assert second.get_json() == first.get_json()
         assert recorder.calls == []
     finally:
-        api_module.invalidate_gallery_cache()
+        obs_module.invalidate_gallery_cache()
 
 
 def test_broadcast_detection_preserves_gallery_cache(api_client, real_db_manager):
@@ -725,17 +739,18 @@ def test_broadcast_detection_preserves_gallery_cache(api_client, real_db_manager
     dashboard cache — but must leave the gallery cache intact, or the gallery
     (opened on demand, not polled) would never get a warm cache."""
     import core.api as api_module
+    from core.routes import observations as obs_module
 
     _insert_detection(real_db_manager)
-    api_module.invalidate_gallery_cache()
-    api_module.invalidate_dashboard_cache()
+    obs_module.invalidate_gallery_cache()
+    obs_module.invalidate_dashboard_cache()
 
     assert api_client.get('/api/species/all').status_code == 200
     assert api_client.get('/api/dashboard').status_code == 200
-    gallery_payload = api_module._gallery_cache['species:all']['payload']
+    gallery_payload = obs_module._gallery_cache['species:all']['payload']
     assert gallery_payload is not None
-    assert api_module._dashboard_cache['payload'] is not None
-    gallery_expiry = api_module._gallery_cache['species:all']['expires_at']
+    assert obs_module._dashboard_cache['payload'] is not None
+    gallery_expiry = obs_module._gallery_cache['species:all']['expires_at']
 
     api_module.broadcast_detection({
         'common_name': 'Northern Cardinal',
@@ -745,25 +760,25 @@ def test_broadcast_detection_preserves_gallery_cache(api_client, real_db_manager
     })
 
     # Dashboard cache expired; gallery cache untouched.
-    assert api_module._dashboard_cache['expires_at'] == 0.0
-    assert api_module._gallery_cache['species:all']['payload'] is gallery_payload
-    assert api_module._gallery_cache['species:all']['expires_at'] == gallery_expiry
+    assert obs_module._dashboard_cache['expires_at'] == 0.0
+    assert obs_module._gallery_cache['species:all']['payload'] is gallery_payload
+    assert obs_module._gallery_cache['species:all']['expires_at'] == gallery_expiry
 
 
 def test_delete_detection_invalidates_gallery_cache(api_client, real_db_manager):
-    import core.api as api_module
+    from core.routes import observations as obs_module
 
     detection_id = _insert_detection(real_db_manager)
-    api_module.invalidate_gallery_cache()
+    obs_module.invalidate_gallery_cache()
 
     assert api_client.get('/api/species/all').status_code == 200
-    assert api_module._gallery_cache['species:all']['payload'] is not None
+    assert obs_module._gallery_cache['species:all']['payload'] is not None
 
     with patch('core.auth.is_authenticated', return_value=True):
         resp = api_client.delete(f'/api/detections/{detection_id}')
 
     assert resp.status_code == 200
-    assert api_module._gallery_cache['species:all']['payload'] is None
+    assert obs_module._gallery_cache['species:all']['payload'] is None
 
 
 def test_update_settings_invalidates_gallery_cache_on_display_change(
@@ -771,13 +786,13 @@ def test_update_settings_invalidates_gallery_cache_on_display_change(
 ):
     """A display.* change alters the localized names baked into the cached
     gallery payload, so the cache must be dropped."""
-    import core.api as api_module
+    from core.routes import observations as obs_module
 
     _insert_detection(real_db_manager)
-    api_module.invalidate_gallery_cache()
+    obs_module.invalidate_gallery_cache()
 
     assert api_client.get('/api/species/all').status_code == 200
-    assert api_module._gallery_cache['species:all']['payload'] is not None
+    assert obs_module._gallery_cache['species:all']['payload'] is not None
 
     with patch('core.auth.is_authenticated', return_value=True):
         resp = api_client.put(
@@ -786,4 +801,4 @@ def test_update_settings_invalidates_gallery_cache_on_display_change(
         )
 
     assert resp.status_code == 200
-    assert api_module._gallery_cache['species:all']['payload'] is None
+    assert obs_module._gallery_cache['species:all']['payload'] is None

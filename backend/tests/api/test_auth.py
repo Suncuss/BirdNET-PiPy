@@ -21,7 +21,7 @@ class TestAuthEndpoints:
             with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
                  patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
-                 patch('core.api.db_manager'), \
+                 patch('core.api_infra.db_manager'), \
                  patch('core.api.socketio'):
 
                 from core.api import create_app
@@ -248,7 +248,7 @@ class TestProtectedRoutes:
             with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
                  patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
-                 patch('core.api.db_manager'), \
+                 patch('core.api_infra.db_manager'), \
                  patch('core.api.socketio'), \
                  patch('core.api.load_user_settings') as mock_load:
 
@@ -314,7 +314,7 @@ class TestPasswordReset:
             with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
                  patch('core.auth.AUTH_CONFIG_FILE', auth_file), \
                  patch('core.auth.RESET_PASSWORD_FILE', reset_file), \
-                 patch('core.api.db_manager'), \
+                 patch('core.api_infra.db_manager'), \
                  patch('core.api.socketio'):
 
                 from core.api import create_app
@@ -361,7 +361,7 @@ class TestAuthToggle:
             with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
                  patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
-                 patch('core.api.db_manager'), \
+                 patch('core.api_infra.db_manager'), \
                  patch('core.api.socketio'):
 
                 from core.api import create_app
@@ -443,7 +443,7 @@ class TestChangePassword:
             with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
                  patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
-                 patch('core.api.db_manager'), \
+                 patch('core.api_infra.db_manager'), \
                  patch('core.api.socketio'):
 
                 from core.api import create_app
@@ -531,7 +531,7 @@ class TestRateLimiting:
             with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
                  patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
-                 patch('core.api.db_manager'), \
+                 patch('core.api_infra.db_manager'), \
                  patch('core.api.socketio'):
 
                 # Reset rate limiting state before each test

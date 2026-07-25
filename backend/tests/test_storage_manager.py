@@ -10,15 +10,12 @@ Tests cover:
 """
 import os
 import sys
-import tempfile
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
 import pytest
 
-# Add tests directory to path for fixtures import
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
-from fixtures.test_config import TEST_DATABASE_SCHEMA
 
 
 def make_detection(timestamp, **overrides):
@@ -76,24 +73,6 @@ def mock_disk_usage_needing(bytes_to_free, total_bytes=100 * 1024**3,
 
 
 @pytest.fixture
-def test_db_manager():
-    """Create a DatabaseManager with temporary test database."""
-    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
-        db_path = tmp.name
-
-    # Patch the settings before importing
-    with patch('config.settings.DATABASE_PATH', db_path):
-        with patch('config.settings.DATABASE_SCHEMA', TEST_DATABASE_SCHEMA):
-            from core.db import DatabaseManager
-            manager = DatabaseManager(db_path=db_path)
-            yield manager
-
-    # Cleanup
-    if os.path.exists(db_path):
-        os.unlink(db_path)
-
-
-@pytest.fixture
 def populated_db_for_cleanup(test_db_manager):
     """Database populated with species having varying detection counts.
 
@@ -140,23 +119,6 @@ def storage_dirs(tmp_path):
             patch('config.settings.SPECTROGRAM_DIR', spectrogram_dir), \
             patch('config.settings.user_settings', {'storage': {}}):
         yield audio_dir, spectrogram_dir
-
-
-class TestGetSpeciesCounts:
-    """Tests for db.get_species_counts()"""
-
-    def test_returns_correct_counts(self, populated_db_for_cleanup):
-        """Should return accurate count for each species."""
-        counts = populated_db_for_cleanup.get_species_counts()
-
-        assert counts['Common Bird'] == 100
-        assert counts['Rare Bird'] == 50
-        assert counts['Very Rare Bird'] == 10
-
-    def test_empty_database(self, test_db_manager):
-        """Should return empty dict for empty database."""
-        counts = test_db_manager.get_species_counts()
-        assert counts == {}
 
 
 class TestGetCleanupProtectedIds:

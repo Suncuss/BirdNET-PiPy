@@ -88,8 +88,8 @@ def _sandboxed_app(db_manager):
              patch('config.settings.USER_SETTINGS_PATH', settings_path), \
              patch('core.runtime_config.USER_SETTINGS_PATH', settings_path), \
              patch('core.timezone_service.USER_SETTINGS_PATH', settings_path), \
-             patch('core.api.USER_SETTINGS_PATH', settings_path), \
-             patch('core.api.db_manager', db_manager), \
+             patch('core.settings_store.USER_SETTINGS_PATH', settings_path), \
+             patch('core.api_infra.db_manager', db_manager), \
              patch('core.api.socketio'):
             from core.api import create_app
             app, _ = create_app()
@@ -113,7 +113,7 @@ def sandboxed_auth_env(db_manager=None, settings=None, mock_socketio=True):
     Same path-redirection idea as _sandboxed_app, but writes a settings file
     the test controls (auth/access tests toggle flags through it) and can keep
     the real SocketIO instance (mock_socketio=False, for websocket tests).
-    db_manager=None patches core.api.db_manager with a bare Mock. Yields
+    db_manager=None patches core.api_infra.db_manager with a bare Mock. Yields
     (api_module, settings_file); callers run create_app() themselves so they
     can shape what they need (HTTP test client vs. socketio test client).
     """
@@ -129,9 +129,9 @@ def sandboxed_auth_env(db_manager=None, settings=None, mock_socketio=True):
             patch('config.settings.USER_SETTINGS_PATH', settings_file),
             patch('core.runtime_config.USER_SETTINGS_PATH', settings_file),
             patch('core.timezone_service.USER_SETTINGS_PATH', settings_file),
-            patch('core.api.USER_SETTINGS_PATH', settings_file),
-            patch('core.api.db_manager') if db_manager is None
-            else patch('core.api.db_manager', db_manager),
+            patch('core.settings_store.USER_SETTINGS_PATH', settings_file),
+            patch('core.api_infra.db_manager') if db_manager is None
+            else patch('core.api_infra.db_manager', db_manager),
         ]
         if mock_socketio:
             patches.append(patch('core.api.socketio'))
@@ -202,8 +202,8 @@ def media_dirs():
         spectrogram_dir = os.path.join(tmp, 'spectrograms')
         os.makedirs(audio_dir)
         os.makedirs(spectrogram_dir)
-        with patch('core.api.EXTRACTED_AUDIO_DIR', audio_dir), \
-             patch('core.api.SPECTROGRAM_DIR', spectrogram_dir):
+        with patch('core.routes.media.EXTRACTED_AUDIO_DIR', audio_dir), \
+             patch('core.routes.media.SPECTROGRAM_DIR', spectrogram_dir):
             yield audio_dir, spectrogram_dir
 
 

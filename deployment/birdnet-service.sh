@@ -9,6 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 RESTART_FLAG_FILE="$PROJECT_ROOT/data/flags/restart-backend"
 UPDATE_FLAG_FILE="$PROJECT_ROOT/data/flags/update-requested"
+UPDATE_STATUS_FILE="$PROJECT_ROOT/data/flags/update-status"
 CHECK_INTERVAL=5  # Check for restart and update flags every 5 seconds
 
 # Colors for output
@@ -345,6 +346,17 @@ perform_system_update() {
             # install.sh handles container restart on failure internally
             log_error "Update failed (exit code: $exit_code)"
             log_error "Check logs: /var/log/birdnet-pipy-install.log"
+        fi
+        # Mark the run failed for the frontend's update poll. install.sh
+        # normally writes this itself; this covers it dying before it could
+        # (e.g. sudo denied). Remove-then-recreate in case the existing file
+        # is root-owned — the flags dir itself is writable by this user.
+        # Never overwrite an existing 'success': install.sh stamps it once
+        # the new code has landed, so a later config-step death must not be
+        # reported as "still on the previous version".
+        if [ "$(cat "$UPDATE_STATUS_FILE" 2>/dev/null | tr -d '\n\r')" != "success" ]; then
+            rm -f "$UPDATE_STATUS_FILE" 2>/dev/null || true
+            echo "failed" > "$UPDATE_STATUS_FILE" 2>/dev/null || true
         fi
         return 1
     fi

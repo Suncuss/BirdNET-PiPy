@@ -353,7 +353,7 @@ class TestMigrationAudioImportEndpoint:
 
             with patch('core.migration_audio.DATA_DIR', tmpdir):
                 # Patch where check_disk_space is used (in api.py)
-                with patch('core.api.check_disk_space', return_value=mock_disk_check):
+                with patch('core.routes.migration.check_disk_space', return_value=mock_disk_check):
                     response = api_client.post(
                         '/api/migration/audio/import',
                         json={'source_folder': 'audio'}
@@ -388,7 +388,7 @@ class TestMigrationAudioImportEndpoint:
 
                 with patch('core.migration_audio.DATA_DIR', tmpdir):
                     with patch('core.migration_audio.EXTRACTED_AUDIO_DIR', dest_dir):
-                        with patch('core.api.check_disk_space', return_value=MOCK_DISK_OK):
+                        with patch('core.routes.migration.check_disk_space', return_value=MOCK_DISK_OK):
                             response = api_client.post(
                                 '/api/migration/audio/import',
                                 json={'source_folder': 'audio'}
@@ -454,8 +454,8 @@ class TestMigrationAudioImportEndpoint:
 
                 with patch('core.migration_audio.DATA_DIR', tmpdir):
                     with patch('core.migration_audio.EXTRACTED_AUDIO_DIR', dest_dir):
-                        with patch('core.api.check_disk_space', return_value=MOCK_DISK_OK):
-                            with patch('core.api.import_audio_files', side_effect=blocking_import):
+                        with patch('core.routes.migration.check_disk_space', return_value=MOCK_DISK_OK):
+                            with patch('core.routes.migration.import_audio_files', side_effect=blocking_import):
                                 # Start first import (will block)
                                 response1 = api_client.post(
                                     '/api/migration/audio/import',
@@ -672,7 +672,7 @@ class TestMigrationSpectrogramGenerateEndpoint:
                 with patch('core.migration_audio.EXTRACTED_AUDIO_DIR', audio_dir):
                     with patch('core.migration_audio.SPECTROGRAM_DIR', spec_dir):
                         with patch('core.migration_audio.check_disk_space', return_value=MOCK_DISK_OK):
-                            with patch('core.api.generate_spectrograms_batch', side_effect=blocking_generate):
+                            with patch('core.routes.migration.generate_spectrograms_batch', side_effect=blocking_generate):
                                 # Start first generation (will block)
                                 response1 = api_client.post('/api/migration/spectrogram/generate')
                                 assert response1.status_code == 200
@@ -760,9 +760,9 @@ class TestMigrationAudioIntegration:
 
                 with patch('core.migration_audio.DATA_DIR', tmpdir):
                     with patch('core.migration_audio.EXTRACTED_AUDIO_DIR', dest_dir):
-                        with patch('core.api.check_disk_space', return_value=MOCK_DISK_OK):
+                        with patch('core.routes.migration.check_disk_space', return_value=MOCK_DISK_OK):
                             # Patch list_available_folders where it's used (in api.py)
-                            with patch('core.api.list_available_folders', return_value=mock_folders):
+                            with patch('core.routes.migration.list_available_folders', return_value=mock_folders):
                                 # Step 1: List folders
                                 response = api_client.get('/api/migration/audio/folders')
                                 assert response.status_code == 200

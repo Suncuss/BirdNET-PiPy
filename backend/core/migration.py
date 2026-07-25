@@ -11,6 +11,7 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime
 
+from core.db_schema import TIMESTAMP_FORMAT
 from core.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -70,7 +71,7 @@ def start_migration_if_not_running(temp_path, total_records):
     with _progress_lock:
         # Check if ANY migration is currently running (not just this ID)
         for existing_id, existing in _migration_progress.items():
-            if existing.get('status') in ('starting', 'loading', 'running'):
+            if existing.get('status') in ('starting', 'running'):
                 return False, existing_id
 
         _migration_progress[temp_path] = {
@@ -274,18 +275,15 @@ class BirdNETPiMigrator:
                 })
 
         try:
-            # Initial progress update
-            update_progress('loading')
-
-            # Pre-load existing records into memory for fast duplicate checking
-            existing_keys = set()
-            if skip_duplicates:
-                existing_keys = self._load_existing_keys(yield_control)
-                logger.info("Loaded existing records for duplicate detection", extra={
-                    'count': len(existing_keys)
-                })
-
             update_progress('running')
+
+            # Duplicate checking probes the (scientific_name, timestamp)
+            # index per record instead of preloading every existing key
+            # into a set — the preload cost ~250MB of RAM against a
+            # million-row target, an OOM risk on the devices this runs on.
+            # batch_keys catches duplicates within the not-yet-inserted
+            # batch; anything older is already committed and probeable.
+            batch_keys = set()
 
             with self._get_source_connection(source_path) as source_conn:
                 source_cursor = source_conn.cursor()
@@ -313,10 +311,10 @@ class BirdNETPiMigrator:
                             )
                         continue
 
-                    # Check for duplicates using in-memory set
                     if skip_duplicates:
                         key = self._make_record_key(transformed)
-                        if key in existing_keys:
+                        if (key in batch_keys
+                                or self._record_exists(transformed)):
                             result['skipped'] += 1
                             # Update progress periodically even for skipped records
                             if (result['imported'] + result['skipped']) % progress_update_interval == 0:
@@ -324,8 +322,7 @@ class BirdNETPiMigrator:
                                 if yield_control:
                                     yield_control()
                             continue
-                        # Add to set to prevent duplicates within the import
-                        existing_keys.add(key)
+                        batch_keys.add(key)
 
                     batch.append(transformed)
 
@@ -335,6 +332,7 @@ class BirdNETPiMigrator:
                         result['imported'] += imported
                         result['errors'] += errors
                         batch = []
+                        batch_keys.clear()
                         update_progress()
                         if yield_control:
                             yield_control()
@@ -367,40 +365,44 @@ class BirdNETPiMigrator:
                     'skipped': result['skipped'],
                     'errors': result['errors']
                 })
+        finally:
+            # _insert_batch writes detections directly, bypassing
+            # insert_detection's species-rollup upkeep — recompute the
+            # rollup for anything that landed, even on a partial failure.
+            if result['imported']:
+                try:
+                    self.db_manager.rebuild_species_table()
+                except Exception:
+                    logger.error("Species rollup rebuild after import failed "
+                                 "(startup consistency check will retry)",
+                                 exc_info=True)
 
         return result
 
-    def _load_existing_keys(self, yield_control=None):
-        """Load all existing record keys into memory for fast duplicate checking.
+    def _record_exists(self, record):
+        """True when the target already holds this record — an indexed
+        point probe on (scientific_name, timestamp), same identity as
+        _make_record_key. Sees rows committed by earlier batches, so
+        cross-batch duplicates within one import are caught too.
 
-        Args:
-            yield_control: Optional no-arg callable invoked per fetched chunk so
-                a cooperative caller can release the worker while scanning a
-                large existing database.
+        The candidate rows' confidences round in Python, matching
+        _make_record_key exactly — SQL round() breaks ties away from zero
+        while Python rounds half-to-even (0.53125 -> 0.5313 vs 0.5312), so
+        rounding on the SQL side would let exact-tie records re-import.
 
-        Returns:
-            set: Set of (timestamp, scientific_name, confidence_rounded) tuples
+        Acquires the connection per call (a fresh thread-local context)
+        rather than holding a cursor across the import loop: a failed
+        _insert_batch discards the shared thread-local connection, and a
+        held cursor would come back "closed" and abort every remaining
+        batch instead of just the bad one.
         """
-        keys = set()
-        try:
-            with self.db_manager.get_db_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT timestamp, scientific_name, confidence
-                    FROM detections
-                """)
-                while True:
-                    rows = cursor.fetchmany(5000)
-                    if not rows:
-                        break
-                    for row in rows:
-                        # Round confidence to 4 decimal places for comparison
-                        keys.add((row[0], row[1], round(row[2], 4)))
-                    if yield_control:
-                        yield_control()
-        except Exception as e:
-            logger.warning("Failed to load existing keys", extra={'error': str(e)})
-        return keys
+        _, _, key_confidence = self._make_record_key(record)
+        with self.db_manager.get_db_connection() as conn:
+            rows = conn.execute(
+                "SELECT confidence FROM detections"
+                " WHERE scientific_name = ? AND timestamp = ?",
+                (record['scientific_name'], record['timestamp'])).fetchall()
+        return any(round(r[0], 4) == key_confidence for r in rows)
 
     def _make_record_key(self, record):
         """Create a key tuple for duplicate detection.
@@ -480,12 +482,12 @@ class BirdNETPiMigrator:
 
             # Try ISO format first (YYYY-MM-DD)
             dt = datetime.strptime(f"{date_str}T{time_str}", "%Y-%m-%dT%H:%M:%S")
-            return dt.strftime("%Y-%m-%dT%H:%M:%S")
+            return dt.strftime(TIMESTAMP_FORMAT)
         except ValueError:
             try:
                 # Try alternative format (MM/DD/YYYY)
                 dt = datetime.strptime(f"{date_str} {time_str}", "%m/%d/%Y %H:%M:%S")
-                return dt.strftime("%Y-%m-%dT%H:%M:%S")
+                return dt.strftime(TIMESTAMP_FORMAT)
             except ValueError:
                 return None
 

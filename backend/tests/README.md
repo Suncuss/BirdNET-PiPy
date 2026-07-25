@@ -51,9 +51,6 @@ tests/
 │   └── test_notification_service.py         # Notification service (28 tests)
 ├── scripts/                                 # Script tests (1 file)
 │   └── test_download_ebird_taxonomy.py      # eBird taxonomy download (8 tests)
-├── fixtures/                                # Shared test utilities
-│   ├── create_test_db.py                    # Test database creation
-│   └── test_config.py                       # Test database schema
 ├── test_bird_name_utils.py                  # Localized bird name helpers (2 tests)
 ├── test_birdweather_service.py              # BirdWeather service (22 tests)
 ├── test_log_reader.py                       # Log reader module (25 tests)

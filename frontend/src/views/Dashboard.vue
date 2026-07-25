@@ -506,9 +506,8 @@ export default {
         } = useFetchBirdData();
 
         // Audio state
-        let audioCtx, audioAnalyser, source, frequencyDataArray, prevFrequencyDataArray, animationId;
+        let audioCtx, audioAnalyser, source, frequencyDataArray, prevFrequencyDataArray, timeDomainDataArray, animationId;
         let spectrogramCanvasCtx, canvasWidth, canvasHeight;
-        let signalStarted = false; // Latch: hold the scroll until the first non-silent frame (see drawSpectrogram)
         let audioClockRunning = false; // Tracks 'playing' vs 'waiting'/'pause' — gates scrolling on real playback progress
         const SPECTROGRAM_SUPERSAMPLE = 2; // Render at 2x internal resolution; browser downscales for smoother edges
         // Scroll speed in CSS px per second of wall-clock. 240 matches the look this
@@ -525,6 +524,10 @@ export default {
         // instead of auto-gaining to the loudest recent bin.
         const SPEC_DB_FLOOR = -110;
         const SPEC_DB_RANGE = 80;
+        // Waveform samples at or below this amplitude (~-120 dBFS) count as digital
+        // silence — far under any live-mic noise floor, above resampler float dust.
+        // The analyser only ever sees it outside the clip (see gate in drawSpectrogram).
+        const SPEC_SILENCE_AMPLITUDE = 1e-6;
         // Gamma <1 brightens midtones without shifting the dark floor or white peak — keeps
         // the Greens_r identity but lifts the bulk of typical bin values up the ramp.
         const SPEC_BRIGHTNESS_GAMMA = 0.8;
@@ -818,7 +821,7 @@ export default {
             audioAnalyser = null
             frequencyDataArray = null
             prevFrequencyDataArray = null
-            signalStarted = false
+            timeDomainDataArray = null
             audioClockRunning = false
         })
 
@@ -898,6 +901,20 @@ export default {
             // forward by the elapsed time.
             if (!audioClockRunning) { scrollPacer.reset(); return; }
 
+            // The media clock alone leaves blank-column windows at both edges of the
+            // clip: 'playing' fires slightly before decoded samples reach the analyser,
+            // and the source feeds the graph slightly ahead of the audible clock, so at
+            // the end terminal silence arrives before 'pause'/'ended' close the gate
+            // above. The raw waveform buffer tells signal and no-signal apart exactly
+            // (unlike the frequency data, whose smoothing decays over many frames), so
+            // hold the scroll while it carries only digital silence.
+            audioAnalyser.getFloatTimeDomainData(timeDomainDataArray);
+            let hasSignal = false;
+            for (let i = 0; i < timeDomainDataArray.length; i++) {
+                if (Math.abs(timeDomainDataArray[i]) > SPEC_SILENCE_AMPLITUDE) { hasSignal = true; break; }
+            }
+            if (!hasSignal) { scrollPacer.reset(); return; }
+
             const frequencyResolution = audioCtx.sampleRate / audioAnalyser.fftSize;
             const minIndex = 0;
             const maxIndex = Math.min(
@@ -907,17 +924,6 @@ export default {
             const binSpan = maxIndex - minIndex;
 
             audioAnalyser.getFloatFrequencyData(frequencyDataArray);
-
-            // 'playing' fires on the media element slightly before decoded samples reach the
-            // analyser, which would scroll in a blank lead-in. Hold the scroll until the first
-            // real signal: getFloatFrequencyData reports -Infinity for every bin during the
-            // silent lead-in, so latch once the first finite bin appears.
-            if (!signalStarted) {
-                for (let i = minIndex; i <= maxIndex; i++) {
-                    if (Number.isFinite(frequencyDataArray[i])) { signalStarted = true; break; }
-                }
-                if (!signalStarted) return;
-            }
 
             // Columns (CSS px) to advance this frame from elapsed wall-clock time, scaled
             // to the supersampled backing store. 0 until a full column is due, and 0 after
@@ -1013,7 +1019,7 @@ export default {
             prevFrequencyDataArray = new Float32Array(audioAnalyser.frequencyBinCount);
             // Initialize prev far below the floor so the first frame's left edge starts dark.
             prevFrequencyDataArray.fill(-200);
-            signalStarted = false;
+            timeDomainDataArray = new Float32Array(audioAnalyser.fftSize);
             audioClockRunning = false;
 	            const latestAudioUrl = getAudioUrl(latestObservationData.value?.bird_song_file_name, latestObservationData.value?.audio_sig)
 	            if (!latestAudioUrl) return

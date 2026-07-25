@@ -392,32 +392,3 @@ DEFAULT_AUDIO_PATH = f'{BASE_DIR}/assets/default_audio.mp3'
 DEFAULT_IMAGE_PATH = f'{BASE_DIR}/assets/default_spectrogram.webp'
 DATABASE_PATH = f'{BASE_DIR}/data/db/birds.db'
 LOGS_DIR = f'{BASE_DIR}/data/logs'
-
-DATABASE_SCHEMA = '''
-CREATE TABLE IF NOT EXISTS detections (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp DATETIME NOT NULL,
-    group_timestamp DATETIME NOT NULL,
-    scientific_name VARCHAR(100) NOT NULL,
-    common_name VARCHAR(100) NOT NULL,
-    confidence DECIMAL(5,4) NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
-    latitude DECIMAL(10,8) CHECK(latitude >= -90 AND latitude <= 90),
-    longitude DECIMAL(11,8) CHECK(longitude >= -180 AND longitude <= 180),
-    cutoff DECIMAL(4,3) CHECK(cutoff > 0 AND cutoff <= 1),
-    sensitivity DECIMAL(4,3) CHECK(sensitivity > 0),
-    overlap DECIMAL(4,3) CHECK(overlap >= 0 AND overlap <= 1),
-    week INT GENERATED ALWAYS AS (strftime('%W', timestamp)) STORED,
-    extra TEXT DEFAULT '{}'
-);
-
-CREATE INDEX IF NOT EXISTS idx_detections_timestamp ON detections(timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_detections_common_name ON detections(common_name);
-CREATE INDEX IF NOT EXISTS idx_detections_scientific_name ON detections(scientific_name);
-CREATE INDEX IF NOT EXISTS idx_detections_week ON detections(week);
-CREATE INDEX IF NOT EXISTS idx_detections_location ON detections(latitude, longitude);
-CREATE INDEX IF NOT EXISTS idx_detections_timestamp_date ON detections(date(timestamp));
-CREATE INDEX IF NOT EXISTS idx_detections_species_date ON detections(common_name, date(timestamp));
-CREATE INDEX IF NOT EXISTS idx_detections_scientific_timestamp ON detections(scientific_name, timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_detections_group_timestamp ON detections(group_timestamp);
-CREATE INDEX IF NOT EXISTS idx_detections_scientific_confidence ON detections(scientific_name, confidence DESC);
-'''

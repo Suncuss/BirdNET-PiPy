@@ -399,6 +399,8 @@ describe('Dashboard', () => {
       minDecibels: -100,
       maxDecibels: -30,
       connect: vi.fn(),
+      // Non-silent waveform so the digital-silence gate lets the draw proceed.
+      getFloatTimeDomainData: vi.fn((array) => { array.fill(0.05) }),
       getFloatFrequencyData: vi.fn((array) => {
         for (let i = 0; i < array.length; i++) {
           // Synthetic dB values spanning the full window so dbToLutIndex hits both clamps.
@@ -432,6 +434,90 @@ describe('Dashboard', () => {
     // 12 kHz cap exceeds available bins at 22050 Hz / fftSize 1024, so loop clamps to 512 bins.
     expect(mockCanvasContext.createLinearGradient).toHaveBeenCalledTimes(512)
     expect(addColorStop).toHaveBeenCalledTimes(1024)
+
+    wrapper.unmount()
+  })
+
+  // When the clip runs out of samples the Web Audio graph goes silent slightly
+  // before the media element fires 'pause'/'ended' (the element's clock trails
+  // the graph by the output latency). The draw loop must freeze on that digital
+  // silence instead of scrolling a strip of blank columns in at the right edge.
+  it('freezes the scroll while the analyser carries only digital silence', async () => {
+    const state = baseState()
+    state.latestObservationData.value = {
+      common_name: 'Robin',
+      scientific_name: 'Turdus migratorius',
+      timestamp: '2024-01-01T12:00:00Z',
+      confidence: 0.91,
+      bird_song_file_name: 'clip.mp3'
+    }
+    useFetchBirdData.mockReturnValue(state)
+
+    let drawFrame = null
+    vi.stubGlobal('requestAnimationFrame', vi.fn((cb) => { drawFrame = cb; return 1 }))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    vi.spyOn(HTMLCanvasElement.prototype, 'offsetWidth', 'get').mockReturnValue(600)
+    vi.spyOn(HTMLCanvasElement.prototype, 'offsetHeight', 'get').mockReturnValue(200)
+    vi.stubGlobal('Audio', vi.fn().mockImplementation(function MockAudio(src) {
+      this.src = src
+      this.crossOrigin = ''
+      this.pause = vi.fn()
+      const listeners = {}
+      this.addEventListener = vi.fn((type, cb) => { listeners[type] = cb })
+      this.play = vi.fn(() => {
+        listeners.playing?.()
+        return Promise.resolve()
+      })
+    }))
+
+    // Waveform output the test flips between real signal and digital silence,
+    // emulating the source running dry ahead of the 'pause'/'ended' events.
+    let waveformAmplitude = 0.05
+    const analyser = {
+      fftSize: 1024,
+      frequencyBinCount: 512,
+      connect: vi.fn(),
+      getFloatTimeDomainData: vi.fn((array) => { array.fill(waveformAmplitude) }),
+      getFloatFrequencyData: vi.fn((array) => { array.fill(-60) })
+    }
+    vi.stubGlobal('AudioContext', vi.fn().mockImplementation(function MockAudioContext() {
+      this.sampleRate = 22050
+      this.state = 'running'
+      this.destination = {}
+      this.createAnalyser = vi.fn(() => analyser)
+      this.createMediaElementSource = vi.fn(() => ({ connect: vi.fn() }))
+      this.resume = vi.fn().mockResolvedValue()
+      this.close = vi.fn().mockResolvedValue()
+    }))
+
+    const wrapper = mountDashboard()
+    await flushPromises()
+
+    wrapper.vm.playLatestObservation()
+
+    // Baseline frame, then one normal frame later: columns get painted.
+    drawFrame(0)
+    drawFrame(1000 / 60)
+    const paintedColumns = mockCanvasContext.createLinearGradient.mock.calls.length
+    expect(paintedColumns).toBeGreaterThan(0)
+
+    // The clip's samples run out; the graph now feeds pure zeros while the
+    // media clock (and its events) lag behind. Nothing may scroll or paint.
+    waveformAmplitude = 0
+    drawFrame(2000 / 60)
+    drawFrame(3000 / 60)
+    expect(mockCanvasContext.createLinearGradient).toHaveBeenCalledTimes(paintedColumns)
+    // The gate exits before the frequency read: both pre-silence frames read it
+    // (baseline + painted), the silent frames added nothing.
+    expect(analyser.getFloatFrequencyData).toHaveBeenCalledTimes(2)
+
+    // Signal returns (e.g. user replays): the pacer was reset while frozen, so
+    // one baseline frame re-arms it and the next paints again — no jump.
+    waveformAmplitude = 0.05
+    drawFrame(4000 / 60)
+    expect(mockCanvasContext.createLinearGradient).toHaveBeenCalledTimes(paintedColumns)
+    drawFrame(5000 / 60)
+    expect(mockCanvasContext.createLinearGradient.mock.calls.length).toBeGreaterThan(paintedColumns)
 
     wrapper.unmount()
   })

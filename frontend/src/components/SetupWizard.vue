@@ -457,7 +457,7 @@
 
 <script>
 import { ref, computed } from 'vue'
-import { isRestartTimeoutError, requestRestart, useServiceRestart } from '@/composables/useServiceRestart'
+import { captureRestartBaseline, isRestartTimeoutError, requestRestart, useServiceRestart } from '@/composables/useServiceRestart'
 import { useSettings } from '@/composables/useSettings'
 import { limitDecimals, sanitizeLabel } from '@/utils/inputHelpers'
 import { FILTER_DEFAULTS, MODEL_TYPES, modelTypeOptions } from '@/utils/modelDefaults'
@@ -717,9 +717,24 @@ export default {
 
         sessionStorage.setItem(WELCOME_PENDING_KEY, '1')
 
-        // Trigger restart
-        await requestRestart()
+        // Trigger restart. A failure here is NOT a save failure — the PUT
+        // above already succeeded — so it gets its own message instead of
+        // the misleading "Failed to save settings".
+        let baseline = null
+        let triggerBaseline = null
+        try {
+          baseline = await captureRestartBaseline()
+          triggerBaseline = await requestRestart()
+        } catch (restartTriggerError) {
+          console.error('Setup restart trigger failed:', restartTriggerError)
+          errorMessage.value = 'Settings saved, but the service restart could not be started. Refresh the page in a minute or restart services manually.'
+          saving.value = false
+          return
+        }
+
         await serviceRestart.waitForRestart({
+          expect: 'restart',
+          baseline: baseline || triggerBaseline,
           autoReload: true,
           message: 'Applying settings',
           // A timeout is not a save failure: the PUT already succeeded.
