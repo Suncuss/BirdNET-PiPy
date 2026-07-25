@@ -17,7 +17,7 @@
         class="shrink-0 ml-4"
         :loading="loading"
         loading-text="Saving..."
-        :disabled="serviceRestart.isRestarting.value || systemUpdate.isRestarting.value"
+        :disabled="serviceRestart.isRestarting.value || systemUpdate.isRestarting.value || systemUpdate.updating.value"
         @click="saveSettings"
       >
         Save
@@ -1086,10 +1086,10 @@
           <!-- Restart Services Button -->
           <button
             class="py-2 text-sm text-gray-600 hover:text-gray-800 border border-gray-200 rounded-lg transition-colors"
-            :class="serviceRestart.isRestarting.value
+            :class="serviceRestart.isRestarting.value || systemUpdate.updating.value || systemUpdate.isRestarting.value
               ? 'opacity-50 cursor-not-allowed'
               : 'hover:text-red-600 hover:border-red-200 hover:bg-red-50'"
-            :disabled="serviceRestart.isRestarting.value"
+            :disabled="serviceRestart.isRestarting.value || systemUpdate.updating.value || systemUpdate.isRestarting.value"
             @click="manualRestart"
           >
             {{ serviceRestart.isRestarting.value ? 'Restarting...' : 'Restart Services' }}
@@ -1186,7 +1186,7 @@
               </p>
             </div>
             <button
-              :disabled="systemUpdate.updating.value"
+              :disabled="systemUpdate.updating.value || serviceRestart.isRestarting.value"
               class="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors disabled:bg-gray-400"
               @click="showUpdateConfirm = true"
             >
@@ -1216,7 +1216,7 @@
 
         <!-- Check for Updates Button -->
         <button
-          :disabled="systemUpdate.checking.value || systemUpdate.updating.value"
+          :disabled="systemUpdate.checking.value || systemUpdate.updating.value || serviceRestart.isRestarting.value"
           class="w-full py-2 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-50 border border-gray-200 rounded-lg transition-colors disabled:text-gray-400 disabled:hover:bg-transparent"
           @click="systemUpdate.checkForUpdates({ force: true })"
         >
@@ -1533,7 +1533,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
 import { io } from 'socket.io-client'
 import { useSystemUpdate } from '@/composables/useSystemUpdate'
-import { requestRestart, useServiceRestart } from '@/composables/useServiceRestart'
+import { captureRestartBaseline, requestRestart, useServiceRestart } from '@/composables/useServiceRestart'
 import { useAuth } from '@/composables/useAuth'
 import { useUnitSettings } from '@/composables/useUnitSettings'
 import { useTimeFormat } from '@/composables/useTimeFormat'
@@ -2201,11 +2201,24 @@ export default {
         return false
       }
 
+      // Guard in the method, not only the disabled button: an update can be
+      // mid-dispatch before its wait flips isRestarting (the HA path can
+      // spend up to 30s racing the dispatch response). The update's own
+      // restart applies the saved settings anyway, so never dispatch a
+      // competing restart under it.
+      if (systemUpdate.updating.value || systemUpdate.isRestarting.value) {
+        showStatus('success', 'Settings saved. They will take effect after the update completes.')
+        return true
+      }
+
       settingsSaveError.value = ''
 
       try {
-        await requestRestart()
+        const baseline = await captureRestartBaseline()
+        const triggerBaseline = await requestRestart()
         await serviceRestart.waitForRestart({
+          expect: 'restart',
+          baseline: baseline || triggerBaseline,
           autoReload: true,
           message
         })
@@ -2242,15 +2255,27 @@ export default {
 
     // Manual restart triggered from Management section
     const manualRestart = async () => {
-      if (serviceRestart.isRestarting.value) return
+      if (
+        serviceRestart.isRestarting.value ||
+        systemUpdate.updating.value ||
+        systemUpdate.isRestarting.value
+      ) return
+      // Close the double-click window: the guard above only becomes
+      // effective once waitForRestart runs, but the trigger round-trips
+      // below take time first.
+      serviceRestart.isRestarting.value = true
       try {
-        await requestRestart()
+        const baseline = await captureRestartBaseline()
+        const triggerBaseline = await requestRestart()
         window.scrollTo({ top: 0, behavior: 'smooth' })
         await serviceRestart.waitForRestart({
+          expect: 'restart',
+          baseline: baseline || triggerBaseline,
           autoReload: true,
           message: 'Restarting services'
         })
       } catch (error) {
+        serviceRestart.isRestarting.value = false
         console.error('Manual restart failed:', error)
         settingsSaveError.value = 'Restart did not complete. Please refresh or restart services.'
       }
@@ -2512,7 +2537,13 @@ export default {
     const confirmUpdate = async () => {
       showUpdateConfirm.value = false
       window.scrollTo({ top: 0, behavior: 'smooth' })
-      await systemUpdate.triggerUpdate(true)
+      try {
+        await systemUpdate.triggerUpdate(true)
+      } catch (error) {
+        // Already surfaced via systemUpdate.statusMessage; swallow the
+        // rethrow so it does not become an unhandled promise rejection.
+        console.error('Update trigger failed:', error)
+      }
     }
 
     // Species filter modal handlers — single source of truth for each list's

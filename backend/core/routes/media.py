@@ -224,7 +224,8 @@ def get_bird_recording(species_name, recording_id):
     a graceful "no longer available" notice instead of a dead player.
     """
     # Mirror the recordings list filter: by scientific_name when the route name
-    # resolves to a known species, otherwise by the legacy common_name.
+    # resolves to a known species (possibly several keys for one common name
+    # after a taxonomy split), otherwise by the legacy common_name.
     sci, common = _resolve_species_filter(species_name)
 
     detection = _run_db(infra.db_manager.get_detection_by_id, recording_id)
@@ -232,7 +233,7 @@ def get_bird_recording(species_name, recording_id):
         return jsonify({"error": "Recording not found"}), 404
 
     belongs = (
-        detection.get('scientific_name') == sci if sci
+        detection.get('scientific_name') in sci if sci
         else detection.get('common_name') == common
     )
     if not belongs:

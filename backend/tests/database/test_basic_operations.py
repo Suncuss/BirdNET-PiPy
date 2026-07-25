@@ -364,3 +364,142 @@ class TestDatabaseBasicOperations:
         # Each species carries its latest detection timestamp so the Species
         # Catalog needs no per-species detail fetch.
         assert all(s['last_detected'] == '2024-01-15T12:00:00' for s in result)
+
+
+class TestBirdDetailsDuplicateCommonName:
+    """One common name, two scientific names (a taxonomy genus split the model
+    label set carries twice, e.g. Charadrius/Thinornis 'Little Ringed Plover').
+
+    The resolver hands the read layer every key for the name; detections can be
+    stored under either, so species-keyed reads must match all of them.
+    Regression for /bird/<name> and /bird/<name>/recording/<id> rendering blank
+    when the resolver's winner isn't the key the station actually stored under.
+    """
+
+    OLD_KEY = 'Charadrius dubius'   # in_v2 — where a real station's rows land
+    NEW_KEY = 'Thinornis dubius'    # v3-only split — the CSV-last winner
+    COMMON = 'Little Ringed Plover'
+
+    def _insert(self, mgr, sci, ts, confidence=0.8):
+        return mgr.insert_detection({
+            'timestamp': ts, 'group_timestamp': ts,
+            'scientific_name': sci, 'common_name': self.COMMON,
+            'confidence': confidence,
+            'latitude': 40.7, 'longitude': -74.0,
+            'cutoff': 0.5, 'sensitivity': 0.75, 'overlap': 0.25,
+        })
+
+    def test_details_found_when_stored_under_non_winner_key(self, test_db_manager):
+        # Rows exist only under the old-genus key; the resolver's winner is the
+        # other. Winner-only (old behavior) misses; both keys now hit.
+        self._insert(test_db_manager, self.OLD_KEY, '2024-01-15T08:00:00')
+        assert test_db_manager.get_bird_details(
+            scientific_name=[self.NEW_KEY]) is None
+        details = test_db_manager.get_bird_details(
+            scientific_name=[self.NEW_KEY, self.OLD_KEY])
+        assert details is not None
+        assert details['total_visits'] == 1
+        assert details['scientific_name'] == self.OLD_KEY
+
+    def test_details_aggregate_across_both_keys(self, test_db_manager):
+        self._insert(test_db_manager, self.OLD_KEY, '2024-01-15T08:00:00')
+        self._insert(test_db_manager, self.OLD_KEY, '2024-02-15T08:00:00')
+        self._insert(test_db_manager, self.NEW_KEY, '2024-03-15T09:00:00')
+        details = test_db_manager.get_bird_details(
+            scientific_name=[self.NEW_KEY, self.OLD_KEY])
+        assert details['total_visits'] == 3
+        assert details['first_detected'] == '2024-01-15T08:00:00'
+        assert details['last_detected'] == '2024-03-15T09:00:00'
+
+    def test_single_key_list_matches_legacy_shape(self, test_db_manager):
+        # The common (unduplicated) case: a one-element list behaves exactly
+        # like the prior single-key read.
+        self._insert(test_db_manager, self.OLD_KEY, '2024-01-15T08:00:00')
+        one = test_db_manager.get_bird_details(scientific_name=[self.OLD_KEY])
+        assert one['total_visits'] == 1
+        assert one['scientific_name'] == self.OLD_KEY
+
+    def test_recordings_and_distribution_span_both_keys(self, test_db_manager):
+        self._insert(test_db_manager, self.OLD_KEY, '2024-01-15T08:00:00')
+        self._insert(test_db_manager, self.NEW_KEY, '2024-01-16T08:00:00')
+        recs = test_db_manager.get_bird_recordings(
+            scientific_name=[self.NEW_KEY, self.OLD_KEY])
+        assert len(recs) == 2
+        dist = test_db_manager.get_detection_distribution(
+            view='month', anchor_date_str='2024-01-15',
+            scientific_name=[self.NEW_KEY, self.OLD_KEY])
+        assert sum(dist['data']) == 2
+
+    def test_representative_is_the_most_detected_key(self, test_db_manager):
+        # The displayed identity comes from the key the station actually uses,
+        # so a rarely-hit duplicate can't relabel the card.
+        self._insert(test_db_manager, self.OLD_KEY, '2024-01-15T08:00:00')
+        self._insert(test_db_manager, self.OLD_KEY, '2024-01-16T08:00:00')
+        self._insert(test_db_manager, self.NEW_KEY, '2024-01-17T08:00:00')
+        for order in ([self.NEW_KEY, self.OLD_KEY], [self.OLD_KEY, self.NEW_KEY]):
+            details = test_db_manager.get_bird_details(scientific_name=order)
+            assert details['scientific_name'] == self.OLD_KEY, order
+
+    def test_representative_tie_breaks_on_caller_order(self, test_db_manager):
+        # Equal counts: the resolver's representative (first key) wins rather
+        # than whichever row SQLite happens to scan first, so the name shown
+        # doesn't flip between requests as counts drift into a tie.
+        self._insert(test_db_manager, self.OLD_KEY, '2024-01-15T08:00:00')
+        self._insert(test_db_manager, self.NEW_KEY, '2024-01-16T08:00:00')
+        first = test_db_manager.get_bird_details(
+            scientific_name=[self.NEW_KEY, self.OLD_KEY])
+        assert first['scientific_name'] == self.NEW_KEY
+        second = test_db_manager.get_bird_details(
+            scientific_name=[self.OLD_KEY, self.NEW_KEY])
+        assert second['scientific_name'] == self.OLD_KEY
+
+    def test_legacy_common_name_path_aggregates_across_keys(self, test_db_manager):
+        # The fallback path (resolver missed, filtering by common_name) must
+        # also report the whole species: it used to GROUP BY scientific_name
+        # and keep one arbitrary group, under-counting a split species.
+        self._insert(test_db_manager, self.OLD_KEY, '2024-01-15T08:00:00')
+        self._insert(test_db_manager, self.OLD_KEY, '2024-02-15T08:00:00')
+        self._insert(test_db_manager, self.NEW_KEY, '2024-03-15T09:00:00')
+        details = test_db_manager.get_bird_details(species_name=self.COMMON)
+        assert details['total_visits'] == 3
+        assert details['first_detected'] == '2024-01-15T08:00:00'
+        assert details['last_detected'] == '2024-03-15T09:00:00'
+        # Representative is the most-detected key, not an arbitrary group.
+        assert details['scientific_name'] == self.OLD_KEY
+
+    def test_legacy_common_name_path_returns_none_for_unknown(self, test_db_manager):
+        # The ungrouped aggregate always yields a row; an unknown species must
+        # still read as "no such species" rather than a zero-count record.
+        assert test_db_manager.get_bird_details(
+            species_name='No Such Bird At All') is None
+
+    def test_catalog_lists_a_split_species_once(self, test_db_manager):
+        # The rollup holds a row per scientific_name, so without folding, the
+        # catalog renders two identical cards that both open the one detail
+        # page merging them — and neither card's count matches that page.
+        self._insert(test_db_manager, self.OLD_KEY, '2024-01-15T08:00:00')
+        self._insert(test_db_manager, self.OLD_KEY, '2024-01-16T08:00:00')
+        self._insert(test_db_manager, self.NEW_KEY, '2024-01-17T08:00:00')
+
+        catalog = test_db_manager.get_all_unique_species()
+        entries = [s for s in catalog if s['common_name'] == self.COMMON]
+        assert len(entries) == 1
+        # Folded entry keeps the most-detected name and the newest sighting.
+        assert entries[0]['scientific_name'] == self.OLD_KEY
+        assert entries[0]['last_detected'] == '2024-01-17T08:00:00'
+
+    def test_catalog_keeps_distinct_species_separate(self, test_db_manager):
+        # Folding must key on the taxon group, not the common name, so genuinely
+        # different birds still get their own catalog entries.
+        self._insert(test_db_manager, self.OLD_KEY, '2024-01-15T08:00:00')
+        test_db_manager.insert_detection({
+            'timestamp': '2024-01-15T09:00:00',
+            'group_timestamp': '2024-01-15T09:00:00',
+            'scientific_name': 'Turdus merula', 'common_name': 'Common Blackbird',
+            'confidence': 0.8, 'latitude': 40.7, 'longitude': -74.0,
+            'cutoff': 0.5, 'sensitivity': 0.75, 'overlap': 0.25,
+        })
+        catalog = test_db_manager.get_all_unique_species()
+        assert len(catalog) == 2
+        assert {s['common_name'] for s in catalog} == {
+            self.COMMON, 'Common Blackbird'}

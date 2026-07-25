@@ -20,6 +20,7 @@ from core.logging_config import get_logger, log_api_request
 from core.settings_store import load_user_settings
 from core.update_service import (
     _HA_CORE_API_BASE,
+    BOOT_ID,
     GITHUB_OWNER,
     GITHUB_REPO,
     _call_supervisor,
@@ -29,6 +30,8 @@ from core.update_service import (
     get_latest_remote_commit,
     load_ha_source_commit,
     load_version_info,
+    read_update_status,
+    reset_update_status,
     should_show_update_note,
     write_flag,
 )
@@ -137,6 +140,10 @@ def get_system_version():
         response = {}
         runtime_mode = get_runtime_mode()
 
+        # boot_id and update_status stay in the public view: unlike the build
+        # fingerprint fields, a random per-process id and a coarse update
+        # phase identify no build, and the restart poll must see them even if
+        # the viewer's session tier degrades mid-restart.
         if runtime_mode == 'ha':
             app_source_commit = load_ha_source_commit()
             response = {
@@ -146,6 +153,12 @@ def get_system_version():
                 'current_branch': 'home_assistant',
                 'remote_url': f'https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}',
                 'runtime_mode': runtime_mode,
+                'boot_id': BOOT_ID,
+                # Never surface the native update-status flag here: nothing in
+                # HA mode writes or resets it, so a file migrated in from a
+                # native install would be reported forever — a stale 'success'
+                # would let the frontend declare a failed add-on update done.
+                'update_status': None,
             }
             return jsonify(_public_version_view(response)), 200
 
@@ -163,6 +176,8 @@ def get_system_version():
             'current_branch': version_info.get('branch', 'unknown'),
             'remote_url': version_info.get('remote_url', f'https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}'),
             'runtime_mode': runtime_mode,
+            'boot_id': BOOT_ID,
+            'update_status': read_update_status(),
         })), 200
     except Exception as e:
         return jsonify({'error': f'Failed to get version info: {str(e)}'}), 500
@@ -479,10 +494,14 @@ def trigger_system_update():
             logger.info("HA addon update triggered via Core service", extra={
                 'entity_id': entity_id,
             })
+            # boot_id in trigger responses: the responder IS the old process,
+            # giving the frontend a late identity baseline when its earlier
+            # /system/version capture failed
             return jsonify({
                 'status': 'update_triggered',
                 'message': 'Home Assistant addon update initiated.',
                 'estimated_downtime': '2-5 minutes',
+                'boot_id': BOOT_ID,
             }), 200
 
         # Load current version info for logging
@@ -496,7 +515,11 @@ def trigger_system_update():
         # Get target branch based on channel setting
         channel, target_branch = get_channel_branch()
 
-        # Write update flag with target branch as content
+        # Clear any stale terminal status before the host script takes over,
+        # then write the update flag with target branch as content. The
+        # read-back value is echoed to the frontend so it knows what status
+        # was verifiably in place at dispatch.
+        post_reset_status = reset_update_status()
         write_flag('update-requested', target_branch)
 
         logger.info("System update triggered", extra={
@@ -510,7 +533,9 @@ def trigger_system_update():
             'message': 'System update initiated. Services will restart shortly.',
             'estimated_downtime': '2-5 minutes',
             'channel': channel,
-            'target_branch': target_branch
+            'target_branch': target_branch,
+            'boot_id': BOOT_ID,
+            'update_status': post_reset_status
         }), 200
 
     except Exception as e:
@@ -533,6 +558,7 @@ def trigger_service_restart():
             'status': 'restart_requested',
             'message': 'Home Assistant add-on restart initiated. Services will restart shortly.',
             'estimated_downtime': '10-30 seconds',
+            'boot_id': BOOT_ID,
         }), 200
 
     write_flag('restart-backend')
@@ -540,7 +566,8 @@ def trigger_service_restart():
     return jsonify({
         'status': 'restart_requested',
         'message': 'Service restart initiated. Services will restart shortly.',
-        'estimated_downtime': '10-30 seconds'
+        'estimated_downtime': '10-30 seconds',
+        'boot_id': BOOT_ID
     }), 200
 
 

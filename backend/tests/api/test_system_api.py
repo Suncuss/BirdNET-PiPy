@@ -193,9 +193,11 @@ class TestSystemAPI:
         """
         with patch('core.routes.system.load_version_info') as mock_load, \
              patch('core.routes.system.write_flag') as mock_flag, \
+             patch('core.routes.system.reset_update_status') as mock_reset, \
              patch('core.routes.system.get_channel_branch') as mock_channel:
 
             mock_load.return_value = self.SAMPLE_VERSION_INFO
+            mock_reset.return_value = 'pending'
             mock_channel.return_value = ('release', 'main')
 
             response = api_client.post('/api/system/update')
@@ -205,15 +207,22 @@ class TestSystemAPI:
             assert data['estimated_downtime'] == '2-5 minutes'
             assert data['channel'] == 'release'
             assert data['target_branch'] == 'main'
+            # The responder is the OLD process; its boot_id serves as a late
+            # identity baseline for the frontend's restart poll, and the
+            # read-back status confirms the stale-value reset happened
+            assert len(data['boot_id']) == 36
+            assert data['update_status'] == 'pending'
             mock_flag.assert_called_once_with('update-requested', 'main')
 
     def test_trigger_update_latest_channel(self, api_client):
         """Test POST /api/system/update writes staging branch for latest channel"""
         with patch('core.routes.system.load_version_info') as mock_load, \
              patch('core.routes.system.write_flag') as mock_flag, \
+             patch('core.routes.system.reset_update_status') as mock_reset, \
              patch('core.routes.system.get_channel_branch') as mock_channel:
 
             mock_load.return_value = self.SAMPLE_VERSION_INFO
+            mock_reset.return_value = 'pending'
             mock_channel.return_value = ('latest', 'staging')
 
             response = api_client.post('/api/system/update')
@@ -224,6 +233,26 @@ class TestSystemAPI:
             assert data['target_branch'] == 'staging'
             mock_flag.assert_called_once_with('update-requested', 'staging')
 
+    def test_trigger_update_resets_update_status(self, api_client):
+        """POST /api/system/update clears any stale terminal status to 'pending'.
+
+        Without the reset, a 'failed' left by a previous update attempt would be
+        visible to the frontend's restart poll before install.sh overwrites it,
+        producing an instant false "update failed" report.
+        """
+        with patch('core.routes.system.load_version_info') as mock_load, \
+             patch('core.routes.system.write_flag'), \
+             patch('core.routes.system.reset_update_status') as mock_reset, \
+             patch('core.routes.system.get_channel_branch') as mock_channel:
+
+            mock_load.return_value = self.SAMPLE_VERSION_INFO
+            mock_reset.return_value = 'pending'
+            mock_channel.return_value = ('release', 'main')
+
+            response = api_client.post('/api/system/update')
+            assert response.status_code == 200
+            mock_reset.assert_called_once()
+
     def test_trigger_update_missing_version(self, api_client):
         """Test POST /api/system/update handles missing version.json"""
         with patch('core.routes.system.load_version_info') as mock_load:
@@ -233,6 +262,57 @@ class TestSystemAPI:
             assert response.status_code == 500
             data = response.get_json()
             assert 'Version information not available' in data['error']
+
+    def test_trigger_restart_returns_boot_id(self, api_client):
+        """POST /api/system/restart echoes the current process boot_id.
+
+        The responder is the old process, so the frontend can use this as a
+        late identity baseline when its /system/version capture failed.
+        """
+        with patch('core.routes.system.write_flag') as mock_flag:
+            response = api_client.post('/api/system/restart')
+            assert response.status_code == 200
+            data = response.get_json()
+            assert data['status'] == 'restart_requested'
+            assert len(data['boot_id']) == 36
+            mock_flag.assert_called_once_with('restart-backend')
+
+    def test_version_includes_stable_boot_id(self, api_client):
+        """GET /api/system/version returns a boot_id stable across requests.
+
+        The frontend compares boot_id before/after a restart to detect that it
+        is talking to a NEW server process, not the old one still shutting
+        down. It must be constant for the process lifetime.
+        """
+        with patch('core.routes.system.load_version_info') as mock_load:
+            mock_load.return_value = self.SAMPLE_VERSION_INFO
+
+            first = api_client.get('/api/system/version').get_json()
+            second = api_client.get('/api/system/version').get_json()
+
+            assert first['boot_id']
+            assert len(first['boot_id']) == 36  # uuid4 string form
+            assert first['boot_id'] == second['boot_id']
+
+    def test_version_includes_update_status(self, api_client):
+        """GET /api/system/version surfaces the update-status flag content."""
+        with patch('core.routes.system.load_version_info') as mock_load, \
+             patch('core.routes.system.read_update_status') as mock_status:
+            mock_load.return_value = self.SAMPLE_VERSION_INFO
+            mock_status.return_value = 'failed'
+
+            data = api_client.get('/api/system/version').get_json()
+            assert data['update_status'] == 'failed'
+
+    def test_version_update_status_none_without_flag(self, api_client):
+        """update_status is null when no status flag file exists."""
+        with patch('core.routes.system.load_version_info') as mock_load, \
+             patch('core.routes.system.read_update_status') as mock_status:
+            mock_load.return_value = self.SAMPLE_VERSION_INFO
+            mock_status.return_value = None
+
+            data = api_client.get('/api/system/version').get_json()
+            assert data['update_status'] is None
 
     def test_version_constant_exists(self):
         """Test that version module exists and has required attributes"""
@@ -660,3 +740,78 @@ class TestUpdateCheckWithNotes:
             data = response.get_json()
             assert data['update_available'] is False
             assert data['update_note'] is None
+
+
+class TestUpdateStatusHelpers:
+    """Unit tests for the update-status flag helpers in core.update_service."""
+
+    def _patched_service(self, monkeypatch, tmp_path):
+        import core.update_service as update_service
+        monkeypatch.setattr(update_service, 'BASE_DIR', str(tmp_path))
+        return update_service
+
+    def test_read_update_status_missing_file(self, tmp_path, monkeypatch):
+        update_service = self._patched_service(monkeypatch, tmp_path)
+        assert update_service.read_update_status() is None
+
+    def test_read_update_status_strips_whitespace(self, tmp_path, monkeypatch):
+        update_service = self._patched_service(monkeypatch, tmp_path)
+        flags = tmp_path / 'data' / 'flags'
+        flags.mkdir(parents=True)
+        (flags / 'update-status').write_text('failed\n')
+        assert update_service.read_update_status() == 'failed'
+
+    def test_read_update_status_empty_file(self, tmp_path, monkeypatch):
+        update_service = self._patched_service(monkeypatch, tmp_path)
+        flags = tmp_path / 'data' / 'flags'
+        flags.mkdir(parents=True)
+        (flags / 'update-status').write_text('')
+        assert update_service.read_update_status() is None
+
+    def test_read_update_status_corrupt_bytes(self, tmp_path, monkeypatch):
+        """A file corrupted mid-write (SD power loss) must read as None, not
+        take the whole /system/version response down with a decode error."""
+        update_service = self._patched_service(monkeypatch, tmp_path)
+        flags = tmp_path / 'data' / 'flags'
+        flags.mkdir(parents=True)
+        (flags / 'update-status').write_bytes(b'\xff\xfe\x00garbage\x80')
+        assert update_service.read_update_status() is None
+
+    def test_reset_update_status_overwrites_stale_status(self, tmp_path, monkeypatch):
+        """A leftover terminal status is replaced by 'pending' on dispatch.
+
+        Removes-then-recreates so a root-owned file from install.sh (the flags
+        dir itself is user-writable) cannot block the reset.
+        """
+        update_service = self._patched_service(monkeypatch, tmp_path)
+        flags = tmp_path / 'data' / 'flags'
+        flags.mkdir(parents=True)
+        (flags / 'update-status').write_text('failed')
+
+        update_service.reset_update_status()
+        assert update_service.read_update_status() == 'pending'
+
+    def test_reset_update_status_creates_from_scratch(self, tmp_path, monkeypatch):
+        update_service = self._patched_service(monkeypatch, tmp_path)
+        update_service.reset_update_status()
+        assert update_service.read_update_status() == 'pending'
+
+    def test_reset_update_status_returns_read_back_value(self, tmp_path, monkeypatch):
+        """The dispatch response forwards this so the frontend knows the
+        stale-value reset verifiably happened."""
+        update_service = self._patched_service(monkeypatch, tmp_path)
+        flags = tmp_path / 'data' / 'flags'
+        flags.mkdir(parents=True)
+        (flags / 'update-status').write_text('failed')
+
+        assert update_service.reset_update_status() == 'pending'
+
+    def test_reset_update_status_never_raises(self, tmp_path, monkeypatch):
+        """Status is advisory: reset must not be able to block an update dispatch."""
+        update_service = self._patched_service(monkeypatch, tmp_path)
+        # Point BASE_DIR at a path whose parent is an unwritable *file*, so both
+        # the unlink and the rewrite fail with OSError internally.
+        blocker = tmp_path / 'blocker'
+        blocker.write_text('')
+        monkeypatch.setattr(update_service, 'BASE_DIR', str(blocker / 'nested'))
+        update_service.reset_update_status()  # must simply not raise

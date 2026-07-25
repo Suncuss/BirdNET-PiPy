@@ -18,6 +18,9 @@ vi.mock('@/services/api', () => ({
 // Mock the useServiceRestart composable (shared state so tests can inspect it)
 const mockWaitForRestart = vi.hoisted(() => vi.fn().mockResolvedValue(true))
 const mockRequestRestart = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
+const mockCaptureBaseline = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({ bootId: 'boot-1', commit: 'c1', version: '1.0.0' })
+)
 const mockRestartState = vi.hoisted(() => ({
   isRestarting: { value: false },
   restartMessage: { value: '' },
@@ -25,6 +28,7 @@ const mockRestartState = vi.hoisted(() => ({
 }))
 vi.mock('@/composables/useServiceRestart', () => ({
   requestRestart: mockRequestRestart,
+  captureRestartBaseline: mockCaptureBaseline,
   isRestartTimeoutError: (error) => error?.message === 'RESTART_TIMEOUT',
   useServiceRestart: () => ({
     ...mockRestartState,
@@ -401,6 +405,26 @@ describe('SetupWizard', () => {
 
       expect(wrapper.text()).toContain('Settings saved — the restart is taking longer than expected')
       expect(wrapper.text()).not.toContain('Failed to save settings')
+    })
+
+    it('shows a restart-trigger notice, not a save error, when requestRestart fails', async () => {
+      setupSaveMocks()
+      // A real trigger failure (not a tolerated connection drop): the PUT
+      // already succeeded, so this must not read as a save failure.
+      mockRequestRestart.mockRejectedValueOnce(
+        new Error('Request failed with status code 500')
+      )
+
+      const wrapper = mountWizard()
+      await goToStep3(wrapper)
+
+      const finishButton = wrapper.findAll('button').find(b => b.text() === 'Finish')
+      await finishButton.trigger('click')
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('Settings saved, but the service restart could not be started')
+      expect(wrapper.text()).not.toContain('Failed to save settings')
+      expect(mockWaitForRestart).not.toHaveBeenCalled()
     })
 
     it('shows error and stays on wizard when timezone lookup fails', async () => {

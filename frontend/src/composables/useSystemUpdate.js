@@ -2,7 +2,13 @@ import { ref, computed } from 'vue'
 import api, { createLongRequest } from '@/services/api'
 import { UPDATE_DISMISSED_UNTIL_KEY } from '@/utils/storageKeys'
 import { useLogger } from './useLogger'
-import { isRestartTimeoutError, useServiceRestart } from './useServiceRestart'
+import {
+  captureRestartBaseline,
+  identityValue,
+  isRestartTimeoutError,
+  isUpdateFailedError,
+  useServiceRestart
+} from './useServiceRestart'
 import { useAuth } from './useAuth'
 import { useDismissible } from './useDismissible'
 
@@ -18,20 +24,45 @@ const statusType = ref(null) // 'success', 'error', 'info'
 // Update banner is snoozable for 7 days.
 const dismissal = useDismissible(UPDATE_DISMISSED_UNTIL_KEY, 7 * 24 * 60 * 60 * 1000)
 
-const HA_POLL_INTERVAL_MS = 10_000
-const HA_POLL_TIMEOUT_MS = 10 * 60 * 1000
-let haPollTimer = null
-
-function stopHaPoll() {
-  if (haPollTimer) {
-    clearTimeout(haPollTimer)
-    haPollTimer = null
+// Module-level like the state above: an update wait can outlive the Settings
+// page (navigating away unmounts it), and a per-mount instance would orphan
+// the in-flight wait's banner refs and cancellation handle on remount.
+// Created lazily so importing this module has no side effects.
+let serviceRestartSingleton = null
+function getServiceRestart() {
+  if (!serviceRestartSingleton) {
+    serviceRestartSingleton = useServiceRestart()
   }
+  return serviceRestartSingleton
+}
+
+// Native updates can legitimately take a long time on slow hardware (a local
+// image build on a Pi Zero 2W exceeds the old 10-minute cap); the identity
+// poll makes a long wait safe because it can't false-positive on the old
+// server. HA add-on installs are pulls, so keep the shorter cap there.
+const UPDATE_MAX_WAIT_SECONDS = 1800
+const HA_UPDATE_MAX_WAIT_SECONDS = 600
+
+// How long to wait for the HA dispatch response to supply a late identity
+// baseline when no other identity is available. The backend can spend ~15s
+// polling the update entity plus ~10s dispatching before its 200 arrives.
+const HA_DISPATCH_BASELINE_WAIT_MS = 30_000
+
+// Identity from the versionInfo cache (loaded alongside the update UI),
+// for when the live pre-trigger capture fails: commit/version comparison
+// works without a boot id, and never delays the monitor. Sentinel-filtered:
+// 'unknown' placeholders can't prove advancement, and returning null here
+// correctly falls through to the dispatch boot_id instead.
+function cachedIdentityBaseline() {
+  const commit = identityValue(versionInfo.value?.current_commit)
+  const version = identityValue(versionInfo.value?.version)
+  if (!commit && !version) return null
+  return { commit, version }
 }
 
 export function useSystemUpdate() {
   const logger = useLogger('useSystemUpdate')
-  const serviceRestart = useServiceRestart()
+  const serviceRestart = getServiceRestart()
 
   const { isAuthenticated } = useAuth()
 
@@ -128,8 +159,14 @@ export function useSystemUpdate() {
     updating.value = true
     statusMessage.value = null
 
-    if (versionInfo.value?.runtime_mode === 'ha') {
-      triggerHaUpdate()
+    // Identity snapshot of the OLD server, taken before anything restarts:
+    // the wait engine compares probes against it, so the old server still
+    // answering during a slow shutdown can't be mistaken for the new one.
+    const baseline = await captureRestartBaseline()
+    const runtimeMode = baseline?.runtimeMode || versionInfo.value?.runtime_mode
+
+    if (runtimeMode === 'ha') {
+      await triggerHaUpdate(baseline)
       return
     }
 
@@ -147,18 +184,41 @@ export function useSystemUpdate() {
       setStatus('info', 'Update started. Services restarting...')
       logger.info('Update triggered successfully', data)
 
-      await serviceRestart.waitForRestart({
-        maxWaitSeconds: 600,
+      // Strengthen the baseline with what the trigger response knows: the
+      // responder is the OLD process, so its boot_id fills in for a failed
+      // capture (cached versionInfo supplies commit/version), and
+      // update_status is the server's read-back after clearing any stale
+      // value — so a later 'failed' is attributable to this attempt.
+      const base = baseline || cachedIdentityBaseline()
+      let effectiveBaseline = base
+      if (base || data.boot_id) {
+        effectiveBaseline = {
+          ...(base || {}),
+          bootId: base?.bootId || data.boot_id,
+          ...(data.update_status !== undefined && { updateStatus: data.update_status })
+        }
+      }
+
+      const completed = await serviceRestart.waitForRestart({
+        expect: 'update',
+        baseline: effectiveBaseline,
+        maxWaitSeconds: UPDATE_MAX_WAIT_SECONDS,
         autoReload: true,
         message: 'System updating',
         timeoutMessage: 'Update taking longer than expected. Try refreshing later.'
       })
+      if (!completed) {
+        updating.value = false // cancelled via reset()
+      }
     } catch (error) {
       updating.value = false
       // Timeout is not a failure - just taking longer than expected
       if (isRestartTimeoutError(error)) {
         logger.warn('Update restart timeout - may still be in progress')
         setStatus('info', 'Update taking longer than expected. Try refreshing later.')
+      } else if (isUpdateFailedError(error)) {
+        logger.error('Update failed on host; previous version restarted')
+        setStatus('error', 'Update failed — the system is still on the previous version. Check the system logs for details.')
       } else {
         logger.error('Failed to trigger update', error)
         const backendError = error.response?.data?.error
@@ -169,60 +229,94 @@ export function useSystemUpdate() {
   }
 
   // Supervisor kills our process mid-install, so we can't await the dispatch
-  // response. Fire and poll /system/version until the addon container reports
-  // the new version, then reload.
-  function triggerHaUpdate() {
-    const baselineVersion = versionInfo.value?.version
+  // response. Fire it, let the shared wait engine poll the server identity,
+  // and surface only real dispatch failures (backend 502 payloads) as errors.
+  async function triggerHaUpdate(baseline) {
     const longApi = createLongRequest()
 
-    serviceRestart.isRestarting.value = true
-    serviceRestart.restartMessage.value =
-      'Updating via Home Assistant — page will reload when ready.'
-
-    logger.info('Triggering HA addon update...', { baselineVersion })
-    longApi.post('/system/update').catch(err => {
+    logger.info('Triggering HA addon update...', { baseline })
+    let dispatchFailed = false
+    const dispatch = longApi.post('/system/update')
+    dispatch.catch(err => {
       // Backend returns 502 with {error: "..."} for known dispatch failures
       // (slug lookup, entity not ready, HTTP error from HA Core). Surface
-      // those; for raw connection drops (Supervisor killed us), keep polling.
+      // those; for raw connection drops (Supervisor killed us), keep waiting.
       const backendError = err.response?.data?.error
       if (backendError) {
         logger.error('HA update dispatch failed', err)
-        stopHaPoll()
-        serviceRestart.reset()
+        dispatchFailed = true
+        serviceRestart.reset() // cancels the in-flight wait (resolves false)
         updating.value = false
         setStatus('error', `Update failed: ${backendError}`)
       } else {
-        logger.warn('HA update dispatch connection lost (poll detects completion)', err)
+        logger.warn('HA update dispatch connection lost (identity poll detects completion)', err)
       }
     })
 
-    stopHaPoll()
-    const deadline = Date.now() + HA_POLL_TIMEOUT_MS
-
-    const poll = async () => {
-      haPollTimer = null
-      if (Date.now() >= deadline) {
-        logger.warn('HA update poll timed out')
-        serviceRestart.reset()
-        updating.value = false
-        setStatus('info', 'Update is taking longer than expected. Refresh the page manually if needed.')
+    // Prefer commit/version identity from the cache over waiting on the
+    // dispatch: a fast container swap can finish before any dispatch
+    // response arrives, and a version comparison also refuses to call a
+    // failed update (old image restarted, new boot, no status file) done.
+    let effectiveBaseline = baseline || cachedIdentityBaseline()
+    if (effectiveBaseline && !effectiveBaseline.bootId) {
+      // Without process identity the wait engine waives its process proof,
+      // so a stale cache (add-on already updated from another tab or the HA
+      // UI) would look "advanced" on the very first probe. The dispatch
+      // responder is the old process: graft its boot_id onto the baseline
+      // whenever the response arrives — the engine reads the baseline per
+      // probe — without delaying the monitor on it.
+      const enrichable = effectiveBaseline
+      dispatch
+        .then(response => {
+          const bootId = response?.data?.boot_id
+          if (bootId && !enrichable.bootId) {
+            enrichable.bootId = bootId
+          }
+        })
+        .catch(() => {})
+    }
+    if (!effectiveBaseline) {
+      // Nothing cached either: give the dispatch response a window to
+      // supply the old process's boot_id as a late baseline (the 200
+      // usually arrives before Supervisor swaps the container out).
+      effectiveBaseline = await Promise.race([
+        dispatch
+          .then(response => {
+            const bootId = response?.data?.boot_id
+            return bootId ? { bootId } : null
+          })
+          .catch(() => null),
+        new Promise(resolve => setTimeout(() => resolve(null), HA_DISPATCH_BASELINE_WAIT_MS))
+      ])
+      if (dispatchFailed) {
+        // The error handler above already surfaced it; don't start a wait.
         return
       }
-      try {
-        const { data } = await api.get('/system/version')
-        if (data?.version && baselineVersion && data.version !== baselineVersion) {
-          logger.info('HA update complete — new version detected', data)
-          serviceRestart.restartMessage.value = 'New version detected. Reloading...'
-          setTimeout(() => window.location.reload(), 1000)
-          return
-        }
-      } catch (err) {
-        logger.debug('HA version poll error (expected during swap)', err)
-      }
-      haPollTimer = setTimeout(poll, HA_POLL_INTERVAL_MS)
     }
 
-    haPollTimer = setTimeout(poll, HA_POLL_INTERVAL_MS)
+    try {
+      const completed = await serviceRestart.waitForRestart({
+        expect: 'update',
+        baseline: effectiveBaseline,
+        maxWaitSeconds: HA_UPDATE_MAX_WAIT_SECONDS,
+        autoReload: true,
+        message: 'Updating via Home Assistant',
+        timeoutMessage: 'Update is taking longer than expected. Refresh the page manually if needed.',
+        failureMessage: 'Update failed — the add-on is still on the previous version. Check the add-on logs.'
+      })
+      if (!completed) {
+        updating.value = false // cancelled (e.g. dispatch error path above)
+      }
+    } catch (error) {
+      updating.value = false
+      if (isRestartTimeoutError(error)) {
+        setStatus('info', 'Update is taking longer than expected. Refresh the page manually if needed.')
+      } else if (isUpdateFailedError(error)) {
+        setStatus('error', 'Update failed — the add-on is still on the previous version. Check the add-on logs.')
+      } else {
+        throw error
+      }
+    }
   }
 
   /**

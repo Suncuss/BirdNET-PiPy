@@ -33,17 +33,112 @@ export function isRestartTimeoutError(error) {
 }
 
 /**
+ * True when waitForRestart detected a failed update: the host restarted the
+ * previous version and marked the run failed via the update-status flag.
+ */
+export function isUpdateFailedError(error) {
+  return error?.message === 'UPDATE_FAILED'
+}
+
+/**
  * Post restart request, tolerating connection errors that indicate the restart was accepted.
+ *
+ * Returns {bootId} when the response carries one: the responding process IS
+ * the old server, so its boot_id doubles as a late identity baseline for
+ * waitForRestart when the earlier captureRestartBaseline() failed. Returns
+ * null when no identity is available (connection cut, older backend).
  */
 export async function requestRestart() {
   try {
-    await api.post('/system/restart')
+    const response = await api.post('/system/restart')
+    const bootId = response?.data?.boot_id
+    return bootId ? { bootId } : null
   } catch (error) {
     if (!isLikelyRestartInProgressError(error)) {
       throw error
     }
     console.warn('Restart request connection dropped; waiting for reconnection anyway', error)
+    return null
   }
+}
+
+/**
+ * The backend uses the literal string 'unknown' as a placeholder when
+ * version metadata is missing (e.g. HA without BUILD_VERSION); a sentinel
+ * can never prove identity or advancement, so treat it as absent.
+ */
+export function identityValue(value) {
+  return value && value !== 'unknown' ? value : undefined
+}
+
+/**
+ * Snapshot the running server's identity BEFORE triggering a restart/update.
+ *
+ * waitForRestart() compares later probes against this, so the old server
+ * answering during a slow shutdown can never be mistaken for the new one
+ * (on slow hardware the stack can take far longer than any fixed delay to
+ * go down). Returns null when the identity can't be captured; the wait then
+ * falls back to down-then-up detection.
+ */
+export async function captureRestartBaseline() {
+  try {
+    const response = await api.get('/system/version')
+    const data = response?.data
+    if (!data) return null
+    return {
+      bootId: data.boot_id,
+      commit: identityValue(data.current_commit),
+      version: identityValue(data.version),
+      runtimeMode: data.runtime_mode,
+      updateStatus: data.update_status
+    }
+  } catch (_error) {
+    return null
+  }
+}
+
+// True when the baseline carries the identity field(s) the expectation needs;
+// otherwise the wait falls back to down-then-up detection. A bootId-only
+// baseline (from a trigger response) suffices for updates too: completion
+// then rides on the explicit success status + new boot_id clause.
+function hasIdentity(expectation, baseline) {
+  if (!baseline) return false
+  if (expectation === 'update') {
+    return Boolean(baseline.commit || baseline.version || baseline.bootId)
+  }
+  return Boolean(baseline.bootId)
+}
+
+// True when a probe response proves the expected transition happened.
+function identityAdvanced(expectation, baseline, data) {
+  if (!data) return false
+  const bootChanged = Boolean(baseline?.bootId && data.boot_id && data.boot_id !== baseline.bootId)
+  if (expectation !== 'update') return bootChanged
+
+  const codeChanged = Boolean(
+    (baseline?.commit && identityValue(data.current_commit) &&
+      data.current_commit !== baseline.commit) ||
+    (baseline?.version && identityValue(data.version) &&
+      data.version !== baseline.version)
+  )
+
+  // bootId-only baseline (from a trigger response): a new process plus a
+  // non-failure status — or no status system at all (the HA add-on never
+  // writes one) — is the only completion proof available.
+  if (baseline?.bootId && !baseline.commit && !baseline.version) {
+    return bootChanged && (data.update_status === 'success' || data.update_status == null)
+  }
+
+  // A commit/version change alone can be the OLD process serving a
+  // version.json refreshed mid-update (compose down is best-effort and the
+  // file is read live per request), so when the baseline carries a boot id,
+  // demand process proof: a new boot_id, or none at all — the baselined
+  // process demonstrably served one, so a response without it is a
+  // different, older-code server (supported latest->release downgrade).
+  const processProof = baseline?.bootId ? (bootChanged || !data.boot_id) : true
+  // Second clause: install.sh rebuilt/restarted without a commit or version
+  // change (e.g. stale-version.json repair) and reported explicit success.
+  return (codeChanged && processProof) || (data.update_status === 'success' && bootChanged)
 }
 
 /**
@@ -62,26 +157,48 @@ export function useServiceRestart() {
   let cancelActiveWait = null
 
   /**
-   * Monitor service reconnection after a restart-triggering action
+   * Monitor service reconnection after a restart-triggering action.
+   *
+   * Probes /system/version and, when a baseline is provided, completes only
+   * once the response's identity differs from it — 'restart' waits for a new
+   * boot_id, 'update' for a new commit/version (or an explicit success
+   * status). A reachable server with an unchanged identity just means the
+   * transition hasn't happened yet. Without a usable baseline it falls back
+   * to requiring at least one failed probe before accepting a success.
+   *
    * @param {Object} options
+   * @param {'restart'|'update'} options.expect - Which transition proves completion (default: 'restart')
+   * @param {Object|null} options.baseline - Identity from captureRestartBaseline() taken before the trigger
    * @param {number} options.maxWaitSeconds - Max time to wait (default: 150s / 2.5 min)
    * @param {number} options.pollInterval - Polling interval in ms (default: 5000)
    * @param {number} options.initialDelay - Delay before first check in ms (default: 10000)
    * @param {number} options.postConnectDelay - Extra delay after connection before reload (default: 15000)
    * @param {boolean} options.autoReload - Whether to reload page on success (default: true)
    * @param {string} options.timeoutMessage - restartError text shown when the wait times out
+   * @param {string} options.failureMessage - restartError text shown when the update failed
    * @returns {Promise<boolean>} - Resolves true when service is back, false
-   *   when reset() cancelled the wait; rejects on timeout
+   *   when reset() cancelled the wait; rejects on timeout (RESTART_TIMEOUT)
+   *   or a detected failed update (UPDATE_FAILED)
    */
   const waitForRestart = async (options = {}) => {
+    // Only one wait can be active per instance: starting a new one cancels
+    // any predecessor (its promise resolves false), so a stale wait can
+    // never fire a surprise reload after being superseded.
+    if (cancelActiveWait) {
+      cancelActiveWait()
+    }
+
     const {
+      expect: expectation = 'restart',
+      baseline = null,
       maxWaitSeconds = 150,
       pollInterval = 5000,
       initialDelay = 10000,
       postConnectDelay = 15000, // Wait for all services (BirdNet, etc.) to fully initialize
       autoReload = true,
       message = 'Services restarting',
-      timeoutMessage = 'Restart is taking longer than expected. Try refreshing the page in a minute.'
+      timeoutMessage = 'Restart is taking longer than expected. Try refreshing the page in a minute.',
+      failureMessage = 'Update failed — the system is still on the previous version. Check the system logs for details.'
     } = options
 
     isRestarting.value = true
@@ -89,6 +206,16 @@ export function useServiceRestart() {
     restartError.value = ''
 
     const startTime = Date.now()
+    const identityMode = hasIdentity(expectation, baseline)
+    // Fallback only: a success may be accepted once an outage was observed.
+    let sawOutage = false
+    // A 'failed' status is terminal only if it appeared during THIS attempt.
+    // Evidence: a literal non-failed status at baseline (normally the
+    // dispatch's verified 'pending' read-back), or a probe witnessing a
+    // non-failed phase mid-wait. null/undefined mean the reset outcome is
+    // unknown — a stale 'failed' could have survived — so no evidence.
+    let sawNonFailedStatus =
+      baseline?.updateStatus != null && baseline.updateStatus !== 'failed'
 
     return new Promise((resolve, reject) => {
       let progressTimer = null
@@ -114,6 +241,15 @@ export function useServiceRestart() {
         resolve(false)
       }
 
+      const settleWithError = (errorCode, bannerText) => {
+        stopProgressTimer()
+        cancelActiveWait = null
+        restartMessage.value = ''
+        restartError.value = bannerText
+        isRestarting.value = false
+        reject(new Error(errorCode))
+      }
+
       const updateProgressMessage = () => {
         const elapsedIntervals = Math.floor((Date.now() - startTime) / PROGRESS_INTERVAL_MS)
         const elapsedSec = elapsedIntervals * (PROGRESS_INTERVAL_MS / 1000)
@@ -127,25 +263,56 @@ export function useServiceRestart() {
         const elapsedMs = Date.now() - startTime
 
         if (elapsedMs >= maxWaitSeconds * 1000) {
-          stopProgressTimer()
-          cancelActiveWait = null
           logger.warn('Service restart taking longer than expected')
-          restartMessage.value = ''
-          restartError.value = timeoutMessage
-          isRestarting.value = false
-          reject(new Error('RESTART_TIMEOUT'))
+          settleWithError('RESTART_TIMEOUT', timeoutMessage)
           return
         }
 
         try {
-          // Reachability probe — detects when the API is back after a
-          // restart. Deliberately a raw request: routing it through
-          // useSettings would let its coalescing return stale cached data
-          // and never detect the reconnect.
-          await api.get('/settings')
+          // Identity probe — deliberately a raw request so nothing cached
+          // can mask the reconnect, and against /system/version because its
+          // boot_id/commit prove WHICH server instance answered.
+          const response = await api.get('/system/version')
           if (cancelled) return // reset() fired while the probe was in flight
 
-          // If we get here, the request succeeded
+          const payload = response?.data || {}
+          // Mirror the baseline-init rule: only a literal non-failed status
+          // is evidence. null/undefined (file absent mid-rewrite, transient
+          // read error, old backend, HA) proves nothing, so it must not
+          // upgrade a later stale 'failed' into a current-attempt failure.
+          if (payload.update_status != null && payload.update_status !== 'failed') {
+            sawNonFailedStatus = true
+          }
+
+          // The host marked this attempt failed (evidence: see the
+          // sawNonFailedStatus init — without it, a stale file that
+          // survived an unverified reset could false-fail a successful
+          // retry). Terminal even if the commit/version advanced:
+          // version.json is refreshed before the post-build configuration
+          // steps, so metadata can be ahead of what actually runs when a
+          // late step fails.
+          if (
+            expectation === 'update' &&
+            payload.update_status === 'failed' &&
+            sawNonFailedStatus
+          ) {
+            logger.error('Update failed on host; previous version restarted')
+            settleWithError('UPDATE_FAILED', failureMessage)
+            return
+          }
+
+          const advanced = identityAdvanced(expectation, baseline, payload)
+
+          const reconnected = identityMode ? advanced : sawOutage
+          if (!reconnected) {
+            // Reachable, but still the old instance (or no outage observed
+            // yet in fallback mode): the transition hasn't happened. This is
+            // the case the old reachability-only probe got wrong on slow
+            // hardware, reloading into a server about to go down.
+            pendingTimer = setTimeout(checkConnection, pollInterval)
+            return
+          }
+
           stopProgressTimer()
           logger.info('API reconnected, waiting for all services to initialize...')
           restartMessage.value = 'Waiting for services to initialize...'
@@ -168,6 +335,7 @@ export function useServiceRestart() {
           }, postConnectDelay)
         } catch (_error) {
           if (cancelled) return
+          sawOutage = true
           pendingTimer = setTimeout(checkConnection, pollInterval)
         }
       }

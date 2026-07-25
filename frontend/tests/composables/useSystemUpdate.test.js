@@ -44,8 +44,14 @@ const mockServiceRestart = vi.hoisted(() => {
   }
 })
 
+const mockCaptureBaseline = vi.hoisted(() => vi.fn())
+
 vi.mock('@/composables/useServiceRestart', () => ({
   isRestartTimeoutError: (error) => error?.message === 'RESTART_TIMEOUT',
+  isUpdateFailedError: (error) => error?.message === 'UPDATE_FAILED',
+  // Real (trivial, pure) implementation: the composable under test calls it
+  identityValue: (value) => (value && value !== 'unknown' ? value : undefined),
+  captureRestartBaseline: mockCaptureBaseline,
   useServiceRestart: () => mockServiceRestart
 }))
 
@@ -58,6 +64,10 @@ describe('useSystemUpdate', () => {
 
     // Reset auth mock to default (auth disabled = isAuthenticated true)
     mockIsAuthenticated.value = true
+
+    // Baseline capture is best-effort; default to "unavailable"
+    mockCaptureBaseline.mockReset()
+    mockCaptureBaseline.mockResolvedValue(null)
 
     // Reset singleton state between tests
     const { versionInfo, updateInfo, updateAvailable, checking, updating, statusMessage, statusType } = useSystemUpdate()
@@ -410,105 +420,307 @@ describe('useSystemUpdate', () => {
     expect(updateInfo.value.latest_version).toBe('0.6.4')
   })
 
-  it('triggerUpdate (HA mode) sets banner and dispatches POST', async () => {
-    const { triggerUpdate, versionInfo, isRestarting, restartMessage } = useSystemUpdate()
+  it('native update passes update expectation and baseline to waitForRestart', async () => {
+    window.confirm.mockReturnValue(true)
+    mockCaptureBaseline.mockResolvedValueOnce({
+      bootId: 'b1', commit: 'c1', version: '0.9.0', runtimeMode: 'native'
+    })
+    mockLongApi.post.mockResolvedValueOnce({ data: { status: 'update_triggered' } })
+
+    const { triggerUpdate } = useSystemUpdate()
+    await triggerUpdate()
+
+    expect(mockCaptureBaseline).toHaveBeenCalled()
+    expect(mockServiceRestart.waitForRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expect: 'update',
+        baseline: expect.objectContaining({ bootId: 'b1', commit: 'c1' }),
+        autoReload: true
+      })
+    )
+  })
+
+  it('falls back to the trigger response boot_id when baseline capture failed', async () => {
+    window.confirm.mockReturnValue(true)
+    // mockCaptureBaseline default resolves null (capture failed)
+    mockLongApi.post.mockResolvedValueOnce({
+      data: { status: 'update_triggered', boot_id: 'boot-from-post' }
+    })
+
+    const { triggerUpdate } = useSystemUpdate()
+    await triggerUpdate()
+
+    expect(mockServiceRestart.waitForRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expect: 'update',
+        baseline: { bootId: 'boot-from-post' }
+      })
+    )
+  })
+
+  it('merges cached version identity with the trigger response identity', async () => {
+    window.confirm.mockReturnValue(true)
+    // mockCaptureBaseline default resolves null (capture failed); the
+    // versionInfo cache still knows the running commit/version.
+    const { triggerUpdate, versionInfo } = useSystemUpdate()
+    versionInfo.value = { current_commit: 'cached-commit', version: '0.9.0' }
+    mockLongApi.post.mockResolvedValueOnce({
+      data: { status: 'update_triggered', boot_id: 'boot-from-post', update_status: 'pending' }
+    })
+
+    await triggerUpdate()
+
+    expect(mockServiceRestart.waitForRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseline: {
+          commit: 'cached-commit',
+          version: '0.9.0',
+          bootId: 'boot-from-post',
+          updateStatus: 'pending'
+        }
+      })
+    )
+  })
+
+  it('refreshes the baseline update status from the trigger response read-back', async () => {
+    window.confirm.mockReturnValue(true)
+    // Stale 'failed' at capture time; the server read back 'pending' after
+    // resetting it, so a later 'failed' is attributable to this attempt.
+    mockCaptureBaseline.mockResolvedValueOnce({
+      bootId: 'b1', commit: 'c1', version: 'v1',
+      runtimeMode: 'native', updateStatus: 'failed'
+    })
+    mockLongApi.post.mockResolvedValueOnce({
+      data: { status: 'update_triggered', boot_id: 'b1', update_status: 'pending' }
+    })
+
+    const { triggerUpdate } = useSystemUpdate()
+    await triggerUpdate()
+
+    expect(mockServiceRestart.waitForRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseline: expect.objectContaining({
+          bootId: 'b1',
+          commit: 'c1',
+          updateStatus: 'pending'
+        })
+      })
+    )
+  })
+
+  it('treats a wait timeout as still-in-progress info, not failure', async () => {
+    window.confirm.mockReturnValue(true)
+    mockLongApi.post.mockResolvedValueOnce({ data: { status: 'update_triggered' } })
+    mockServiceRestart.waitForRestart.mockRejectedValueOnce(new Error('RESTART_TIMEOUT'))
+
+    const { triggerUpdate, statusType, statusMessage, updating } = useSystemUpdate()
+    await triggerUpdate()
+
+    expect(updating.value).toBe(false)
+    expect(statusType.value).toBe('info')
+    expect(statusMessage.value).toContain('longer than expected')
+  })
+
+  it('reports a failed update distinctly when the wait rejects with UPDATE_FAILED', async () => {
+    window.confirm.mockReturnValue(true)
+    mockLongApi.post.mockResolvedValueOnce({ data: { status: 'update_triggered' } })
+    mockServiceRestart.waitForRestart.mockRejectedValueOnce(new Error('UPDATE_FAILED'))
+
+    const { triggerUpdate, statusType, statusMessage, updating } = useSystemUpdate()
+    await triggerUpdate()
+
+    expect(updating.value).toBe(false)
+    expect(statusType.value).toBe('error')
+    expect(statusMessage.value.toLowerCase()).toContain('update failed')
+  })
+
+  it('triggerUpdate (HA mode) dispatches POST and delegates to the shared wait engine', async () => {
+    const { triggerUpdate, versionInfo } = useSystemUpdate()
     versionInfo.value = { runtime_mode: 'ha', version: '0.6.4-dev21' }
+    mockCaptureBaseline.mockResolvedValueOnce({
+      bootId: 'b1', version: '0.6.4-dev21', runtimeMode: 'ha'
+    })
     mockLongApi.post.mockResolvedValueOnce({ data: { status: 'update_triggered' } })
 
     await triggerUpdate(true)
 
     expect(mockLongApi.post).toHaveBeenCalledWith('/system/update')
-    expect(isRestarting.value).toBe(true)
-    expect(restartMessage.value).toContain('Home Assistant')
+    expect(mockServiceRestart.waitForRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expect: 'update',
+        baseline: expect.objectContaining({ bootId: 'b1' }),
+        autoReload: true,
+        message: expect.stringContaining('Home Assistant')
+      })
+    )
   })
 
-  it('triggerUpdate (HA mode) suppresses dispatch errors and keeps polling', async () => {
-    const { triggerUpdate, versionInfo, isRestarting, statusType } = useSystemUpdate()
+  it('triggerUpdate (HA mode) tolerates dispatch connection loss and keeps waiting', async () => {
+    const { triggerUpdate, versionInfo, statusType } = useSystemUpdate()
     versionInfo.value = { runtime_mode: 'ha', version: '0.6.4-dev21' }
     mockLongApi.post.mockRejectedValueOnce(new Error('connection lost'))
-    mockApi.get.mockResolvedValue({ data: { version: '0.6.4-dev21' } })
 
     await triggerUpdate(true)
     // Flush the rejected POST's .catch microtask
     await vi.advanceTimersByTimeAsync(0)
 
-    expect(isRestarting.value).toBe(true)
+    expect(mockServiceRestart.reset).not.toHaveBeenCalled()
     expect(statusType.value).toBeNull()
   })
 
-  it('triggerUpdate (HA mode) surfaces backend error response and stops polling', async () => {
-    const { triggerUpdate, versionInfo, isRestarting, statusType, statusMessage, updating } = useSystemUpdate()
+  it('triggerUpdate (HA mode) surfaces backend dispatch error and cancels the wait', async () => {
+    const { triggerUpdate, versionInfo, statusType, statusMessage, updating } = useSystemUpdate()
     versionInfo.value = { runtime_mode: 'ha', version: '0.6.4-dev21' }
+    // Captured baseline: the wait starts immediately, so the dispatch error
+    // must cancel it mid-flight.
+    mockCaptureBaseline.mockResolvedValueOnce({
+      bootId: 'b1', version: '0.6.4-dev21', runtimeMode: 'ha'
+    })
+    const backendErr = new Error('Request failed with status code 502')
+    backendErr.response = { status: 502, data: { error: 'Could not find update entity for addon' } }
+    mockLongApi.post.mockRejectedValueOnce(backendErr)
+
+    // The wait stays pending until reset() cancels it, mirroring the real
+    // engine where reset() resolves the in-flight waitForRestart with false.
+    let resolveWait
+    mockServiceRestart.waitForRestart.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveWait = resolve })
+    )
+    mockServiceRestart.reset.mockImplementationOnce(() => { resolveWait?.(false) })
+
+    await triggerUpdate(true)
+
+    expect(mockServiceRestart.reset).toHaveBeenCalled()
+    expect(statusType.value).toBe('error')
+    expect(statusMessage.value).toContain('Could not find update entity')
+    expect(updating.value).toBe(false)
+  })
+
+  it('triggerUpdate (HA mode) dispatch error without any identity never starts a wait', async () => {
+    const { triggerUpdate, versionInfo, statusType, statusMessage, updating } = useSystemUpdate()
+    // No version/commit in the cache either: the dispatch-response race is
+    // the only identity source, so a dispatch failure must return early.
+    versionInfo.value = { runtime_mode: 'ha' }
+    // mockCaptureBaseline default resolves null (capture failed)
     const backendErr = new Error('Request failed with status code 502')
     backendErr.response = { status: 502, data: { error: 'Could not find update entity for addon' } }
     mockLongApi.post.mockRejectedValueOnce(backendErr)
 
     await triggerUpdate(true)
-    await vi.advanceTimersByTimeAsync(0)
 
+    expect(mockServiceRestart.waitForRestart).not.toHaveBeenCalled()
     expect(statusType.value).toBe('error')
     expect(statusMessage.value).toContain('Could not find update entity')
-    expect(isRestarting.value).toBe(false)
     expect(updating.value).toBe(false)
-
-    // Confirm polling was stopped — no GET on /system/version even after interval elapses
-    await vi.advanceTimersByTimeAsync(10_000)
-    expect(mockApi.get).not.toHaveBeenCalled()
   })
 
-  it('triggerUpdate (HA mode) reloads when version changes', async () => {
+  it('triggerUpdate (HA mode) sentinel-only cached identity falls back to the dispatch race', async () => {
+    const { triggerUpdate, versionInfo } = useSystemUpdate()
+    // 'unknown' placeholders can't prove advancement; they must not
+    // suppress the dispatch boot_id fallback.
+    versionInfo.value = {
+      runtime_mode: 'ha', version: 'unknown', current_commit: 'unknown'
+    }
+    mockLongApi.post.mockResolvedValueOnce({
+      data: { status: 'update_triggered', boot_id: 'boot-from-dispatch' }
+    })
+
+    await triggerUpdate(true)
+
+    expect(mockServiceRestart.waitForRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseline: { bootId: 'boot-from-dispatch' }
+      })
+    )
+  })
+
+  it('triggerUpdate (HA mode) uses the dispatch response boot_id when no other identity exists', async () => {
+    const { triggerUpdate, versionInfo } = useSystemUpdate()
+    // Neither a captured baseline nor cached version identity: only the
+    // dispatch response can supply a baseline.
+    versionInfo.value = { runtime_mode: 'ha' }
+    mockLongApi.post.mockResolvedValueOnce({
+      data: { status: 'update_triggered', boot_id: 'boot-from-dispatch' }
+    })
+
+    await triggerUpdate(true)
+
+    expect(mockServiceRestart.waitForRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expect: 'update',
+        baseline: { bootId: 'boot-from-dispatch' }
+      })
+    )
+  })
+
+  it('triggerUpdate (HA mode) uses cached version identity immediately when capture failed', async () => {
+    const { triggerUpdate, versionInfo } = useSystemUpdate()
+    versionInfo.value = {
+      runtime_mode: 'ha', version: '0.6.4-dev21', current_commit: 'ha-commit'
+    }
+    // mockCaptureBaseline default resolves null (capture failed).
+    // Dispatch never settles: the monitor must start anyway — a fast
+    // container swap can finish before any dispatch response arrives, and
+    // version identity also refuses to call a failed update (old image
+    // back, new boot, no status file) done.
+    mockLongApi.post.mockImplementationOnce(() => new Promise(() => {}))
+
+    await triggerUpdate(true)
+
+    expect(mockServiceRestart.waitForRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expect: 'update',
+        baseline: expect.objectContaining({
+          version: '0.6.4-dev21',
+          commit: 'ha-commit'
+        })
+      })
+    )
+  })
+
+  it('triggerUpdate (HA mode) grafts the dispatch boot_id onto a cache-derived baseline', async () => {
+    const { triggerUpdate, versionInfo } = useSystemUpdate()
+    versionInfo.value = {
+      runtime_mode: 'ha', version: '0.6.4-dev21', current_commit: 'ha-commit'
+    }
+    // Capture fails (default null): the cache supplies commit/version but no
+    // process identity, which waives the wait engine's process proof — a
+    // stale cache could then look "advanced" on the first probe. The
+    // dispatch responder is the old process; its boot_id must be grafted
+    // onto the in-flight baseline when the response arrives.
+    let resolveDispatch
+    mockLongApi.post.mockImplementationOnce(
+      () => new Promise(resolve => { resolveDispatch = resolve })
+    )
+
+    await triggerUpdate(true)
+
+    const { baseline } = mockServiceRestart.waitForRestart.mock.calls[0][0]
+    expect(baseline).toMatchObject({ version: '0.6.4-dev21', commit: 'ha-commit' })
+    expect(baseline.bootId).toBeUndefined()
+
+    resolveDispatch({ data: { status: 'update_triggered', boot_id: 'old-boot' } })
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(baseline.bootId).toBe('old-boot')
+  })
+
+  it('triggerUpdate (HA mode) with a captured baseline starts the wait without awaiting dispatch', async () => {
     const { triggerUpdate, versionInfo } = useSystemUpdate()
     versionInfo.value = { runtime_mode: 'ha', version: '0.6.4-dev21' }
-    mockLongApi.post.mockResolvedValueOnce({ data: {} })
-    mockApi.get
-      .mockResolvedValueOnce({ data: { version: '0.6.4-dev21' } })
-      .mockResolvedValueOnce({ data: { version: '0.6.4-dev22' } })
+    mockCaptureBaseline.mockResolvedValueOnce({
+      bootId: 'b1', version: '0.6.4-dev21', runtimeMode: 'ha'
+    })
+    // Dispatch never settles (Supervisor kills the connection): must not block
+    mockLongApi.post.mockImplementationOnce(() => new Promise(() => {}))
 
     await triggerUpdate(true)
 
-    await vi.advanceTimersByTimeAsync(10_000)
-    expect(mockApi.get).toHaveBeenCalledWith('/system/version')
-    expect(window.location.reload).not.toHaveBeenCalled()
-
-    await vi.advanceTimersByTimeAsync(10_000)
-    await vi.advanceTimersByTimeAsync(1_000)
-    expect(window.location.reload).toHaveBeenCalled()
-  })
-
-  it('triggerUpdate (HA mode) keeps polling through GET errors', async () => {
-    const { triggerUpdate, versionInfo } = useSystemUpdate()
-    versionInfo.value = { runtime_mode: 'ha', version: '0.6.4-dev21' }
-    mockLongApi.post.mockResolvedValueOnce({ data: {} })
-    mockApi.get
-      .mockRejectedValueOnce(new Error('proxy down'))
-      .mockResolvedValueOnce({ data: { version: '0.6.4-dev22' } })
-
-    await triggerUpdate(true)
-
-    await vi.advanceTimersByTimeAsync(10_000)
-    expect(mockApi.get).toHaveBeenCalledTimes(1)
-    expect(window.location.reload).not.toHaveBeenCalled()
-
-    await vi.advanceTimersByTimeAsync(10_000)
-    await vi.advanceTimersByTimeAsync(1_000)
-    expect(window.location.reload).toHaveBeenCalled()
-  })
-
-  it('triggerUpdate (HA mode) shows fallback after timeout, no reload', async () => {
-    const { triggerUpdate, versionInfo, isRestarting, statusType, statusMessage, updating } = useSystemUpdate()
-    versionInfo.value = { runtime_mode: 'ha', version: '0.6.4-dev21' }
-    mockLongApi.post.mockResolvedValueOnce({ data: {} })
-    mockApi.get.mockResolvedValue({ data: { version: '0.6.4-dev21' } })
-
-    await triggerUpdate(true)
-
-    await vi.advanceTimersByTimeAsync(10 * 60 * 1000 + 1000)
-
-    expect(window.location.reload).not.toHaveBeenCalled()
-    expect(isRestarting.value).toBe(false)
-    expect(updating.value).toBe(false)
-    expect(statusType.value).toBe('info')
-    expect(statusMessage.value).toContain('longer than expected')
+    expect(mockServiceRestart.waitForRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseline: expect.objectContaining({ bootId: 'b1' })
+      })
+    )
   })
 
   it('triggerUpdate throws on connection loss in native mode', async () => {

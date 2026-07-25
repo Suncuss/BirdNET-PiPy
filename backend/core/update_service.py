@@ -9,6 +9,7 @@ update-check response cache.
 """
 import json
 import os
+import uuid
 
 import requests
 
@@ -18,6 +19,13 @@ from core.timezone_service import local_now
 from version import DISPLAY_NAME, __version__
 
 logger = get_logger(__name__)
+
+# Random identity for this API process, reported by /api/system/version so the
+# frontend can tell a freshly restarted server from the old one still shutting
+# down (reachability alone can't distinguish them on slow hardware). Relies on
+# the single-gunicorn-worker deployment (docker-compose --workers 1, which
+# SocketIO already requires); multiple workers would each mint their own id.
+BOOT_ID = str(uuid.uuid4())
 
 _HA_CORE_API_BASE = "http://supervisor/core/api"
 
@@ -88,6 +96,65 @@ def write_flag(flag_name, content=None):
         'content': content,
         'path': flag_file
     })
+
+
+# Written by install.sh / birdnet-service.sh as the update pipeline advances
+# (pending -> in_progress -> success|failed) and surfaced via
+# /api/system/version so the frontend's restart poll can tell a failed update
+# (old code restarted) from one still in progress.
+UPDATE_STATUS_FLAG = 'update-status'
+
+
+def _update_status_path():
+    return os.path.join(BASE_DIR, 'data', 'flags', UPDATE_STATUS_FLAG)
+
+
+def read_update_status():
+    """Return the update-status flag content, or None if absent/unreadable.
+
+    ValueError covers UnicodeDecodeError from a file corrupted mid-write
+    (e.g. power loss on an SD card): an advisory field must never take the
+    whole /system/version response down with it. The read is capped — valid
+    statuses are single short words.
+    """
+    try:
+        with open(_update_status_path()) as f:
+            return f.read(64).strip() or None
+    except (OSError, ValueError):
+        return None
+
+
+def reset_update_status():
+    """Best-effort reset to 'pending' before dispatching a new update.
+
+    Without this, a 'failed' left by a previous attempt would be visible to
+    the frontend's poll before install.sh overwrites it, producing an instant
+    false "update failed" report. Removes-then-recreates because the existing
+    file may be root-owned (install.sh writes as root) while the flags dir
+    itself is user-writable. Never raises: the status is advisory and must
+    not block an update dispatch.
+
+    Returns the status read back from disk after the reset (normally
+    'pending'). The trigger response forwards it so the frontend has a
+    server-confirmed post-reset value: any 'failed' it sees later must have
+    been written by this attempt, not a stale survivor.
+    """
+    path = _update_status_path()
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        logger.warning("Could not remove stale update-status flag", extra={
+            'path': path, 'error': str(e)
+        })
+    try:
+        write_flag(UPDATE_STATUS_FLAG, 'pending')
+    except OSError as e:
+        logger.warning("Could not write pending update-status flag", extra={
+            'path': path, 'error': str(e)
+        })
+    return read_update_status()
 
 # GitHub API configuration
 GITHUB_OWNER = "Suncuss"

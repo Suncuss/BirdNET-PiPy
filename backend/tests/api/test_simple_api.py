@@ -994,6 +994,64 @@ class TestSimpleAPI:
         response = api_client.get(f'/api/bird/Blue%20Jay/recording/{target["id"]}')
         assert response.status_code == 404
 
+    def test_bird_recording_permalink_matches_split_species_key(
+            self, api_client, real_db_manager, create_recording_files):
+        """A recording stored under either half of a taxonomy genus split
+        resolves under the shared English name.
+
+        "Little Ringed Plover" is two rows in the model label set (Charadrius
+        dubius, Thinornis dubius). The ownership check must accept whichever key
+        the model actually emitted, or the shared-recording page 404s and
+        renders blank for history the station really has.
+        """
+        species = 'Little Ringed Plover'
+        real_db_manager.insert_detection({
+            'timestamp': '2024-01-15T10:30:00',
+            'group_timestamp': '2024-01-15T10:30:00',
+            'common_name': species,
+            # The key the resolver does NOT pick as representative.
+            'scientific_name': 'Charadrius dubius',
+            'confidence': 0.80,
+            'latitude': 40.7128,
+            'longitude': -74.0060,
+            'cutoff': 0.5,
+            'sensitivity': 0.75,
+            'overlap': 0.25,
+        })
+        recordings = create_recording_files(real_db_manager, species_name=species)
+        target = recordings[0]
+
+        response = api_client.get(
+            f'/api/bird/{species}/recording/{target["id"]}')
+        assert response.status_code == 200
+        assert response.get_json()['id'] == target['id']
+
+    def test_bird_recording_permalink_rejects_unrelated_species_sharing_a_name(
+            self, api_client, real_db_manager, create_recording_files):
+        """Widening the ownership check must not let a common name shared by two
+        different birds cross-authorize. "Black Vulture" labels both Coragyps
+        atratus and (via label_en_uk) Aegypius monachus, which are distinct
+        species — a Cinereous Vulture recording must not be reachable there."""
+        real_db_manager.insert_detection({
+            'timestamp': '2024-01-15T10:30:00',
+            'group_timestamp': '2024-01-15T10:30:00',
+            'common_name': 'Cinereous Vulture',
+            'scientific_name': 'Aegypius monachus',
+            'confidence': 0.80,
+            'latitude': 40.7128,
+            'longitude': -74.0060,
+            'cutoff': 0.5,
+            'sensitivity': 0.75,
+            'overlap': 0.25,
+        })
+        recordings = create_recording_files(
+            real_db_manager, species_name='Cinereous Vulture')
+        target = recordings[0]
+
+        response = api_client.get(
+            f'/api/bird/Black%20Vulture/recording/{target["id"]}')
+        assert response.status_code == 404
+
     def test_bird_recording_permalink_no_existence_oracle(self, api_client, real_db_manager, create_recording_files):
         """A missing id and a real id under the wrong species return identical
         404 responses, so the endpoint can't be probed to learn which ids exist

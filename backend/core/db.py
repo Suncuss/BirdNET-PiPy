@@ -14,6 +14,7 @@ from core.db_schema import TIMESTAMP_FORMAT, ensure_schema
 from core.logging_config import get_logger
 from core.timezone_service import local_now
 from core.utils import build_detection_filenames
+from model_service.label_utils import same_taxon_group
 
 # Species identity expression (owned by core.db_species alongside the
 # rollup it powers); short private name for the many f-string query sites.
@@ -110,19 +111,58 @@ def _count_query(where_clause):
     return f"SELECT COUNT(*) as total FROM detections WHERE {where_clause}"
 
 
+def _normalize_species_keys(scientific_name):
+    """Normalize the ``scientific_name`` filter arg to a de-duplicated list.
+
+    Accepts a single key, a sequence of keys (an ambiguous common name maps to
+    more than one after a taxonomy split), or None/empty. Order is preserved so
+    the caller's representative-first ordering survives.
+    """
+    if not scientific_name:
+        return []
+    if isinstance(scientific_name, str):
+        return [scientific_name]
+    seen = []
+    for key in scientific_name:
+        if key and key not in seen:
+            seen.append(key)
+    return seen
+
+
 def _resolve_filter_column(species_name=None, *, scientific_name=None):
-    """Resolve a (column, value) pair for species-keyed WHERE clauses.
+    """Resolve a (column, values) pair for species-keyed WHERE clauses.
 
     Routes resolve their English input through the species table at ingress
-    and pass ``scientific_name=`` when known. Legacy or unknown names fall
-    back to ``common_name`` so migrated rows stay accessible. Returns
-    ``(None, None)`` when no species filter was supplied.
+    and pass ``scientific_name=`` when known — a single key, or a list of keys
+    that denote the same species under duplicate common names in the model
+    label set. Legacy or unknown names fall back to ``common_name`` so migrated
+    rows stay accessible. ``values`` is always a list; returns ``(None, [])``
+    when no species filter was supplied.
     """
-    if scientific_name:
-        return 'scientific_name', scientific_name
+    keys = _normalize_species_keys(scientific_name)
+    if keys:
+        return 'scientific_name', keys
     if species_name:
-        return 'common_name', species_name
-    return None, None
+        return 'common_name', [species_name]
+    return None, []
+
+
+def _species_where(column, values):
+    """Build a ``(clause, params)`` fragment for a species-column filter.
+
+    Emits ``col IN (…)``; SQLite folds a single-element IN list to an equality
+    seek, so the ~99% one-key case keeps the same covering-index plan a literal
+    ``col = ?`` would give. Multi-key filters do give up the index-ordered scan
+    under ``ORDER BY … LIMIT`` (a temp B-tree sort), which is acceptable only
+    because the ambiguous species are a known-small set.
+
+    Raises on an empty list: ``col IN ()`` is accepted by SQLite as always-false
+    and would silently return no rows — a blank page rather than a loud failure.
+    """
+    if not values:
+        raise ValueError(f"_species_where({column!r}) needs at least one value")
+    placeholders = ", ".join("?" * len(values))
+    return f"{column} IN ({placeholders})", list(values)
 
 
 def _summary_stats_bucket(total, unique, hour, most_key, rare_key, names):
@@ -851,21 +891,35 @@ class DatabaseManager:
 
         ``scientific_name`` is preferred — it merges V2/V3 English variants
         (e.g. "Eurasian Blackbird" + "Common Blackbird" both Turdus merula)
-        into one detail record and is served off the species rollup.
+        into one detail record and is served off the species rollup. It may be
+        a single key or a list of keys the model duplicates under one common
+        name (a taxonomy split); all are aggregated into one record.
         ``species_name`` keeps the legacy English filter (and its original
         full-scan query) for routes where the resolver couldn't map the
         input string.
         """
-        if scientific_name:
-            return self._get_bird_details_from_rollup(scientific_name)
+        keys = _normalize_species_keys(scientific_name)
+        if keys:
+            return self._get_bird_details_from_rollup(keys)
         if not species_name:
             return None
 
         ebird = db_species.ebird_expr('d3.')
+        # No GROUP BY: one record for the whole common name. Grouping by
+        # scientific_name and taking fetchone() reported only one arbitrary
+        # group when a common name spans several scientific names, so a
+        # migrated row set split across a genus rename under-counted itself.
+        # scientific_name is therefore an explicit most-detected representative
+        # rather than a bare column picked from an arbitrary row.
         query = f"""
         SELECT
             MIN(common_name) AS common_name,
-            scientific_name,
+            (SELECT d4.scientific_name
+            FROM detections d4
+            WHERE d4.common_name = d1.common_name
+            GROUP BY d4.scientific_name
+            ORDER BY COUNT(*) DESC, d4.scientific_name ASC
+            LIMIT 1) as scientific_name,
             COUNT(*) as total_visits,
             MIN(timestamp) as first_detected,
             MAX(timestamp) as last_detected,
@@ -888,45 +942,60 @@ class DatabaseManager:
             LIMIT 1) as ebird_code
         FROM detections d1
         WHERE common_name = ?
-        GROUP BY scientific_name
         """
         with self.get_db_connection() as conn:
             cur = conn.cursor()
             cur.execute(query, (species_name,))
             result = cur.fetchone()
-            return dict(result) if result else None
+            # Ungrouped aggregates always return a row; an unknown species comes
+            # back as a zero-count row, not an empty result set.
+            if not result or not result['total_visits']:
+                return None
+            return dict(result)
 
-    def _get_bird_details_from_rollup(self, scientific_name):
+    def _get_bird_details_from_rollup(self, scientific_names):
         """Species detail card off the rollup: count, first/last, average
         confidence and ebird_code are a primary-key read; peak hour and
         seasonality are two bounded passes over the species' rows via the
         covering (scientific_name, timestamp) index. Replaces correlated
         subqueries that re-grouped — and json-parsed — the species' full
         history per call (429-558ms on the top species, now ~tens of ms).
+
+        ``scientific_names`` is a list. It holds one key for almost every
+        species (a single ``species_key`` point read, unchanged); it holds
+        several only for common names the model label set duplicates across a
+        taxonomy split, whose detections can land under either key. Those rows
+        are summed into one record so the detail page never blanks just because
+        the resolved winner differs from the key the station actually stored.
         """
+        keys = _normalize_species_keys(scientific_names)
+        if not keys:
+            return None
+        key_clause, key_params = _species_where('species_key', keys)
+        sci_clause, sci_params = _species_where('scientific_name', keys)
         with self.get_db_connection() as conn:
             cur = conn.cursor()
             cur.execute(
-                "SELECT common_name, scientific_name, ebird_code, "
+                "SELECT species_key, common_name, scientific_name, ebird_code, "
                 "detection_count, sum_confidence, first_detected, "
-                "last_detected FROM species WHERE species_key = ?",
-                (scientific_name,))
-            row = cur.fetchone()
-            if row is None:
+                f"last_detected FROM species WHERE {key_clause}",
+                key_params)
+            rows = cur.fetchall()
+            if not rows:
                 return None
 
             # One covering-index pass; at most 12x24 groups come back and
             # Python folds them into peak hour + distinct months. substr at
             # fixed offsets into db_schema.TIMESTAMP_FORMAT beats strftime
             # by ~30% here — no per-row datetime parsing.
-            cur.execute("""
+            cur.execute(f"""
                 SELECT substr(timestamp, 6, 2) AS month,
                        substr(timestamp, 12, 2) AS hour,
                        COUNT(*) AS count
                 FROM detections
-                WHERE scientific_name = ?
+                WHERE {sci_clause}
                 GROUP BY month, hour
-                """, (scientific_name,))
+                """, sci_params)
             buckets = cur.fetchall()
 
         months_seen = len({b['month'] for b in buckets})
@@ -946,16 +1015,31 @@ class DatabaseManager:
         else:
             seasonality = 'Seasonal'
 
+        # Aggregate across the (usually one) matched rollup rows. Rank by
+        # detection count so a placeholder duplicate can't outvote the key the
+        # station really uses, then by the caller's key order so an exact tie
+        # settles on the resolver's representative rather than SQLite's scan
+        # order — otherwise the displayed name flips as counts drift.
+        key_rank = {key: position for position, key in enumerate(keys)}
+        ordered = sorted(
+            rows,
+            key=lambda r: (-r['detection_count'],
+                           key_rank.get(r['species_key'], len(keys))),
+        )
+        rep = ordered[0]
+        total_visits = sum(r['detection_count'] for r in rows)
+        sum_confidence = sum(r['sum_confidence'] for r in rows)
+        ebird_code = next((r['ebird_code'] for r in ordered if r['ebird_code']), None)
         return {
-            'common_name': row['common_name'],
-            'scientific_name': row['scientific_name'],
-            'total_visits': row['detection_count'],
-            'first_detected': row['first_detected'],
-            'last_detected': row['last_detected'],
-            'average_confidence': row['sum_confidence'] / row['detection_count'],
+            'common_name': rep['common_name'],
+            'scientific_name': rep['scientific_name'],
+            'total_visits': total_visits,
+            'first_detected': min(r['first_detected'] for r in rows),
+            'last_detected': max(r['last_detected'] for r in rows),
+            'average_confidence': sum_confidence / total_visits,
             'peak_activity_time': peak_time,
             'seasonality': seasonality,
-            'ebird_code': row['ebird_code'],
+            'ebird_code': ebird_code,
         }
 
     def get_bird_recordings(self, species_name=None, sort='recent', limit=None,
@@ -980,20 +1064,22 @@ class DatabaseManager:
             List of recording dicts with id, timestamp, common_name, confidence,
             audio_filename, spectrogram_filename
         """
-        filter_col, filter_value = _resolve_filter_column(
+        filter_col, filter_values = _resolve_filter_column(
             species_name, scientific_name=scientific_name,
         )
         if filter_col is None:
             return []
 
         # Order column is chosen from a fixed set (not interpolated user input);
-        # the filter column is validated above. LIMIT uses -1 for unlimited.
+        # the filter column/values are validated above. LIMIT uses -1 for
+        # unlimited.
+        species_clause, species_params = _species_where(filter_col, filter_values)
         window_clause = "AND timestamp >= ?" if since else ""
         order_by = "confidence DESC" if sort == 'best' else "timestamp DESC"
         query = f"""
         SELECT id, timestamp, common_name, confidence, extra, audio_source
         FROM detections
-        WHERE {filter_col} = ?
+        WHERE {species_clause}
         {window_clause}
         ORDER BY {order_by}
         LIMIT ?
@@ -1001,7 +1087,7 @@ class DatabaseManager:
 
         # Use -1 for unlimited (SQLite treats negative LIMIT as no limit)
         limit_param = limit if limit is not None else -1
-        params = [filter_value]
+        params = list(species_params)
         if since:
             params.append(since)
         params.append(limit_param)
@@ -1014,7 +1100,7 @@ class DatabaseManager:
         recordings = [self._normalize_detection(row, include_filenames=True) for row in rows]
 
         logger.debug("Bird recordings retrieved", extra={
-            'species': filter_value,
+            'species': filter_values,
             'filter_col': filter_col,
             'sort': sort,
             'limit': limit,
@@ -1032,7 +1118,7 @@ class DatabaseManager:
         single query over a sargable timestamp range — see
         _distribution_spec for the per-view labels/range/bucket table.
         """
-        filter_col, filter_value = _resolve_filter_column(
+        filter_col, filter_values = _resolve_filter_column(
             species_name, scientific_name=scientific_name,
         )
         if filter_col is None:
@@ -1043,27 +1129,28 @@ class DatabaseManager:
             view, anchor)
 
         logger.debug("Getting detection distribution", extra={
-            'species': filter_value,
+            'species': filter_values,
             'filter_col': filter_col,
             'view': view,
             'date': anchor_date_str
         })
 
-        # filter_col is validated above; bucket_expr comes from the fixed
-        # per-view table. The plain timestamp range (unlike the previous
+        # filter_col/values are validated above; bucket_expr comes from the
+        # fixed per-view table. The plain timestamp range (unlike the previous
         # per-row date()/strftime() predicates) keeps this a bounded index
         # search — 52-207ms/chart -> ~1ms on the top species of a 1M-row DB.
+        species_clause, species_params = _species_where(filter_col, filter_values)
         query = f"""
         SELECT {bucket_expr} as bucket, COUNT(*) as count
         FROM detections
-        WHERE {filter_col} = ? AND timestamp >= ? AND timestamp < ?
+        WHERE {species_clause} AND timestamp >= ? AND timestamp < ?
         GROUP BY bucket
         """
 
         data = [0] * len(labels)
         with self.get_db_connection() as conn:
             cur = conn.cursor()
-            cur.execute(query, (filter_value, _iso_ts(start), _iso_ts(end)))
+            cur.execute(query, (*species_params, _iso_ts(start), _iso_ts(end)))
             for row in cur.fetchall():
                 index = to_index(row['bucket'])
                 if 0 <= index < len(data):
@@ -1147,9 +1234,15 @@ class DatabaseManager:
         Distinct on the species key so the same species detected under
         different V2/V3 English variants surfaces as a single entry, while
         blank-sci legacy rows still differentiate by common_name.
+
+        The rollup holds one row per scientific_name, so a bird the label set
+        carries under two of them (a taxonomy genus split) would otherwise show
+        up as two identical catalog cards that both open the one detail page
+        that merges them. Those rows are folded together here, keeping the
+        most-detected name as the entry the catalog displays.
         """
         query = """
-        SELECT scientific_name, common_name, last_detected
+        SELECT scientific_name, common_name, last_detected, detection_count
         FROM species
         ORDER BY common_name ASC
         """
@@ -1158,14 +1251,35 @@ class DatabaseManager:
             cur.execute(query)
             results = cur.fetchall()
 
-        return [
-            {
-                'common_name': row['common_name'],
-                'scientific_name': row['scientific_name'],
-                'last_detected': row['last_detected'],
-            }
-            for row in results
-        ]
+        merged = {}
+        for row in results:
+            group = same_taxon_group(row['scientific_name'])
+            # Legacy rows can carry a blank scientific_name; they key on their
+            # own common_name, exactly as the rollup does.
+            key = group[0] if group else (row['common_name'] or '')
+            existing = merged.get(key)
+            if existing is None:
+                merged[key] = {
+                    'common_name': row['common_name'],
+                    'scientific_name': row['scientific_name'],
+                    'last_detected': row['last_detected'],
+                    '_count': row['detection_count'],
+                }
+                continue
+            if row['last_detected'] > existing['last_detected']:
+                existing['last_detected'] = row['last_detected']
+            # Ties keep the first row, i.e. the alphabetically-first common
+            # name, so the displayed entry is stable across requests.
+            if row['detection_count'] > existing['_count']:
+                existing['common_name'] = row['common_name']
+                existing['scientific_name'] = row['scientific_name']
+                existing['_count'] = row['detection_count']
+
+        species = list(merged.values())
+        for entry in species:
+            del entry['_count']
+        species.sort(key=lambda s: s['common_name'])
+        return species
 
     def get_cleanup_protected_ids(self, keep_per_species=60, keep_recent_per_species=16):
         """Ids protected from storage cleanup, plus the total detection count.
@@ -1750,12 +1864,13 @@ class DatabaseManager:
             conditions.append("strftime('%H', timestamp) = ?")
             params.append(f"{int(hour):02d}")
 
-        filter_col, filter_value = _resolve_filter_column(
+        filter_col, filter_values = _resolve_filter_column(
             species, scientific_name=scientific_name,
         )
         if filter_col:
-            conditions.append(f"{filter_col} = ?")
-            params.append(filter_value)
+            species_clause, species_params = _species_where(filter_col, filter_values)
+            conditions.append(species_clause)
+            params.extend(species_params)
 
         where_clause = " AND ".join(conditions) if conditions else _NO_FILTERS
         return where_clause, params

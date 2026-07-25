@@ -237,3 +237,36 @@ class TestRecordingHasMedia:
         open(os.path.join(audio_dir, 'a.mp3'), 'wb').close()
         rec = {'audio_filename': 'a.mp3'}
         assert recording_has_media(rec, audio_dir, spectrogram_dir) is False
+
+
+class TestResolveSpeciesFilter:
+    """_resolve_species_filter is the glue between the resolver and the DB
+    reads: it must forward *every* scientific name a species resolves to.
+
+    Returning only the representative would silently reinstate the winner-only
+    bug on every route — the DB layer re-wraps a bare string into a one-element
+    list, so the mistake would not raise anywhere.
+    """
+
+    def test_forwards_every_key_of_a_split_species(self):
+        from core.api_utils import _resolve_species_filter
+        scis, common = _resolve_species_filter('Little Ringed Plover')
+        assert common is None
+        assert set(scis) == {'Charadrius dubius', 'Thinornis dubius'}
+
+    def test_single_key_species_returns_one_element_list(self):
+        from core.api_utils import _resolve_species_filter
+        scis, common = _resolve_species_filter('Common Blackbird')
+        assert scis == ['Turdus merula']
+        assert common is None
+
+    def test_unknown_name_falls_back_to_common_name(self):
+        from core.api_utils import _resolve_species_filter
+        scis, common = _resolve_species_filter('Totally Unknown Bird')
+        assert scis == []
+        assert common == 'Totally Unknown Bird'
+
+    def test_empty_name_filters_nothing(self):
+        from core.api_utils import _resolve_species_filter
+        assert _resolve_species_filter('') == ([], None)
+        assert _resolve_species_filter(None) == ([], None)

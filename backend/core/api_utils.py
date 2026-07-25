@@ -11,7 +11,7 @@ from flask import jsonify, make_response, request, send_from_directory
 
 from core.logging_config import get_logger
 from core.utils import get_legacy_filename
-from model_service.label_utils import resolve_to_scientific_name
+from model_service.label_utils import resolve_to_scientific_names
 
 logger = get_logger(__name__)
 
@@ -252,17 +252,22 @@ def log_data_metrics(endpoint_name, data, custom_metrics=None):
 def _resolve_species_filter(name):
     """Map a route-supplied English bird name to a DB filter pair.
 
-    Returns ``(scientific_name, common_name)`` where exactly one is populated.
-    When the resolver recognises the input (canonical common_name, V2 label_en,
-    or label_en_uk), we filter the underlying query by ``scientific_name`` —
-    this is what merges V2's "Eurasian Blackbird" and V3's "Common Blackbird"
-    history for the same Turdus merula into a single result.
+    Returns ``(scientific_names, common_name)`` where exactly one side is
+    populated. When the resolver recognises the input (canonical common_name,
+    V2 label_en, or label_en_uk), we filter the underlying query by
+    ``scientific_names`` — a list — this is what merges V2's "Eurasian
+    Blackbird" and V3's "Common Blackbird" history for the same Turdus merula
+    into a single result. The list normally holds one name; it holds several
+    only for common names the model label set duplicates across a taxonomy
+    genus split (e.g. Charadrius/Thinornis "Little Ringed Plover"), so a
+    detail page matches detections stored under any of the split keys.
 
     When the resolver misses (unknown English string, legacy migration row),
-    we fall back to filtering by ``common_name`` so the user keeps access to
-    data the species table doesn't know about.
+    ``scientific_names`` is empty and we fall back to filtering by
+    ``common_name`` so the user keeps access to data the species table doesn't
+    know about.
     """
     if not name:
-        return None, None
-    sci = resolve_to_scientific_name(name)
-    return (sci, None) if sci else (None, name)
+        return [], None
+    scis = resolve_to_scientific_names(name)
+    return (scis, None) if scis else ([], name)

@@ -61,6 +61,22 @@ class TestHaVersionEndpoint:
                 data = response.get_json()
                 assert data['current_commit'] == 'unknown'
 
+    def test_ha_version_never_surfaces_native_update_status(self, api_client):
+        """HA mode has no writer or reset for the update-status flag, so a
+        file migrated in from a native install must not be reported — a stale
+        'success' would let the frontend declare a failed add-on update done.
+        """
+        with patch('core.routes.system.is_home_assistant_mode', return_value=True), \
+             patch('core.routes.system.get_runtime_mode', return_value='ha'), \
+             patch('core.routes.system.load_ha_source_commit', return_value='abc1234def'), \
+             patch('core.routes.system.read_update_status', return_value='success'):
+            with patch.dict(os.environ, {'BUILD_VERSION': '2.0.0'}):
+                response = api_client.get('/api/system/version')
+                assert response.status_code == 200
+                data = response.get_json()
+                assert data['update_status'] is None
+                assert len(data['boot_id']) == 36
+
     def test_native_mode_returns_runtime_mode(self, api_client):
         with patch('core.routes.system.is_home_assistant_mode', return_value=False), \
              patch('core.routes.system.get_runtime_mode', return_value='native'), \

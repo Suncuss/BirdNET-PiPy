@@ -887,8 +887,26 @@ EOF
 # Update Mode Functions
 # ============================================================================
 
+# Record update pipeline state (in_progress/success/failed) for the frontend:
+# /api/system/version surfaces it so the restart poll can distinguish a failed
+# update (old code restarted) from one still in progress. Best-effort — a
+# status write must never fail the update. Remove-then-recreate because the
+# existing file may be owned by the API container user while we run as root
+# (and vice versa); only the directory needs to be writable.
+write_update_status() {
+    local flags_dir="$PROJECT_ROOT/data/flags"
+    if [ ! -d "$flags_dir" ]; then
+        mkdir -p "$flags_dir" 2>/dev/null || true
+        # Keep the dir writable by the API container user, which also writes flags here
+        chown "$ACTUAL_USER:$ACTUAL_USER" "$flags_dir" 2>/dev/null || true
+    fi
+    rm -f "$flags_dir/update-status" 2>/dev/null || true
+    echo "$1" > "$flags_dir/update-status" 2>/dev/null || true
+}
+
 # Helper function to restart containers on failure during update
 restart_containers_on_failure() {
+    write_update_status "failed"
     print_status "Restarting containers with current code..."
     cd "$PROJECT_ROOT"
     docker compose up -d || true
@@ -911,6 +929,8 @@ perform_update() {
         target_branch="main"
     fi
     print_status "Target branch: $target_branch"
+
+    write_update_status "in_progress"
 
     # Step 1: Stop containers so Docker artifacts are unused and can be pruned safely
     print_status "Stopping containers..."
@@ -955,6 +975,9 @@ perform_update() {
         create_service_file
         install_service
         setup_sudoers
+        # Same-commit outcome: the frontend's update poll can't see a commit
+        # change here, so the explicit success status is its completion signal
+        write_update_status "success"
         print_status "Restarting containers..."
         docker compose up -d || true
         print_status "Update complete (no code changes)"
@@ -1009,6 +1032,12 @@ perform_update() {
         restart_containers_on_failure
         exit 1
     fi
+
+    # The update itself has landed: new images are built/pulled (and in the
+    # local-build path build.sh has already deployed them). Written BEFORE the
+    # config refresh below so an unguarded set -e death in Step 7 cannot get
+    # stamped 'failed' by the service wrapper while the new code is serving.
+    write_update_status "success"
 
     # Step 7: Update system configurations (root operations)
     print_status "Updating system configurations..."
