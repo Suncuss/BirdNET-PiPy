@@ -3,7 +3,7 @@
     <div class="bg-white rounded-lg shadow p-4">
       <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between mb-4">
         <h2 class="text-lg font-semibold mb-2">
-          Bird Activity Overview
+          Activity Overview
         </h2>
         <div class="flex flex-wrap items-stretch gap-2 justify-center lg:justify-end">
           <div class="hidden sm:flex items-center bg-gray-100 rounded-full p-0.5">

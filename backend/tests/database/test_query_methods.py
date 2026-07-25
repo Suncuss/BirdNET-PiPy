@@ -571,8 +571,8 @@ class TestDatabaseQueryMethods:
             assert stats['totalObservations'] == 0
             assert stats['uniqueSpecies'] == 0
             assert stats['mostActiveHour'] == 'N/A'
-            assert stats['mostCommonBird'] == 'N/A'
-            assert stats['rarestBird'] == 'N/A'
+            assert stats['mostCommonSpecies'] == 'N/A'
+            assert stats['rarestSpecies'] == 'N/A'
 
     def test_summary_stats_buckets_by_period(self, test_db_manager, frozen_db_now):
         """Detections in different time windows land in the right buckets.
@@ -615,12 +615,12 @@ class TestDatabaseQueryMethods:
 
         assert all_stats['today']['totalObservations'] == 3
         assert all_stats['today']['uniqueSpecies'] == 1
-        assert all_stats['today']['mostCommonBird'] == 'Common Bird'
+        assert all_stats['today']['mostCommonSpecies'] == 'Common Bird'
 
         assert all_stats['week']['totalObservations'] == 4
         assert all_stats['week']['uniqueSpecies'] == 2
-        assert all_stats['week']['mostCommonBird'] == 'Common Bird'
-        assert all_stats['week']['rarestBird'] == 'Week Bird'
+        assert all_stats['week']['mostCommonSpecies'] == 'Common Bird'
+        assert all_stats['week']['rarestSpecies'] == 'Week Bird'
 
         assert all_stats['month']['totalObservations'] == 4
         assert all_stats['month']['uniqueSpecies'] == 2
@@ -628,7 +628,7 @@ class TestDatabaseQueryMethods:
         # 45-day-old detection shows up only in allTime.
         assert all_stats['allTime']['totalObservations'] == 5
         assert all_stats['allTime']['uniqueSpecies'] == 3
-        assert all_stats['allTime']['rarestBird'] in {'Week Bird', 'Old Bird'}
+        assert all_stats['allTime']['rarestSpecies'] in {'Week Bird', 'Old Bird'}
 
     def test_summary_stats_picks_most_recent_name_per_species(
         self, test_db_manager, frozen_db_now
@@ -687,15 +687,15 @@ class TestDatabaseQueryMethods:
         # so even MIN over the today subset would pick it. The real
         # discriminator is the allTime assertion below.
         assert all_stats['today']['totalObservations'] == 1
-        assert all_stats['today']['mostCommonBird'] == 'Zulu Today'
+        assert all_stats['today']['mostCommonSpecies'] == 'Zulu Today'
 
         # The regression guard: allTime contains both rows. MIN over
         # all-time would return 'Alpha Historical' (A < Z). Option C
         # returns 'Zulu Today' (most recent). This is the case that
         # actually distinguishes the two behaviors.
         assert all_stats['allTime']['totalObservations'] == 2
-        assert all_stats['allTime']['mostCommonBird'] == 'Zulu Today'
-        assert all_stats['allTime']['rarestBird'] == 'Zulu Today'
+        assert all_stats['allTime']['mostCommonSpecies'] == 'Zulu Today'
+        assert all_stats['allTime']['rarestSpecies'] == 'Zulu Today'
 
     def test_summary_stats_breaks_count_ties_alphabetically(
         self, test_db_manager, frozen_db_now
@@ -753,8 +753,8 @@ class TestDatabaseQueryMethods:
         # Both species tied at c_today=1. Alphabetic species_key wins both
         # the most-common and rarest picks (only one alphabetically minimal
         # row exists). Without the tiebreaker, either pick could come back.
-        assert all_stats['today']['mostCommonBird'] == 'Alpha Bird'
-        assert all_stats['today']['rarestBird'] == 'Alpha Bird'
+        assert all_stats['today']['mostCommonSpecies'] == 'Alpha Bird'
+        assert all_stats['today']['rarestSpecies'] == 'Alpha Bird'
 
         # Hours 08 and 10 both have count=1. The hour ASC tiebreaker means
         # the earlier hour (08) wins.

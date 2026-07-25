@@ -179,9 +179,9 @@ class TestBirdRecordingsResolverIngress:
 
 
 class TestDashboardSummaryLocalization:
-    """The mostCommonBird summary surface uses the resolved scientific_name."""
+    """The mostCommonSpecies summary surface uses the resolved scientific_name."""
 
-    def test_summary_localizes_most_common_bird(self, api_client, real_db_manager):
+    def test_summary_localizes_most_common_species(self, api_client, real_db_manager):
         # Three detections of one species so it wins "most common".
         for i in range(3):
             real_db_manager.insert_detection(_make_detection(
@@ -198,8 +198,8 @@ class TestDashboardSummaryLocalization:
         all_time = data['allTime']
         # The English fields keep V2's string (for backward-compat with any
         # consumer that reads them), but the Display field is localized.
-        assert all_time['mostCommonBirdScientificName'] == 'Turdus merula'
-        assert all_time['mostCommonBirdDisplay'] == 'Amsel'
+        assert all_time['mostCommonSpeciesScientificName'] == 'Turdus merula'
+        assert all_time['mostCommonSpeciesDisplay'] == 'Amsel'
 
 
 class TestLatestDetectionsUniqueDeduplication:

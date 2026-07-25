@@ -180,10 +180,10 @@ def _summary_stats_bucket(total, unique, hour, most_key, rare_key, names):
         'totalObservations': total or 0,
         'uniqueSpecies': unique or 0,
         'mostActiveHour': f"{hour}:00" if hour else "N/A",
-        'mostCommonBird': most_common or "N/A",
-        'mostCommonBirdScientificName': most_sci or "",
-        'rarestBird': rarest_common or "N/A",
-        'rarestBirdScientificName': rarest_sci or "",
+        'mostCommonSpecies': most_common or "N/A",
+        'mostCommonSpeciesScientificName': most_sci or "",
+        'rarestSpecies': rarest_common or "N/A",
+        'rarestSpeciesScientificName': rarest_sci or "",
     }
 
 
@@ -625,8 +625,8 @@ class DatabaseManager:
 
         Replaces what used to be 4 sequential per-period calls. Each per-period
         bucket has the same 7-key shape: totalObservations, uniqueSpecies,
-        mostActiveHour, mostCommonBird, mostCommonBirdScientificName,
-        rarestBird, rarestBirdScientificName.
+        mostActiveHour, mostCommonSpecies, mostCommonSpeciesScientificName,
+        rarestSpecies, rarestSpeciesScientificName.
 
         Species are grouped by the species key (scientific_name with a
         common_name fallback for legacy rows) so V2/V3 English drift

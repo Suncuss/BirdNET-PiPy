@@ -166,8 +166,8 @@ class TestDatabaseBasicOperations:
         assert 'uniqueSpecies' in stats
         assert stats['totalObservations'] == 11
         assert stats['uniqueSpecies'] == 2
-        assert stats['mostCommonBird'] == 'American Robin'
-        assert stats['rarestBird'] == 'Hooded Warbler'
+        assert stats['mostCommonSpecies'] == 'American Robin'
+        assert stats['rarestSpecies'] == 'Hooded Warbler'
 
         # Today/week/month buckets stay empty — the WHERE c_<period> > 0
         # guards in the SQL must prevent leaking historical detections
@@ -177,8 +177,8 @@ class TestDatabaseBasicOperations:
             assert empty['totalObservations'] == 0, period
             assert empty['uniqueSpecies'] == 0, period
             assert empty['mostActiveHour'] == 'N/A', period
-            assert empty['mostCommonBird'] == 'N/A', period
-            assert empty['rarestBird'] == 'N/A', period
+            assert empty['mostCommonSpecies'] == 'N/A', period
+            assert empty['rarestSpecies'] == 'N/A', period
 
     def test_get_bird_details(self, test_db_manager):
         """Test bird details with proper data."""

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-07-25
+
+- Changed bird-specific wording to species, since detections aren't limited to birds: the Observation Summary now reads "Most Common Species" and "Rarest Species", and the dashboard and charts headings read "Activity Overview". The summary API fields were renamed to match (`mostCommonBird` → `mostCommonSpecies`, `rarestBird` → `rarestSpecies`, and their `ScientificName`/`Display` variants) — a breaking change for anything reading `/api/observations/summary` or `/api/dashboard` directly
 - Fixed the updating/restarting banner reloading into a dead page on slow devices (e.g. Pi Zero 2W): the page could mistake the old server, still shutting down, for the restarted one and refresh too early. It now waits until the server proves it came back (new process or version identity) before reloading, allows slow-hardware updates up to 30 minutes instead of 10, and reports a failed update outright instead of waiting forever
 - Fixed species detail and shared-recording pages rendering blank, or showing only part of a bird's history, for the ~160 species the model lists under two scientific names after a taxonomy genus split (e.g. Little Ringed Plover, Cattle Egret, Snowy Plover). Detections recorded under either name now merge into one record, while two different birds that merely share an English name (e.g. Black Vulture) stay separate
 - Fixed the dashboard call player's rolling spectrogram scrolling a strip of blank columns in at the right edge when playback ended — the display now stops together with the audio

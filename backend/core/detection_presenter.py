@@ -202,7 +202,7 @@ def _localize_species_list(species_list, settings=None):
 
 
 def _localize_summary(summary, settings=None):
-    """Add ``mostCommonBirdDisplay`` and ``rarestBirdDisplay`` fields.
+    """Add ``mostCommonSpeciesDisplay`` and ``rarestSpeciesDisplay`` fields.
 
     Looks up the translation by ``{key}ScientificName`` (the stable key from
     the DB CTE), so V2's "Eurasian Blackbird" and V3's "Common Blackbird" for
@@ -212,18 +212,18 @@ def _localize_summary(summary, settings=None):
     """
     localized_summary = dict(summary)
 
-    for key in ('mostCommonBird', 'rarestBird'):
-        bird_name = localized_summary.get(key)
+    for key in ('mostCommonSpecies', 'rarestSpecies'):
+        common_name = localized_summary.get(key)
         sci_name = localized_summary.get(f'{key}ScientificName')
-        if bird_name and bird_name != 'N/A':
+        if common_name and common_name != 'N/A':
             localized_summary[f'{key}Display'] = get_localized_common_name(
                 sci_name,
-                bird_name,
+                common_name,
                 language=get_bird_name_language(settings),
                 settings=settings,
             )
         else:
-            localized_summary[f'{key}Display'] = bird_name
+            localized_summary[f'{key}Display'] = common_name
 
     return localized_summary
 
