@@ -223,8 +223,8 @@ describe('useFetchBirdData', () => {
         totalObservations: 42,
         uniqueSpecies: 7,
         mostActiveHour: '09:00',
-        mostCommonBird: 'Robin',
-        rarestBird: 'Sparrow'
+        mostCommonSpecies: 'Robin',
+        rarestSpecies: 'Sparrow'
       }
 
       mockApi.get.mockImplementation((url) => {

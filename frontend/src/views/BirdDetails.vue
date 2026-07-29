@@ -9,7 +9,12 @@
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <!-- Bird Image, Quick Stats, and Attribution -->
       <div class="bg-white rounded-lg shadow overflow-hidden lg:col-span-1">
-        <div class="relative overflow-hidden w-full aspect-square max-h-[300px] bg-gray-200">
+        <!-- aspect-square capped by max-h goes wide on desktop; useFocalPoint
+             tracks this box's measured aspect through the ref. -->
+        <div
+          ref="imageContainer"
+          class="relative overflow-hidden w-full aspect-square max-h-[300px] bg-gray-200"
+        >
           <template v-if="hasCustomImage">
             <img
               :src="customImageSrc"
@@ -117,7 +122,7 @@
 
 
       <!-- Detection Distribution -->
-      <div class="bg-white rounded-lg shadow p-6 lg:col-span-2">
+      <div class="bg-white rounded-lg shadow p-6 lg:col-span-2 flex flex-col">
         <h2 class="text-lg font-semibold mb-2">
           Distribution
         </h2>
@@ -184,8 +189,9 @@
           </button>
         </div>
         
-        <!-- Canvas Container with fixed aspect ratio for Safari -->
-        <div class="relative w-full h-[300px]">
+        <!-- Fills the card's grid-stretched height; the absolutely-positioned
+             canvas keeps Safari sizing stable. -->
+        <div class="relative flex-1 min-h-[300px]">
           <canvas
             ref="detectionChart"
             class="absolute inset-0 w-full h-full"
@@ -413,7 +419,8 @@ export default {
     const { colorPalette } = useChartColors()
     const { useFocalPoint } = useSmartCrop()
     const { formatHourLabel } = useTimeFormat()
-    const { focalPoint: imageFocalPoint, isReady: imageReady, updateFocalPoint } = useFocalPoint()
+    const imageContainer = ref(null)
+    const { focalPoint: imageFocalPoint, isReady: imageReady, updateFocalPoint } = useFocalPoint(imageContainer)
 
     // Detect mobile portrait mode and return appropriate tick limits
     const getMaxTicksLimit = (view) => {
@@ -837,6 +844,7 @@ export default {
       firstDetected,
       lastDetected,
       birdImageData,
+      imageContainer,
       imageFocalPoint,
       imageReady,
       hasCustomImage,

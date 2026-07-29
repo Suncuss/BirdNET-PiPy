@@ -7,11 +7,11 @@
       v-if="locationConfigured !== false && !authGated"
       class="p-4 grid grid-cols-1 lg:grid-cols-3 gap-4"
     >
-      <!-- Bird Activity Overview -->
-      <div class="bg-white rounded-lg shadow p-4 lg:col-span-3 h-[300px] lg:h-[375px]">
+      <!-- Activity Overview -->
+      <div class="bg-white rounded-lg shadow p-4 lg:col-span-3 h-[300px] lg:h-[375px] flex flex-col">
         <div class="flex items-center justify-between mb-2">
           <h2 class="text-lg font-semibold">
-            Bird Activity Overview
+            Activity Overview
           </h2>
           <button
             v-if="hasLoadedOnce && !isDataEmpty && !detailedBirdActivityError"
@@ -38,13 +38,13 @@
         <CenteredMessage
           v-if="!hasLoadedOnce"
           variant="loading"
-          container-class="h-[calc(100%-2rem)]"
+          container-class="flex-1"
         >
           Fetching the latest data...
         </CenteredMessage>
         <div
           v-else-if="!isDataEmpty && !detailedBirdActivityError"
-          class="flex h-[calc(100%-2rem)]"
+          class="flex flex-1 min-h-0"
         >
           <div class="w-full lg:w-1/3 lg:pr-2 relative">
             <canvas
@@ -80,14 +80,14 @@
         <CenteredMessage
           v-else-if="detailedBirdActivityError"
           variant="error"
-          container-class="h-[calc(100%-2rem)]"
+          container-class="flex-1"
         >
           {{ detailedBirdActivityError }}
         </CenteredMessage>
         <CenteredMessage
           v-else
           variant="info"
-          container-class="h-[calc(100%-2rem)]"
+          container-class="flex-1"
         >
           No bird activity recorded yet for today. Check back later!
         </CenteredMessage>
@@ -264,12 +264,12 @@
             >
               <span class="font-medium whitespace-nowrap mr-1">{{ formatSummaryKey(entry.key) }}:</span>
               <router-link
-                v-if="(entry.key === 'mostCommonBird' || entry.key === 'rarestBird') && entry.value !== 'N/A'"
+                v-if="(entry.key === 'mostCommonSpecies' || entry.key === 'rarestSpecies') && entry.value !== 'N/A'"
                 :to="{ name: 'BirdDetails', params: { name: entry.value } }"
-                :title="getSummaryBirdDisplay(currentPeriodSummary, entry.key)"
+                :title="getSummarySpeciesDisplay(currentPeriodSummary, entry.key)"
                 class="font-medium hover:text-blue-600 hover:underline transition-colors duration-300 truncate min-w-0"
               >
-                {{ getSummaryBirdDisplay(currentPeriodSummary, entry.key) }}
+                {{ getSummarySpeciesDisplay(currentPeriodSummary, entry.key) }}
               </router-link>
               <span
                 v-else
@@ -879,7 +879,7 @@ export default {
 
         const summaryEntries = computed(() => (
             Object.entries(currentPeriodSummary.value || {})
-                // Hide *Display variants (rendered separately via getSummaryBirdDisplay)
+                // Hide *Display variants (rendered separately via getSummarySpeciesDisplay)
                 // and *ScientificName fields (backend-only stable key used by
                 // _localize_summary, not a user-visible summary entry).
                 .filter(([key]) => !key.endsWith('Display') && !key.endsWith('ScientificName'))
@@ -1067,7 +1067,7 @@ export default {
             return typeof value === 'number' ? value.toLocaleString() : value
         }
 
-        const getSummaryBirdDisplay = (summary, key) => {
+        const getSummarySpeciesDisplay = (summary, key) => {
             return summary?.[`${key}Display`] || summary?.[key] || ''
         }
 
@@ -1132,7 +1132,7 @@ export default {
             formatSummaryKey,
             formatSummaryValue,
             getDisplayCommonName,
-            getSummaryBirdDisplay,
+            getSummarySpeciesDisplay,
             formatConfidence,
             showSpectrogram,
             hourlyBirdActivityData,

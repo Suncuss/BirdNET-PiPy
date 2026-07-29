@@ -210,6 +210,9 @@ describe('Dashboard', () => {
     await flushPromises()
 
     expect(wrapper.vm.formatSummaryKey('mostActiveHour')).toBe('Most Active Hour')
+    // Species-named keys (detections aren't only birds) label themselves
+    expect(wrapper.vm.formatSummaryKey('mostCommonSpecies')).toBe('Most Common Species')
+    expect(wrapper.vm.formatSummaryKey('rarestSpecies')).toBe('Rarest Species')
     expect(wrapper.vm.formatSummaryValue('totalDetections', 1234)).toBe('1,234')
     expect(wrapper.vm.formatSummaryValue('mostActiveHour', '09:00')).toBe('09:00')
     expect(wrapper.vm.formatSummaryValue('mostActiveHour', 'N/A')).toBe('N/A')

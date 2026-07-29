@@ -2,7 +2,8 @@
  * Tests for useSmartCrop composable
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { useSmartCrop, clearFocalPointCache } from '@/composables/useSmartCrop'
+import { ref, nextTick } from 'vue'
+import { useSmartCrop, clearFocalPointCache, mapFocalToObjectPosition } from '@/composables/useSmartCrop'
 
 // Mock smartcrop library
 vi.mock('smartcrop', () => ({
@@ -14,6 +15,30 @@ vi.mock('smartcrop', () => ({
 describe('useSmartCrop', () => {
   let smartcrop
   let helpers
+  let currentImg
+
+  // Stub the global Image constructor with a synthetic element that fires
+  // onload (or onerror) on a macrotask, like a real browser load. Undone for
+  // every test by afterEach's unstubAllGlobals, so a failing assertion can't
+  // leak the stub into later tests. `manual: true` fires nothing — the
+  // returned load() hands the test control of the timing.
+  const stubImage = ({ width = 800, height = 600, fail = false, manual = false } = {}) => {
+    vi.stubGlobal('Image', vi.fn(() => {
+      currentImg = {
+        crossOrigin: '',
+        onload: null,
+        onerror: null,
+        src: '',
+        naturalWidth: width,
+        naturalHeight: height
+      }
+      if (!manual) {
+        setTimeout(() => (fail ? currentImg.onerror?.() : currentImg.onload?.()), 0)
+      }
+      return currentImg
+    }))
+    return { load: () => currentImg.onload?.() }
+  }
 
   beforeEach(async () => {
     smartcrop = (await import('smartcrop')).default
@@ -23,32 +48,13 @@ describe('useSmartCrop', () => {
 
   afterEach(() => {
     clearFocalPointCache()
+    vi.unstubAllGlobals()
     vi.restoreAllMocks()
   })
 
   describe('calculateFocalPoint', () => {
     it('returns cached value if available', async () => {
-      // First call - setup mock
-      const mockImage = {
-        naturalWidth: 800,
-        naturalHeight: 600
-      }
-
-      // Mock Image constructor
-      const originalImage = global.Image
-      global.Image = vi.fn().mockImplementation(() => {
-        const img = {
-          crossOrigin: '',
-          onload: null,
-          onerror: null,
-          src: '',
-          naturalWidth: mockImage.naturalWidth,
-          naturalHeight: mockImage.naturalHeight
-        }
-        setTimeout(() => img.onload?.(), 0)
-        return img
-      })
-
+      stubImage()
       smartcrop.crop.mockResolvedValue({
         topCrop: { x: 200, y: 150, width: 100, height: 100 }
       })
@@ -60,29 +66,10 @@ describe('useSmartCrop', () => {
       // Should only call smartcrop once due to caching
       expect(smartcrop.crop).toHaveBeenCalledTimes(1)
       expect(result1).toBe(result2)
-
-      global.Image = originalImage
     })
 
     it('calculates focal point as percentage', async () => {
-      const mockImage = {
-        naturalWidth: 1000,
-        naturalHeight: 1000
-      }
-
-      const originalImage = global.Image
-      global.Image = vi.fn().mockImplementation(() => {
-        const img = {
-          crossOrigin: '',
-          onload: null,
-          onerror: null,
-          src: '',
-          naturalWidth: mockImage.naturalWidth,
-          naturalHeight: mockImage.naturalHeight
-        }
-        setTimeout(() => img.onload?.(), 0)
-        return img
-      })
+      stubImage({ width: 1000, height: 1000 })
 
       // Crop centered at (300, 200) with size 100x100
       // Center would be at (350, 250)
@@ -94,29 +81,10 @@ describe('useSmartCrop', () => {
       const result = await helpers.calculateFocalPoint('https://example.com/bird2.jpg')
 
       expect(result).toBe('35.0% 25.0%')
-
-      global.Image = originalImage
     })
 
     it('clamps values to 0-100% range for square images', async () => {
-      const mockImage = {
-        naturalWidth: 1000,
-        naturalHeight: 1000
-      }
-
-      const originalImage = global.Image
-      global.Image = vi.fn().mockImplementation(() => {
-        const img = {
-          crossOrigin: '',
-          onload: null,
-          onerror: null,
-          src: '',
-          naturalWidth: mockImage.naturalWidth,
-          naturalHeight: mockImage.naturalHeight
-        }
-        setTimeout(() => img.onload?.(), 0)
-        return img
-      })
+      stubImage({ width: 1000, height: 1000 })
 
       // Crop at extreme corner (0, 0)
       // Center would be at (50, 50) = 5%, 5% - clamps to 0% minimum
@@ -127,126 +95,72 @@ describe('useSmartCrop', () => {
       const result = await helpers.calculateFocalPoint('https://example.com/corner.jpg')
 
       expect(result).toBe('5.0% 5.0%')
-
-      global.Image = originalImage
     })
 
-    it('maps focal point to correct object-position for portrait images', async () => {
-      // Portrait image: 750x1000 (aspect 0.75)
-      // In square container, visible height = 75% of image
-      // halfVisible = 37.5%
-      const mockImage = {
-        naturalWidth: 750,
-        naturalHeight: 1000
-      }
-
-      const originalImage = global.Image
-      global.Image = vi.fn().mockImplementation(() => {
-        const img = {
-          crossOrigin: '',
-          onload: null,
-          onerror: null,
-          src: '',
-          naturalWidth: mockImage.naturalWidth,
-          naturalHeight: mockImage.naturalHeight
-        }
-        setTimeout(() => img.onload?.(), 0)
-        return img
-      })
-
-      // Focal point at top (5%) - should map to 0% to show top of image
+    it('runs detection once per URL even across different target aspects', async () => {
+      stubImage()
       smartcrop.crop.mockResolvedValue({
-        topCrop: { x: 325, y: 0, width: 100, height: 100 }
+        topCrop: { x: 300, y: 190, width: 100, height: 100 }
       })
 
-      const result = await helpers.calculateFocalPoint('https://example.com/portrait.jpg')
+      const url = 'https://example.com/multi-aspect.jpg'
+      const square = await helpers.calculateFocalPoint(url)
+      const wide = await helpers.calculateFocalPoint(url, { targetAspect: 2 })
 
-      // Focal Y = 5%, which is < halfVisible (37.5%), so object-position Y = 0%
-      expect(result).toBe('50.0% 0.0%')
-
-      global.Image = originalImage
-    })
-
-    it('maps focal point to correct object-position for extreme portrait images', async () => {
-      // Extreme portrait image: 600x1000 (aspect 0.6)
-      // In square container, visible height = 60% of image
-      // halfVisible = 30%
-      const mockImage = {
-        naturalWidth: 600,
-        naturalHeight: 1000
-      }
-
-      const originalImage = global.Image
-      global.Image = vi.fn().mockImplementation(() => {
-        const img = {
-          crossOrigin: '',
-          onload: null,
-          onerror: null,
-          src: '',
-          naturalWidth: mockImage.naturalWidth,
-          naturalHeight: mockImage.naturalHeight
-        }
-        setTimeout(() => img.onload?.(), 0)
-        return img
-      })
-
-      // Focal point at 20% from top - should map to 0% (within upper visible region)
-      smartcrop.crop.mockResolvedValue({
-        topCrop: { x: 250, y: 150, width: 100, height: 100 }
-      })
-
-      const result = await helpers.calculateFocalPoint('https://example.com/extreme-portrait.jpg')
-
-      // Focal Y = 20%, which is < halfVisible (30%), so object-position Y = 0%
-      expect(result).toBe('50.0% 0.0%')
-      // smartcrop should still be called with new algorithm
-      expect(smartcrop.crop).toHaveBeenCalled()
-
-      global.Image = originalImage
+      // One cached detection, two different mappings (the mapping arithmetic
+      // itself is pinned by the mapFocalToObjectPosition tests).
+      expect(smartcrop.crop).toHaveBeenCalledTimes(1)
+      expect(square).not.toBe(wide)
     })
 
     it('returns fallback on error', async () => {
-      const originalImage = global.Image
-      global.Image = vi.fn().mockImplementation(() => {
-        const img = {
-          crossOrigin: '',
-          onload: null,
-          onerror: null,
-          src: ''
-        }
-        setTimeout(() => img.onerror?.(), 0)
-        return img
-      })
+      stubImage({ fail: true })
 
       const result = await helpers.calculateFocalPoint('https://example.com/broken.jpg')
 
       expect(result).toBe('50% 35%')
-
-      global.Image = originalImage
     })
 
     it('returns fallback when smartcrop fails', async () => {
-      const originalImage = global.Image
-      global.Image = vi.fn().mockImplementation(() => {
-        const img = {
-          crossOrigin: '',
-          onload: null,
-          onerror: null,
-          src: '',
-          naturalWidth: 800,
-          naturalHeight: 600
-        }
-        setTimeout(() => img.onload?.(), 0)
-        return img
-      })
-
+      stubImage()
       smartcrop.crop.mockRejectedValue(new Error('Analysis failed'))
 
       const result = await helpers.calculateFocalPoint('https://example.com/fail.jpg')
 
       expect(result).toBe('50% 35%')
+    })
+  })
 
-      global.Image = originalImage
+  describe('mapFocalToObjectPosition', () => {
+    it('returns the default position for missing focal data', () => {
+      expect(mapFocalToObjectPosition(null)).toBe('50% 35%')
+    })
+
+    it('falls back to raw focal percentages without a container aspect', () => {
+      // Aspect-agnostic fallback: X%/Y% object-position keeps the focal point
+      // visible in a box of any shape, so no remap is needed or possible.
+      const focal = { focalX: 20, focalY: 80, imgAspect: 1.5 }
+      expect(mapFocalToObjectPosition(focal)).toBe('20.0% 80.0%')
+      expect(mapFocalToObjectPosition(focal, null)).toBe('20.0% 80.0%')
+      expect(mapFocalToObjectPosition(focal, 0)).toBe('20.0% 80.0%')
+      expect(mapFocalToObjectPosition(focal, NaN)).toBe('20.0% 80.0%')
+    })
+
+    it('snaps a high focal point to the top in a wide container', () => {
+      // Square image in a 2:1 box: visible height 50%, so a focal point in
+      // the top quarter aligns to the top edge instead of "centering" past it.
+      expect(mapFocalToObjectPosition({ focalX: 50, focalY: 10, imgAspect: 1 }, 2))
+        .toBe('50.0% 0.0%')
+    })
+
+    it('snaps an edge focal point horizontally in a taller container', () => {
+      expect(mapFocalToObjectPosition({ focalX: 90, focalY: 50, imgAspect: 2 }, 1))
+        .toBe('100.0% 50.0%')
+    })
+
+    it('leaves both axes raw when image and container aspects match', () => {
+      expect(mapFocalToObjectPosition({ focalX: 33, focalY: 66, imgAspect: 1.5 }, 1.5))
+        .toBe('33.0% 66.0%')
     })
   })
 
@@ -278,36 +192,12 @@ describe('useSmartCrop', () => {
     })
 
     it('stays visible while calculating then triggers brief fade', async () => {
-      const mockImage = {
-        naturalWidth: 800,
-        naturalHeight: 600
-      }
-
-      const originalImage = global.Image
-      const originalRAF = global.requestAnimationFrame
-      let resolveLoad
+      const { load } = stubImage({ manual: true })
       let rafCallback
-
-      global.Image = vi.fn().mockImplementation(() => {
-        const img = {
-          crossOrigin: '',
-          onload: null,
-          onerror: null,
-          src: '',
-          naturalWidth: mockImage.naturalWidth,
-          naturalHeight: mockImage.naturalHeight
-        }
-        // Don't auto-resolve, let us control timing
-        resolveLoad = () => img.onload?.()
-        return img
-      })
-
-      // Mock requestAnimationFrame to control timing
-      global.requestAnimationFrame = vi.fn((cb) => {
+      vi.stubGlobal('requestAnimationFrame', vi.fn((cb) => {
         rafCallback = cb
         return 1
-      })
-
+      }))
       smartcrop.crop.mockResolvedValue({
         topCrop: { x: 400, y: 300, width: 100, height: 100 }
       })
@@ -323,7 +213,7 @@ describe('useSmartCrop', () => {
       expect(isReady.value).toBe(true)
 
       // Resolve the image load and smartcrop calculation
-      resolveLoad()
+      load()
 
       // Wait for the calculation to complete and isReady to be set to false
       await vi.waitFor(() => {
@@ -336,33 +226,52 @@ describe('useSmartCrop', () => {
 
       // Should be true after fade-in
       expect(isReady.value).toBe(true)
+    })
 
-      global.Image = originalImage
-      global.requestAnimationFrame = originalRAF
+    it('remaps the focal point to the tracked container aspect and follows resizes', async () => {
+      stubImage()
+      // Focal center (350, 240) of 800x600 → 43.75%, 40%
+      smartcrop.crop.mockResolvedValue({
+        topCrop: { x: 300, y: 190, width: 100, height: 100 }
+      })
+
+      let roCallback
+      const observedElements = []
+      vi.stubGlobal('ResizeObserver', class {
+        constructor(cb) { roCallback = cb }
+        observe(el) { observedElements.push(el) }
+        disconnect() {}
+      })
+
+      const containerRef = ref(null)
+      const focal = helpers.useFocalPoint(containerRef)
+
+      await focal.updateFocalPoint('https://example.com/tracked.jpg')
+
+      // No container measured yet → raw focal percentages (the aspect-agnostic fallback)
+      expect(focal.focalPoint.value).toBe('43.8% 40.0%')
+
+      // Container element appears (v-if resolves) → gets observed
+      const el = document.createElement('div')
+      containerRef.value = el
+      await nextTick()
+      expect(observedElements).toContain(el)
+
+      // Container reports 2:1 → vertical crop, focal Y recentered to 20%
+      roCallback([{ contentRect: { width: 600, height: 300 } }])
+      await nextTick()
+      expect(focal.focalPoint.value).toBe('43.8% 20.0%')
+
+      // Resize to square → horizontal crop, focal X recentered to 25%
+      roCallback([{ contentRect: { width: 300, height: 300 } }])
+      await nextTick()
+      expect(focal.focalPoint.value).toBe('25.0% 40.0%')
     })
   })
 
   describe('clearFocalPointCache', () => {
     it('clears the focal point cache', async () => {
-      const mockImage = {
-        naturalWidth: 800,
-        naturalHeight: 600
-      }
-
-      const originalImage = global.Image
-      global.Image = vi.fn().mockImplementation(() => {
-        const img = {
-          crossOrigin: '',
-          onload: null,
-          onerror: null,
-          src: '',
-          naturalWidth: mockImage.naturalWidth,
-          naturalHeight: mockImage.naturalHeight
-        }
-        setTimeout(() => img.onload?.(), 0)
-        return img
-      })
-
+      stubImage()
       smartcrop.crop.mockResolvedValue({
         topCrop: { x: 400, y: 300, width: 100, height: 100 }
       })
@@ -383,8 +292,6 @@ describe('useSmartCrop', () => {
       // Third call - should recalculate
       await helpers.calculateFocalPoint(url)
       expect(smartcrop.crop).toHaveBeenCalledTimes(2)
-
-      global.Image = originalImage
     })
   })
 })

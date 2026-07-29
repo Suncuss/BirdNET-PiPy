@@ -1487,7 +1487,7 @@ class TestSimpleAPI:
 
         assert data['totalObservations'] == 1
         assert data['uniqueSpecies'] == 1
-        assert data['mostCommonBird'] == 'American Robin'
+        assert data['mostCommonSpecies'] == 'American Robin'
 
     def test_dashboard_summary_endpoint_rejects_invalid_period(self, api_client):
         response = api_client.get('/api/dashboard/summary?period=year')
