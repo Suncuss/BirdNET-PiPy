@@ -8,7 +8,7 @@
       class="p-4 grid grid-cols-1 lg:grid-cols-3 gap-4"
     >
       <!-- Activity Overview -->
-      <div class="bg-white rounded-lg shadow p-4 lg:col-span-3 h-[300px] lg:h-[375px]">
+      <div class="bg-white rounded-lg shadow p-4 lg:col-span-3 h-[300px] lg:h-[375px] flex flex-col">
         <div class="flex items-center justify-between mb-2">
           <h2 class="text-lg font-semibold">
             Activity Overview
@@ -38,13 +38,13 @@
         <CenteredMessage
           v-if="!hasLoadedOnce"
           variant="loading"
-          container-class="h-[calc(100%-2rem)]"
+          container-class="flex-1"
         >
           Fetching the latest data...
         </CenteredMessage>
         <div
           v-else-if="!isDataEmpty && !detailedBirdActivityError"
-          class="flex h-[calc(100%-2rem)]"
+          class="flex flex-1 min-h-0"
         >
           <div class="w-full lg:w-1/3 lg:pr-2 relative">
             <canvas
@@ -80,14 +80,14 @@
         <CenteredMessage
           v-else-if="detailedBirdActivityError"
           variant="error"
-          container-class="h-[calc(100%-2rem)]"
+          container-class="flex-1"
         >
           {{ detailedBirdActivityError }}
         </CenteredMessage>
         <CenteredMessage
           v-else
           variant="info"
-          container-class="h-[calc(100%-2rem)]"
+          container-class="flex-1"
         >
           No bird activity recorded yet for today. Check back later!
         </CenteredMessage>

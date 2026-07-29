@@ -1,10 +1,12 @@
 import smartcrop from 'smartcrop'
-import { ref } from 'vue'
+import { ref, computed, watch, getCurrentScope, onScopeDispose } from 'vue'
 import { isDefaultBirdImageUrl } from '@/services/media'
 import { swapImageWithFade } from '@/utils/imageFade'
 
 // Module-level so results survive component remounts (BirdDetails remounts per
-// navigation) and are shared across all consumers of the composable.
+// navigation) and are shared across all consumers. Holds raw focal data
+// ({ focalX, focalY, imgAspect }): one detection per URL serves every box
+// shape via mapFocalToObjectPosition.
 const focalPointCache = new Map()
 
 /**
@@ -16,173 +18,197 @@ export function clearFocalPointCache() {
   focalPointCache.clear()
 }
 
+// Upper-center: better default than dead center for bird photos.
+const DEFAULT_POSITION = '50% 35%'
+
+const clampPercent = (value) => Math.max(0, Math.min(100, value))
+
+// Map a focal coordinate (image %) to the object-position % that centers it,
+// given the fraction of that axis object-cover leaves visible. A focal point
+// whose centered window would run past the image edge snaps to that edge.
+const centerFocal = (focal, visibleRatio) => {
+  const halfVisible = visibleRatio * 50
+  if (focal <= halfVisible) return 0
+  if (focal >= 100 - halfVisible) return 100
+  return ((focal - halfVisible) / (100 - 2 * halfVisible)) * 100
+}
+
+/**
+ * Map raw focal data to a CSS object-position for an object-cover container
+ * of the given aspect ratio (width/height).
+ *
+ * Without a usable container aspect, the raw focal percentages are used
+ * directly: `object-position: X% Y%` aligns the image's X% point with the
+ * container's X% point, which keeps the focal point visible in a box of any
+ * shape — just not perfectly centered.
+ *
+ * @param {{ focalX: number, focalY: number, imgAspect: number }|null} focal
+ * @param {number|null} containerAspect
+ * @returns {string} CSS object-position value
+ */
+export function mapFocalToObjectPosition(focal, containerAspect = null) {
+  if (!focal) return DEFAULT_POSITION
+  let x = focal.focalX
+  let y = focal.focalY
+  if (containerAspect > 0 && focal.imgAspect > 0) {
+    if (focal.imgAspect < containerAspect) {
+      // Image is taller than the container — object-cover crops vertically.
+      y = centerFocal(y, focal.imgAspect / containerAspect)
+    } else if (focal.imgAspect > containerAspect) {
+      x = centerFocal(x, containerAspect / focal.imgAspect)
+    }
+  }
+  return `${clampPercent(x).toFixed(1)}% ${clampPercent(y).toFixed(1)}%`
+}
+
+const loadImage = (url) => {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = () => resolve(img)
+    img.onerror = () => reject(new Error(`Failed to load image: ${url}`))
+    img.src = url
+  })
+}
+
+/**
+ * Detect (or return the cached) raw focal point of an image using
+ * smartcrop.js. Also serves as a preload — the browser caches the decoded
+ * image. Returns null when the image can't be loaded or analyzed (callers
+ * fall back to the default position); failures are not cached, so a transient
+ * network error doesn't pin the fallback for the whole session.
+ */
+const getFocalData = async (imageUrl) => {
+  if (focalPointCache.has(imageUrl)) {
+    return focalPointCache.get(imageUrl)
+  }
+
+  try {
+    const img = await loadImage(imageUrl)
+
+    const imgAspect = img.naturalWidth / img.naturalHeight
+
+    // Build boost regions for bird photos
+    // Birds typically have heads in the upper portion of the image
+    const boost = []
+
+    // Boost upper portion - stronger for portrait images
+    if (imgAspect < 1) {
+      boost.push({
+        x: 0,
+        y: 0,
+        width: img.naturalWidth,
+        height: img.naturalHeight * 0.4,
+        weight: 1.5
+      })
+    } else {
+      boost.push({
+        x: 0,
+        y: 0,
+        width: img.naturalWidth,
+        height: img.naturalHeight * 0.5,
+        weight: 0.3
+      })
+    }
+
+    // Square detection window regardless of display shape — the display
+    // mapping happens per-container in mapFocalToObjectPosition.
+    const result = await smartcrop.crop(img, {
+      width: 100,
+      height: 100,
+      minScale: 0.5,
+      boost
+    })
+
+    const { topCrop } = result
+
+    // Center of the detected crop area, as percentages of the image.
+    const focal = {
+      focalX: ((topCrop.x + topCrop.width / 2) / img.naturalWidth) * 100,
+      focalY: ((topCrop.y + topCrop.height / 2) / img.naturalHeight) * 100,
+      imgAspect
+    }
+
+    focalPointCache.set(imageUrl, focal)
+    return focal
+  } catch (error) {
+    console.warn(`Smart crop failed for ${imageUrl}:`, error.message)
+    return null
+  }
+}
+
+/**
+ * Calculate a static object-position for an image in a container of a known,
+ * fixed aspect ratio (e.g. the gallery's aspect-square cards).
+ * @param {string} imageUrl - URL of the image to analyze
+ * @param {Object} options - Optional configuration
+ * @param {number} options.targetAspect - Container aspect ratio (width/height), defaults to 1 (square)
+ * @returns {Promise<string>} CSS object-position value (e.g., "45% 30%")
+ */
+const calculateFocalPoint = async (imageUrl, { targetAspect = 1 } = {}) =>
+  mapFocalToObjectPosition(await getFocalData(imageUrl), targetAspect)
+
+/**
+ * Reactive focal point for a single image. With a container element ref, the
+ * object-position tracks the container's measured aspect ratio across resizes
+ * and breakpoints; without one — or before it mounts, or when ResizeObserver
+ * is unavailable — it uses the raw-percentage fallback (see
+ * mapFocalToObjectPosition).
+ *
+ * @param {Ref<HTMLElement>|null} containerRef - template ref of the element the image covers
+ * @returns {{ focalPoint: Ref<string>, isReady: Ref<boolean>, updateFocalPoint: (url: string) => Promise<void> }}
+ */
+const useFocalPoint = (containerRef = null) => {
+  const focalData = ref(null)
+  const containerAspect = ref(null)
+  const isReady = ref(true) // Start visible to show placeholder
+
+  const focalPoint = computed(() =>
+    mapFocalToObjectPosition(focalData.value, containerAspect.value)
+  )
+
+  if (containerRef && typeof ResizeObserver !== 'undefined') {
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect
+      if (height <= 0) return
+      // Quantized (nearest 0.05) so frame-by-frame drag resizes coalesce into
+      // one write instead of re-rendering the consumer for sub-percent shifts.
+      containerAspect.value = Math.round((width / height) * 20) / 20
+    })
+    // The container typically mounts late (behind a v-if on fetched data),
+    // so follow the ref instead of observing once at setup.
+    watch(containerRef, (el) => {
+      observer.disconnect()
+      if (el) observer.observe(el)
+    }, { immediate: true, flush: 'post' })
+    if (getCurrentScope()) onScopeDispose(() => observer.disconnect())
+  }
+
+  const updateFocalPoint = async (url) => {
+    if (!url || isDefaultBirdImageUrl(url)) {
+      focalData.value = null
+      isReady.value = true
+      return
+    }
+
+    // Detect first (also preloads the image into the browser cache), then
+    // swap with a brief fade.
+    const focal = await getFocalData(url)
+
+    await swapImageWithFade(
+      (visible) => { isReady.value = visible },
+      () => { focalData.value = focal }
+    )
+  }
+
+  return { focalPoint, isReady, updateFocalPoint }
+}
+
 /**
  * Composable for smart image cropping using focal point detection.
  * Uses smartcrop.js to find the best crop area for wildlife photos.
  */
 export function useSmartCrop() {
-  /**
-   * Calculate the focal point of an image using smartcrop.js
-   * @param {string} imageUrl - URL of the image to analyze
-   * @param {Object} options - Optional configuration
-   * @param {number} options.targetAspect - Target aspect ratio (width/height), defaults to 1 (square)
-   * @returns {Promise<string>} CSS object-position value (e.g., "45% 30%")
-   */
-  const calculateFocalPoint = async (imageUrl, { targetAspect = 1 } = {}) => {
-    // Return cached value if available
-    if (focalPointCache.has(imageUrl)) {
-      return focalPointCache.get(imageUrl)
-    }
-
-    try {
-      // Create an image element and wait for it to load
-      const img = await loadImage(imageUrl)
-
-      const imgAspect = img.naturalWidth / img.naturalHeight
-
-      // Use target aspect ratio for detection (matches display container)
-      const cropWidth = 100
-      const cropHeight = Math.round(cropWidth / targetAspect)
-
-      // Build boost regions for bird photos
-      // Birds typically have heads in the upper portion of the image
-      const boost = []
-
-      // Boost upper portion - stronger for portrait images
-      if (imgAspect < 1) {
-        boost.push({
-          x: 0,
-          y: 0,
-          width: img.naturalWidth,
-          height: img.naturalHeight * 0.4,
-          weight: 1.5
-        })
-      } else {
-        boost.push({
-          x: 0,
-          y: 0,
-          width: img.naturalWidth,
-          height: img.naturalHeight * 0.5,
-          weight: 0.3
-        })
-      }
-
-      // Use smartcrop to find the best crop area
-      const result = await smartcrop.crop(img, {
-        width: cropWidth,
-        height: cropHeight,
-        minScale: 0.5,
-        boost
-      })
-
-      const { topCrop } = result
-
-      // Calculate center of the detected crop area as percentages
-      const focalX = ((topCrop.x + topCrop.width / 2) / img.naturalWidth) * 100
-      const focalY = ((topCrop.y + topCrop.height / 2) / img.naturalHeight) * 100
-
-      // Calculate the correct object-position based on aspect ratio differences
-      // This ensures the focal point is actually visible in the cropped view
-      let objectPositionX = focalX
-      let objectPositionY = focalY
-
-      if (imgAspect < targetAspect) {
-        // Portrait image in square/landscape container
-        // Only a portion of the height is visible with object-cover
-        const visibleHeightRatio = imgAspect / targetAspect
-        const halfVisible = visibleHeightRatio * 50
-
-        // Map focal point to object-position that actually shows it
-        if (focalY <= halfVisible) {
-          // Focal point is in upper region - align to top
-          objectPositionY = 0
-        } else if (focalY >= 100 - halfVisible) {
-          // Focal point is in lower region - align to bottom
-          objectPositionY = 100
-        } else {
-          // Focal point is in middle - map linearly to center it
-          objectPositionY = (focalY - halfVisible) / (100 - 2 * halfVisible) * 100
-        }
-      } else if (imgAspect > targetAspect) {
-        // Landscape image in square/portrait container
-        // Only a portion of the width is visible with object-cover
-        const visibleWidthRatio = targetAspect / imgAspect
-        const halfVisible = visibleWidthRatio * 50
-
-        if (focalX <= halfVisible) {
-          objectPositionX = 0
-        } else if (focalX >= 100 - halfVisible) {
-          objectPositionX = 100
-        } else {
-          objectPositionX = (focalX - halfVisible) / (100 - 2 * halfVisible) * 100
-        }
-      }
-
-      // Clamp to reasonable range
-      const clampedX = Math.max(0, Math.min(100, objectPositionX))
-      const clampedY = Math.max(0, Math.min(100, objectPositionY))
-
-      const position = `${clampedX.toFixed(1)}% ${clampedY.toFixed(1)}%`
-
-      // Cache the result
-      focalPointCache.set(imageUrl, position)
-
-      return position
-    } catch (error) {
-      console.warn(`Smart crop failed for ${imageUrl}:`, error.message)
-      // Fall back to upper-center for bird photos (better default than center)
-      return '50% 35%'
-    }
-  }
-
-  /**
-   * Load an image and return a promise that resolves when loaded
-   * @param {string} url - Image URL
-   * @returns {Promise<HTMLImageElement>}
-   */
-  const loadImage = (url) => {
-    return new Promise((resolve, reject) => {
-      const img = new Image()
-      img.crossOrigin = 'anonymous'
-      img.onload = () => resolve(img)
-      img.onerror = () => reject(new Error(`Failed to load image: ${url}`))
-      img.src = url
-    })
-  }
-
-  /**
-   * Create a reactive focal point for an image.
-   * Automatically calculates when the URL changes.
-   * @param {string} initialUrl - Initial image URL (optional)
-   * @returns {{ focalPoint: Ref<string>, isReady: Ref<boolean>, updateFocalPoint: (url: string) => Promise<void> }}
-   */
-  const useFocalPoint = (initialUrl = null) => {
-    const focalPoint = ref('50% 35%') // Default slightly above center for bird photos
-    const isReady = ref(true) // Start visible to show placeholder
-
-    const updateFocalPoint = async (url) => {
-      if (!url || isDefaultBirdImageUrl(url)) {
-        focalPoint.value = '50% 35%'
-        isReady.value = true
-        return
-      }
-
-      // Calculate focal point first (preloads image into browser cache)
-      const newFocalPoint = await calculateFocalPoint(url)
-
-      await swapImageWithFade(
-        (visible) => { isReady.value = visible },
-        () => { focalPoint.value = newFocalPoint }
-      )
-    }
-
-    if (initialUrl) {
-      updateFocalPoint(initialUrl)
-    }
-
-    return { focalPoint, isReady, updateFocalPoint }
-  }
-
   return {
     calculateFocalPoint,
     useFocalPoint

@@ -1,17 +1,20 @@
 """Detection payload shaping: localization + the anonymous-safe public variant.
 
 Every detection-shaped payload the API returns passes through here on its way
-out. Two concerns live together because they run per-row in the same pass:
+out. Three concerns live together because they run per-row in the same pass:
 
 - Localization: attach display names in the configured bird-name language.
 - Privacy: strip private/owner-only fields and mint short-lived signed media
   URLs, but only for detections inside the anonymous public recency window.
+- Enrichment: derive presentation-only fields the stored row lacks (currently
+  ``extra.weather.is_day``, computed from the detection timestamp + station
+  location so historical rows need no migration).
 
 The window helpers (_public_window_cutoff*) are the single source of truth for
 "how far back can an anonymous caller see" — the recordings routes, the
 Detections table, and the media-signature gate must all agree on one boundary.
 """
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from core.auth import get_request_tier
 from core.bird_name_utils import (
@@ -22,7 +25,9 @@ from core.bird_name_utils import (
 )
 from core.db import PRIVATE_DETECTION_FIELDS
 from core.media_access import sign_media_query
-from core.timezone_service import local_now
+from core.runtime_config import get_runtime_setting
+from core.solar import is_daylight
+from core.timezone_service import get_timezone, local_now
 
 # Recency window for anonymous callers: the public view shows only the recent
 # slice, so an anonymous caller can't pull a species' old all-time clips (incl.
@@ -106,6 +111,62 @@ def _add_media_signatures(detection, cutoff=None):
     return detection
 
 
+def _solar_context():
+    """``(lat, lon, tzinfo)`` for is_day derivation, or None when the station
+    location isn't usable. Resolved once per request (see the cutoff hoist in
+    _localize_detection_list) — the settings read stats the file each call.
+    """
+    location = get_runtime_setting('location') or {}
+    if not location.get('configured'):
+        return None
+    lat, lon = location.get('latitude'), location.get('longitude')
+    if lat is None or lon is None:  # explicit None check for 0-coordinate support
+        return None
+    return lat, lon, get_timezone()
+
+
+def _attach_is_day(detection, solar_ctx):
+    """Fill ``extra.weather.is_day`` (1/0) when the stored weather lacks it.
+
+    Derived, not stored: day/night is a pure function of the detection
+    timestamp and the station coordinates (core.solar), so historical rows
+    gain the flag retroactively with no migration — and it reflects the
+    detection's own moment, not the hourly weather-fetch time, which matters
+    exactly at dawn/dusk when birds are most active. An existing flag (a
+    future write-time stamp) is never overwritten.
+
+    Rebuilds extra/weather instead of mutating in place: _localize_detection
+    works on a shallow copy, so nested writes would leak into cached payload
+    builders' shared rows. ``extra`` is always a dict by the time payloads
+    reach the presenter (DatabaseManager._normalize_detection/_parse_extra);
+    anything else is left untouched.
+    """
+    if solar_ctx is None or not isinstance(detection, dict):
+        return detection
+    extra = detection.get('extra')
+    if not isinstance(extra, dict):
+        return detection
+    # Legacy 'Weather' capitalization, same tolerance as _strip_public_metadata
+    weather_key = next((k for k in extra if k.lower() == 'weather'), None)
+    if weather_key is None:
+        return detection
+    weather = extra[weather_key]
+    if not isinstance(weather, dict) or 'is_day' in weather:
+        return detection
+    try:
+        dt = datetime.fromisoformat(str(detection.get('timestamp')))
+    except ValueError:
+        return detection
+    lat, lon, tz = solar_ctx
+    if dt.tzinfo is None:  # stored timestamps are naive station-local
+        dt = dt.replace(tzinfo=tz)
+    detection['extra'] = {
+        **extra,
+        weather_key: {**weather, 'is_day': int(is_daylight(dt, lat, lon))},
+    }
+    return detection
+
+
 # Extra-blob keys safe to expose to anonymous callers. Anything else (notably
 # source_label, a user-chosen name that can hint at the station's location or
 # layout) is dropped from public payloads, along with the raw audio_source id.
@@ -127,21 +188,30 @@ def _strip_public_metadata(detection):
     return detection
 
 
-def _localize_detection(detection, settings=None, is_public=None, cutoff=None):
+# Sentinel for "resolve _solar_context() in this call" — None already means
+# "no usable station location", so it can't double as the unset marker.
+_SOLAR_CTX_UNSET = object()
+
+
+def _localize_detection(detection, settings=None, is_public=None, cutoff=None,
+                        solar_ctx=_SOLAR_CTX_UNSET):
     # add_display_common_name returns a copy, so popping here never mutates the
     # underlying DB row.
     # is_public=None derives the tier from the current request; callers
-    # serializing a list pass it (and cutoff) in once, computed per-request,
-    # rather than re-deriving them for every row. Off-request-thread callers
-    # (the cached payload builders) MUST pass is_public explicitly — there is
-    # no request context to derive from.
+    # serializing a list pass it (and cutoff, and solar_ctx) in once, computed
+    # per-request, rather than re-deriving them for every row. Off-request-thread
+    # callers (the cached payload builders) MUST pass is_public explicitly —
+    # there is no request context to derive from.
     if is_public is None:
         is_public = get_request_tier() == 'public'
+    if solar_ctx is _SOLAR_CTX_UNSET:
+        solar_ctx = _solar_context()
     localized = _strip_private_fields(add_display_common_name(
         detection,
         language=get_bird_name_language(settings),
         settings=settings,
     ))
+    _attach_is_day(localized, solar_ctx)
     # Anonymous callers get the safe variant: owner-only metadata stripped, and
     # signed media URLs minted (owners fetch media by bare filename via their
     # session, so signatures would be dead payload weight for them). Cached
@@ -159,9 +229,10 @@ def _localize_detection_list(detections, settings=None, public_only=False):
     # request thread, so there is no request context to classify.
     is_public = public_only or get_request_tier() == 'public'
     cutoff = _public_window_cutoff()
+    solar_ctx = _solar_context()
     return [
         _localize_detection(detection, settings=settings, is_public=is_public,
-                            cutoff=cutoff)
+                            cutoff=cutoff, solar_ctx=solar_ctx)
         for detection in detections
     ]
 

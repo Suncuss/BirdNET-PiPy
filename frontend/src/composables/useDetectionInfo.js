@@ -1,10 +1,12 @@
 import { computed, toValue } from 'vue'
 
-// Weather codes from WMO (World Meteorological Organization)
+// Weather codes from WMO (World Meteorological Organization).
+// nightIcon (where the day icon shows a sun) is used when the backend-derived
+// weather.is_day flag says the sun was down; descriptions are day/night-neutral.
 const weatherCodeMap = {
-  0: { desc: 'Clear sky', icon: '☀️' },
-  1: { desc: 'Mainly clear', icon: '🌤️' },
-  2: { desc: 'Partly cloudy', icon: '⛅' },
+  0: { desc: 'Clear sky', icon: '☀️', nightIcon: '🌙' },
+  1: { desc: 'Mainly clear', icon: '🌤️', nightIcon: '🌙' },
+  2: { desc: 'Partly cloudy', icon: '⛅', nightIcon: '☁️' },
   3: { desc: 'Overcast', icon: '☁️' },
   45: { desc: 'Fog', icon: '🌫️' },
   48: { desc: 'Depositing rime fog', icon: '🌫️' },
@@ -22,9 +24,9 @@ const weatherCodeMap = {
   73: { desc: 'Moderate snow', icon: '❄️' },
   75: { desc: 'Heavy snow', icon: '❄️' },
   77: { desc: 'Snow grains', icon: '❄️' },
-  80: { desc: 'Slight rain showers', icon: '🌦️' },
-  81: { desc: 'Moderate rain showers', icon: '🌦️' },
-  82: { desc: 'Violent rain showers', icon: '🌦️' },
+  80: { desc: 'Slight rain showers', icon: '🌦️', nightIcon: '🌧️' },
+  81: { desc: 'Moderate rain showers', icon: '🌦️', nightIcon: '🌧️' },
+  82: { desc: 'Violent rain showers', icon: '🌦️', nightIcon: '🌧️' },
   85: { desc: 'Slight snow showers', icon: '🌨️' },
   86: { desc: 'Heavy snow showers', icon: '🌨️' },
   95: { desc: 'Thunderstorm', icon: '⛈️' },
@@ -73,8 +75,13 @@ export function useDetectionInfo(detection) {
   const hasWeatherData = computed(() => weatherData.value !== null)
 
   const weatherDescription = computed(() => {
-    if (!weatherData.value) return { desc: 'Unknown', icon: '❓' }
-    return weatherCodeMap[weatherData.value.code] || { desc: 'Unknown', icon: '❓' }
+    const weather = weatherData.value
+    const entry = weather && weatherCodeMap[weather.code]
+    if (!entry) return { desc: 'Unknown', icon: '❓' }
+    // is_day is 1/0 from the backend; rows predating the flag lack it and
+    // keep the daytime icon.
+    const icon = (weather.is_day === 0 && entry.nightIcon) || entry.icon
+    return { desc: entry.desc, icon }
   })
 
   // Filter out weather from general metadata display (case-insensitive)

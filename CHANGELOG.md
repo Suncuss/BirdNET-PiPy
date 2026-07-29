@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Improved the species detail page layout on desktop: the distribution chart now stretches to fill its card instead of leaving blank space beneath it
+- Fixed species photos on the detail page cropping the bird out of view: the smart-crop focal point was computed for a square frame, but the detail page's image box is wider on desktop. The crop now adapts to the box's real shape and follows it across resizes
+- Fixed night-time detections showing a daytime sun icon in the weather conditions card: clear, partly-cloudy, and rain-shower icons now switch to their night variants after sunset, computed from the detection's own time and the station location — past detections get the correct icon retroactively
+
 ## [0.8.5] - 2026-07-25
 
 - Changed bird-specific wording to species, since detections aren't limited to birds: the Observation Summary now reads "Most Common Species" and "Rarest Species", and the dashboard and charts headings read "Activity Overview". The summary API fields were renamed to match (`mostCommonBird` → `mostCommonSpecies`, `rarestBird` → `rarestSpecies`, and their `ScientificName`/`Display` variants) — a breaking change for anything reading `/api/observations/summary` or `/api/dashboard` directly
