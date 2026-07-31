@@ -619,7 +619,8 @@ prune_docker_before_update() {
 }
 
 # Try to pull pre-built images from GHCR, fall back to local build.
-# Skips pull for non-ARM64, non-release branches, and non-1000 UID systems.
+# Skips pull for unsupported architectures, non-release branches, and
+# non-1000 UID systems.
 pull_or_build() {
     # -C: fresh installs call this without cd-ing into the repo first, so don't
     # rely on the caller's working directory for git context.
@@ -643,10 +644,14 @@ pull_or_build() {
         return $?
     fi
 
-    # Pre-built images are ARM64 only (Raspberry Pi target)
+    # Pre-built images cover ARM64 (Raspberry Pi) and AMD64 via multi-arch
+    # manifests; anything else (e.g. 32-bit armv7l) builds locally. Older
+    # commits published ARM64-only tags — pulling one of those on AMD64
+    # fails with "no matching manifest" and falls back to a local build
+    # through the normal pull-failure path.
     local arch
     arch=$(uname -m)
-    if [ "$can_pull" = true ] && [ "$arch" != "aarch64" ]; then
+    if [ "$can_pull" = true ] && [ "$arch" != "aarch64" ] && [ "$arch" != "x86_64" ]; then
         print_status "Architecture $arch has no pre-built images, building locally..."
         can_pull=false
     fi
@@ -663,8 +668,8 @@ pull_or_build() {
     fi
 
     # Check if the image build workflow completed for this commit. Captured here
-    # (not at the top) so the skip-build / non-ARM / non-1000-UID fast paths above
-    # don't run an unused git call that set -e could trip on.
+    # (not at the top) so the skip-build / unsupported-arch / non-1000-UID fast
+    # paths above don't run an unused git call that set -e could trip on.
     local commit
     commit=$(git -C "$PROJECT_ROOT" rev-parse HEAD)
     local api_response
@@ -686,7 +691,11 @@ pull_or_build() {
         local pull_ok=true
         local max_retries=3
         local attempt
+        local pull_index=0
         for img in "${pull_images[@]}"; do
+            pull_index=$((pull_index + 1))
+            # Counters only, not image names: /update-progress is public
+            write_update_progress "pull" "Downloading updated images ($pull_index of ${#pull_images[@]})"
             for attempt in $(seq 1 $max_retries); do
                 if sudo -u "$ACTUAL_USER" docker pull "$img"; then
                     break
@@ -729,6 +738,7 @@ build_application() {
 
     print_status "Building BirdNET-PiPy application..."
     print_status "Building as user $ACTUAL_USER (UID:$ACTUAL_UID, GID:$ACTUAL_GID)..."
+    write_update_progress "build" "Building images locally"
 
     cd "$PROJECT_ROOT"
     chmod +x build.sh
@@ -889,24 +899,48 @@ EOF
 
 # Record update pipeline state (in_progress/success/failed) for the frontend:
 # /api/system/version surfaces it so the restart poll can distinguish a failed
-# update (old code restarted) from one still in progress. Best-effort — a
-# status write must never fail the update. Remove-then-recreate because the
-# existing file may be owned by the API container user while we run as root
-# (and vice versa); only the directory needs to be writable.
+# update (old code restarted) from one still in progress.
 write_update_status() {
+    write_flag_file "update-status" "$1"
+}
+
+# Shared flag-file plumbing: ensure the flags dir exists (kept writable by the
+# API container user, which also writes flags here), then remove-then-recreate
+# — the existing file may be owned by the API container user while we run as
+# root (and vice versa); only the directory needs to be writable. Best-effort:
+# a flag write must never fail the update. $1 = flag name, $2 = content.
+write_flag_file() {
     local flags_dir="$PROJECT_ROOT/data/flags"
     if [ ! -d "$flags_dir" ]; then
         mkdir -p "$flags_dir" 2>/dev/null || true
-        # Keep the dir writable by the API container user, which also writes flags here
         chown "$ACTUAL_USER:$ACTUAL_USER" "$flags_dir" 2>/dev/null || true
     fi
-    rm -f "$flags_dir/update-status" 2>/dev/null || true
-    echo "$1" > "$flags_dir/update-status" 2>/dev/null || true
+    rm -f "$flags_dir/$1" 2>/dev/null || true
+    echo "$2" > "$flags_dir/$1" 2>/dev/null || true
+}
+
+# Record a coarse stage for the frontend's update banner. During a native
+# update the frontend nginx container is kept running (see perform_update) and
+# serves data/flags/update-progress at /update-progress, so the SPA can show
+# real stages ("Downloading updated images (2 of 3)") instead of a blind
+# elapsed counter while the API is down. Served UNAUTHENTICATED — callers must
+# pass only fixed public-safe strings and counters, never branch names, paths,
+# or command output. No-op outside update mode: fresh installs share
+# pull_or_build/build_application but have nothing serving the file.
+# Only `message` is read by the banner; `stage` and `timestamp` exist for
+# on-disk debugging of an unattended update, not for any consumer.
+# $1 = stage id, $2 = human-readable message.
+write_update_progress() {
+    [ "$UPDATE_MODE" = true ] || return 0
+    write_flag_file "update-progress" \
+        "$(printf '{"stage":"%s","message":"%s","timestamp":"%s"}' \
+            "$1" "$2" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
 }
 
 # Helper function to restart containers on failure during update
 restart_containers_on_failure() {
     write_update_status "failed"
+    write_update_progress "failed" "Update failed, restarting the previous version"
     print_status "Restarting containers with current code..."
     cd "$PROJECT_ROOT"
     docker compose up -d || true
@@ -931,17 +965,33 @@ perform_update() {
     print_status "Target branch: $target_branch"
 
     write_update_status "in_progress"
+    write_update_progress "stopping" "Stopping services"
 
-    # Step 1: Stop containers so Docker artifacts are unused and can be pruned safely
-    print_status "Stopping containers..."
-    docker compose down || true
+    # Step 1: Stop containers so Docker artifacts are unused and can be pruned
+    # safely — except the frontend: nginx (a few MB) keeps serving the
+    # already-loaded SPA and /update-progress through the long pull/build
+    # phase, and is recreated with the new image by the post-update service
+    # restart. The service list comes from the CURRENT compose file — the same
+    # one these containers were created from (git sync happens later). If the
+    # selective stop can't run, fall back to the old full teardown: a dark
+    # site during the update is the pre-progress-banner baseline, while a
+    # backend container left running through git reset would not be safe.
+    print_status "Stopping containers (keeping frontend up for update progress)..."
+    local stop_services
+    stop_services=$(docker compose config --services 2>/dev/null | grep -vx frontend || true)
+    # An empty list (config failed) makes rm target all services — the full
+    # teardown that case wants anyway.
+    # shellcheck disable=SC2086  # word-splitting the service list is intended
+    docker compose rm -sf $stop_services || docker compose down || true
 
     # Step 2: Reclaim Docker disk space before any git/pull/build work
+    write_update_progress "cleanup" "Cleaning up disk space"
     prune_docker_before_update
 
     # Step 3: Fetch target branch with explicit refspec
     # This ensures origin/$target_branch is created even in shallow/single-branch clones
     print_status "Fetching latest code..."
+    write_update_progress "fetch" "Downloading the latest code"
     if ! git fetch origin "+refs/heads/$target_branch:refs/remotes/origin/$target_branch" 2>&1; then
         print_error "Git fetch failed - branch '$target_branch' may not exist on remote"
         restart_containers_on_failure
@@ -971,6 +1021,7 @@ perform_update() {
         fi
 
         print_status "Refreshing system configurations..."
+        write_update_progress "configure" "Refreshing system configuration"
         configure_pulseaudio
         create_service_file
         install_service
@@ -978,6 +1029,7 @@ perform_update() {
         # Same-commit outcome: the frontend's update poll can't see a commit
         # change here, so the explicit success status is its completion signal
         write_update_status "success"
+        write_update_progress "restarting" "Restarting services"
         print_status "Restarting containers..."
         docker compose up -d || true
         print_status "Update complete (no code changes)"
@@ -996,6 +1048,7 @@ perform_update() {
 
     # Step 5: Sync to target branch (checkout + reset)
     print_status "Syncing to origin/$target_branch..."
+    write_update_progress "sync" "Applying the new code"
 
     # Check if local branch exists
     if git show-ref --verify --quiet "refs/heads/$target_branch"; then
@@ -1033,14 +1086,16 @@ perform_update() {
         exit 1
     fi
 
-    # The update itself has landed: new images are built/pulled (and in the
-    # local-build path build.sh has already deployed them). Written BEFORE the
-    # config refresh below so an unguarded set -e death in Step 7 cannot get
-    # stamped 'failed' by the service wrapper while the new code is serving.
+    # The update itself has landed: the repo is synced and the new images are
+    # pulled/built (deployment happens at the post-update service restart).
+    # Written BEFORE the config refresh below so an unguarded set -e death in
+    # Step 7 cannot get stamped 'failed' by the service wrapper after the
+    # update work already succeeded.
     write_update_status "success"
 
     # Step 7: Update system configurations (root operations)
     print_status "Updating system configurations..."
+    write_update_progress "configure" "Updating system configuration"
     configure_pulseaudio
     create_service_file
     install_service
@@ -1054,6 +1109,9 @@ perform_update() {
     fi
     print_status "Exiting to restart service with updated code..."
     print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    # Last stage the old frontend can serve: the service restart takes it down
+    # and birdnet-service.sh clears the progress file once the new stack is up.
+    write_update_progress "restarting" "Restarting services with the new version"
 
     exit 0
 }

@@ -15,9 +15,22 @@
 
 | Component | Requirement |
 |-----------|-------------|
-| **Raspberry Pi** | Model 4 or newer (Pi 5 recommended), 2GB+ RAM |
+| **Raspberry Pi** | Pi 5, Pi 4, Pi 3, or Zero 2W |
 | **Storage** | 128GB+ SD card (V30) or NVMe SSD |
 | **Microphone** | USB microphone |
+
+All of these run the full system — the board mainly changes how responsive the dashboard feels:
+
+| Board | What to expect |
+|-------|----------------|
+| **Pi 5, Pi 4** | Recommended. Responsive dashboard with headroom for several audio sources. |
+| **Pi 3, Zero 2W** | Usable with a single microphone, but slow: pages can take several seconds on the first load after the station has been idle, and updates take considerably longer. Use a fast SD card and stay on the default BirdNET V2.4 model. |
+
+On the smaller boards the installer adapts automatically — it adds a swap file, reclaims unused GPU memory on headless systems (`gpu_mem=16`), and builds images sequentially instead of in parallel.
+
+> **Note:** the Pi 3 and Zero 2W tier is field-tested on the Zero 2W. The Pi 3 is expected to do at least as well — same quad-core processor, higher clock, and more memory — but we have not measured it directly.
+
+**Not supported:** 32-bit-only boards (Pi 2 and earlier, the original Pi Zero and Zero W). BirdNET-PiPy ships arm64-only Python wheels, so the installer stops early on a 32-bit OS.
 
 ### Software
 

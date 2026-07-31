@@ -233,16 +233,19 @@ class TestSystemAPI:
             assert data['target_branch'] == 'staging'
             mock_flag.assert_called_once_with('update-requested', 'staging')
 
-    def test_trigger_update_resets_update_status(self, api_client):
-        """POST /api/system/update clears any stale terminal status to 'pending'.
+    def test_trigger_update_resets_stale_update_state(self, api_client):
+        """POST /api/system/update clears stale state from earlier attempts.
 
-        Without the reset, a 'failed' left by a previous update attempt would be
-        visible to the frontend's restart poll before install.sh overwrites it,
-        producing an instant false "update failed" report.
+        The terminal status resets to 'pending' — a leftover 'failed' would be
+        visible to the frontend's restart poll before install.sh overwrites
+        it, producing an instant false "update failed" report — and the
+        update-progress stage file is deleted so the banner's progress poll
+        can't surface a stage from a previous attempt.
         """
         with patch('core.routes.system.load_version_info') as mock_load, \
              patch('core.routes.system.write_flag'), \
              patch('core.routes.system.reset_update_status') as mock_reset, \
+             patch('core.routes.system.reset_update_progress') as mock_progress, \
              patch('core.routes.system.get_channel_branch') as mock_channel:
 
             mock_load.return_value = self.SAMPLE_VERSION_INFO
@@ -252,6 +255,7 @@ class TestSystemAPI:
             response = api_client.post('/api/system/update')
             assert response.status_code == 200
             mock_reset.assert_called_once()
+            mock_progress.assert_called_once()
 
     def test_trigger_update_missing_version(self, api_client):
         """Test POST /api/system/update handles missing version.json"""
@@ -815,3 +819,25 @@ class TestUpdateStatusHelpers:
         blocker.write_text('')
         monkeypatch.setattr(update_service, 'BASE_DIR', str(blocker / 'nested'))
         update_service.reset_update_status()  # must simply not raise
+
+    def test_reset_update_progress_removes_file(self, tmp_path, monkeypatch):
+        update_service = self._patched_service(monkeypatch, tmp_path)
+        flags = tmp_path / 'data' / 'flags'
+        flags.mkdir(parents=True)
+        stage_file = flags / 'update-progress'
+        stage_file.write_text('{"stage":"pull","message":"Downloading updated images (1 of 3)"}')
+
+        update_service.reset_update_progress()
+        assert not stage_file.exists()
+
+    def test_reset_update_progress_missing_file_is_fine(self, tmp_path, monkeypatch):
+        update_service = self._patched_service(monkeypatch, tmp_path)
+        update_service.reset_update_progress()  # must simply not raise
+
+    def test_reset_update_progress_never_raises(self, tmp_path, monkeypatch):
+        """Progress is advisory: reset must not be able to block a dispatch."""
+        update_service = self._patched_service(monkeypatch, tmp_path)
+        blocker = tmp_path / 'blocker'
+        blocker.write_text('')
+        monkeypatch.setattr(update_service, 'BASE_DIR', str(blocker / 'nested'))
+        update_service.reset_update_progress()  # must simply not raise

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Added pre-built AMD64 images: releases now publish multi-arch (ARM64 + AMD64) container images, so x86 installs pull them during install and update instead of building everything locally
+- Improved the update banner on native installs to show what the update is actually doing ("Downloading updated images (2 of 3)", "Building images locally", …) instead of only a ticking timer. The web server now stays up through the long download/build phase, so the page keeps responding where it previously showed a connection error until the update finished
+- Changed the documented hardware support to Raspberry Pi 5, 4, 3, and Zero 2W, with a note on what to expect from each, since the low-memory work in recent releases made the smaller boards usable. Previously the docs asked for a Pi 4 or newer with 2GB+ RAM
+- Improved the wait shown after saving settings: the banner now reads "Settings saved — restarting services to apply" instead of "Applying settings changes", and drops the elapsed-seconds counter. The save itself is instant; the wait is the service restart, and a ticking timer made a normal restart look like a slow save
 - Improved the species detail page layout on desktop: the distribution chart now stretches to fill its card instead of leaving blank space beneath it
 - Fixed species photos on the detail page cropping the bird out of view: the smart-crop focal point was computed for a square frame, but the detail page's image box is wider on desktop. The crop now adapts to the box's real shape and follows it across resizes
 - Fixed night-time detections showing a daytime sun icon in the weather conditions card: clear, partly-cloudy, and rain-shower icons now switch to their night variants after sunset, computed from the detection's own time and the station location — past detections get the correct icon retroactively

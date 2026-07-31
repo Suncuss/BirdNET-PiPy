@@ -167,15 +167,28 @@ export function useServiceRestart() {
    * to requiring at least one failed probe before accepting a success.
    *
    * @param {Object} options
-   * @param {'restart'|'update'} options.expect - Which transition proves completion (default: 'restart')
+   * @param {'restart'|'update'} options.expect - Which transition proves
+   *   completion, and with it the wait's character: 'update' is open-ended
+   *   (elapsed counter shown), 'restart' is short (no counter). Default 'restart'
    * @param {Object|null} options.baseline - Identity from captureRestartBaseline() taken before the trigger
    * @param {number} options.maxWaitSeconds - Max time to wait (default: 150s / 2.5 min)
    * @param {number} options.pollInterval - Polling interval in ms (default: 5000)
    * @param {number} options.initialDelay - Delay before first check in ms (default: 10000)
    * @param {number} options.postConnectDelay - Extra delay after connection before reload (default: 15000)
    * @param {boolean} options.autoReload - Whether to reload page on success (default: true)
+   * @param {string} options.message - Progress banner subject, no trailing
+   *   punctuation: this appends '...' and, on an 'update' wait, ' (Ns)'.
+   *   Unlike timeoutMessage/failureMessage, which are used verbatim
    * @param {string} options.timeoutMessage - restartError text shown when the wait times out
    * @param {string} options.failureMessage - restartError text shown when the update failed
+   * @param {string|null} options.progressUrl - Same-origin URL of the host's
+   *   update-stage file (native updates pass '/update-progress', served
+   *   statically by the nginx container that stays up through the update).
+   *   When set, a dedicated poll (primed at start, then banner cadence)
+   *   fetches it and a fresh stage message replaces the generic subject.
+   *   Any fetch/parse failure — endpoint absent (HA, older stack), server
+   *   down, malformed body — is silently ignored and the generic message
+   *   stays.
    * @returns {Promise<boolean>} - Resolves true when service is back, false
    *   when reset() cancelled the wait; rejects on timeout (RESTART_TIMEOUT)
    *   or a detected failed update (UPDATE_FAILED)
@@ -198,7 +211,8 @@ export function useServiceRestart() {
       autoReload = true,
       message = 'Services restarting',
       timeoutMessage = 'Restart is taking longer than expected. Try refreshing the page in a minute.',
-      failureMessage = 'Update failed — the system is still on the previous version. Check the system logs for details.'
+      failureMessage = 'Update failed — the system is still on the previous version. Check the system logs for details.',
+      progressUrl = null
     } = options
 
     isRestarting.value = true
@@ -219,6 +233,7 @@ export function useServiceRestart() {
 
     return new Promise((resolve, reject) => {
       let progressTimer = null
+      let stagePollTimer = null
       let pendingTimer = null
       let cancelled = false
       let lastDisplayedElapsedSec = 0
@@ -227,6 +242,10 @@ export function useServiceRestart() {
         if (progressTimer !== null) {
           clearInterval(progressTimer)
           progressTimer = null
+        }
+        if (stagePollTimer !== null) {
+          clearInterval(stagePollTimer)
+          stagePollTimer = null
         }
       }
 
@@ -250,13 +269,38 @@ export function useServiceRestart() {
         reject(new Error(errorCode))
       }
 
+      // Latest stage from the host's update-progress file, shown in place of
+      // the generic subject. Plain variable, not a ref: it only feeds the
+      // next banner tick. A fetch resolving after cancellation just writes a
+      // string nobody reads.
+      let stageMessage = ''
+      let stageFetchPending = false
+
+      const pollStageMessage = () => {
+        // Raw fetch on purpose: the axios client is rooted at /api, which is
+        // down for the whole window this poll exists to cover. The pending
+        // guard keeps an endpoint that hangs (rather than failing fast) from
+        // stacking a request per tick over a long wait.
+        if (stageFetchPending) return
+        stageFetchPending = true
+        fetch(progressUrl, { cache: 'no-store' })
+          .then(response => (response.ok ? response.json() : null))
+          .then(data => {
+            if (typeof data?.message === 'string' && data.message) {
+              stageMessage = data.message
+            }
+          })
+          .catch(() => {})
+          .finally(() => { stageFetchPending = false })
+      }
+
       const updateProgressMessage = () => {
         const elapsedIntervals = Math.floor((Date.now() - startTime) / PROGRESS_INTERVAL_MS)
         const elapsedSec = elapsedIntervals * (PROGRESS_INTERVAL_MS / 1000)
         if (elapsedSec <= lastDisplayedElapsedSec) return
 
         lastDisplayedElapsedSec = elapsedSec
-        restartMessage.value = `${message}... (${elapsedSec}s)`
+        restartMessage.value = `${stageMessage || message}... (${elapsedSec}s)`
       }
 
       const checkConnection = async () => {
@@ -340,7 +384,21 @@ export function useServiceRestart() {
         }
       }
 
-      progressTimer = setInterval(updateProgressMessage, PROGRESS_INTERVAL_MS)
+      // Elapsed seconds only earn their place on an open-ended wait (an
+      // update can run for many minutes). A restart is short and already
+      // steps through its own phase messages, so a counter there just makes
+      // a normal wait look like something is going wrong.
+      if (expectation === 'update') {
+        progressTimer = setInterval(updateProgressMessage, PROGRESS_INTERVAL_MS)
+        if (progressUrl) {
+          // Stage polling gets its own interval, decoupled from the banner
+          // repaint so a rework of the counter display can't silently stop
+          // the transport. Primed immediately so the first tick can already
+          // show a real stage.
+          pollStageMessage()
+          stagePollTimer = setInterval(pollStageMessage, PROGRESS_INTERVAL_MS)
+        }
+      }
 
       // Start checking after initial delay (allow time for shutdown)
       pendingTimer = setTimeout(checkConnection, initialDelay)

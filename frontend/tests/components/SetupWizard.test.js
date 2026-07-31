@@ -284,7 +284,7 @@ describe('SetupWizard', () => {
       expect(mockWaitForRestart).toHaveBeenCalledWith(
         expect.objectContaining({
           autoReload: true,
-          message: 'Applying settings'
+          message: 'Settings saved — starting BirdNET'
         })
       )
     })

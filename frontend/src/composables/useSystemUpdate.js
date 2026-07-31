@@ -205,7 +205,9 @@ export function useSystemUpdate() {
         maxWaitSeconds: UPDATE_MAX_WAIT_SECONDS,
         autoReload: true,
         message: 'System updating',
-        timeoutMessage: 'Update taking longer than expected. Try refreshing later.'
+        timeoutMessage: 'Update taking longer than expected. Try refreshing later.',
+        // Native only — the HA path has no stage file (see the JSDoc)
+        progressUrl: '/update-progress'
       })
       if (!completed) {
         updating.value = false // cancelled via reset()

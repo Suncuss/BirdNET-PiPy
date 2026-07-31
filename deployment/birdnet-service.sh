@@ -10,6 +10,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 RESTART_FLAG_FILE="$PROJECT_ROOT/data/flags/restart-backend"
 UPDATE_FLAG_FILE="$PROJECT_ROOT/data/flags/update-requested"
 UPDATE_STATUS_FILE="$PROJECT_ROOT/data/flags/update-status"
+UPDATE_PROGRESS_FILE="$PROJECT_ROOT/data/flags/update-progress"
 CHECK_INTERVAL=5  # Check for restart and update flags every 5 seconds
 
 # Colors for output
@@ -269,6 +270,11 @@ start_containers() {
 
     if docker compose up -d; then
         log_info "Docker containers started successfully"
+        # A full stack start means any update is over; drop the stage file so
+        # /update-progress doesn't keep serving the last stage between
+        # updates. (The banner itself is protected by the dispatch-time
+        # reset in the API — this is just hygiene.)
+        rm -f "$UPDATE_PROGRESS_FILE" 2>/dev/null || true
     else
         log_error "Failed to start Docker containers"
         return 1

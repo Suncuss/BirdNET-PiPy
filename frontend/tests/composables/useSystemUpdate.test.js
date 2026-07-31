@@ -440,6 +440,35 @@ describe('useSystemUpdate', () => {
     )
   })
 
+  it('native update points the wait at the host update-progress stage file', async () => {
+    window.confirm.mockReturnValue(true)
+    mockCaptureBaseline.mockResolvedValueOnce({
+      bootId: 'b1', commit: 'c1', version: '0.9.0', runtimeMode: 'native'
+    })
+    mockLongApi.post.mockResolvedValueOnce({ data: { status: 'update_triggered' } })
+
+    const { triggerUpdate } = useSystemUpdate()
+    await triggerUpdate()
+
+    expect(mockServiceRestart.waitForRestart).toHaveBeenCalledWith(
+      expect.objectContaining({ progressUrl: '/update-progress' })
+    )
+  })
+
+  it('HA update never passes a progressUrl (Supervisor owns that update)', async () => {
+    const { triggerUpdate, versionInfo } = useSystemUpdate()
+    versionInfo.value = { runtime_mode: 'ha' }
+    mockLongApi.post.mockResolvedValueOnce({
+      data: { status: 'update_triggered', boot_id: 'boot-from-dispatch' }
+    })
+
+    await triggerUpdate(true)
+
+    expect(mockServiceRestart.waitForRestart).toHaveBeenCalledTimes(1)
+    const options = mockServiceRestart.waitForRestart.mock.calls[0][0]
+    expect(options.progressUrl).toBeUndefined()
+  })
+
   it('falls back to the trigger response boot_id when baseline capture failed', async () => {
     window.confirm.mockReturnValue(true)
     // mockCaptureBaseline default resolves null (capture failed)

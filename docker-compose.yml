@@ -134,6 +134,10 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     logging: *default-logging
+    volumes:
+      # nginx serves data/flags/update-progress at /update-progress during
+      # native updates — see frontend/nginx.conf and install.sh perform_update
+      - ./data/flags:/var/lib/birdnet-flags:ro
     ports:
       - "80:80"
     environment:

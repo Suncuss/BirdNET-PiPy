@@ -736,7 +736,7 @@ export default {
           expect: 'restart',
           baseline: baseline || triggerBaseline,
           autoReload: true,
-          message: 'Applying settings',
+          message: 'Settings saved — starting BirdNET',
           // A timeout is not a save failure: the PUT already succeeded.
           timeoutMessage: 'Settings saved — the restart is taking longer than expected. Refresh the page in a minute.'
         })
