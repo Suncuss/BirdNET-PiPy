@@ -2,10 +2,11 @@
 
 ## [Unreleased]
 
+- Improved the dashboard's Activity Overview on desktop: tall monitors now get a taller card showing 15 species instead of 10, using vertical space that previously sat blank. Laptop-sized windows and mobile keep the compact 10-row card
 - Added an installer option to choose the web interface port (`--port 8080`) for systems where port 80 is already taken, e.g. by Pi-hole or another web server. The choice persists across updates, and `--update --port N` moves an existing installation
 - Added pre-built AMD64 images: releases now publish multi-arch (ARM64 + AMD64) container images, so x86 installs pull them during install and update instead of building everything locally
 - Added an update screen for visitors who open the app while a native update is running: instead of a dashboard full of failed requests, the page now explains an update is in progress, shows its current stage, and reloads itself when the system is back
-- Improved the update banner on native installs to show what the update is actually doing ("Downloading updated images (2 of 3)", "Building images locally", …) instead of only a ticking timer. The web server now stays up through the long download/build phase, so the page keeps responding where it previously showed a connection error until the update finished
+- Improved the update banner to show what the update is actually doing ("Downloading updated images (2 of 3)", "Building images locally", …) in place of the elapsed-seconds counter, which made a normal update look like it was stalling; Home Assistant updates, which have no stages to report, show a steady "Updating via Home Assistant". On native installs the web server now stays up through the long download/build phase, so the page keeps responding where it previously showed a connection error until the update finished
 - Changed the documented hardware support to Raspberry Pi 5, 4, 3, and Zero 2W, with a note on what to expect from each, since the low-memory work in recent releases made the smaller boards usable. Previously the docs asked for a Pi 4 or newer with 2GB+ RAM
 - Improved the wait shown after saving settings: the banner now reads "Settings saved — restarting services to apply" instead of "Applying settings changes", and drops the elapsed-seconds counter. The save itself is instant; the wait is the service restart, and a ticking timer made a normal restart look like a slow save
 - Improved the species detail page layout on desktop: the distribution chart now stretches to fill its card instead of leaving blank space beneath it

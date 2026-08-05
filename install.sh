@@ -966,8 +966,8 @@ write_flag_file() {
 # Record a coarse stage for the frontend's update banner. During a native
 # update the frontend nginx container is kept running (see perform_update) and
 # serves data/flags/update-progress at /update-progress, so the SPA can show
-# real stages ("Downloading updated images (2 of 3)") instead of a blind
-# elapsed counter while the API is down. Served UNAUTHENTICATED — callers must
+# real stages ("Downloading updated images (2 of 3)") instead of one static
+# message for the whole outage. Served UNAUTHENTICATED — callers must
 # pass only fixed public-safe strings and counters, never branch names, paths,
 # or command output. No-op outside update mode: fresh installs share
 # pull_or_build/build_application but have nothing serving the file.

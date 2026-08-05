@@ -335,12 +335,12 @@ describe('useServiceRestart', () => {
       })
 
       // The stage poll is primed at wait start (before any timer fires), so
-      // the very first banner tick can already render a real stage.
+      // a real stage lands as soon as the fetch resolves.
       expect(fetchMock).toHaveBeenCalledWith('/update-progress', { cache: 'no-store' })
       expect(restartMessage.value).toBe('System updating...')
 
-      await vi.advanceTimersByTimeAsync(5000)
-      expect(restartMessage.value).toBe('Downloading updated images (1 of 3)... (5s)')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(restartMessage.value).toBe('Downloading updated images (1 of 3)...')
 
       reset()
       await expect(promise).resolves.toBe(false)
@@ -365,7 +365,7 @@ describe('useServiceRestart', () => {
       })
 
       await vi.advanceTimersByTimeAsync(15000)
-      expect(restartMessage.value).toBe('System updating... (15s)')
+      expect(restartMessage.value).toBe('System updating...')
 
       reset()
       await expect(promise).resolves.toBe(false)
@@ -388,6 +388,35 @@ describe('useServiceRestart', () => {
 
       reset()
       await expect(promise).resolves.toBe(false)
+    })
+
+    it('ignores a stage that lands after the wait has settled', async () => {
+      // The stage fetch is async, so a slow response can resolve once the
+      // banner has moved on — it must not overwrite the completion message.
+      let resolveStage
+      fetchMock.mockImplementationOnce(() => new Promise((resolve) => {
+        resolveStage = resolve
+      }))
+      mockApi.get.mockResolvedValue(UPDATED_SERVER)
+
+      const { restartMessage, waitForRestart } = useServiceRestart()
+      const promise = waitForRestart({
+        expect: 'update',
+        baseline: BASELINE,
+        initialDelay: 100,
+        postConnectDelay: 0,
+        autoReload: false,
+        message: 'System updating',
+        progressUrl: '/update-progress'
+      })
+
+      await vi.advanceTimersByTimeAsync(200)
+      await promise
+      expect(restartMessage.value).toBe('Services ready!')
+
+      resolveStage(stageResponse('Building images locally'))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(restartMessage.value).toBe('Services ready!')
     })
   })
 
@@ -995,7 +1024,10 @@ describe('useServiceRestart', () => {
     expect(restartMessage.value).toContain('ready')
   })
 
-  it('updates elapsed progress in five-second increments during an update', async () => {
+  it('holds the banner subject steady during an update, with no elapsed counter', async () => {
+    // The banner changes only when the host reports a new stage. A ticking
+    // counter made a normal wait read as slow; the spinner beside the
+    // message already says "still working".
     let resolveProbe
     mockApi.get.mockImplementationOnce(() => new Promise((resolve) => {
       resolveProbe = resolve
@@ -1012,27 +1044,17 @@ describe('useServiceRestart', () => {
     })
 
     await vi.advanceTimersByTimeAsync(100)
-    await vi.advanceTimersByTimeAsync(4900)
-    expect(restartMessage.value).toBe('System updating... (5s)')
-
-    await vi.advanceTimersByTimeAsync(5000)
-    expect(restartMessage.value).toBe('System updating... (10s)')
-
-    await vi.advanceTimersByTimeAsync(5000)
-    expect(restartMessage.value).toBe('System updating... (15s)')
+    await vi.advanceTimersByTimeAsync(15000)
+    expect(restartMessage.value).toBe('System updating...')
 
     resolveProbe(UPDATED_SERVER)
     await vi.advanceTimersByTimeAsync(0)
     await promise
 
     expect(restartMessage.value).toBe('Services ready!')
-    await vi.advanceTimersByTimeAsync(5000)
-    expect(restartMessage.value).toBe('Services ready!')
   })
 
-  it('omits the elapsed counter during a restart, keeping the phase messages', async () => {
-    // A restart is short and its phases already advance; a ticking counter
-    // only makes a normal wait read as slow.
+  it('holds the banner subject steady during a restart', async () => {
     let resolveProbe
     mockApi.get.mockImplementationOnce(() => new Promise((resolve) => {
       resolveProbe = resolve

@@ -616,6 +616,93 @@ describe('Dashboard', () => {
     expect(reverseButton).toBeFalsy()
   })
 
+  describe('activity overview row sizing', () => {
+    const speciesRows = (n) => Array.from({ length: n }, (_, i) => ({
+      species: `Species ${i}`,
+      hourlyActivity: [1, ...Array(23).fill(0)]
+    }))
+
+    // Controllable matchMedia stub: Dashboard reads .matches at setup and
+    // listens for 'change' — dispatch() drives a tier flip.
+    const stubViewportTier = (matches) => {
+      const listeners = new Set()
+      const mql = {
+        matches,
+        addEventListener: (_, fn) => listeners.add(fn),
+        removeEventListener: (_, fn) => listeners.delete(fn),
+        dispatch (next) {
+          this.matches = next
+          listeners.forEach(fn => fn({ matches: next }))
+        },
+        get listenerCount () { return listeners.size }
+      }
+      vi.stubGlobal('matchMedia', vi.fn(() => mql))
+      return mql
+    }
+
+    beforeEach(() => {
+      const state = baseState()
+      state.detailedBirdActivityData.value = speciesRows(20)
+      useFetchBirdData.mockReturnValue(state)
+    })
+
+    it('renders 10 rows in the compact card on laptop-sized viewports', async () => {
+      stubViewportTier(false)
+      const wrapper = mountDashboard()
+      await flushPromises()
+
+      expect(useBirdCharts().createTotalObservationsChart.mock.lastCall[1]).toHaveLength(10)
+      expect(wrapper.html()).toContain('lg:h-[375px]')
+    })
+
+    it('renders 15 rows in a taller card on tall desktop viewports', async () => {
+      stubViewportTier(true)
+      const wrapper = mountDashboard()
+      await flushPromises()
+
+      // Both canvases get the same sliced list (lockstep)
+      expect(useBirdCharts().createTotalObservationsChart.mock.lastCall[1]).toHaveLength(15)
+      expect(useBirdCharts().createHourlyActivityHeatmap.mock.lastCall[1]).toHaveLength(15)
+      expect(wrapper.html()).toContain('lg:h-[500px]')
+    })
+
+    it('gates the tall tier on lg width and the tall-viewport height', async () => {
+      stubViewportTier(false)
+      mountDashboard()
+      await flushPromises()
+
+      expect(window.matchMedia).toHaveBeenCalledWith(
+        '(min-width: 1024px) and (min-height: 1150px)'
+      )
+    })
+
+    it('redraws with the new tier when the media query flips', async () => {
+      const mql = stubViewportTier(false)
+      const wrapper = mountDashboard()
+      await flushPromises()
+
+      mql.dispatch(true)
+      await flushPromises()
+      expect(useBirdCharts().createTotalObservationsChart.mock.lastCall[1]).toHaveLength(15)
+      expect(wrapper.html()).toContain('lg:h-[500px]')
+
+      mql.dispatch(false)
+      await flushPromises()
+      expect(useBirdCharts().createTotalObservationsChart.mock.lastCall[1]).toHaveLength(10)
+      expect(wrapper.html()).toContain('lg:h-[375px]')
+    })
+
+    it('removes its media-query listener on unmount', async () => {
+      const mql = stubViewportTier(false)
+      const wrapper = mountDashboard()
+      await flushPromises()
+      expect(mql.listenerCount).toBe(1)
+
+      wrapper.unmount()
+      expect(mql.listenerCount).toBe(0)
+    })
+  })
+
   describe('unique species toggle', () => {
     it('renders pill toggle with All and Unique options', async () => {
       const wrapper = mountDashboard()

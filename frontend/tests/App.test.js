@@ -9,7 +9,15 @@ import { useAppStatus } from '@/composables/useAppStatus'
 let infoSpy
 let debugSpy
 let errorSpy
-const useLoggerMock = vi.fn()
+// Hoisted because useUpdateOverlay.js calls useLogger() at module scope,
+// which runs during import — before this file's consts initialize. The
+// default implementation hands out a discard-logger for those module-scope
+// callers; beforeEach overrides it with per-test spies.
+const useLoggerMock = vi.hoisted(() => vi.fn(() => ({
+  info: () => {},
+  debug: () => {},
+  error: () => {}
+})))
 
 vi.mock('@/composables/useLogger', () => ({
   useLogger: (...args) => useLoggerMock(...args)

@@ -7,8 +7,12 @@
       v-if="locationConfigured !== false && !authGated"
       class="p-4 grid grid-cols-1 lg:grid-cols-3 gap-4"
     >
-      <!-- Activity Overview -->
-      <div class="bg-white rounded-lg shadow p-4 lg:col-span-3 h-[300px] lg:h-[375px] flex flex-col">
+      <!-- Activity Overview — card height tracks the viewport tier; see
+           ACTIVITY_TIERS in the script. -->
+      <div
+        class="bg-white rounded-lg shadow p-4 lg:col-span-3 h-[300px] flex flex-col"
+        :class="activityTier.heightClass"
+      >
         <div class="flex items-center justify-between mb-2">
           <h2 class="text-lg font-semibold">
             Activity Overview
@@ -585,6 +589,33 @@ export default {
         const showLeastCommon = ref(false)
         const isActivityUpdating = ref(false)
 
+        // Activity Overview tiers. The tall tier matches the server's
+        // activityOverview cap (the client slices down), and 500px carries
+        // 15 rows at the same ~25px/row density the 375px card gives 10.
+        const ACTIVITY_TIERS = {
+            base: { rows: 10, heightClass: 'lg:h-[375px]' },
+            tall: { rows: 15, heightClass: 'lg:h-[500px]' }
+        }
+        // min-width is Tailwind's lg breakpoint (below it the card is
+        // fixed-height and the heatmap hidden); min-height clears a
+        // fullscreen 16" MacBook Pro viewport (1117px), so built-in laptop
+        // displays always stay compact while taller desktop monitors
+        // (1440p-class and up) get the tall tier.
+        const tallViewport = window.matchMedia(
+            '(min-width: 1024px) and (min-height: 1150px)'
+        )
+        const isTallViewport = ref(tallViewport.matches)
+        const activityTier = computed(() => (
+            isTallViewport.value ? ACTIVITY_TIERS.tall : ACTIVITY_TIERS.base
+        ))
+
+        // 'change' only fires when the tier actually flips, so no debounce
+        // is needed; the redraw comes from the client-side cache, no refetch.
+        const onTierChange = (event) => {
+            isTallViewport.value = event.matches
+            if (isActive) redrawActivityCharts()
+        }
+
         // Recent observations filter: true = Unique (one per species, the
         // default), false = All. Only an explicit stored "false" opts into All.
         const showUniqueSpecies = ref(
@@ -750,8 +781,7 @@ export default {
                 createHourlyChart(hourlyActivityChart, hourlyBirdActivityData.value, { animate: initialLoad.value });
             }
             if (!isDataEmpty.value) {
-                createTotalObsChart(totalObservationsChart, detailedBirdActivityData.value, { animate: initialLoad.value, title: null });
-                createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: initialLoad.value, title: null, date: getLocalDateString() });
+                await redrawActivityCharts(initialLoad.value)
             }
 
             // Initialize spectrogram canvas after DOM updates with new data
@@ -762,6 +792,7 @@ export default {
 
         // Lifecycle hooks
         onMounted(async () => {
+            tallViewport.addEventListener('change', onTierChange)
             // Only start fetching if location is already configured
             if (locationConfigured.value === true) {
                 await startDashboard();
@@ -801,6 +832,8 @@ export default {
                 document.removeEventListener('visibilitychange', visibilityHandler)
                 visibilityHandler = null
             }
+
+            tallViewport.removeEventListener('change', onTierChange)
 
             pauseLatestObservation()
 
@@ -1095,18 +1128,25 @@ export default {
             isActivityUpdating.value = true
             try {
                 setActivityOrder(currentOrder())
-                await createTotalObsChart(totalObservationsChart, detailedBirdActivityData.value, { animate: true, title: null })
-                await createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate: true, title: null, date: getLocalDateString() })
+                await redrawActivityCharts(true)
             } finally {
                 isActivityUpdating.value = false
             }
         }
 
+        // Redraw the two Activity Overview canvases from the species list
+        // sliced to the current tier — both canvases always get the same
+        // list, which keeps the heatmap and axis-link overlays in lockstep.
+        const redrawActivityCharts = async (animate = false) => {
+            const rows = detailedBirdActivityData.value.slice(0, activityTier.value.rows)
+            await createTotalObsChart(totalObservationsChart, rows, { animate, title: null })
+            await createHeatmap(hourlyActivityHeatmap, rows, { animate, title: null, date: getLocalDateString() })
+        }
+
         // Redraw charts function using composable methods
         const redrawCharts = async (animate = false) => {
             initialLoad.value = false;
-            await createTotalObsChart(totalObservationsChart, detailedBirdActivityData.value, { animate, title: null });
-            await createHeatmap(hourlyActivityHeatmap, detailedBirdActivityData.value, { animate, title: null, date: getLocalDateString() });
+            await redrawActivityCharts(animate)
             await createHourlyChart(hourlyActivityChart, hourlyBirdActivityData.value, { animate });
         };
 
@@ -1137,6 +1177,7 @@ export default {
             showSpectrogram,
             hourlyBirdActivityData,
             totalObservationsChart,
+            activityTier,
             speciesAxisLayout,
             timeAxisLayout,
             hourlyActivityHeatmap,
