@@ -54,7 +54,13 @@ run_frontend_lint() {
         echo "Running with --fix enabled"
     fi
 
+    # Run as the host user so npm ci doesn't fill the bind-mounted
+    # node_modules with root-owned files (later host-side npm writes then
+    # fail with EACCES). npm's cache moves to /tmp because the container
+    # HOME may not be writable for an arbitrary --user uid.
     docker run --rm \
+        --user "$(id -u):$(id -g)" \
+        -e npm_config_cache=/tmp/.npm \
         -v "$(pwd)/frontend:/app" \
         -w /app \
         node:20-alpine \
@@ -79,11 +85,16 @@ run_backend_lint() {
         echo "Running with --fix enabled"
     fi
 
+    # Run as the host user so ruff's cache and --fix rewrites stay
+    # host-owned. pip installs to $HOME/.local (HOME=/tmp, writable for
+    # any --user uid), so ruff is invoked by its installed path.
     docker run --rm \
+        --user "$(id -u):$(id -g)" \
+        -e HOME=/tmp \
         -v "$(pwd)/backend:/app" \
         -w /app \
         python:3.11-slim \
-        sh -c "pip install -q ruff && ruff check . $fix_flag" || BACKEND_FAILED=true
+        sh -c "pip install -q --user ruff && /tmp/.local/bin/ruff check . $fix_flag" || BACKEND_FAILED=true
 
     if [ "$BACKEND_FAILED" = true ]; then
         echo -e "${RED}[LINT]${NC} Backend: issues found"

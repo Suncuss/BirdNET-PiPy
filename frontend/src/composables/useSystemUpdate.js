@@ -1,6 +1,7 @@
 import { ref, computed } from 'vue'
 import api, { createLongRequest } from '@/services/api'
 import { UPDATE_DISMISSED_UNTIL_KEY } from '@/utils/storageKeys'
+import { UPDATE_PROGRESS_URL } from '@/utils/updateStage'
 import { useLogger } from './useLogger'
 import {
   captureRestartBaseline,
@@ -205,7 +206,9 @@ export function useSystemUpdate() {
         maxWaitSeconds: UPDATE_MAX_WAIT_SECONDS,
         autoReload: true,
         message: 'System updating',
-        timeoutMessage: 'Update taking longer than expected. Try refreshing later.'
+        timeoutMessage: 'Update taking longer than expected. Try refreshing later.',
+        // Native only — the HA path has no stage file (see the JSDoc)
+        progressUrl: UPDATE_PROGRESS_URL
       })
       if (!completed) {
         updating.value = false // cancelled via reset()

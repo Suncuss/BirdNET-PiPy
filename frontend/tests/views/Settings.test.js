@@ -966,7 +966,7 @@ describe('Settings', () => {
       expect(mockRequestRestart).toHaveBeenCalled()
       expect(mockWaitForRestart).toHaveBeenCalledWith(expect.objectContaining({
         autoReload: true,
-        message: 'Applying settings changes'
+        message: 'Settings saved — restarting services to apply'
       }))
     })
 
@@ -1230,7 +1230,7 @@ describe('Settings', () => {
       expect(mockRequestRestart).toHaveBeenCalled()
       expect(mockWaitForRestart).toHaveBeenCalledWith(expect.objectContaining({
         autoReload: true,
-        message: 'Applying settings changes'
+        message: 'Settings saved — restarting services to apply'
       }))
       expect(wrapper.vm.showUnsavedModal).toBe(false)
     })

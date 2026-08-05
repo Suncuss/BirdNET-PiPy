@@ -91,4 +91,25 @@ describe('api service 401 interceptor', () => {
     const err = error(401, '/settings')
     await expect(errorHandler()(err)).rejects.toBe(err)
   })
+
+  const unreachableCalls = () => dispatchSpy.mock.calls.filter(
+    ([event]) => event?.type === 'api:unreachable'
+  )
+
+  it('dispatches api:unreachable on 502 (dead upstream behind nginx)', async () => {
+    await expect(errorHandler()(error(502, '/dashboard'))).rejects.toBeDefined()
+    expect(unreachableCalls()).toHaveLength(1)
+  })
+
+  it('dispatches api:unreachable when there is no response at all', async () => {
+    const networkError = { config: { url: '/dashboard' }, message: 'Network Error' }
+    await expect(errorHandler()(networkError)).rejects.toBeDefined()
+    expect(unreachableCalls()).toHaveLength(1)
+  })
+
+  it('does NOT dispatch api:unreachable on ordinary HTTP errors', async () => {
+    await expect(errorHandler()(error(401, '/settings'))).rejects.toBeDefined()
+    await expect(errorHandler()(error(500, '/settings'))).rejects.toBeDefined()
+    expect(unreachableCalls()).toHaveLength(0)
+  })
 })

@@ -158,6 +158,10 @@
       v-if="showWelcome"
       @done="showWelcome = false"
     />
+
+    <!-- Full-page explainer for visitors who load the app while a native
+         update has the backend down (self-gating via useUpdateOverlay) -->
+    <UpdateOverlay />
   </div>
 </template>
 
@@ -171,10 +175,12 @@ import { useAppStatus } from '@/composables/useAppStatus'
 import { useSystemUpdate } from '@/composables/useSystemUpdate'
 import { useRecorderHealth } from '@/composables/useRecorderHealth'
 import { useScrollToTop } from '@/composables/useScrollToTop'
+import { useUpdateOverlay } from '@/composables/useUpdateOverlay'
 import { DISPLAY_NAME } from './version'
 import SetupWizard from '@/components/SetupWizard.vue'
 import LoginModal from '@/components/LoginModal.vue'
 import WelcomeOverlay from '@/components/WelcomeOverlay.vue'
+import UpdateOverlay from '@/components/UpdateOverlay.vue'
 import WarningIcon from '@/components/icons/WarningIcon.vue'
 import { WELCOME_PENDING_KEY } from '@/utils/storageKeys'
 
@@ -184,6 +190,7 @@ export default {
     SetupWizard,
     LoginModal,
     WelcomeOverlay,
+    UpdateOverlay,
     WarningIcon
   },
   setup() {
@@ -196,6 +203,7 @@ export default {
     const systemUpdate = useSystemUpdate()
     const recorderHealth = useRecorderHealth()
     const scrollToTop = useScrollToTop()
+    const updateOverlay = useUpdateOverlay()
 
     // Whether the global status FABs may occupy the bottom-right corner: not on
     // Settings, and not while a page-level scroll-to-top button claims it.
@@ -335,6 +343,9 @@ export default {
 
       // Listen for auth required events from API interceptor
       window.addEventListener('auth:required', handleAuthRequired)
+      // Backend-unreachable events: the overlay checks whether a native
+      // update is actually running before showing anything
+      window.addEventListener('api:unreachable', updateOverlay.checkForActiveUpdate)
 
       // Ensure auth status is loaded (shares the one-time load with the
       // router guard — see useAuth.ensureAuthLoaded)
@@ -360,6 +371,7 @@ export default {
 
     onUnmounted(() => {
       window.removeEventListener('auth:required', handleAuthRequired)
+      window.removeEventListener('api:unreachable', updateOverlay.checkForActiveUpdate)
       cancelSettingsRetry()
     })
 

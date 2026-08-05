@@ -17,9 +17,19 @@ const LONG_TIMEOUT = 300000
 // The session-expired flow should only fire for non-auth endpoints.
 const isAuthEndpoint = (url) => typeof url === 'string' && url.includes('/auth/')
 
-const authErrorHandler = (error) => {
+// Backend-unreachable shapes: nginx proxying to a dead upstream (502/504) or
+// no response at all (network error, timeout). May mean a native update has
+// the stack down — the update overlay listens and decides (it requires a
+// fresh /update-progress stage, so ordinary outages don't trigger it).
+const isServerUnreachable = (error) =>
+  !error.response || error.response.status === 502 || error.response.status === 504
+
+const responseErrorHandler = (error) => {
   if (error.response?.status === 401 && !isAuthEndpoint(error.config?.url)) {
     window.dispatchEvent(new CustomEvent('auth:required'))
+  }
+  if (isServerUnreachable(error)) {
+    window.dispatchEvent(new CustomEvent('api:unreachable'))
   }
   return Promise.reject(error)
 }
@@ -30,7 +40,7 @@ function createApiInstance(timeout) {
     timeout,
     headers: { 'Content-Type': 'application/json' }
   })
-  instance.interceptors.response.use((response) => response, authErrorHandler)
+  instance.interceptors.response.use((response) => response, responseErrorHandler)
   return instance
 }
 

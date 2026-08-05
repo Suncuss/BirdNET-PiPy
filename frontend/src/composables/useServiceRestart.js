@@ -1,8 +1,15 @@
 import { ref } from 'vue'
 import api from '@/services/api'
+import { fetchUpdateStage } from '@/utils/updateStage'
 import { useLogger } from './useLogger'
 
-const PROGRESS_INTERVAL_MS = 5000
+const STAGE_POLL_INTERVAL_MS = 5000
+
+// True while any waitForRestart() is pending, across instances. The
+// boot-time update overlay (useUpdateOverlay) checks this so the tab that
+// initiated a restart/update — whose banner already owns the UX — never
+// also gets the overlay when its identity probes fail mid-wait.
+export const managedWaitActive = ref(false)
 
 /**
  * Detect errors that likely mean restart was accepted but HTTP response was cut off.
@@ -167,15 +174,27 @@ export function useServiceRestart() {
    * to requiring at least one failed probe before accepting a success.
    *
    * @param {Object} options
-   * @param {'restart'|'update'} options.expect - Which transition proves completion (default: 'restart')
+   * @param {'restart'|'update'} options.expect - Which transition proves
+   *   completion. Identity semantics only: wait length is maxWaitSeconds and
+   *   banner staging is progressUrl. Default 'restart'
    * @param {Object|null} options.baseline - Identity from captureRestartBaseline() taken before the trigger
    * @param {number} options.maxWaitSeconds - Max time to wait (default: 150s / 2.5 min)
    * @param {number} options.pollInterval - Polling interval in ms (default: 5000)
    * @param {number} options.initialDelay - Delay before first check in ms (default: 10000)
    * @param {number} options.postConnectDelay - Extra delay after connection before reload (default: 15000)
    * @param {boolean} options.autoReload - Whether to reload page on success (default: true)
+   * @param {string} options.message - Progress banner subject, no trailing
+   *   punctuation: this appends '...'. Unlike timeoutMessage/failureMessage,
+   *   which are used verbatim
    * @param {string} options.timeoutMessage - restartError text shown when the wait times out
    * @param {string} options.failureMessage - restartError text shown when the update failed
+   * @param {string|null} options.progressUrl - Same-origin URL of the host's
+   *   update-stage file (native updates pass '/update-progress', served
+   *   statically by the nginx container that stays up through the update).
+   *   When set, a poll fetches it every 5s and each fresh stage message
+   *   replaces the generic subject in the banner. Any fetch/parse failure —
+   *   endpoint absent (HA, older stack), server down, malformed body — is
+   *   silently ignored and the last message stays.
    * @returns {Promise<boolean>} - Resolves true when service is back, false
    *   when reset() cancelled the wait; rejects on timeout (RESTART_TIMEOUT)
    *   or a detected failed update (UPDATE_FAILED)
@@ -198,10 +217,12 @@ export function useServiceRestart() {
       autoReload = true,
       message = 'Services restarting',
       timeoutMessage = 'Restart is taking longer than expected. Try refreshing the page in a minute.',
-      failureMessage = 'Update failed — the system is still on the previous version. Check the system logs for details.'
+      failureMessage = 'Update failed — the system is still on the previous version. Check the system logs for details.',
+      progressUrl = null
     } = options
 
     isRestarting.value = true
+    managedWaitActive.value = true
     restartMessage.value = `${message}...`
     restartError.value = ''
 
@@ -218,23 +239,22 @@ export function useServiceRestart() {
       baseline?.updateStatus != null && baseline.updateStatus !== 'failed'
 
     return new Promise((resolve, reject) => {
-      let progressTimer = null
+      let stagePollTimer = null
       let pendingTimer = null
       let cancelled = false
-      let lastDisplayedElapsedSec = 0
 
-      const stopProgressTimer = () => {
-        if (progressTimer !== null) {
-          clearInterval(progressTimer)
-          progressTimer = null
-        }
+      // Nulling the handle is what makes it the liveness flag read below.
+      const stopStagePolling = () => {
+        clearInterval(stagePollTimer)
+        stagePollTimer = null
       }
 
       cancelActiveWait = () => {
         cancelled = true
         cancelActiveWait = null
-        stopProgressTimer()
+        stopStagePolling()
         clearTimeout(pendingTimer)
+        managedWaitActive.value = false
         // Resolve, don't reject: every caller's catch turns unexpected
         // errors into user-facing failure banners, and a reset() usually
         // means the user just dismissed one.
@@ -242,21 +262,31 @@ export function useServiceRestart() {
       }
 
       const settleWithError = (errorCode, bannerText) => {
-        stopProgressTimer()
+        stopStagePolling()
         cancelActiveWait = null
         restartMessage.value = ''
         restartError.value = bannerText
         isRestarting.value = false
+        managedWaitActive.value = false
         reject(new Error(errorCode))
       }
 
-      const updateProgressMessage = () => {
-        const elapsedIntervals = Math.floor((Date.now() - startTime) / PROGRESS_INTERVAL_MS)
-        const elapsedSec = elapsedIntervals * (PROGRESS_INTERVAL_MS / 1000)
-        if (elapsedSec <= lastDisplayedElapsedSec) return
+      let stageFetchPending = false
 
-        lastDisplayedElapsedSec = elapsedSec
-        restartMessage.value = `${message}... (${elapsedSec}s)`
+      const pollStageMessage = () => {
+        // The pending guard keeps an endpoint that hangs (rather than
+        // failing fast) from stacking a request per tick over a long wait.
+        if (stageFetchPending) return
+        stageFetchPending = true
+        fetchUpdateStage(progressUrl)
+          .then(stage => {
+            // Still-polling check: the fetch is async, so a response landing
+            // after the wait settled would clobber 'Services ready!'.
+            if (stage && stagePollTimer !== null) {
+              restartMessage.value = `${stage.message}...`
+            }
+          })
+          .finally(() => { stageFetchPending = false })
       }
 
       const checkConnection = async () => {
@@ -313,13 +343,14 @@ export function useServiceRestart() {
             return
           }
 
-          stopProgressTimer()
+          stopStagePolling()
           logger.info('API reconnected, waiting for all services to initialize...')
           restartMessage.value = 'Waiting for services to initialize...'
 
           // Wait extra time for all services (BirdNet inference, etc.) to fully start
           pendingTimer = setTimeout(() => {
             cancelActiveWait = null
+            managedWaitActive.value = false
             logger.info('Service restart complete')
             restartMessage.value = 'Services ready!'
 
@@ -340,7 +371,17 @@ export function useServiceRestart() {
         }
       }
 
-      progressTimer = setInterval(updateProgressMessage, PROGRESS_INTERVAL_MS)
+      // The banner repaints only when the host reports a new stage — no
+      // elapsed counter, because a ticking number made a normal wait read as
+      // something going wrong and the spinner beside it already carries
+      // "still working".
+      if (progressUrl) {
+        // Interval first, so the primed call's guard is already armed when
+        // its fetch resolves. Primed at all so a real stage replaces the
+        // generic subject as soon as the host has one, not a tick later.
+        stagePollTimer = setInterval(pollStageMessage, STAGE_POLL_INTERVAL_MS)
+        pollStageMessage()
+      }
 
       // Start checking after initial delay (allow time for shutdown)
       pendingTimer = setTimeout(checkConnection, initialDelay)

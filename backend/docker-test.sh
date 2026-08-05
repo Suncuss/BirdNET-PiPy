@@ -20,8 +20,14 @@ echo "Test image: ${IMAGE}"
 # Build test image if needed
 docker build -f Dockerfile.test -t "$IMAGE" .
 
-# Run tests in container
+# Run tests in container as the host user so pytest caches, coverage
+# output, and test artifacts on the bind mount stay host-owned (root-run
+# containers used to leave files the host can't modify or clean up).
+# HOME points at /tmp because the image has no home directory for an
+# arbitrary --user uid (matplotlib and friends want a writable HOME).
 docker run --rm \
+    --user "$(id -u):$(id -g)" \
+    -e HOME=/tmp \
     -v "$(pwd):/app" \
     -w /app \
     -e PYTHONPATH=/app \

@@ -3,6 +3,7 @@ import {
   useServiceRestart,
   captureRestartBaseline,
   isUpdateFailedError,
+  managedWaitActive,
   requestRestart
 } from '@/composables/useServiceRestart'
 
@@ -184,6 +185,37 @@ describe('useServiceRestart', () => {
     expect(isRestarting.value).toBe(false)
   })
 
+  it('flags managedWaitActive for the wait lifetime (suppresses the update overlay)', async () => {
+    mockApi.get.mockResolvedValue(RESTARTED_SERVER)
+
+    const { waitForRestart, reset } = useServiceRestart()
+    expect(managedWaitActive.value).toBe(false)
+
+    const promise = waitForRestart({
+      baseline: BASELINE,
+      initialDelay: 100,
+      pollInterval: 100,
+      postConnectDelay: 0,
+      autoReload: false
+    })
+    expect(managedWaitActive.value).toBe(true)
+
+    await vi.advanceTimersByTimeAsync(200)
+    await promise
+    expect(managedWaitActive.value).toBe(false)
+
+    // Cancellation clears it too
+    const second = waitForRestart({
+      baseline: BASELINE,
+      initialDelay: 100,
+      pollInterval: 100
+    })
+    expect(managedWaitActive.value).toBe(true)
+    reset()
+    await expect(second).resolves.toBe(false)
+    expect(managedWaitActive.value).toBe(false)
+  })
+
   it('probes /system/version and polls until the new instance responds', async () => {
     mockApi.get
       .mockRejectedValueOnce(new Error('Service down'))
@@ -269,6 +301,123 @@ describe('useServiceRestart', () => {
     expect((await outcome).message).toBe('RESTART_TIMEOUT')
     expect(restartError.value).toBe('Took too long')
     expect(window.location.reload).not.toHaveBeenCalled()
+  })
+
+  describe('update progress stages (progressUrl)', () => {
+    let fetchMock
+
+    beforeEach(() => {
+      fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+    })
+
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    const stageResponse = message => ({
+      ok: true,
+      json: () => Promise.resolve({ stage: 'pull', message })
+    })
+
+    it('replaces the generic banner subject with the fetched stage message', async () => {
+      mockApi.get.mockRejectedValue(new Error('down for update'))
+      fetchMock.mockResolvedValue(stageResponse('Downloading updated images (1 of 3)'))
+
+      const { restartMessage, waitForRestart, reset } = useServiceRestart()
+      const promise = waitForRestart({
+        expect: 'update',
+        baseline: BASELINE,
+        initialDelay: 100,
+        pollInterval: 1000,
+        message: 'System updating',
+        progressUrl: '/update-progress'
+      })
+
+      // The stage poll is primed at wait start (before any timer fires), so
+      // a real stage lands as soon as the fetch resolves.
+      expect(fetchMock).toHaveBeenCalledWith('/update-progress', { cache: 'no-store' })
+      expect(restartMessage.value).toBe('System updating...')
+
+      await vi.advanceTimersByTimeAsync(0)
+      expect(restartMessage.value).toBe('Downloading updated images (1 of 3)...')
+
+      reset()
+      await expect(promise).resolves.toBe(false)
+    })
+
+    it('keeps the generic subject when the endpoint is missing or the fetch fails', async () => {
+      // Older stacks and the first update shipping this feature have no
+      // /update-progress; the SPA 404-fallback serves index.html with 404.
+      mockApi.get.mockRejectedValue(new Error('down for update'))
+      fetchMock
+        .mockResolvedValueOnce({ ok: false, json: () => Promise.resolve({}) })
+        .mockRejectedValue(new TypeError('Failed to fetch'))
+
+      const { restartMessage, waitForRestart, reset } = useServiceRestart()
+      const promise = waitForRestart({
+        expect: 'update',
+        baseline: BASELINE,
+        initialDelay: 100,
+        pollInterval: 1000,
+        message: 'System updating',
+        progressUrl: '/update-progress'
+      })
+
+      await vi.advanceTimersByTimeAsync(15000)
+      expect(restartMessage.value).toBe('System updating...')
+
+      reset()
+      await expect(promise).resolves.toBe(false)
+    })
+
+    it('never fetches stages when no progressUrl is given', async () => {
+      mockApi.get.mockRejectedValue(new Error('down for update'))
+
+      const { waitForRestart, reset } = useServiceRestart()
+      const promise = waitForRestart({
+        expect: 'update',
+        baseline: BASELINE,
+        initialDelay: 100,
+        pollInterval: 1000,
+        message: 'System updating'
+      })
+
+      await vi.advanceTimersByTimeAsync(15000)
+      expect(fetchMock).not.toHaveBeenCalled()
+
+      reset()
+      await expect(promise).resolves.toBe(false)
+    })
+
+    it('ignores a stage that lands after the wait has settled', async () => {
+      // The stage fetch is async, so a slow response can resolve once the
+      // banner has moved on — it must not overwrite the completion message.
+      let resolveStage
+      fetchMock.mockImplementationOnce(() => new Promise((resolve) => {
+        resolveStage = resolve
+      }))
+      mockApi.get.mockResolvedValue(UPDATED_SERVER)
+
+      const { restartMessage, waitForRestart } = useServiceRestart()
+      const promise = waitForRestart({
+        expect: 'update',
+        baseline: BASELINE,
+        initialDelay: 100,
+        postConnectDelay: 0,
+        autoReload: false,
+        message: 'System updating',
+        progressUrl: '/update-progress'
+      })
+
+      await vi.advanceTimersByTimeAsync(200)
+      await promise
+      expect(restartMessage.value).toBe('Services ready!')
+
+      resolveStage(stageResponse('Building images locally'))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(restartMessage.value).toBe('Services ready!')
+    })
   })
 
   describe('expect: update', () => {
@@ -875,7 +1024,37 @@ describe('useServiceRestart', () => {
     expect(restartMessage.value).toContain('ready')
   })
 
-  it('updates elapsed progress in five-second increments while a probe is pending', async () => {
+  it('holds the banner subject steady during an update, with no elapsed counter', async () => {
+    // The banner changes only when the host reports a new stage. A ticking
+    // counter made a normal wait read as slow; the spinner beside the
+    // message already says "still working".
+    let resolveProbe
+    mockApi.get.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveProbe = resolve
+    }))
+
+    const { restartMessage, waitForRestart } = useServiceRestart()
+    const promise = waitForRestart({
+      expect: 'update',
+      baseline: BASELINE,
+      initialDelay: 100,
+      postConnectDelay: 0,
+      autoReload: false,
+      message: 'System updating'
+    })
+
+    await vi.advanceTimersByTimeAsync(100)
+    await vi.advanceTimersByTimeAsync(15000)
+    expect(restartMessage.value).toBe('System updating...')
+
+    resolveProbe(UPDATED_SERVER)
+    await vi.advanceTimersByTimeAsync(0)
+    await promise
+
+    expect(restartMessage.value).toBe('Services ready!')
+  })
+
+  it('holds the banner subject steady during a restart', async () => {
     let resolveProbe
     mockApi.get.mockImplementationOnce(() => new Promise((resolve) => {
       resolveProbe = resolve
@@ -887,25 +1066,17 @@ describe('useServiceRestart', () => {
       initialDelay: 100,
       postConnectDelay: 0,
       autoReload: false,
-      message: 'System updating'
+      message: 'Restarting services'
     })
 
     await vi.advanceTimersByTimeAsync(100)
-    await vi.advanceTimersByTimeAsync(4900)
-    expect(restartMessage.value).toBe('System updating... (5s)')
-
-    await vi.advanceTimersByTimeAsync(5000)
-    expect(restartMessage.value).toBe('System updating... (10s)')
-
-    await vi.advanceTimersByTimeAsync(5000)
-    expect(restartMessage.value).toBe('System updating... (15s)')
+    await vi.advanceTimersByTimeAsync(15000)
+    expect(restartMessage.value).toBe('Restarting services...')
 
     resolveProbe(RESTARTED_SERVER)
     await vi.advanceTimersByTimeAsync(0)
     await promise
 
-    expect(restartMessage.value).toBe('Services ready!')
-    await vi.advanceTimersByTimeAsync(5000)
     expect(restartMessage.value).toBe('Services ready!')
   })
 
@@ -991,7 +1162,7 @@ describe('useServiceRestart', () => {
     })
 
     await vi.advanceTimersByTimeAsync(5000)
-    expect(restartMessage.value).toBe('Restarting services... (5s)')
+    expect(restartMessage.value).toBe('Restarting services...')
     const callsBeforeReset = mockApi.get.mock.calls.length
 
     reset()

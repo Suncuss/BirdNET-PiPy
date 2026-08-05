@@ -86,9 +86,8 @@ def write_flag(flag_name, content=None):
         content: Optional content to write. If None, writes timestamp.
                  For update-requested, content should be the target branch name.
     """
-    flag_dir = os.path.join(BASE_DIR, 'data', 'flags')
-    os.makedirs(flag_dir, exist_ok=True)
-    flag_file = os.path.join(flag_dir, flag_name)
+    flag_file = _flag_path(flag_name)
+    os.makedirs(os.path.dirname(flag_file), exist_ok=True)
     with open(flag_file, 'w') as f:
         f.write(content if content else local_now().isoformat())
     logger.debug("Flag file written", extra={
@@ -98,15 +97,33 @@ def write_flag(flag_name, content=None):
     })
 
 
+def _flag_path(flag_name):
+    return os.path.join(BASE_DIR, 'data', 'flags', flag_name)
+
+
+def _remove_flag(flag_name):
+    """Best-effort removal of a flag file.
+
+    Never raises: flags are advisory and must not block an update dispatch.
+    The file may be root-owned (install.sh writes as root) but the flags dir
+    is writable by this process, which is all deletion needs.
+    """
+    path = _flag_path(flag_name)
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        logger.warning("Could not remove stale flag", extra={
+            'flag': flag_name, 'path': path, 'error': str(e)
+        })
+
+
 # Written by install.sh / birdnet-service.sh as the update pipeline advances
 # (pending -> in_progress -> success|failed) and surfaced via
 # /api/system/version so the frontend's restart poll can tell a failed update
 # (old code restarted) from one still in progress.
 UPDATE_STATUS_FLAG = 'update-status'
-
-
-def _update_status_path():
-    return os.path.join(BASE_DIR, 'data', 'flags', UPDATE_STATUS_FLAG)
 
 
 def read_update_status():
@@ -118,7 +135,7 @@ def read_update_status():
     statuses are single short words.
     """
     try:
-        with open(_update_status_path()) as f:
+        with open(_flag_path(UPDATE_STATUS_FLAG)) as f:
             return f.read(64).strip() or None
     except (OSError, ValueError):
         return None
@@ -139,22 +156,27 @@ def reset_update_status():
     server-confirmed post-reset value: any 'failed' it sees later must have
     been written by this attempt, not a stale survivor.
     """
-    path = _update_status_path()
-    try:
-        os.remove(path)
-    except FileNotFoundError:
-        pass
-    except OSError as e:
-        logger.warning("Could not remove stale update-status flag", extra={
-            'path': path, 'error': str(e)
-        })
+    _remove_flag(UPDATE_STATUS_FLAG)
     try:
         write_flag(UPDATE_STATUS_FLAG, 'pending')
     except OSError as e:
         logger.warning("Could not write pending update-status flag", extra={
-            'path': path, 'error': str(e)
+            'path': _flag_path(UPDATE_STATUS_FLAG), 'error': str(e)
         })
     return read_update_status()
+
+# Written by install.sh during a native update: a coarse JSON stage the
+# frontend nginx container (kept running through the update) serves at
+# /update-progress for the SPA's update banner. The API never reads it — it
+# only deletes it at dispatch so a stage left by an earlier attempt can't
+# show up in a new update's banner before install.sh takes over.
+UPDATE_PROGRESS_FLAG = 'update-progress'
+
+
+def reset_update_progress():
+    """Best-effort removal of the update-progress stage file at dispatch."""
+    _remove_flag(UPDATE_PROGRESS_FLAG)
+
 
 # GitHub API configuration
 GITHUB_OWNER = "Suncuss"

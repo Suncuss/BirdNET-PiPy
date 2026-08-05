@@ -16,7 +16,7 @@ BirdNET-PiPy is a self-hosted system that uses the [BirdNET](https://birdnet.cor
 
 ## Quick Start
 
-**Prerequisites:** Raspberry Pi 4/5 (2GB+) running Raspberry Pi OS (64-bit).
+**Prerequisites:** Raspberry Pi 5, 4, 3, or Zero 2W running Raspberry Pi OS (64-bit).
 
 Run the automated installer:
 

@@ -2195,7 +2195,7 @@ export default {
     }
 
     // Trigger backend restart + wait flow when required by changed settings.
-    const triggerRestartIfRequired = async (result, message = 'Applying settings changes') => {
+    const triggerRestartIfRequired = async (result, message = 'Settings saved — restarting services to apply') => {
       const needsFullRestart = result?.changes?.full_restart_required === true
       if (!needsFullRestart) {
         return false
@@ -2235,7 +2235,7 @@ export default {
       const result = await saveSettingsOnly()
       if (result) {
         appStatus.setStationName(settings.value.display?.station_name)
-        const restartTriggered = await triggerRestartIfRequired(result, 'Applying settings changes')
+        const restartTriggered = await triggerRestartIfRequired(result)
         if (!restartTriggered) {
           if (result?.changes?.changed_paths?.includes('display.bird_name_language')) {
             await loadSpeciesList()
@@ -2614,7 +2614,7 @@ export default {
         throw new Error('Failed to save species filter')
       }
 
-      const restartTriggered = await triggerRestartIfRequired(result, 'Applying species filter changes')
+      const restartTriggered = await triggerRestartIfRequired(result, 'Species filter saved — restarting services to apply')
       if (!restartTriggered) {
         showStatus('success', result?.message || 'Settings applied.')
       }
@@ -2774,7 +2774,7 @@ export default {
             navigationResolver.value(false)
             navigationResolver.value = null
           }
-          await triggerRestartIfRequired(result, 'Applying settings changes')
+          await triggerRestartIfRequired(result)
         } else {
           // No restart required: proceed with the original pending navigation.
           if (navigationResolver.value) {

@@ -128,6 +128,12 @@ def get_activity_overview():
 # /api/dashboard/summary. TTL slightly above the poll interval so consecutive
 # polls hit the cache.
 _DASHBOARD_CACHE_TTL_SECONDS = 10
+
+# Ceiling for the Activity Overview species lists. The client renders 10 or
+# 15 rows depending on viewport height and slices down, so this stays a fixed
+# server cap (rather than a per-client count parameter) to keep the payload
+# shared across the single-flight cache.
+_DASHBOARD_ACTIVITY_MAX_SPECIES = 15
 _dashboard_cache_lock = threading.Lock()
 _dashboard_cache: dict = {
     'payload': None,
@@ -360,7 +366,8 @@ def _build_dashboard_payload():
 
     hourly_activity = infra.db_manager.get_hourly_activity(today)
     activity_overview = _localize_activity_overview(
-        infra.db_manager.get_activity_overview_both(today),
+        infra.db_manager.get_activity_overview_both(
+            today, num_species=_DASHBOARD_ACTIVITY_MAX_SPECIES),
         settings=settings,
     )
 

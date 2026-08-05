@@ -607,7 +607,9 @@ class DatabaseManager:
         })
         return species_activity
 
-    def get_activity_overview_both(self, date=None, num_species=10):
+    def get_activity_overview_both(self, date=None, *, num_species):
+        # num_species is required so the caller (the dashboard route) stays
+        # the single owner of the cap.
         species_activity = self._species_activity_for_day(date)
         most = sorted(species_activity, key=lambda x: x['totalObservations'],
                       reverse=True)[:num_species]

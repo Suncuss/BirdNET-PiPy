@@ -31,6 +31,7 @@ from core.update_service import (
     load_ha_source_commit,
     load_version_info,
     read_update_status,
+    reset_update_progress,
     reset_update_status,
     should_show_update_note,
     write_flag,
@@ -518,8 +519,10 @@ def trigger_system_update():
         # Clear any stale terminal status before the host script takes over,
         # then write the update flag with target branch as content. The
         # read-back value is echoed to the frontend so it knows what status
-        # was verifiably in place at dispatch.
+        # was verifiably in place at dispatch. The stage file goes too (see
+        # reset_update_progress for why).
         post_reset_status = reset_update_status()
+        reset_update_progress()
         write_flag('update-requested', target_branch)
 
         logger.info("System update triggered", extra={

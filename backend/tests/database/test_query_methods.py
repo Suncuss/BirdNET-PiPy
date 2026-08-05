@@ -129,7 +129,8 @@ class TestDatabaseQueryMethods:
 
     def test_get_activity_overview_both_empty_db(self, test_db_manager):
         """Test get_activity_overview_both() on empty database."""
-        result = test_db_manager.get_activity_overview_both('2024-01-15')
+        result = test_db_manager.get_activity_overview_both('2024-01-15',
+                                                            num_species=10)
 
         assert result == {'most': [], 'least': []}
 
