@@ -27,26 +27,29 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --extra-index-url https://www.piwheels.org/simple \
     -r requirements.txt
 
+# Create the runtime user before the source copies: COPY --chown bakes
+# ownership into each layer, where a trailing chown -R would duplicate all of
+# /app into an extra layer shipped with every update. Non-recursive chown:
+# WORKDIR created /app root-owned; the copies below own their contents.
+RUN groupadd -g ${GID} birdnet && \
+    useradd -u ${UID} -g birdnet -m birdnet && \
+    chown ${UID}:${GID} /app
+
 # Keep release validation cached across unrelated source edits. Only validator,
 # parser, or bundled-asset changes invalidate these memory-intensive gates.
-COPY model_service/label_utils.py \
+COPY --chown=${UID}:${GID} model_service/label_utils.py \
      model_service/model_assets.py \
      model_service/geomodel_assets.py \
      model_service/birdnet_v3_assets.py \
      ./model_service/
-COPY model_service/models/geomodel ./model_service/models/geomodel
-COPY model_service/models/v3.1 ./model_service/models/v3.1
+COPY --chown=${UID}:${GID} model_service/models/geomodel ./model_service/models/geomodel
+COPY --chown=${UID}:${GID} model_service/models/v3.1 ./model_service/models/v3.1
 RUN python -m model_service.geomodel_assets
 RUN python -m model_service.birdnet_v3_assets
 # Compose bind-mounts the checkout over /app, so runtime loaders repeat the
 # authoritative checks against the bytes each service actually reads.
 
-COPY . .
-
-# Create user with matching host UID/GID
-RUN groupadd -g ${GID} birdnet && \
-    useradd -u ${UID} -g birdnet -m birdnet && \
-    chown -R birdnet:birdnet /app
+COPY --chown=${UID}:${GID} . .
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh /usr/local/bin/

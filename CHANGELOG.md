@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Improved update download size: the backend image no longer ships a duplicated file-ownership layer, cutting roughly 130MB from every update's download and ~250MB from the image's size on disk
+- Fixed locally built backend images baking in a leftover `backend/data` directory (database, auth secrets, station coordinates) when one existed from running the backend outside Docker; pre-built images were never affected
 - Improved the dashboard's Activity Overview on desktop: tall monitors now get a taller card showing 15 species instead of 10, using vertical space that previously sat blank. Laptop-sized windows and mobile keep the compact 10-row card
 - Added an installer option to choose the web interface port (`--port 8080`) for systems where port 80 is already taken, e.g. by Pi-hole or another web server. The choice persists across updates, and `--update --port N` moves an existing installation
 - Added pre-built AMD64 images: releases now publish multi-arch (ARM64 + AMD64) container images, so x86 installs pull them during install and update instead of building everything locally
