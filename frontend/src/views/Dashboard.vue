@@ -7,11 +7,12 @@
       v-if="locationConfigured !== false && !authGated"
       class="p-4 grid grid-cols-1 lg:grid-cols-3 gap-4"
     >
-      <!-- Activity Overview — card height tracks the viewport tier; see
-           ACTIVITY_TIERS in the script. -->
+      <!-- Activity Overview — card height tracks the viewport tier and the
+           visible row count; see ACTIVITY_TIERS / ROW_HEIGHT_CLASSES in the
+           script. -->
       <div
         class="bg-white rounded-lg shadow p-4 lg:col-span-3 h-[300px] flex flex-col"
-        :class="activityTier.heightClass"
+        :class="activityHeightClass"
       >
         <div class="flex items-center justify-between mb-2">
           <h2 class="text-lg font-semibold">
@@ -590,11 +591,23 @@ export default {
         const isActivityUpdating = ref(false)
 
         // Activity Overview tiers. The tall tier matches the server's
-        // activityOverview cap (the client slices down), and 500px carries
-        // 15 rows at the same ~25px/row density the 375px card gives 10.
+        // activityOverview cap (the client slices down).
         const ACTIVITY_TIERS = {
-            base: { rows: 10, heightClass: 'lg:h-[375px]' },
-            tall: { rows: 15, heightClass: 'lg:h-[500px]' }
+            base: { rows: 10 },
+            tall: { rows: 15 }
+        }
+        // Card height per visible row count, at the same ~25px/row density
+        // the 375px card gives 10 rows. On the tall tier the card grows with
+        // the actual species count instead of jumping straight to the 15-row
+        // height, but never shrinks below the 10-row card. Literal class
+        // strings so Tailwind's scanner generates them.
+        const ROW_HEIGHT_CLASSES = {
+            10: 'lg:h-[375px]',
+            11: 'lg:h-[400px]',
+            12: 'lg:h-[425px]',
+            13: 'lg:h-[450px]',
+            14: 'lg:h-[475px]',
+            15: 'lg:h-[500px]'
         }
         // min-width is Tailwind's lg breakpoint (below it the card is
         // fixed-height and the heatmap hidden); min-height clears a
@@ -608,6 +621,13 @@ export default {
         const activityTier = computed(() => (
             isTallViewport.value ? ACTIVITY_TIERS.tall : ACTIVITY_TIERS.base
         ))
+        const activityHeightClass = computed(() => {
+            const shown = Math.min(
+                Math.max(detailedBirdActivityData.value.length, ACTIVITY_TIERS.base.rows),
+                activityTier.value.rows
+            )
+            return ROW_HEIGHT_CLASSES[shown]
+        })
 
         // 'change' only fires when the tier actually flips, so no debounce
         // is needed; the redraw comes from the client-side cache, no refetch.
@@ -1177,7 +1197,7 @@ export default {
             showSpectrogram,
             hourlyBirdActivityData,
             totalObservationsChart,
-            activityTier,
+            activityHeightClass,
             speciesAxisLayout,
             timeAxisLayout,
             hourlyActivityHeatmap,

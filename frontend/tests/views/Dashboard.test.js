@@ -640,10 +640,15 @@ describe('Dashboard', () => {
       return mql
     }
 
-    beforeEach(() => {
+    const useSpeciesCount = (n) => {
       const state = baseState()
-      state.detailedBirdActivityData.value = speciesRows(20)
+      state.detailedBirdActivityData.value = speciesRows(n)
       useFetchBirdData.mockReturnValue(state)
+      return state
+    }
+
+    beforeEach(() => {
+      useSpeciesCount(20)
     })
 
     it('renders 10 rows in the compact card on laptop-sized viewports', async () => {
@@ -664,6 +669,30 @@ describe('Dashboard', () => {
       expect(useBirdCharts().createTotalObservationsChart.mock.lastCall[1]).toHaveLength(15)
       expect(useBirdCharts().createHourlyActivityHeatmap.mock.lastCall[1]).toHaveLength(15)
       expect(wrapper.html()).toContain('lg:h-[500px]')
+    })
+
+    it('keeps the 10-row height on tall viewports with 10 or fewer species', async () => {
+      useSpeciesCount(7)
+      stubViewportTier(true)
+      const wrapper = mountDashboard()
+      await flushPromises()
+
+      expect(useBirdCharts().createTotalObservationsChart.mock.lastCall[1]).toHaveLength(7)
+      expect(wrapper.html()).toContain('lg:h-[375px]')
+    })
+
+    it('grows the tall card row by row between 11 and 14 species', async () => {
+      const state = useSpeciesCount(12)
+      stubViewportTier(true)
+      const wrapper = mountDashboard()
+      await flushPromises()
+
+      expect(wrapper.html()).toContain('lg:h-[425px]')
+
+      // Height tracks the live species count as new species arrive
+      state.detailedBirdActivityData.value = speciesRows(14)
+      await nextTick()
+      expect(wrapper.html()).toContain('lg:h-[475px]')
     })
 
     it('gates the tall tier on lg width and the tall-viewport height', async () => {
