@@ -3,6 +3,7 @@ import {
   useServiceRestart,
   captureRestartBaseline,
   isUpdateFailedError,
+  managedWaitActive,
   requestRestart
 } from '@/composables/useServiceRestart'
 
@@ -182,6 +183,37 @@ describe('useServiceRestart', () => {
     await promise
 
     expect(isRestarting.value).toBe(false)
+  })
+
+  it('flags managedWaitActive for the wait lifetime (suppresses the update overlay)', async () => {
+    mockApi.get.mockResolvedValue(RESTARTED_SERVER)
+
+    const { waitForRestart, reset } = useServiceRestart()
+    expect(managedWaitActive.value).toBe(false)
+
+    const promise = waitForRestart({
+      baseline: BASELINE,
+      initialDelay: 100,
+      pollInterval: 100,
+      postConnectDelay: 0,
+      autoReload: false
+    })
+    expect(managedWaitActive.value).toBe(true)
+
+    await vi.advanceTimersByTimeAsync(200)
+    await promise
+    expect(managedWaitActive.value).toBe(false)
+
+    // Cancellation clears it too
+    const second = waitForRestart({
+      baseline: BASELINE,
+      initialDelay: 100,
+      pollInterval: 100
+    })
+    expect(managedWaitActive.value).toBe(true)
+    reset()
+    await expect(second).resolves.toBe(false)
+    expect(managedWaitActive.value).toBe(false)
   })
 
   it('probes /system/version and polls until the new instance responds', async () => {

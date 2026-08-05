@@ -77,6 +77,7 @@ UPDATE_MODE=false
 TARGET_BRANCH=""  # Target branch for install/update (default: main for install, current for update)
 NO_REBOOT=false   # Skip reboot prompt (for testing)
 SKIP_BUILD=false  # Skip Docker image build (for testing)
+WEB_PORT=""       # Host port for the web interface (--port; empty = keep existing .env value or default 80)
 
 # ============================================================================
 # Logging Functions
@@ -193,6 +194,7 @@ show_usage() {
     echo "Options:"
     echo "  --update             Update existing installation (git sync + build + config)"
     echo "  --branch BRANCH      Target branch (default: main for install, current for update)"
+    echo "  --port PORT          Host port for the web interface (default: 80, remembered across updates)"
     echo "  --no-reboot          Skip automatic reboot after installation (for testing)"
     echo "  --skip-build         Skip Docker image build (for testing)"
     echo "  --help               Show this help message"
@@ -203,6 +205,9 @@ show_usage() {
     echo ""
     echo "  # Install from staging branch (latest features)"
     echo "  curl -fsSL https://raw.githubusercontent.com/Suncuss/BirdNET-PiPy/main/install.sh | sudo bash -s -- --branch staging"
+    echo ""
+    echo "  # Install with the web interface on port 8080 (port 80 already taken)"
+    echo "  curl -fsSL https://raw.githubusercontent.com/Suncuss/BirdNET-PiPy/main/install.sh | sudo bash -s -- --port 8080"
     echo ""
     echo "  # Update existing installation"
     echo "  sudo ./install.sh --update"
@@ -587,6 +592,45 @@ set_env_var() {
     echo "${key}=${value}" >> "$env_file"
 }
 
+# Validate a --port value: an integer in 1-65535 that doesn't collide with
+# the loopback ports the backend services already publish (see docker-compose.yml).
+validate_web_port() {
+    local port="$1"
+    if ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+        print_error "Invalid --port value '$port' (expected a number between 1 and 65535)"
+        return 1
+    fi
+    case "$port" in
+        5001|5002|8888)
+            print_error "Port $port is already used internally by BirdNET-PiPy services"
+            return 1
+            ;;
+    esac
+}
+
+# Record the web port in .env so docker-compose publishes the frontend there.
+# .env is untracked, so the choice survives updates (git reset doesn't touch it).
+persist_web_port() {
+    local port="$1"
+    # Warn-only: the port may be held by a service that won't be there after
+    # reboot — or by our own still-running frontend during an update.
+    if command -v ss >/dev/null 2>&1 \
+        && ss -tlnH 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${port}\$"; then
+        print_warning "Port $port appears to be in use; if another service owns it, the web interface will fail to start"
+    fi
+    set_env_var "BIRDNET_WEB_PORT" "$port"
+    print_status "Web interface port set to $port"
+}
+
+# Effective web port: this run's --port, else the persisted .env value, else 80.
+effective_web_port() {
+    local port="$WEB_PORT"
+    if [ -z "$port" ] && [ -f "$PROJECT_ROOT/.env" ]; then
+        port=$(grep -E '^BIRDNET_WEB_PORT=' "$PROJECT_ROOT/.env" | tail -1 | cut -d= -f2 || true)
+    fi
+    echo "${port:-80}"
+}
+
 # Free disk space before an update fetch/build without removing runnable images.
 # This is update-only on purpose: installs can start clean, while updates need to
 # preserve existing images for failure recovery if the new pull/build does not finish.
@@ -927,9 +971,9 @@ write_flag_file() {
 # pass only fixed public-safe strings and counters, never branch names, paths,
 # or command output. No-op outside update mode: fresh installs share
 # pull_or_build/build_application but have nothing serving the file.
-# Only `message` is read by the banner; `stage` and `timestamp` exist for
-# on-disk debugging of an unattended update, not for any consumer.
-# $1 = stage id, $2 = human-readable message.
+# The banner shows `message`; the boot-time overlay (useUpdateOverlay) also
+# checks `timestamp` so a leftover file can't pose as a live update. `stage`
+# is on-disk debugging only. $1 = stage id, $2 = human-readable message.
 write_update_progress() {
     [ "$UPDATE_MODE" = true ] || return 0
     write_flag_file "update-progress" \
@@ -956,6 +1000,12 @@ perform_update() {
 
     cd "$PROJECT_ROOT"
     local update_warnings=false
+
+    # Apply a requested port change before any containers are (re)created —
+    # including the failure path's fallback docker compose up
+    if [ -n "$WEB_PORT" ]; then
+        persist_web_port "$WEB_PORT"
+    fi
 
     # Determine target branch: explicit > current > main
     local target_branch="${TARGET_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
@@ -1209,8 +1259,14 @@ show_completion_message() {
     hostname=$(hostname)
     local ip_addr
     ip_addr=$(hostname -I | awk '{print $1}')
-    echo "  http://${hostname}.local"
-    [ -n "$ip_addr" ] && echo "  http://${ip_addr}"
+    # Non-default web port (this run's --port or a persisted earlier choice)
+    # must appear in the URLs
+    local port_suffix=""
+    local web_port
+    web_port=$(effective_web_port)
+    [ "$web_port" != "80" ] && port_suffix=":${web_port}"
+    echo "  http://${hostname}.local${port_suffix}"
+    [ -n "$ip_addr" ] && echo "  http://${ip_addr}${port_suffix}"
     echo ""
 }
 
@@ -1243,6 +1299,13 @@ main() {
                 ;;
             --branch)
                 TARGET_BRANCH="$2"
+                shift 2
+                ;;
+            --port)
+                if ! validate_web_port "${2:-}"; then
+                    exit 1
+                fi
+                WEB_PORT="$2"
                 shift 2
                 ;;
             --help)
@@ -1296,6 +1359,7 @@ main() {
         # Save arguments to pass through (array preserves quoting)
         ARGS=()
         [ -n "$TARGET_BRANCH" ] && ARGS+=(--branch "$TARGET_BRANCH")
+        [ -n "$WEB_PORT" ] && ARGS+=(--port "$WEB_PORT")
         [ "$NO_REBOOT" = true ] && ARGS+=(--no-reboot)
         [ "$SKIP_BUILD" = true ] && ARGS+=(--skip-build)
         reexec_from_clone "${ARGS[@]}"
@@ -1305,6 +1369,11 @@ main() {
     # Stage 2: Local installation (from cloned repo)
     print_status "Running in local mode (installing from: $PROJECT_ROOT)"
     echo ""
+
+    # Record the requested web port before anything builds or starts containers
+    if [ -n "$WEB_PORT" ]; then
+        persist_web_port "$WEB_PORT"
+    fi
 
     # Docker setup
     if command -v docker &> /dev/null && docker compose version &> /dev/null 2>&1; then

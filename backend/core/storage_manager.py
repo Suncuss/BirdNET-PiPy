@@ -5,8 +5,8 @@ spectrogram files when disk usage exceeds a configurable threshold. Database
 records are preserved - only the associated files are deleted.
 
 Key features:
-- Triggers cleanup when disk usage exceeds trigger_percent (default: 80%)
-- Frees space until usage drops to target_percent (default: 70%)
+- Triggers cleanup when disk usage exceeds trigger_percent (default: 85%)
+- Frees space until usage drops to target_percent (default: 80%)
 - Protects the top N recordings per species by confidence (default: 60)
 - Protects the latest N recordings per species by timestamp (default: 16)
 - Deletes oldest files first
@@ -20,6 +20,7 @@ import time
 
 from config.settings import (
     BASE_DIR,
+    DEFAULT_SETTINGS,
     EXTRACTED_AUDIO_DIR,
     SPECTROGRAM_DIR,
 )
@@ -38,15 +39,17 @@ ESTIMATED_SIZE_PER_DETECTION = 300 * 1024  # 300 KB
 _SCAN_BATCH_ROWS = 1000
 
 def _get_storage_config() -> dict:
-    """Load current storage settings with defaults."""
+    """Load current storage settings, filling gaps from the shipped defaults.
+
+    Fallbacks come from DEFAULT_SETTINGS rather than literals here so this
+    module can't drift from config/settings.py (the check-interval fallback
+    used to say 1440 against a shipped default of 30). Settings reads already
+    merge defaults, so these only apply if a key is missing entirely.
+    """
     storage = get_runtime_settings().get('storage', {})
     return {
-        'auto_cleanup_enabled': storage.get('auto_cleanup_enabled', True),
-        'trigger_percent': storage.get('trigger_percent', 85),
-        'target_percent': storage.get('target_percent', 80),
-        'keep_per_species': storage.get('keep_per_species', 60),
-        'keep_recent_per_species': storage.get('keep_recent_per_species', 16),
-        'check_interval_minutes': storage.get('check_interval_minutes', 1440),
+        key: storage.get(key, default)
+        for key, default in DEFAULT_SETTINGS['storage'].items()
     }
 
 

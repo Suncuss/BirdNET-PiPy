@@ -66,6 +66,16 @@ less install.sh
 sudo bash install.sh
 ```
 
+### Custom Web Port
+
+By default the web interface is served on port 80. If something else on the Pi already uses it (Pi-hole, another web server), pick a different port with `--port`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Suncuss/BirdNET-PiPy/main/install.sh | sudo bash -s -- --port 8080
+```
+
+The choice is remembered across updates. Access the dashboard with the port in the URL, e.g. `http://<hostname>.local:8080`. To change the port on an existing installation, run an update with the flag: `sudo ./install.sh --update --port 8080`.
+
 ---
 
 ## Post-Installation
@@ -127,6 +137,8 @@ Find your Pi's IP by running `hostname -I` on the Pi.
 ```
 http://localhost
 ```
+
+> Installed with `--port`? Append it to any of these, e.g. `http://<hostname>.local:8080`.
 
 ---
 

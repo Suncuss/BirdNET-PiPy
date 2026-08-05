@@ -139,7 +139,9 @@ services:
       # native updates — see frontend/nginx.conf and install.sh perform_update
       - ./data/flags:/var/lib/birdnet-flags:ro
     ports:
-      - "80:80"
+      # Host port is configurable via BIRDNET_WEB_PORT in .env (set by
+      # install.sh --port); nginx always listens on 80 inside the container
+      - "${BIRDNET_WEB_PORT:-80}:80"
     environment:
       - TZ=UTC
     depends_on:

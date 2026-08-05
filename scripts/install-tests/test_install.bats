@@ -281,6 +281,104 @@ EOF
     rm -rf "$temp_dir"
 }
 
+@test "unit: validate_web_port accepts valid ports and rejects bad values" {
+    local temp_dir
+    temp_dir=$(mktemp -d)
+
+    local port
+    for port in 1 80 8080 65535; do
+        run run_install_function "$temp_dir" validate_web_port "$port"
+        [ "$status" -eq 0 ]
+    done
+
+    # Non-numeric, out of range, and the loopback ports the backend
+    # services already publish (docker-compose.yml)
+    for port in abc "" 0 65536 5001 5002 8888; do
+        run run_install_function "$temp_dir" validate_web_port "$port"
+        [ "$status" -ne 0 ]
+    done
+
+    rm -rf "$temp_dir"
+}
+
+@test "unit: persist_web_port records BIRDNET_WEB_PORT preserving other .env keys" {
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    printf 'BIRDNET_CHANNEL=main\n' > "$temp_dir/.env"
+
+    run run_install_function "$temp_dir" persist_web_port 8080
+    [ "$status" -eq 0 ]
+    assert_file_contains "$temp_dir/.env" "BIRDNET_WEB_PORT=8080"
+    assert_file_contains "$temp_dir/.env" "BIRDNET_CHANNEL=main"
+
+    rm -rf "$temp_dir"
+}
+
+@test "unit: effective_web_port resolves flag, then .env, then default 80" {
+    local temp_dir
+    temp_dir=$(mktemp -d)
+
+    # No flag, no .env entry -> default
+    run run_install_function "$temp_dir" effective_web_port
+    [ "$status" -eq 0 ]
+    [ "$output" = "80" ]
+
+    # .env entry wins over the default
+    printf 'BIRDNET_WEB_PORT=8080\n' > "$temp_dir/.env"
+    run run_install_function "$temp_dir" effective_web_port
+    [ "$status" -eq 0 ]
+    [ "$output" = "8080" ]
+
+    # This run's --port (WEB_PORT) wins over .env
+    run run_install_function "$temp_dir" eval 'WEB_PORT=9090; effective_web_port'
+    [ "$status" -eq 0 ]
+    [ "$output" = "9090" ]
+
+    rm -rf "$temp_dir"
+}
+
+@test "unit: install.sh rejects an invalid --port before doing any work" {
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    cp "$PROJECT_DIR/install.sh" "$temp_dir/"
+
+    run bash "$temp_dir/install.sh" --port abc
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Invalid --port value"* ]]
+
+    run bash "$temp_dir/install.sh" --port 5002
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"used internally"* ]]
+
+    rm -rf "$temp_dir"
+}
+
+@test "unit: compose frontend host port follows BIRDNET_WEB_PORT with default 80" {
+    local compose="$PROJECT_DIR/docker-compose.yml"
+
+    # Explicit empty override so a BIRDNET_WEB_PORT in the repo's own .env
+    # (shell env beats .env in compose) can't skew the default check
+    run bash -c "BIRDNET_WEB_PORT= docker compose -f '$compose' config --format json | python3 -c \"
+import sys, json
+cfg = json.load(sys.stdin)
+ports = cfg['services']['frontend']['ports']
+assert any(str(p.get('published')) == '80' and p.get('target') == 80 for p in ports), ports
+print('default: frontend publishes 80')
+\""
+    echo "output: $output"
+    [ "$status" -eq 0 ]
+
+    run bash -c "BIRDNET_WEB_PORT=8080 docker compose -f '$compose' config --format json | python3 -c \"
+import sys, json
+cfg = json.load(sys.stdin)
+ports = cfg['services']['frontend']['ports']
+assert any(str(p.get('published')) == '8080' and p.get('target') == 80 for p in ports), ports
+print('override: frontend publishes 8080')
+\""
+    echo "output: $output"
+    [ "$status" -eq 0 ]
+}
+
 @test "unit: apply_gpu_mem_to_config reopens [all] when last section is board-filtered" {
     local temp_dir
     temp_dir=$(mktemp -d)
@@ -443,7 +541,9 @@ EOF
     # --skip-build skips Docker image build (which doesn't work in DinD due to overlay issues)
     # This tests all other installation steps: Docker setup, PulseAudio, systemd, sudoers, etc.
     # SUDO_USER must be set explicitly since we're running as root in the container
-    run sudo SUDO_USER=testuser bash "$PROJECT_DIR/install.sh" --no-reboot --skip-build
+    # --port 8080 exercises the custom web port path end-to-end; the update
+    # tests below then verify the choice survives updates untouched
+    run sudo SUDO_USER=testuser bash "$PROJECT_DIR/install.sh" --no-reboot --skip-build --port 8080
     echo "Install output: $output"
     [ "$status" -eq 0 ]
 }
@@ -502,6 +602,11 @@ EOF
 
 @test "integration: flags directory exists" {
     assert_directory_exists "$PROJECT_DIR/data/flags"
+}
+
+@test "integration: web port choice is recorded in .env" {
+    # From the --port 8080 passed to the full installation test
+    assert_file_contains "$PROJECT_DIR/.env" "BIRDNET_WEB_PORT=8080"
 }
 
 @test "integration: Docker images are built" {
@@ -564,6 +669,10 @@ EOF
     # Assert data was preserved (chown skips data/)
     assert_file_exists "$PROJECT_DIR/data/test-preserve.txt"
     assert_file_contains "$PROJECT_DIR/data/test-preserve.txt" "test-data"
+
+    # Assert the web port chosen at install time survived the update
+    # (.env is untracked, so git sync must not touch it)
+    assert_file_contains "$PROJECT_DIR/.env" "BIRDNET_WEB_PORT=8080"
 }
 
 @test "integration: update on non-release branch falls back to local build" {

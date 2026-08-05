@@ -1,8 +1,15 @@
 import { ref } from 'vue'
 import api from '@/services/api'
+import { fetchUpdateStage } from '@/utils/updateStage'
 import { useLogger } from './useLogger'
 
 const PROGRESS_INTERVAL_MS = 5000
+
+// True while any waitForRestart() is pending, across instances. The
+// boot-time update overlay (useUpdateOverlay) checks this so the tab that
+// initiated a restart/update — whose banner already owns the UX — never
+// also gets the overlay when its identity probes fail mid-wait.
+export const managedWaitActive = ref(false)
 
 /**
  * Detect errors that likely mean restart was accepted but HTTP response was cut off.
@@ -216,6 +223,7 @@ export function useServiceRestart() {
     } = options
 
     isRestarting.value = true
+    managedWaitActive.value = true
     restartMessage.value = `${message}...`
     restartError.value = ''
 
@@ -254,6 +262,7 @@ export function useServiceRestart() {
         cancelActiveWait = null
         stopProgressTimer()
         clearTimeout(pendingTimer)
+        managedWaitActive.value = false
         // Resolve, don't reject: every caller's catch turns unexpected
         // errors into user-facing failure banners, and a reset() usually
         // means the user just dismissed one.
@@ -266,6 +275,7 @@ export function useServiceRestart() {
         restartMessage.value = ''
         restartError.value = bannerText
         isRestarting.value = false
+        managedWaitActive.value = false
         reject(new Error(errorCode))
       }
 
@@ -277,20 +287,14 @@ export function useServiceRestart() {
       let stageFetchPending = false
 
       const pollStageMessage = () => {
-        // Raw fetch on purpose: the axios client is rooted at /api, which is
-        // down for the whole window this poll exists to cover. The pending
-        // guard keeps an endpoint that hangs (rather than failing fast) from
-        // stacking a request per tick over a long wait.
+        // The pending guard keeps an endpoint that hangs (rather than
+        // failing fast) from stacking a request per tick over a long wait.
         if (stageFetchPending) return
         stageFetchPending = true
-        fetch(progressUrl, { cache: 'no-store' })
-          .then(response => (response.ok ? response.json() : null))
-          .then(data => {
-            if (typeof data?.message === 'string' && data.message) {
-              stageMessage = data.message
-            }
+        fetchUpdateStage(progressUrl)
+          .then(stage => {
+            if (stage) stageMessage = stage.message
           })
-          .catch(() => {})
           .finally(() => { stageFetchPending = false })
       }
 
@@ -364,6 +368,7 @@ export function useServiceRestart() {
           // Wait extra time for all services (BirdNet inference, etc.) to fully start
           pendingTimer = setTimeout(() => {
             cancelActiveWait = null
+            managedWaitActive.value = false
             logger.info('Service restart complete')
             restartMessage.value = 'Services ready!'
 
