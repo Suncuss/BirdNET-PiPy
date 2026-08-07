@@ -739,7 +739,7 @@ pull_or_build() {
         for img in "${pull_images[@]}"; do
             pull_index=$((pull_index + 1))
             # Counters only, not image names: /update-progress is public
-            write_update_progress "pull" "Downloading updated images ($pull_index of ${#pull_images[@]})"
+            write_update_progress "pull" "Pulling the latest images from GHCR ($pull_index of ${#pull_images[@]})"
             for attempt in $(seq 1 $max_retries); do
                 if sudo -u "$ACTUAL_USER" docker pull "$img"; then
                     break
@@ -815,6 +815,16 @@ refresh_version_info() {
     return 0
 }
 
+# Owner-only mode on the config files: they hold RTSP camera credentials,
+# Apprise notification URLs and the station coordinates. New writes get 0600
+# from the app itself; this repairs installs that predate that. Deliberately
+# separate from fix_data_permissions so the update path can call it without
+# also running a recursive chown over a data/ directory that can reach tens of
+# gigabytes.
+fix_config_permissions() {
+    chmod 600 "$PROJECT_ROOT"/data/config/*.json 2>/dev/null || true
+}
+
 # Fix existing data folder permissions
 fix_data_permissions() {
     print_status "Setting up data directory permissions..."
@@ -823,6 +833,8 @@ fix_data_permissions() {
     mkdir -p "$PROJECT_ROOT/data/flags"
 
     chown -R "$ACTUAL_USER:$ACTUAL_USER" "$PROJECT_ROOT/data"
+    fix_config_permissions
+
     print_status "Data permissions fixed for user $ACTUAL_USER"
 }
 
@@ -966,7 +978,7 @@ write_flag_file() {
 # Record a coarse stage for the frontend's update banner. During a native
 # update the frontend nginx container is kept running (see perform_update) and
 # serves data/flags/update-progress at /update-progress, so the SPA can show
-# real stages ("Downloading updated images (2 of 3)") instead of one static
+# real stages ("Pulling the latest images from GHCR (2 of 3)") instead of one static
 # message for the whole outage. Served UNAUTHENTICATED — callers must
 # pass only fixed public-safe strings and counters, never branch names, paths,
 # or command output. No-op outside update mode: fresh installs share
@@ -1041,7 +1053,7 @@ perform_update() {
     # Step 3: Fetch target branch with explicit refspec
     # This ensures origin/$target_branch is created even in shallow/single-branch clones
     print_status "Fetching latest code..."
-    write_update_progress "fetch" "Downloading the latest code"
+    write_update_progress "fetch" "Fetching the latest code from GitHub"
     if ! git fetch origin "+refs/heads/$target_branch:refs/remotes/origin/$target_branch" 2>&1; then
         print_error "Git fetch failed - branch '$target_branch' may not exist on remote"
         restart_containers_on_failure
@@ -1098,7 +1110,8 @@ perform_update() {
 
     # Step 5: Sync to target branch (checkout + reset)
     print_status "Syncing to origin/$target_branch..."
-    write_update_progress "sync" "Applying the new code"
+    # No stage write here: checkout+reset takes seconds, so the banner keeps
+    # the fetch stage's message until the pull/build stage replaces it.
 
     # Check if local branch exists
     if git show-ref --verify --quiet "refs/heads/$target_branch"; then
@@ -1150,6 +1163,7 @@ perform_update() {
     create_service_file
     install_service
     setup_sudoers
+    fix_config_permissions
 
     # Step 8: Success - exit for systemd restart
     print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

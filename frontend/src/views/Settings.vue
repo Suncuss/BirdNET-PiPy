@@ -2005,6 +2005,15 @@ export default {
       settingsSocket.on('recorder_status', (status) => {
         recorderStatus.value = status
       })
+
+      // A password change evicts every other device: the server closes the
+      // owner room and says so. Reconnect rather than reload — the socket
+      // re-authenticates on connect, so the owner whose own change triggered
+      // this rejoins transparently while an evicted session does not.
+      settingsSocket.on('session_revoked', () => {
+        settingsSocket.disconnect()
+        settingsSocket.connect()
+      })
     }
 
     // Load species list (shared with SpeciesFilterModal)

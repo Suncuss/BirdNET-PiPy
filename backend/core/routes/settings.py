@@ -5,6 +5,7 @@ core.runtime_config classifies which sections changed and the affected
 services pick the new values up live. Persistence itself lives in
 core.settings_store. Registered on the shared ``api`` blueprint at import.
 """
+import re
 import threading
 
 from flask import jsonify, request
@@ -46,7 +47,7 @@ logger = get_logger(__name__)
 # the worker, and the only caller is the settings handler resolving a newly
 # saved location — a station that never edits its location never pays for it.
 _timezone_finder = None
-_tz_finder_lock = threading.Lock()
+_tz_finder_lock = threading.Lock()  # hub-only: timezone lookup runs in settings-route greenlets, never the DB lane
 
 
 def _get_timezone_finder():
@@ -332,7 +333,12 @@ def update_settings():
                 mic_count = 0
                 for source in sources:
                     sid = source.get('id', '')
-                    if not sid or not sid.startswith('source_'):
+                    # Full match, not a prefix check: the id becomes a directory
+                    # name under RECORDING_DIR, so anything past the prefix has
+                    # to be digits.
+                    # [0-9], not \d: \d is Unicode-aware on str, so
+                    # 'source_٣' would pass a check that reads as ASCII-only.
+                    if not re.fullmatch(r'source_[0-9]+', sid or ''):
                         return jsonify({'error': f'Invalid source id: {sid}. Must match source_<int>'}), 400
                     if sid in seen_ids:
                         return jsonify({'error': f'Duplicate source id: {sid}'}), 400

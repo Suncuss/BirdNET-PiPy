@@ -13,6 +13,13 @@ import { API_BASE } from '@/services/baseUrl'
 const DEFAULT_TIMEOUT = 15000
 const LONG_TIMEOUT = 300000
 
+// Budget for heavy read queries (dashboard aggregation, table fetches).
+// Right after a stack restart the first reads can legitimately wait out
+// main's backlog writes and WAL recovery (SQLite busy handling holds
+// readers up to 30s); the 15s default turns that bounded wait into a
+// dead view.
+export const SLOW_QUERY_TIMEOUT = 45000
+
 // Auth endpoints manage their own 401 semantics (bad password, setup-not-complete).
 // The session-expired flow should only fire for non-auth endpoints.
 const isAuthEndpoint = (url) => typeof url === 'string' && url.includes('/auth/')

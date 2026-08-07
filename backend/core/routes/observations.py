@@ -134,7 +134,11 @@ _DASHBOARD_CACHE_TTL_SECONDS = 10
 # server cap (rather than a per-client count parameter) to keep the payload
 # shared across the single-flight cache.
 _DASHBOARD_ACTIVITY_MAX_SPECIES = 15
-_dashboard_cache_lock = threading.Lock()
+
+# Ceiling for the Recent Observations lists, same pattern: the client shows
+# 7 or 8 rows depending on viewport height and slices down.
+_DASHBOARD_RECENT_MAX = 8
+_dashboard_cache_lock = threading.Lock()  # hub-only: taken by route greenlets around job.result(), never inside builders
 _dashboard_cache: dict = {
     'payload': None,
     'expires_at': 0.0,
@@ -155,7 +159,7 @@ _SUMMARY_CACHE_TTL_SECONDS = {
 }
 # The TTL table defines the period set: adding a period means giving it a TTL.
 _SUMMARY_PERIODS = tuple(_SUMMARY_CACHE_TTL_SECONDS)
-_summary_cache_lock = threading.Lock()
+_summary_cache_lock = threading.Lock()  # hub-only: see _dashboard_cache_lock
 _summary_cache: dict = {
     period: {
         'payload': None,
@@ -178,7 +182,7 @@ _GALLERY_CACHE_TTL_SECONDS = 90
 _GALLERY_KEY_FREQUENT = 'sightings:frequent'
 _GALLERY_KEY_RARE = 'sightings:rare'
 _GALLERY_KEY_SPECIES = 'species:all'
-_gallery_cache_lock = threading.Lock()
+_gallery_cache_lock = threading.Lock()  # hub-only: see _dashboard_cache_lock
 _gallery_cache: dict = {
     key: {'payload': None, 'expires_at': 0.0, 'inflight': None, 'dirty': False}
     for key in (_GALLERY_KEY_FREQUENT, _GALLERY_KEY_RARE, _GALLERY_KEY_SPECIES)
@@ -352,8 +356,9 @@ def _build_dashboard_payload():
     today = now.strftime('%Y-%m-%d')
     settings = load_user_settings()
 
-    recent_all = infra.db_manager.get_latest_detections(7)
-    recent_unique = infra.db_manager.get_latest_detections(7, unique=True)
+    recent_all = infra.db_manager.get_latest_detections(_DASHBOARD_RECENT_MAX)
+    recent_unique = infra.db_manager.get_latest_detections(
+        _DASHBOARD_RECENT_MAX, unique=True)
     # Cached + shared across tiers -> always emit the anonymous-safe variant
     # (the dashboard never displays source_label, so owners lose nothing here).
     recent_all = _localize_detection_list(recent_all, settings=settings, public_only=True)

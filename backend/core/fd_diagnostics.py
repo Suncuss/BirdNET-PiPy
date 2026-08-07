@@ -13,7 +13,7 @@ FD_SAMPLE_LIMIT = 40
 CHILD_SAMPLE_LIMIT = 20
 
 _last_log_at: dict[str, float] = {}
-_last_log_lock = threading.Lock()
+_last_log_lock = threading.Lock()  # hub-only: main process, no gevent
 
 
 def find_fd_exhaustion_errno(error: BaseException) -> int | None:

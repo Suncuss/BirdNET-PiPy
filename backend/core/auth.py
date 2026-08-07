@@ -19,6 +19,8 @@ from flask import jsonify, request, session
 from flask.sessions import SecureCookieSessionInterface
 
 from core.logging_config import get_logger
+from core.native_lock import native_lock
+from core.secure_file import atomic_write_private_json
 
 logger = get_logger(__name__)
 
@@ -41,7 +43,7 @@ ATTEMPT_WINDOW_SECONDS = 300  # Window for counting attempts
 
 # Rate limiting state (in-memory, resets on restart)
 _login_attempts = defaultdict(list)  # IP -> list of timestamps
-_login_attempts_lock = Lock()
+_login_attempts_lock = Lock()  # hub-only: login routes run in request greenlets, never the DB lane
 
 
 # Parsed auth.json, keyed by (path, mtime) so an external edit (or the test
@@ -49,42 +51,25 @@ _login_attempts_lock = Lock()
 # consulted several times per request (default-deny gate, scope decorators,
 # tier checks), so uncached disk reads would multiply per request.
 _auth_config_cache = None  # (path, mtime, config)
-_auth_config_lock = Lock()
+# Native lock: read from request greenlets AND from the DB-lane worker
+# (cache builders mint media signatures -> get_or_create_media_secret reads
+# the config through this cache) — a patched lock loses wakeups across that
+# boundary (see core/native_lock.py). Guards ONLY the cache tuple
+# (compare/copy/assign); file I/O and logging stay outside it. First-mint
+# and mutation serialization is _auth_config_write_lock's job (below).
+_auth_config_lock = native_lock()
+
+# Every auth.json writer replaces the complete object, so the entire
+# read-modify-write transaction must be serialized. This covers first secret
+# mints from the DB-lane worker as well as password/setup/toggle requests; a
+# save-only lock would still let a stale reader overwrite a newer password,
+# epoch, or rotated capability secret. The lock is native because both OS
+# threads and request greenlets take it (see core/native_lock.py).
+_auth_config_write_lock = native_lock()
 
 
-def load_auth_config(check_reset=True):
-    """Load authentication configuration from JSON file (mtime-cached).
-
-    Args:
-        check_reset: If True, check for password reset file first.
-                    Set to False to avoid redundant checks.
-    """
-    global _auth_config_cache
-
-    # Check for password reset file first (only when requested)
-    if check_reset:
-        check_password_reset()
-
-    try:
-        mtime = os.path.getmtime(AUTH_CONFIG_FILE)
-    except OSError:
-        mtime = None
-
-    if mtime is not None:
-        with _auth_config_lock:
-            if _auth_config_cache and _auth_config_cache[:2] == (AUTH_CONFIG_FILE, mtime):
-                # Copy so callers' mutate-then-save flows can't corrupt the cache.
-                return dict(_auth_config_cache[2])
-        try:
-            with open(AUTH_CONFIG_FILE) as f:
-                config = json.load(f)
-            with _auth_config_lock:
-                _auth_config_cache = (AUTH_CONFIG_FILE, mtime, config)
-            return dict(config)
-        except Exception as e:
-            logger.error("Failed to load auth config", extra={'error': str(e)})
-
-    # Return default config (auth disabled, no password set)
+def _default_auth_config():
+    """The auth-disabled config substituted when no usable file is present."""
     return {
         'password_hash': None,
         'auth_enabled': False,
@@ -94,39 +79,129 @@ def load_auth_config(check_reset=True):
     }
 
 
-def save_auth_config(config):
-    """Atomically save authentication configuration to JSON file."""
+def _load_auth_config(check_reset=True):
+    """Load the auth config, reporting whether an existing file was unreadable.
+
+    Args:
+        check_reset: If True, check for password reset file first.
+                    Set to False to avoid redundant checks.
+
+    Returns:
+        ``(config, unreadable)``. ``unreadable`` is True only when a config file
+        is present but could not be read or parsed — a missing file (first run)
+        reports False, because there the substituted defaults are the right
+        answer. Every caller that writes the config back MUST check it:
+        persisting substituted defaults over a real-but-unreadable file replaces
+        the password hash and all three secrets with nulls.
+    """
     global _auth_config_cache
 
-    # Ensure directory exists
-    os.makedirs(AUTH_CONFIG_DIR, exist_ok=True)
+    # Check for password reset file first (only when requested)
+    if check_reset:
+        check_password_reset()
+
+    try:
+        mtime = os.path.getmtime(AUTH_CONFIG_FILE)
+    except FileNotFoundError:
+        return _default_auth_config(), False
+    except OSError as e:
+        # Present but un-stattable (EACCES, EIO): unreadable, NOT a first run.
+        logger.error("Failed to stat auth config", extra={'error': str(e)})
+        return _default_auth_config(), True
+
+    with _auth_config_lock:
+        if _auth_config_cache and _auth_config_cache[:2] == (AUTH_CONFIG_FILE, mtime):
+            # Copy so callers' mutate-then-save flows can't corrupt the cache.
+            return dict(_auth_config_cache[2]), False
+    try:
+        with open(AUTH_CONFIG_FILE) as f:
+            config = json.load(f)
+    except Exception as e:
+        logger.error("Failed to load auth config", extra={'error': str(e)})
+        return _default_auth_config(), True
+
+    if not isinstance(config, dict):
+        # Parses as JSON but is the wrong shape — `null`, a bare scalar, or a
+        # list. Both halves matter: dict(None) would raise out of every auth
+        # check (500 on every request, and the cache would replay it), while
+        # dict([]) would quietly yield an empty config that reads as legitimate
+        # and gets written back over the real one. Unreadable covers both.
+        logger.error("Auth config is not a JSON object",
+                     extra={'type': type(config).__name__})
+        return _default_auth_config(), True
+
+    with _auth_config_lock:
+        _auth_config_cache = (AUTH_CONFIG_FILE, mtime, config)
+    return dict(config), False
+
+
+def _next_session_epoch(config):
+    """The next value for the session epoch: wall-clock, but strictly increasing.
+
+    Wall-clock rather than a counter so the epoch cannot be *rewound*. The
+    RESET_PASSWORD recovery deletes auth.json, and a counter would restart at 0
+    — revalidating every cookie a previous password change had evicted. A
+    timestamp never collides with those, and max(..., prev + 1) keeps it
+    monotonic across two changes inside the same second.
+    """
+    return max(int(time.time()), config.get('session_epoch', 0) + 1)
+
+
+def _refuse_write_on_unreadable(unreadable, action):
+    """Whether a config write must be skipped, logging why.
+
+    Guards every writer of auth.json: when the on-disk file is present but
+    unreadable the in-hand config is the auth-disabled default, so writing it
+    would turn a transient read failure into a permanent auth wipe — and, via
+    the anonymous /api/auth/setup route, into a station takeover.
+    """
+    if not unreadable:
+        return False
+    logger.critical(
+        "Auth config unreadable — refusing to %s. Restore or remove %s to recover.",
+        action, AUTH_CONFIG_FILE
+    )
+    return True
+
+
+def load_auth_config(check_reset=True):
+    """Load authentication configuration from JSON file (mtime-cached).
+
+    Args:
+        check_reset: If True, check for password reset file first.
+                    Set to False to avoid redundant checks.
+    """
+    return _load_auth_config(check_reset)[0]
+
+
+def _save_auth_config(config):
+    """Save auth configuration while ``_auth_config_write_lock`` is held."""
+    global _auth_config_cache
 
     # Update timestamp
     config['last_modified'] = datetime.utcnow().isoformat() + 'Z'
 
-    # Atomic write using temp file
-    temp_file = AUTH_CONFIG_FILE + '.tmp'
-    with open(temp_file, 'w') as f:
-        json.dump(config, f, indent=2)
-
-    os.replace(temp_file, AUTH_CONFIG_FILE)
+    # fsync before the rename: without it a power cut can publish an empty or
+    # partial auth.json, which reads as "auth disabled" downstream. The helper
+    # also creates the temp file as 0600 before writing any secrets into it.
+    atomic_write_private_json(AUTH_CONFIG_FILE, config, fsync=True)
 
     # Drop the read cache explicitly — mtime alone can miss a same-instant
     # rewrite on filesystems with coarse timestamp resolution.
     with _auth_config_lock:
         _auth_config_cache = None
 
-    # Set restrictive permissions (owner read/write only)
-    try:
-        os.chmod(AUTH_CONFIG_FILE, 0o600)
-    except Exception as e:
-        logger.warning("Could not set file permissions", extra={'error': str(e)})
-
     logger.info("Auth config saved")
 
 
-def check_password_reset():
-    """Check for password reset file and handle reset if present."""
+def save_auth_config(config):
+    """Atomically save authentication configuration."""
+    with _auth_config_write_lock:
+        _save_auth_config(config)
+
+
+def _check_password_reset_unlocked():
+    """Handle a reset marker while ``_auth_config_write_lock`` is held."""
     global _auth_config_cache
     if os.path.exists(RESET_PASSWORD_FILE):
         logger.warning("Password reset file detected, resetting authentication")
@@ -144,6 +219,18 @@ def check_password_reset():
 
         return True
     return False
+
+
+def check_password_reset():
+    """Check for password reset file and handle reset if present."""
+    with _auth_config_write_lock:
+        return _check_password_reset_unlocked()
+
+
+def _load_auth_config_for_update():
+    """Load the latest config inside an auth.json mutation transaction."""
+    _check_password_reset_unlocked()
+    return _load_auth_config(check_reset=False)
 
 
 def _get_client_ip():
@@ -242,21 +329,33 @@ def _get_or_create_secret(key, label):
     Backs the session/media/share secret accessors — each is the same
     get-or-create-and-save logic over a different config key.
     """
-    config = load_auth_config()
+    config, unreadable = _load_auth_config()
 
     if config.get(key):
         return config[key]
 
-    secret = secrets.token_hex(32)
-    config[key] = secret
+    with _auth_config_write_lock:
+        # Re-read: another thread may have minted and saved while we waited.
+        config, unreadable = _load_auth_config_for_update()
+        if config.get(key):
+            return config[key]
 
-    if not config.get('created_at'):
-        config['created_at'] = datetime.utcnow().isoformat() + 'Z'
+        secret = secrets.token_hex(32)
 
-    save_auth_config(config)
-    logger.info("Generated new %s secret", label)
+        if _refuse_write_on_unreadable(unreadable, f'persist a new {label} secret'):
+            # Serve an ephemeral secret instead: it lasts this process only,
+            # and the on-disk config stays recoverable.
+            return secret
 
-    return secret
+        config[key] = secret
+
+        if not config.get('created_at'):
+            config['created_at'] = datetime.utcnow().isoformat() + 'Z'
+
+        _save_auth_config(config)
+        logger.info("Generated new %s secret", label)
+
+        return secret
 
 
 def get_or_create_session_secret():
@@ -311,18 +410,38 @@ def is_setup_complete():
 
 
 def is_authenticated():
-    """Check if the current session is authenticated."""
-    if not is_auth_enabled():
+    """Check if the current session is authenticated.
+
+    Loads the config once and reads both the enabled flag and the session epoch
+    off it — same cached-stat cost as checking the flag alone.
+    """
+    config = load_auth_config()
+
+    if not config.get('auth_enabled', False):
         return True  # Auth disabled = always authenticated
 
-    return session.get('authenticated', False)
+    if not session.get('authenticated', False):
+        return False
+
+    # Sessions carry the epoch they were minted under. change_password() bumps
+    # it, so a password change actually evicts every other signed-in device
+    # instead of leaving stateless cookies valid forever. Sessions predating
+    # the epoch (and configs predating it) both read as 0, so an upgrade does
+    # not sign anyone out.
+    return session.get('epoch', 0) == config.get('session_epoch', 0)
 
 
 def set_auth_enabled(enabled):
     """Enable or disable authentication."""
-    config = load_auth_config()
-    config['auth_enabled'] = enabled
-    save_auth_config(config)
+    with _auth_config_write_lock:
+        config, unreadable = _load_auth_config_for_update()
+        if _refuse_write_on_unreadable(unreadable, 'toggle authentication'):
+            raise RuntimeError(
+                "Authentication config could not be read; refusing to overwrite it"
+            )
+
+        config['auth_enabled'] = enabled
+        _save_auth_config(config)
     logger.info("Authentication enabled" if enabled else "Authentication disabled")
 
 
@@ -368,9 +487,7 @@ def require_feature(feature_name):
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
-            if is_feature_public(feature_name):
-                return f(*args, **kwargs)
-            if session.get('authenticated'):
+            if is_feature_public(feature_name) or is_authenticated():
                 return f(*args, **kwargs)
             return jsonify({'error': 'Authentication required'}), 401
         # Access-declaration marker for the boot-time route audit (see
@@ -429,41 +546,87 @@ def require_scope(scope):
 
 def setup_password(password):
     """Set up the initial password (first-time setup)."""
-    if is_setup_complete():
-        raise ValueError("Password already set up")
+    with _auth_config_write_lock:
+        config, unreadable = _load_auth_config_for_update()
+        if config.get('password_hash') is not None:
+            raise ValueError("Password already set up")
 
-    if not password or len(password) < MIN_PASSWORD_LENGTH:
-        raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
+        if not password or len(password) < MIN_PASSWORD_LENGTH:
+            raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
 
-    config = load_auth_config()
-    config['password_hash'] = hash_password(password)
-    config['auth_enabled'] = True
+        if _refuse_write_on_unreadable(unreadable, 'set up a password'):
+            # /api/auth/setup is anonymously reachable and gated only by
+            # is_setup_complete(), which reads None off the substituted defaults —
+            # so without this an unreadable config lets any visitor claim the
+            # station and destroy the owner's real credentials.
+            raise ValueError(
+                "Authentication config could not be read; refusing to overwrite it"
+            )
 
-    if not config.get('session_secret'):
-        config['session_secret'] = secrets.token_hex(32)
+        config['password_hash'] = hash_password(password)
+        config['auth_enabled'] = True
+        # Claiming the station evicts anything already holding a session — this is
+        # also the path RESET_PASSWORD recovery lands on, where the old config (and
+        # its epoch) is gone but old cookies may still be in circulation.
+        config['session_epoch'] = _next_session_epoch(config)
 
-    if not config.get('created_at'):
-        config['created_at'] = datetime.utcnow().isoformat() + 'Z'
+        if not config.get('session_secret'):
+            config['session_secret'] = secrets.token_hex(32)
 
-    save_auth_config(config)
+        if not config.get('created_at'):
+            config['created_at'] = datetime.utcnow().isoformat() + 'Z'
+
+        _save_auth_config(config)
     logger.info("Password set up successfully")
 
 
 def change_password(current_password, new_password):
     """Change the password (requires current password verification)."""
-    config = load_auth_config()
+    with _auth_config_write_lock:
+        config, unreadable = _load_auth_config_for_update()
+        if _refuse_write_on_unreadable(unreadable, 'change the password'):
+            raise ValueError(
+                "Authentication config could not be read; refusing to overwrite it"
+            )
 
-    if not config.get('password_hash'):
-        raise ValueError("No password set up")
+        if not config.get('password_hash'):
+            raise ValueError("No password set up")
 
-    if not verify_password(current_password, config['password_hash']):
-        raise ValueError("Current password is incorrect")
+        if not verify_password(current_password, config['password_hash']):
+            raise ValueError("Current password is incorrect")
 
-    if not new_password or len(new_password) < MIN_PASSWORD_LENGTH:
-        raise ValueError(f"New password must be at least {MIN_PASSWORD_LENGTH} characters")
+        if not new_password or len(new_password) < MIN_PASSWORD_LENGTH:
+            raise ValueError(f"New password must be at least {MIN_PASSWORD_LENGTH} characters")
 
-    config['password_hash'] = hash_password(new_password)
-    save_auth_config(config)
+        config['password_hash'] = hash_password(new_password)
+        # Evict every other signed-in device: sessions minted under an older epoch
+        # stop validating in is_authenticated().
+        config['session_epoch'] = _next_session_epoch(config)
+
+        # The cookie is not the only thing a stolen session can leave behind: it
+        # can mint signed media URLs (valid 24-48h) and share tokens (30 days),
+        # neither of which carries the epoch. Rotating these two secrets is the
+        # documented mass-revocation lever, so a password change revokes them too.
+        # The owner's outstanding share links stop working — the intended trade for
+        # an action whose whole purpose is to evict someone.
+        config['media_secret'] = secrets.token_hex(32)
+        config['share_secret'] = secrets.token_hex(32)
+
+        _save_auth_config(config)
+        new_epoch = config['session_epoch']
+
+    # media_access caches the secret for the process lifetime; share_tokens
+    # deliberately re-reads per call and needs no invalidation.
+    from core.media_access import reset_secret_cache
+    reset_secret_cache()
+
+    # ...except this one. The caller just proved knowledge of the password, so
+    # re-stamp their session rather than logging them out of the page they are
+    # standing on. (Reads the raw flag, not is_authenticated(): the epoch it
+    # would compare against was just bumped.)
+    if session.get('authenticated'):
+        session['epoch'] = new_epoch
+
     logger.info("Password changed successfully")
 
 
@@ -496,6 +659,7 @@ def authenticate(password):
     # Set session
     session['authenticated'] = True
     session['authenticated_at'] = datetime.utcnow().isoformat()
+    session['epoch'] = config.get('session_epoch', 0)
     session.permanent = True  # Use permanent session (respects PERMANENT_SESSION_LIFETIME)
 
     logger.info("User authenticated successfully")
@@ -506,6 +670,7 @@ def logout():
     """Clear the authentication session."""
     session.pop('authenticated', None)
     session.pop('authenticated_at', None)
+    session.pop('epoch', None)
     logger.info("User logged out")
 
 
@@ -513,16 +678,15 @@ def require_auth(f):
     """Decorator to protect API routes requiring authentication."""
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        # is_auth_enabled() calls load_auth_config() which checks password reset
-        # So we don't need a separate check_password_reset() call here
-        if not is_auth_enabled():
+        # Single source of truth for "signed in": is_authenticated() also
+        # returns True when auth is disabled, and checks the session epoch so
+        # a password change evicts this session too. Reading
+        # session['authenticated'] directly here would silently opt these
+        # routes out of that.
+        if is_authenticated():
             return f(*args, **kwargs)
 
-        # Check session authentication
-        if not session.get('authenticated'):
-            return jsonify({'error': 'Authentication required'}), 401
-
-        return f(*args, **kwargs)
+        return jsonify({'error': 'Authentication required'}), 401
     decorated_function._access_gate = 'owner'
     return decorated_function
 

@@ -88,9 +88,9 @@ class FailingExecutor:
 
 class _TimingOutJob:
     def result(self, timeout=None):
-        # Mirrors what _GeventJob.result() must do when AsyncResult.get()
-        # raises gevent.Timeout — translate to a TimeoutError so the
-        # `except Exception` blocks downstream actually fire.
+        # Mirrors _LaneJob.result() hitting its deadline — it raises
+        # TimeoutError (never gevent.Timeout) so the `except Exception`
+        # blocks downstream actually fire.
         raise TimeoutError("simulated db job timeout")
 
 
@@ -391,7 +391,7 @@ def test_failed_compute_clears_inflight(api_client, monkeypatch):
 def test_db_job_timeout_clears_inflight_and_returns_500(api_client, monkeypatch):
     """gevent.Timeout used to slip past `except Exception`, leaving the
     dashboard inflight slot pointing at a dead job until the next
-    invalidation. _GeventJob.result() now translates it to TimeoutError;
+    invalidation. _LaneJob.result() raises TimeoutError instead;
     confirm the dashboard handler treats that like any other failure."""
     from core.routes import observations as obs_module
 

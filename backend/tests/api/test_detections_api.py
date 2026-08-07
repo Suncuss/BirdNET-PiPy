@@ -743,8 +743,10 @@ class TestExportDetectionsAPI:
 
     def test_export_blocked_when_auth_enabled(self, api_client, real_db_manager):
         """Test that export returns 401 when auth is enabled but not authenticated."""
-        # Enable auth
-        with patch('core.auth.is_auth_enabled', return_value=True):
+        # require_auth consults is_authenticated(), which folds in the
+        # auth-enabled check and the session epoch — patch that, not the
+        # enabled flag it reads internally.
+        with patch('core.auth.is_authenticated', return_value=False):
             response = api_client.get('/api/detections/export')
             assert response.status_code == 401
 

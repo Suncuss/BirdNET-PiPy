@@ -3,6 +3,7 @@
 import json
 import os
 import tempfile
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -521,6 +522,347 @@ class TestChangePassword:
         assert response.status_code == 401
 
 
+class TestSessionEviction:
+    """Changing the password must evict other devices' sessions.
+
+    Sessions are stateless signed cookies, so without an epoch stamp a captured
+    cookie stays valid forever and changing the password — the one remediation
+    the UI offers — evicts nobody.
+    """
+
+    @pytest.fixture
+    def auth_app(self):
+        """Yield the app itself, so a test can hold two independent clients.
+
+        sandboxed_auth_env also redirects USER_SETTINGS_PATH, which a
+        hand-rolled auth-only patch block would leave pointing at the
+        developer's real settings file.
+        """
+        with sandboxed_auth_env() as (api_module, _):
+            app, _ = api_module.create_app()
+            app.config['TESTING'] = True
+            yield app
+
+    @staticmethod
+    def _setup(client, password='oldpass123'):
+        client.post('/api/auth/setup',
+                    data=json.dumps({'password': password}),
+                    content_type='application/json')
+
+    @staticmethod
+    def _change(client, current='oldpass123', new='newpass456'):
+        return client.post('/api/auth/change-password',
+                           data=json.dumps({'current_password': current,
+                                            'new_password': new}),
+                           content_type='application/json')
+
+    @staticmethod
+    def _authenticated(client):
+        return client.get('/api/auth/status').get_json()['authenticated']
+
+    def test_password_change_evicts_other_sessions(self, auth_app):
+        # Plain clients, not `with` blocks: nesting two test_client context
+        # managers unwinds their request contexts out of order.
+        owner = auth_app.test_client()
+        other = auth_app.test_client()
+        self._setup(owner)
+
+        # A second device signs in with the old password.
+        other.post('/api/auth/login',
+                   data=json.dumps({'password': 'oldpass123'}),
+                   content_type='application/json')
+        assert self._authenticated(other) is True
+
+        assert self._change(owner).status_code == 200
+
+        assert self._authenticated(other) is False
+
+    def test_password_change_keeps_the_caller_signed_in(self, auth_app):
+        """The caller just proved knowledge of the password — don't log them
+        out of the page they are standing on."""
+        owner = auth_app.test_client()
+        self._setup(owner)
+        assert self._change(owner).status_code == 200
+        assert self._authenticated(owner) is True
+
+    def test_sessions_predating_the_epoch_stay_valid(self, auth_app):
+        """Upgrade path: a cookie minted before this change carries no epoch,
+        and a config written before it has no session_epoch. Both read as 0, so
+        deploying the fix must not sign the owner out."""
+        import core.auth as auth_module
+
+        owner = auth_app.test_client()
+        self._setup(owner)
+
+        # Reconstruct the genuine pre-upgrade state: config written by the old
+        # code (no session_epoch) and a cookie minted by it (no epoch).
+        config = auth_module.load_auth_config()
+        config.pop('session_epoch', None)
+        auth_module.save_auth_config(config)
+        with owner.session_transaction() as sess:
+            sess.pop('epoch', None)
+
+        assert self._authenticated(owner) is True
+
+    def test_epoch_is_never_rewound_by_a_password_reset(self, auth_app):
+        """RESET_PASSWORD deletes auth.json, so a counter would restart at 0 and
+        revalidate cookies an earlier password change had evicted. The epoch is
+        wall-clock, so a config rebuilt from scratch still outranks them."""
+        import core.auth as auth_module
+
+        owner = auth_app.test_client()
+        other = auth_app.test_client()
+        self._setup(owner)
+        other.post('/api/auth/login',
+                   data=json.dumps({'password': 'oldpass123'}),
+                   content_type='application/json')
+        self._change(owner)
+        assert self._authenticated(other) is False
+
+        # Owner forgets the new password and uses the documented recovery.
+        with open(auth_module.RESET_PASSWORD_FILE, 'w') as f:
+            f.write('reset')
+        auth_module.check_password_reset()
+        self._setup(owner, password='recovered123')
+
+        # The evicted session must NOT come back from the dead.
+        assert self._authenticated(other) is False
+
+    def test_password_change_rotates_capability_secrets(self, auth_app):
+        """A stolen session can mint signed media URLs (24-48h) and share
+        tokens (30 days), neither of which carries the session epoch. Evicting
+        the cookie alone would leave those working."""
+        import core.auth as auth_module
+
+        owner = auth_app.test_client()
+        self._setup(owner)
+        before = (auth_module.get_or_create_media_secret(),
+                  auth_module.get_or_create_share_secret())
+
+        self._change(owner)
+
+        after = (auth_module.get_or_create_media_secret(),
+                 auth_module.get_or_create_share_secret())
+        assert after[0] != before[0]
+        assert after[1] != before[1]
+
+    def test_media_signatures_stop_verifying_after_a_change(self, auth_app):
+        """The rotation only bites if the cached secret is dropped too —
+        otherwise the process keeps signing with the revoked one."""
+        import core.media_access as media_access
+
+        owner = auth_app.test_client()
+        self._setup(owner)
+        stale = media_access.sign_media_query('clip.mp3')
+        exp, sig = (p.split('=', 1)[1] for p in stale.split('&'))
+        assert media_access.verify_media_signature('clip.mp3', exp, sig) is True
+
+        self._change(owner)
+
+        assert media_access.verify_media_signature('clip.mp3', exp, sig) is False
+
+    def test_eviction_applies_to_every_gate(self, auth_app):
+        """is_authenticated() is not the only gate: require_auth and
+        require_feature used to read session['authenticated'] directly, so an
+        evicted session kept passing them. Assert the eviction reaches an
+        owner-gated route and a feature-gated one, not just /auth/status."""
+        owner = auth_app.test_client()
+        other = auth_app.test_client()
+        self._setup(owner)
+        other.post('/api/auth/login',
+                   data=json.dumps({'password': 'oldpass123'}),
+                   content_type='application/json')
+        # require_auth route, and a require_feature route with the feature off.
+        assert other.get('/api/settings').status_code == 200
+        assert other.get('/api/stream/config').status_code == 200
+
+        self._change(owner)
+
+        assert other.get('/api/settings').status_code == 401
+        assert other.get('/api/stream/config').status_code == 401
+        # The owner who made the change keeps working.
+        assert owner.get('/api/settings').status_code == 200
+
+
+class TestAuthConfigDurability:
+    """An unreadable auth.json must not become a permanent auth wipe."""
+
+    def test_unreadable_config_is_never_overwritten(self):
+        """A corrupt-but-present auth.json makes load fall through to the
+        auth-disabled defaults. Persisting those would replace a real password
+        hash with nulls, turning a transient read failure into permanent loss —
+        so secret creation serves an ephemeral value and leaves the file alone.
+        """
+        import core.auth as auth_module
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            auth_file = os.path.join(tmpdir, 'auth.json')
+            truncated = '{"password_hash": "trunc'
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', auth_file), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET')):
+                auth_module.setup_password('realpass123')
+                assert 'password_hash' in json.loads(open(auth_file).read())
+
+                # Simulate the post-power-cut state: present but unparseable.
+                with open(auth_file, 'w') as f:
+                    f.write(truncated)
+
+                secret = auth_module.get_or_create_media_secret()
+
+                assert secret  # usable for this process
+                assert open(auth_file).read() == truncated
+
+    def test_unreadable_config_blocks_anonymous_takeover(self):
+        """With the config unreadable, auth reads as disabled and
+        is_setup_complete() reads None — so /api/auth/setup, which is
+        anonymously reachable, would otherwise let a visitor claim the station
+        and destroy the owner's real credentials."""
+        import core.auth as auth_module
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            auth_file = os.path.join(tmpdir, 'auth.json')
+            truncated = '{"password_hash": "trunc'
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', auth_file), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET')):
+                auth_module.setup_password('realpass123')
+                with open(auth_file, 'w') as f:
+                    f.write(truncated)
+
+                with pytest.raises(ValueError, match='could not be read'):
+                    auth_module.setup_password('attacker99')
+                with pytest.raises(RuntimeError, match='could not be read'):
+                    auth_module.set_auth_enabled(False)
+
+                assert open(auth_file).read() == truncated
+
+    @pytest.mark.parametrize('payload', ['null', '123', '"x"', '[]'])
+    def test_wrong_shape_config_is_treated_as_unreadable(self, payload):
+        """Valid JSON of the wrong shape must not reach dict().
+
+        `null`/scalars would raise TypeError out of every auth check (500 on
+        every request, replayed from the cache), and `[]` would yield an empty
+        config that reads as legitimate — so the write-guard would let it be
+        written back over the real one.
+        """
+        import core.auth as auth_module
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            auth_file = os.path.join(tmpdir, 'auth.json')
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', auth_file), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET')):
+                auth_module.setup_password('realpass123')
+                with open(auth_file, 'w') as f:
+                    f.write(payload)
+
+                # Auth checks stay callable instead of raising.
+                assert auth_module.is_auth_enabled() is False
+                assert auth_module.is_setup_complete() is False
+
+                # ...and the file is still guarded against every writer.
+                assert auth_module.get_or_create_media_secret()
+                with pytest.raises(ValueError, match='could not be read'):
+                    auth_module.setup_password('attacker99')
+
+                assert open(auth_file).read() == payload
+
+    def test_config_is_fsynced_before_publish(self):
+        """The rename is only atomic if the bytes are on disk first: without
+        the fsync a power cut can publish an empty auth.json, which reads as
+        'auth disabled' everywhere downstream."""
+        import core.auth as auth_module
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET')), \
+                 patch('core.secure_file.os.fsync', wraps=os.fsync) as mock_fsync:
+                auth_module.save_auth_config({'password_hash': 'x'})
+
+            assert mock_fsync.called
+
+    def test_secret_mint_cannot_overwrite_a_password_change(self):
+        """All auth.json mutations must share one read-modify-write lock.
+
+        A first media-secret mint used to load the old config, pause before its
+        save, and then overwrite a completed password change with that stale
+        password hash, epoch, and secret set.
+        """
+        from flask import Flask
+
+        import core.auth as auth_module
+
+        app = Flask(__name__)
+        app.secret_key = 'auth-race-test'
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            auth_file = os.path.join(tmpdir, 'auth.json')
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', auth_file), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET')):
+                auth_module.save_auth_config({
+                    'password_hash': 'old-hash',
+                    'auth_enabled': True,
+                    'session_epoch': 1,
+                })
+
+                mint_saving = threading.Event()
+                release_mint = threading.Event()
+                change_done = threading.Event()
+                errors = []
+                original_save = auth_module._save_auth_config
+
+                def pause_stale_mint(config):
+                    if (config.get('password_hash') == 'old-hash'
+                            and config.get('media_secret')
+                            and not config.get('share_secret')):
+                        mint_saving.set()
+                        if not release_mint.wait(timeout=2):
+                            raise TimeoutError('password change did not reach the forced race')
+                    return original_save(config)
+
+                def mint_secret():
+                    try:
+                        auth_module.get_or_create_media_secret()
+                    except Exception as exc:  # surfaced in the main test thread
+                        errors.append(exc)
+
+                def change_password():
+                    try:
+                        with app.test_request_context():
+                            auth_module.change_password('old-password', 'new-password')
+                    except Exception as exc:  # surfaced in the main test thread
+                        errors.append(exc)
+                    finally:
+                        change_done.set()
+
+                with patch('core.auth._save_auth_config', side_effect=pause_stale_mint), \
+                     patch('core.auth.verify_password', return_value=True), \
+                     patch('core.auth.hash_password', return_value='new-hash'):
+                    mint_thread = threading.Thread(target=mint_secret)
+                    mint_thread.start()
+                    assert mint_saving.wait(timeout=2)
+
+                    change_thread = threading.Thread(target=change_password)
+                    change_thread.start()
+                    assert not change_done.wait(timeout=0.1)
+
+                    release_mint.set()
+                    mint_thread.join(timeout=2)
+                    change_thread.join(timeout=2)
+
+                assert not mint_thread.is_alive()
+                assert not change_thread.is_alive()
+                assert not errors
+                final_config = auth_module.load_auth_config(check_reset=False)
+                assert final_config['password_hash'] == 'new-hash'
+                assert final_config['session_epoch'] > 1
+                assert final_config.get('media_secret')
+                assert final_config.get('share_secret')
+
+
 class TestRateLimiting:
     """Test rate limiting functionality."""
 
@@ -655,6 +997,21 @@ class TestFeatureAccess:
         with open(settings_file, 'w') as f:
             json.dump(data, f)
 
+    def _set_sources(self, settings_file, sources):
+        """Helper to set audio.sources directly.
+
+        Drops the legacy recording_mode key too: leaving it makes
+        _migrate_audio_sources treat the file as pre-sources and replace these
+        sources with a generated 'Local Mic'.
+        """
+        with open(settings_file) as f:
+            data = json.load(f)
+        audio = data.setdefault('audio', {})
+        audio.pop('recording_mode', None)
+        audio['sources'] = sources
+        with open(settings_file, 'w') as f:
+            json.dump(data, f)
+
     def test_public_features_default_empty(self, feature_client):
         """auth/status returns empty public_features by default."""
         client, _ = feature_client
@@ -700,6 +1057,29 @@ class TestFeatureAccess:
         self._set_access(settings_file, live_feed_public=True)
         response = client.get('/api/stream/config')
         assert response.status_code == 200
+
+    def test_stream_config_hides_source_labels_from_anonymous(self, feature_client):
+        """Owner-chosen labels can name the property or the mic's placement in
+        it, which is why _strip_public_metadata drops source_label and
+        /api/recorder/status is owner-only. Anonymous live-feed listeners get a
+        positional name; the owner keeps their own."""
+        client, settings_file = feature_client
+        self._set_access(settings_file, live_feed_public=True)
+        self._set_sources(settings_file, [
+            {'id': 'source_0', 'type': 'pulseaudio', 'enabled': True,
+             'label': 'Nursery window'},
+            {'id': 'source_1', 'type': 'rtsp', 'enabled': True,
+             'url': 'rtsp://cam/1', 'label': 'Elm Street feeder'},
+        ])
+
+        anon = client.get('/api/stream/config').get_json()['streams']
+        assert [s['label'] for s in anon] == ['Source 1', 'Source 2']
+        # The stream is still selectable — only the name is clamped.
+        assert [s['source_id'] for s in anon] == ['source_0', 'source_1']
+
+        self._login(client)
+        owner = client.get('/api/stream/config').get_json()['streams']
+        assert [s['label'] for s in owner] == ['Nursery window', 'Elm Street feeder']
 
     def test_auth_verify_allows_stream_when_public(self, feature_client):
         """auth/verify returns 200 for /stream/ URIs when live_feed is public."""

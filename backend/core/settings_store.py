@@ -5,15 +5,13 @@ reads go through the runtime-settings cache (core.runtime_config) and writes
 are atomic. The routes in core/routes/settings.py own request parsing and the
 restart-required classification; this module owns the file.
 """
-import json
-import os
-
 from config.settings import USER_SETTINGS_PATH
 from core.logging_config import get_logger
 from core.runtime_config import (
     get_runtime_settings,
     invalidate_runtime_settings_cache,
 )
+from core.secure_file import atomic_write_private_json
 
 logger = get_logger(__name__)
 
@@ -65,15 +63,10 @@ def _validate_notification_settings(notif):
 def save_user_settings(settings_dict):
     """Save settings to JSON file atomically"""
     json_path = USER_SETTINGS_PATH
-    temp_file = json_path + '.tmp'
+    # The file carries RTSP credentials, notification URLs, the BirdWeather ID
+    # and coordinates. Its temporary file is 0600 before content is written.
+    atomic_write_private_json(json_path, settings_dict)
 
-    os.makedirs(os.path.dirname(json_path), exist_ok=True)
-
-    # Atomic write
-    with open(temp_file, 'w') as f:
-        json.dump(settings_dict, f, indent=2)
-
-    os.rename(temp_file, json_path)
     logger.info("User settings saved", extra={
         'path': json_path
     })

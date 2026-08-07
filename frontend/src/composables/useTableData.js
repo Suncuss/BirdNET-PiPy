@@ -1,5 +1,5 @@
 import { ref, computed } from 'vue'
-import api from '@/services/api'
+import api, { SLOW_QUERY_TIMEOUT } from '@/services/api'
 import { useLogger } from './useLogger'
 import { normalizeHour } from '@/utils/inputHelpers'
 import { ERR_UNREACHABLE, fetchErrorMessage } from '@/utils/errorMessages'
@@ -57,10 +57,17 @@ export function useTableData() {
     detections.value.every(d => selectedIds.value.has(d.id))
   )
 
+  // Monotonic fetch id, same latest-wins pattern as useFetchBirdData: with
+  // the generous SLOW_QUERY_TIMEOUT, a response for an abandoned query
+  // (filter/page/sort changed mid-flight) can land after the newer one and
+  // must not overwrite its results.
+  let fetchVersion = 0
+
   /**
    * Fetch detections from API with current filters and pagination.
    */
   async function fetchDetections() {
+    const myVersion = ++fetchVersion
     isLoading.value = true
     error.value = null
 
@@ -80,7 +87,8 @@ export function useTableData() {
 
         logger.info('Fetching detections', params)
 
-        const response = await api.get('/detections', { params })
+        const response = await api.get('/detections', { params, timeout: SLOW_QUERY_TIMEOUT })
+        if (myVersion !== fetchVersion) return // superseded by a newer fetch
         logger.api('GET', '/detections', params, response)
 
         detections.value = Array.isArray(response.data?.detections)
@@ -107,12 +115,15 @@ export function useTableData() {
         break
       }
     } catch (err) {
+      if (myVersion !== fetchVersion) return // stale failure — newer fetch owns the UI
       logger.error('Failed to fetch detections', err)
       error.value = fetchErrorMessage(err)
       detections.value = []
       totalItems.value = 0
     } finally {
-      isLoading.value = false
+      if (myVersion === fetchVersion) {
+        isLoading.value = false
+      }
     }
   }
 
@@ -126,7 +137,10 @@ export function useTableData() {
     actionError.value = null
 
     try {
-      const response = await api.delete(`/detections/${id}`)
+      // Deletes wait out the same post-restart SQLite busy window as reads;
+      // aborting client-side at the 15s default reports a false failure for
+      // a delete that then lands server-side (retry shows a confusing 404).
+      const response = await api.delete(`/detections/${id}`, { timeout: SLOW_QUERY_TIMEOUT })
       logger.api('DELETE', `/detections/${id}`, null, response)
 
       if (response.data?.status === 'deleted') {
@@ -215,7 +229,8 @@ export function useTableData() {
 
     try {
       const ids = Array.from(selectedIds.value)
-      const response = await api.delete('/detections/batch', { data: { ids } })
+      // Same slow budget as single deletes — see deleteDetection.
+      const response = await api.delete('/detections/batch', { data: { ids }, timeout: SLOW_QUERY_TIMEOUT })
       logger.api('DELETE', '/detections/batch', { ids }, response)
 
       const { deleted, failed } = response.data

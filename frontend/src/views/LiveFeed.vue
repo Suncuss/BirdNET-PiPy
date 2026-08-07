@@ -651,6 +651,14 @@ export default {
         console.log(`[LiveFeed] WebSocket disconnected: ${reason}`)
       })
 
+      // A password change evicts every other device. Reconnect so the socket
+      // re-authenticates: the owner rejoins, an evicted session is refused if
+      // the live feed is not public.
+      socket.on('session_revoked', () => {
+        socket.disconnect()
+        socket.connect()
+      })
+
       socket.on('bird_detected', (detection) => {
         
         // Find existing detection for this bird species

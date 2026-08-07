@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 
 # Global storage for migration progress, keyed by temp_path
 _migration_progress = {}
-_progress_lock = threading.Lock()
+_progress_lock = threading.Lock()  # hub-only: import worker is a greenlet under patch_all, never the DB lane
 
 
 def get_migration_progress(temp_path):

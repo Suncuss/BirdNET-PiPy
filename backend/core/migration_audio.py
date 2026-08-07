@@ -35,7 +35,7 @@ EXCLUDED_FOLDERS = {'audio', 'spectrograms', 'database', 'logs'}
 # Progress tracking
 _audio_import_progress = {}
 _spectrogram_progress = {}
-_progress_lock = threading.Lock()
+_progress_lock = threading.Lock()  # hub-only: migration worker is a greenlet under patch_all, never the DB lane
 
 
 # =============================================================================

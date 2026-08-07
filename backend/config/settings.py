@@ -8,6 +8,7 @@ from config.constants import (
     MODEL_SAMPLE_RATES,
     ModelType,
 )
+from core.secure_file import atomic_write_private_json
 
 logger = logging.getLogger(__name__)
 
@@ -126,9 +127,9 @@ def _apply_model_aware_defaults(settings, user_data):
 def _write_user_settings_file(settings):
     """Persist a settings dict back to the user settings file (best effort)."""
     try:
-        os.makedirs(os.path.dirname(USER_SETTINGS_PATH), exist_ok=True)
-        with open(USER_SETTINGS_PATH, 'w') as f:
-            json.dump(settings, f, indent=2)
+        # Migrations run in every process and can recreate this file, so use
+        # the same private atomic writer as normal settings saves.
+        atomic_write_private_json(USER_SETTINGS_PATH, settings)
     except Exception as e:
         logger.warning(f"Failed to write settings during migration: {e}")
 

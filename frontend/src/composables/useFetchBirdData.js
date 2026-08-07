@@ -1,5 +1,5 @@
 import { ref } from "vue";
-import api from "@/services/api";
+import api, { SLOW_QUERY_TIMEOUT } from "@/services/api";
 import { getBirdImageUrl, getDefaultBirdImageUrl, isDefaultBirdImageUrl } from "@/services/media";
 import { fetchErrorMessage } from "@/utils/errorMessages";
 import { useLogger } from "./useLogger";
@@ -126,7 +126,7 @@ export function useFetchBirdData() {
     logger.info('Fetching dashboard data');
     try {
       // /dashboard is a heavy aggregation — allow generous time on slow devices.
-      const response = await api.get('/dashboard', { timeout: 45000 });
+      const response = await api.get('/dashboard', { timeout: SLOW_QUERY_TIMEOUT });
 
       // Bail out if a newer fetch has started while we were awaiting
       if (myVersion !== fetchVersion) return;

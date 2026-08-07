@@ -23,7 +23,7 @@ logger = get_logger(__name__)
 
 # Simple in-memory cache
 image_cache = {}
-_image_cache_lock = threading.Lock()
+_image_cache_lock = threading.Lock()  # hub-only: Wikimedia fetches run in request greenlets, never the DB lane
 CACHE_EXPIRATION = 172800  # Cache expiration time in seconds (48 hours)
 MAX_CACHE_SIZE = 1000  # Maximum number of cached entries
 
@@ -34,7 +34,7 @@ MAX_CACHE_SIZE = 1000  # Maximum number of cached entries
 # map only dedups concurrent cache-misses for the same (species, limit) so they
 # share one upstream fetch instead of each hammering Wikimedia.
 _wikimedia_inflight = {}
-_wikimedia_inflight_lock = threading.Lock()
+_wikimedia_inflight_lock = threading.Lock()  # hub-only: see above
 _WIKIMEDIA_FETCH_TIMEOUT = 30  # waiter cap; the leader does up to 10s+15s of HTTP
 
 

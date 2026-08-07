@@ -20,6 +20,7 @@ import hmac
 import time
 
 from core.auth import get_or_create_media_secret
+from core.native_lock import native_lock
 
 _DAY = 86400
 # exp is rounded up to a day boundary so the same file yields the same URL all
@@ -27,13 +28,28 @@ _DAY = 86400
 _TTL_DAYS = 2
 
 _cached_secret = None
+# Signature generation runs both in request greenlets and in the native DB-lane
+# worker, so cache fill/reset coordination needs an unpatched lock.
+_secret_cache_lock = native_lock()
 
 
 def _media_secret():
     global _cached_secret
-    if _cached_secret is None:
-        _cached_secret = get_or_create_media_secret()
-    return _cached_secret
+    with _secret_cache_lock:
+        if _cached_secret is None:
+            _cached_secret = get_or_create_media_secret()
+        return _cached_secret
+
+
+def reset_secret_cache():
+    """Drop the cached secret so the next signature re-reads it from auth.json.
+
+    Called after a password change rotates the secret: without this the process
+    keeps signing and verifying with the revoked one for its whole lifetime.
+    """
+    global _cached_secret
+    with _secret_cache_lock:
+        _cached_secret = None
 
 
 def _current_exp(now=None):
