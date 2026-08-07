@@ -1,14 +1,40 @@
-FROM python:3.11-slim
+# Pin the multi-platform index so upstream base rebuilds do not invalidate every
+# BirdNET layer between deliberate dependency updates. This digest contains
+# both the AMD64 and ARM64 images built by CI.
+FROM python:3.11-slim@sha256:94c50be2dc994b873b55bc123e95e6dbade08095b3dfd790f51c34de3f08cbb7 AS python-deps
+
+# Build native wheels in a disposable stage. timezonefinder currently builds
+# from source on ARM64, so a compiler is still required during image creation,
+# but none of this toolchain needs to ship to stations.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+    build-essential
+
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY requirements.txt .
+
+# Use piwheels for pre-compiled ARM packages. Keep numpy separate so its pinned
+# ABI is established before resolving the remaining ML dependencies.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --extra-index-url https://www.piwheels.org/simple \
+    numpy==1.26.4 && \
+    pip install --extra-index-url https://www.piwheels.org/simple \
+    -r requirements.txt
+
+# Use the same pinned multi-platform base for the shipped runtime image.
+FROM python:3.11-slim@sha256:94c50be2dc994b873b55bc123e95e6dbade08095b3dfd790f51c34de3f08cbb7
 
 # Build arguments for user/group IDs (defaults for fallback)
 ARG UID=1000
 ARG GID=1000
 
-# Cache apt packages for faster rebuilds
+# Install runtime libraries only; the compiler toolchain stays in python-deps.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
     ffmpeg \
     curl \
     tzdata \
@@ -17,15 +43,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /app
 
-COPY requirements.txt .
-
-# Use piwheels for pre-compiled ARM packages (massive speedup on Raspberry Pi)
-# Split install: heavy packages first (better caching), then rest
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --extra-index-url https://www.piwheels.org/simple \
-    numpy==1.26.4 && \
-    pip install --extra-index-url https://www.piwheels.org/simple \
-    -r requirements.txt
+# Copy only the finished environment; build-essential and intermediate wheel
+# caches remain in the discarded python-deps stage.
+COPY --from=python-deps /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
 # Create the runtime user before the source copies: COPY --chown bakes
 # ownership into each layer, where a trailing chown -R would duplicate all of

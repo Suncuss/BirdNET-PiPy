@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Improved native updates on Raspberry Pis by stabilizing Docker base layers between releases and removing the backend compiler toolchain from the runtime image, reducing both routine downloads and slow SD-card extraction
 - Fixed failed update checks exposing the exact installed commit to anonymous visitors through detailed GitHub error URLs; diagnostics remain available to signed-in owners and in logs
 - Fixed authentication and settings temporary files being readable by other local users while sensitive content was still being written; private files now start owner-only
 - Fixed a password-change race that could leave previously issued audio links valid until the API service restarted
