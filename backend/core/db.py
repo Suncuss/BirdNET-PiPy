@@ -1355,8 +1355,8 @@ class DatabaseManager:
 
         Returns:
             List of dicts with id, common_name, confidence, timestamp,
-            extra (raw JSON string); fewer than ``limit`` rows signals
-            the end of the table.
+            extra (raw JSON string), and audio_source; fewer than ``limit``
+            rows signals the end of the table.
         """
         where = _NO_FILTERS
         params = []
@@ -1365,7 +1365,7 @@ class DatabaseManager:
             params = [after_timestamp, after_timestamp, after_id]
 
         query = f"""
-        SELECT id, common_name, confidence, timestamp, extra
+        SELECT id, common_name, confidence, timestamp, extra, audio_source
         FROM detections
         WHERE {where}
         ORDER BY timestamp ASC, id ASC

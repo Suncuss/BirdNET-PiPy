@@ -611,6 +611,58 @@ class TestDeleteDetectionAPI:
             assert not os.path.exists(audio_file)
             assert not os.path.exists(spectrogram_file)
 
+    def test_delete_reports_resolved_legacy_source_filenames(
+            self, api_client, real_db_manager):
+        """The response names the source-ID files it actually removes."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            audio_dir = os.path.join(tmpdir, 'audio')
+            spectrogram_dir = os.path.join(tmpdir, 'spectrograms')
+            os.makedirs(audio_dir)
+            os.makedirs(spectrogram_dir)
+
+            timestamp = '2024-01-15T10:30:00'
+            detection_id = real_db_manager.insert_detection({
+                'timestamp': timestamp,
+                'group_timestamp': timestamp,
+                'common_name': 'American Robin',
+                'scientific_name': 'Turdus migratorius',
+                'confidence': 0.8500,
+                'latitude': 40.7128,
+                'longitude': -74.0060,
+                'cutoff': 0.5,
+                'sensitivity': 0.75,
+                'overlap': 0.25,
+                'extra': {},
+                'audio_source': 'source_0',
+            })
+
+            from core.utils import build_detection_filenames
+
+            filenames = build_detection_filenames(
+                'American Robin', 0.8500, timestamp,
+                audio_source='source_0')
+            audio_file = os.path.join(
+                audio_dir, filenames['audio_filename'])
+            spectrogram_file = os.path.join(
+                spectrogram_dir, filenames['spectrogram_filename'])
+            for path in (audio_file, spectrogram_file):
+                with open(path, 'w') as f:
+                    f.write('media data')
+
+            with patch('core.auth.is_authenticated', return_value=True), \
+                 patch('core.storage_manager.EXTRACTED_AUDIO_DIR', audio_dir), \
+                 patch('core.storage_manager.SPECTROGRAM_DIR', spectrogram_dir):
+                response = api_client.delete(
+                    f'/api/detections/{detection_id}')
+
+            assert response.status_code == 200
+            assert response.get_json()['files_deleted'] == [
+                filenames['audio_filename'],
+                filenames['spectrogram_filename'],
+            ]
+            assert not os.path.exists(audio_file)
+            assert not os.path.exists(spectrogram_file)
+
 
 class TestDetectionsDatabaseMethods:
     """Tests for the underlying database methods."""

@@ -98,8 +98,15 @@ def _resolve_path_with_legacy_fallback(filename, directory):
     return path  # Return original path even if it doesn't exist
 
 
-def _detection_filenames(detection):
-    """Build the dash-pattern filenames for a detection record."""
+def _detection_filename_candidates(detection):
+    """Build ordered dash-pattern filename candidates for a detection.
+
+    Source labels are frozen into ``extra`` for current files. During the
+    brief transition to multi-source recording, files instead used the raw
+    ``audio_source`` id (for example, ``source_0``) and those rows have no
+    saved label. Some imported legacy rows can still be unsuffixed despite
+    carrying an audio source, so keep that as the final fallback.
+    """
     extra = detection.get('extra', {})
     if isinstance(extra, str):
         # Only the source_label matters here, and most rows don't have one —
@@ -112,12 +119,34 @@ def _detection_filenames(detection):
         else:
             extra = {}
     source_label = extra.get('source_label')
-    return build_detection_filenames(
-        detection['common_name'],
-        detection['confidence'],
-        detection['timestamp'],
-        audio_source=source_label or None
+    if source_label:
+        source_suffixes = (source_label,)
+    elif detection.get('audio_source'):
+        source_suffixes = (detection['audio_source'], None)
+    else:
+        source_suffixes = (None,)
+
+    return tuple(
+        build_detection_filenames(
+            detection['common_name'],
+            detection['confidence'],
+            detection['timestamp'],
+            audio_source=source_suffix,
+        )
+        for source_suffix in source_suffixes
     )
+
+
+def _resolve_detection_path(filename_candidates, key, directory):
+    """Return the first existing path for one detection media type."""
+    first_path = None
+    for filenames in filename_candidates:
+        path = _resolve_path_with_legacy_fallback(filenames[key], directory)
+        if first_path is None:
+            first_path = path
+        if os.path.exists(path):
+            return path
+    return first_path
 
 
 def get_detection_files(detection):
@@ -132,11 +161,13 @@ def get_detection_files(detection):
     Returns:
         dict with audio_path and spectrogram_path
     """
-    filenames = _detection_filenames(detection)
+    filename_candidates = _detection_filename_candidates(detection)
 
     return {
-        'audio_path': _resolve_path_with_legacy_fallback(filenames['audio_filename'], EXTRACTED_AUDIO_DIR),
-        'spectrogram_path': _resolve_path_with_legacy_fallback(filenames['spectrogram_filename'], SPECTROGRAM_DIR)
+        'audio_path': _resolve_detection_path(
+            filename_candidates, 'audio_filename', EXTRACTED_AUDIO_DIR),
+        'spectrogram_path': _resolve_detection_path(
+            filename_candidates, 'spectrogram_filename', SPECTROGRAM_DIR),
     }
 
 
@@ -166,9 +197,11 @@ def _disk_filename_sets():
 def _has_files_on_disk(detection, audio_names, spectrogram_names):
     """Whether any of the detection's files (dash or legacy pattern) exist
     in the normalized directory snapshots from _disk_filename_sets()."""
-    filenames = _detection_filenames(detection)
-    return (filenames['audio_filename'] in audio_names
-            or filenames['spectrogram_filename'] in spectrogram_names)
+    return any(
+        filenames['audio_filename'] in audio_names
+        or filenames['spectrogram_filename'] in spectrogram_names
+        for filenames in _detection_filename_candidates(detection)
+    )
 
 
 def delete_detection_files(detection):
@@ -178,12 +211,14 @@ def delete_detection_files(detection):
         detection: dict with common_name, confidence, timestamp
 
     Returns:
-        dict with deleted_audio, deleted_spectrogram, bytes_freed
+        dict with deleted_audio, deleted_spectrogram, deleted_filenames,
+        and bytes_freed
     """
     paths = get_detection_files(detection)
     result = {
         'deleted_audio': False,
         'deleted_spectrogram': False,
+        'deleted_filenames': [],
         'bytes_freed': 0
     }
 
@@ -194,6 +229,7 @@ def delete_detection_files(detection):
             size = os.path.getsize(audio_path)
             os.remove(audio_path)
             result['deleted_audio'] = True
+            result['deleted_filenames'].append(os.path.basename(audio_path))
             result['bytes_freed'] += size
         except OSError as e:
             logger.warning("Failed to delete audio file", extra={
@@ -208,6 +244,8 @@ def delete_detection_files(detection):
             size = os.path.getsize(spectrogram_path)
             os.remove(spectrogram_path)
             result['deleted_spectrogram'] = True
+            result['deleted_filenames'].append(
+                os.path.basename(spectrogram_path))
             result['bytes_freed'] += size
         except OSError as e:
             logger.warning("Failed to delete spectrogram file", extra={
