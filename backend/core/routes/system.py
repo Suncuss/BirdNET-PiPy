@@ -71,7 +71,7 @@ def _cache_and_return_update_result(result, cache_key, now):
     _update_check_cache['result'] = result
     _update_check_cache['timestamp'] = now
     _update_check_cache['cache_key'] = cache_key
-    return jsonify(result), 200
+    return jsonify(_public_update_check_view(result)), 200
 
 
 
@@ -129,6 +129,44 @@ def _public_version_view(response):
         for field in ('current_commit', 'current_commit_date', 'current_branch'):
             response.pop(field, None)
     return response
+
+
+# Allowlist, not a denylist: a field added to an update-check result must not
+# reach anonymous callers just because nobody remembered to exclude it.
+_PUBLIC_UPDATE_CHECK_FIELDS = (
+    'update_available', 'runtime_mode', 'fresh_sync', 'update_note',
+)
+
+
+def _public_update_check_view(result):
+    """Clamp an update-check result to the public tier.
+
+    Same reasoning as _public_version_view — stripping the commit there is
+    pointless if this endpoint hands it straight back on the same anonymous page
+    load. Anonymous callers keep ``update_available`` (all the frontend's
+    logged-out badge needs); the owner still gets the full result.
+
+    Builds a new dict rather than popping: the result is retained in the shared
+    cache across tiers, so mutating it in place would strip the fields from the
+    owner's view for the rest of the cache window.
+    """
+    if get_request_tier() != 'public':
+        return result
+
+    return {k: result[k] for k in _PUBLIC_UPDATE_CHECK_FIELDS if k in result}
+
+
+def _update_check_error_response(error, status_code=500):
+    """Return update-check diagnostics only to the authenticated owner.
+
+    GitHub request errors can contain the comparison URL, whose path embeds the
+    exact installed commit. Anonymous callers only need a stable failure message;
+    the detailed cause remains available to the owner and in server logs.
+    """
+    message = 'Failed to check for updates'
+    if get_request_tier() != 'public':
+        message = f'{message}: {error}'
+    return jsonify({'error': message}), status_code
 
 
 @api.route('/api/system/version', methods=['GET'])
@@ -224,15 +262,18 @@ def check_for_updates():
 
             info, error = _call_supervisor('GET', '/addons/self/info')
             if error:
-                return jsonify({'error': f'Failed to check for updates: {error}'}), 502
+                logger.error("Home Assistant update check failed", extra={'error': error})
+                return _update_check_error_response(error, 502)
 
-            return jsonify({
+            # Clamped like the native branch: this is the fourth return path in
+            # this handler, and the one most likely to be forgotten.
+            return jsonify(_public_update_check_view({
                 'update_available': bool(info.get('update_available')),
                 'runtime_mode': 'ha',
                 'current_version': info.get('version', 'unknown'),
                 'latest_version': info.get('version_latest'),
                 'update_note': None,
-            }), 200
+            })), 200
 
         force = request.args.get('force', 'false').lower() == 'true'
 
@@ -260,7 +301,9 @@ def check_for_updates():
                     'cache_key': cache_key,
                     'cache_age_seconds': int(now - _update_check_cache['timestamp'])
                 })
-                return jsonify(_update_check_cache['result']), 200
+                return jsonify(
+                    _public_update_check_view(_update_check_cache['result'])
+                ), 200
 
         logger.info("Update check initiated", extra={
             'current_commit': current_commit,
@@ -290,7 +333,7 @@ def check_for_updates():
                 remote_info, remote_error = get_latest_remote_commit(target_branch)
                 if remote_error:
                     logger.error("Failed to get remote commit", extra={'error': remote_error})
-                    return jsonify({'error': f'Failed to check for updates: {remote_error}'}), 500
+                    return _update_check_error_response(remote_error)
 
                 remote_commit = remote_info['sha']
                 # If commits differ, update is available (fresh sync required)
@@ -322,7 +365,7 @@ def check_for_updates():
             else:
                 # Do NOT cache error responses - let them retry
                 logger.error("GitHub API comparison failed", extra={'error': error})
-                return jsonify({'error': f'Failed to check for updates: {error}'}), 500
+                return _update_check_error_response(error)
 
         # Determine if update is available
         # ahead_by: how many commits the target branch is ahead of current
@@ -370,7 +413,9 @@ def check_for_updates():
 
     except Exception as e:
         # Do NOT cache error responses - let them retry
-        return jsonify({'error': f'Failed to check for updates: {str(e)}'}), 500
+        logger.error("Unexpected update check failure", extra={'error': str(e)},
+                     exc_info=True)
+        return _update_check_error_response(e)
 
 @api.route('/api/system/update', methods=['POST'])
 @require_auth

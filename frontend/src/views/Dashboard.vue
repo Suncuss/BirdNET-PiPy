@@ -7,11 +7,12 @@
       v-if="locationConfigured !== false && !authGated"
       class="p-4 grid grid-cols-1 lg:grid-cols-3 gap-4"
     >
-      <!-- Activity Overview — card height tracks the viewport tier; see
-           ACTIVITY_TIERS in the script. -->
+      <!-- Activity Overview — card height tracks the viewport tier and the
+           visible row count; see VIEWPORT_TIERS / ROW_HEIGHT_CLASSES in the
+           script. -->
       <div
         class="bg-white rounded-lg shadow p-4 lg:col-span-3 h-[300px] flex flex-col"
-        :class="activityTier.heightClass"
+        :class="activityHeightClass"
       >
         <div class="flex items-center justify-between mb-2">
           <h2 class="text-lg font-semibold">
@@ -328,11 +329,11 @@
           Fetching the latest data...
         </CenteredMessage>
         <ul
-          v-else-if="recentObservationsData.length && !recentObservationsError"
+          v-else-if="visibleRecentObservations.length && !recentObservationsError"
           class="space-y-2"
         >
           <li
-            v-for="observation in recentObservationsData"
+            v-for="observation in visibleRecentObservations"
             :key="observation.id"
             class="flex items-center justify-between"
           >
@@ -387,28 +388,36 @@
       </div>
 
 
-      <!-- Hourly Activity Chart -->
-      <div class="bg-white rounded-lg shadow p-4">
+      <!-- Hourly Activity Chart — the chart flex-fills the card, which the
+           grid row stretches level with the Recent Observations card at
+           either tier's row count (same follower-card pattern as the
+           species page's Distribution chart); the absolutely-positioned
+           canvas keeps sizing stable. min-h preserves the compact height
+           on mobile and short viewports. -->
+      <div class="bg-white rounded-lg shadow p-4 flex flex-col">
         <h2 class="text-lg font-semibold mb-2">
           Hourly Activity
         </h2>
         <CenteredMessage
           v-if="!hasLoadedOnce"
           variant="loading"
-          container-class="h-[220px]"
+          container-class="flex-1 min-h-[220px]"
         >
           Fetching the latest data...
         </CenteredMessage>
         <div
           v-else-if="!hourlyBirdActivityError"
-          class="relative h-[220px] w-full"
+          class="relative flex-1 min-h-[220px]"
         >
-          <canvas ref="hourlyActivityChart" />
+          <canvas
+            ref="hourlyActivityChart"
+            class="absolute inset-0 w-full h-full"
+          />
         </div>
         <CenteredMessage
           v-else
           variant="error"
-          container-class="h-[220px]"
+          container-class="flex-1 min-h-[220px]"
         >
           {{ hourlyBirdActivityError }}
         </CenteredMessage>
@@ -589,12 +598,25 @@ export default {
         const showLeastCommon = ref(false)
         const isActivityUpdating = ref(false)
 
-        // Activity Overview tiers. The tall tier matches the server's
-        // activityOverview cap (the client slices down), and 500px carries
-        // 15 rows at the same ~25px/row density the 375px card gives 10.
-        const ACTIVITY_TIERS = {
-            base: { rows: 10, heightClass: 'lg:h-[375px]' },
-            tall: { rows: 15, heightClass: 'lg:h-[500px]' }
+        // Rows shown per viewport tier. The tall counts match the server's
+        // dashboard caps (activityOverview 15, recentObservations 8 — the
+        // client slices down).
+        const VIEWPORT_TIERS = {
+            base: { activityRows: 10, recentRows: 7 },
+            tall: { activityRows: 15, recentRows: 8 }
+        }
+        // Card height per visible row count, at the same ~25px/row density
+        // the 375px card gives 10 rows. On the tall tier the card grows with
+        // the actual species count instead of jumping straight to the 15-row
+        // height, but never shrinks below the 10-row card. Literal class
+        // strings so Tailwind's scanner generates them.
+        const ROW_HEIGHT_CLASSES = {
+            10: 'lg:h-[375px]',
+            11: 'lg:h-[400px]',
+            12: 'lg:h-[425px]',
+            13: 'lg:h-[450px]',
+            14: 'lg:h-[475px]',
+            15: 'lg:h-[500px]'
         }
         // min-width is Tailwind's lg breakpoint (below it the card is
         // fixed-height and the heatmap hidden); min-height clears a
@@ -605,9 +627,16 @@ export default {
             '(min-width: 1024px) and (min-height: 1150px)'
         )
         const isTallViewport = ref(tallViewport.matches)
-        const activityTier = computed(() => (
-            isTallViewport.value ? ACTIVITY_TIERS.tall : ACTIVITY_TIERS.base
+        const viewportTier = computed(() => (
+            isTallViewport.value ? VIEWPORT_TIERS.tall : VIEWPORT_TIERS.base
         ))
+        const activityHeightClass = computed(() => {
+            const shown = Math.min(
+                Math.max(detailedBirdActivityData.value.length, VIEWPORT_TIERS.base.activityRows),
+                viewportTier.value.activityRows
+            )
+            return ROW_HEIGHT_CLASSES[shown]
+        })
 
         // 'change' only fires when the tier actually flips, so no debounce
         // is needed; the redraw comes from the client-side cache, no refetch.
@@ -615,6 +644,10 @@ export default {
             isTallViewport.value = event.matches
             if (isActive) redrawActivityCharts()
         }
+
+        const visibleRecentObservations = computed(() => (
+            recentObservationsData.value.slice(0, viewportTier.value.recentRows)
+        ))
 
         // Recent observations filter: true = Unique (one per species, the
         // default), false = All. Only an explicit stored "false" opts into All.
@@ -1138,7 +1171,7 @@ export default {
         // sliced to the current tier — both canvases always get the same
         // list, which keeps the heatmap and axis-link overlays in lockstep.
         const redrawActivityCharts = async (animate = false) => {
-            const rows = detailedBirdActivityData.value.slice(0, activityTier.value.rows)
+            const rows = detailedBirdActivityData.value.slice(0, viewportTier.value.activityRows)
             await createTotalObsChart(totalObservationsChart, rows, { animate, title: null })
             await createHeatmap(hourlyActivityHeatmap, rows, { animate, title: null, date: getLocalDateString() })
         }
@@ -1154,7 +1187,7 @@ export default {
             locationConfigured,
             authGated,
             latestObservationData,
-            recentObservationsData,
+            visibleRecentObservations,
             currentSummaryPeriod,
             summaryPeriods,
             currentPeriodSummary,
@@ -1177,7 +1210,7 @@ export default {
             showSpectrogram,
             hourlyBirdActivityData,
             totalObservationsChart,
-            activityTier,
+            activityHeightClass,
             speciesAxisLayout,
             timeAxisLayout,
             hourlyActivityHeatmap,

@@ -5,7 +5,7 @@ core.runtime_config classifies which sections changed and the affected
 services pick the new values up live. Persistence itself lives in
 core.settings_store. Registered on the shared ``api`` blueprint at import.
 """
-import threading
+import re
 
 from flask import jsonify, request
 
@@ -41,32 +41,21 @@ from core.utils import normalize_site_url
 logger = get_logger(__name__)
 
 
-# Singleton TimezoneFinder (loads ~40MB shape data on first use). The import
-# itself is deferred into _get_timezone_finder(): it drags numpy/cffi/h3 into
-# the worker, and the only caller is the settings handler resolving a newly
-# saved location — a station that never edits its location never pays for it.
-_timezone_finder = None
-_tz_finder_lock = threading.Lock()
-
-
-def _get_timezone_finder():
-    """Lazy-import and lazy-load TimezoneFinder (loads ~40MB shape data)."""
-    global _timezone_finder
-    with _tz_finder_lock:
-        if _timezone_finder is None:
-            from timezonefinder import TimezoneFinder
-            _timezone_finder = TimezoneFinder()
-        return _timezone_finder
-
-
 def get_timezone_for_location(lat: float, lon: float) -> str | None:
-    """Offline timezone lookup. Returns IANA timezone or None on failure."""
+    """Offline timezone lookup. Returns IANA timezone or None on failure.
+
+    tzfpy's simplified polygons leave rare hairline gaps at zone borders
+    (and at exactly ±180° longitude) where lookup returns nothing; retrying
+    a few km to each side recovers a point sitting in such a gap. The import
+    stays deferred so only the location-save path ever pays for it.
+    """
     try:
-        tf = _get_timezone_finder()
-        timezone = tf.timezone_at(lat=lat, lng=lon)
-        if timezone:
-            logger.info(f"Resolved timezone: {timezone}")
-            return timezone
+        from tzfpy import get_tz
+        for dlat, dlon in ((0, 0), (0.1, 0), (-0.1, 0), (0, 0.1), (0, -0.1)):
+            timezone = get_tz(lon + dlon, lat + dlat)  # tzfpy takes lng first
+            if timezone:
+                logger.info(f"Resolved timezone: {timezone}")
+                return timezone
         logger.warning(f"No timezone found for ({lat}, {lon})")
         return None
     except Exception as e:
@@ -332,7 +321,12 @@ def update_settings():
                 mic_count = 0
                 for source in sources:
                     sid = source.get('id', '')
-                    if not sid or not sid.startswith('source_'):
+                    # Full match, not a prefix check: the id becomes a directory
+                    # name under RECORDING_DIR, so anything past the prefix has
+                    # to be digits.
+                    # [0-9], not \d: \d is Unicode-aware on str, so
+                    # 'source_٣' would pass a check that reads as ASCII-only.
+                    if not re.fullmatch(r'source_[0-9]+', sid or ''):
                         return jsonify({'error': f'Invalid source id: {sid}. Must match source_<int>'}), 400
                     if sid in seen_ids:
                         return jsonify({'error': f'Duplicate source id: {sid}'}), 400

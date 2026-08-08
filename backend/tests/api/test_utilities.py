@@ -94,26 +94,14 @@ class TestSettingsManagement:
 
     def test_save_user_settings_atomic(self):
         """Test atomic save of user settings."""
-        from core.settings_store import save_user_settings
+        from core import settings_store
 
         test_settings = {'test': 'data'}
 
-        with patch('os.makedirs') as mock_makedirs:
-            with patch('builtins.open', mock_open()) as mock_file:
-                with patch('os.rename') as mock_rename:
-                    save_user_settings(test_settings)
+        with patch.object(settings_store, 'atomic_write_private_json') as mock_write:
+            settings_store.save_user_settings(test_settings)
 
-                    # Should create directory
-                    mock_makedirs.assert_called_once()
-
-                    # Should write to temp file
-                    mock_file.assert_called()
-                    written_path = mock_file.call_args[0][0]
-                    assert written_path.endswith('.tmp')
-
-                    # Should rename temp file to final
-                    mock_rename.assert_called_once()
-                    assert mock_rename.call_args[0][1].endswith('user_settings.json')
+        mock_write.assert_called_once_with(settings_store.USER_SETTINGS_PATH, test_settings)
 
 
 class TestFlagFileWriting:

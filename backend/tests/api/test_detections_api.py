@@ -1,8 +1,9 @@
 """Tests for the /api/detections paginated endpoint and DELETE endpoint."""
 
 import os
-import tempfile
 from unittest.mock import patch
+
+from tests.api.conftest import insert_detection
 
 
 class TestDetectionsAPI:
@@ -561,55 +562,62 @@ class TestDeleteDetectionAPI:
         detection = real_db_manager.get_detection_by_id(detection_id)
         assert detection is None
 
-    def test_delete_detection_removes_files(self, api_client, real_db_manager):
+    def test_delete_detection_removes_files(self, api_client, real_db_manager,
+                                            storage_media_dirs):
         """Test that deletion also removes associated files."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            audio_dir = os.path.join(tmpdir, 'audio')
-            spectrogram_dir = os.path.join(tmpdir, 'spectrograms')
-            os.makedirs(audio_dir)
-            os.makedirs(spectrogram_dir)
+        audio_dir, spectrogram_dir = storage_media_dirs
+        detection_id = insert_detection(real_db_manager)
 
-            # Insert a detection
-            detection_id = real_db_manager.insert_detection({
-                'timestamp': '2024-01-15T10:30:00',
-                'group_timestamp': '2024-01-15T10:30:00',
-                'common_name': 'American Robin',
-                'scientific_name': 'Turdus migratorius',
-                'confidence': 0.8500,
-                'latitude': 40.7128,
-                'longitude': -74.0060,
-                'cutoff': 0.5,
-                'sensitivity': 0.75,
-                'overlap': 0.25
-            })
+        # Get the detection to know the filenames
+        detection = real_db_manager.get_detection_by_id(detection_id)
+        audio_file = os.path.join(audio_dir, detection['audio_filename'])
+        spectrogram_file = os.path.join(
+            spectrogram_dir, detection['spectrogram_filename'])
+        for path in (audio_file, spectrogram_file):
+            with open(path, 'w') as f:
+                f.write('media data')
 
-            # Get the detection to know the filenames
-            detection = real_db_manager.get_detection_by_id(detection_id)
-            audio_file = os.path.join(audio_dir, detection['audio_filename'])
-            spectrogram_file = os.path.join(spectrogram_dir, detection['spectrogram_filename'])
+        with patch('core.auth.is_authenticated', return_value=True):
+            response = api_client.delete(f'/api/detections/{detection_id}')
 
-            # Create the files
-            with open(audio_file, 'w') as f:
-                f.write('audio data')
-            with open(spectrogram_file, 'w') as f:
-                f.write('spectrogram data')
+        assert response.status_code == 200
+        assert response.get_json()['files_deleted'] == [
+            detection['audio_filename'],
+            detection['spectrogram_filename'],
+        ]
+        assert not os.path.exists(audio_file)
+        assert not os.path.exists(spectrogram_file)
 
-            assert os.path.exists(audio_file)
-            assert os.path.exists(spectrogram_file)
+    def test_delete_reports_resolved_legacy_source_filenames(
+            self, api_client, real_db_manager, storage_media_dirs):
+        """The response names the source-ID files it actually removes."""
+        audio_dir, spectrogram_dir = storage_media_dirs
+        timestamp = '2024-01-15T10:30:00'
+        detection_id = insert_detection(
+            real_db_manager, timestamp=timestamp, confidence=0.85,
+            extra={}, audio_source='source_0')
 
-            # Delete with auth bypass and patched directories
-            # Note: Patch storage_manager where delete_detection_files looks up the dirs
-            with patch('core.auth.is_authenticated', return_value=True), \
-                 patch('core.storage_manager.EXTRACTED_AUDIO_DIR', audio_dir), \
-                 patch('core.storage_manager.SPECTROGRAM_DIR', spectrogram_dir):
-                response = api_client.delete(f'/api/detections/{detection_id}')
-                assert response.status_code == 200
-                data = response.get_json()
-                assert len(data['files_deleted']) == 2
+        from core.utils import build_detection_filenames
 
-            # Verify files are deleted
-            assert not os.path.exists(audio_file)
-            assert not os.path.exists(spectrogram_file)
+        filenames = build_detection_filenames(
+            'American Robin', 0.85, timestamp, audio_source='source_0')
+        audio_file = os.path.join(audio_dir, filenames['audio_filename'])
+        spectrogram_file = os.path.join(
+            spectrogram_dir, filenames['spectrogram_filename'])
+        for path in (audio_file, spectrogram_file):
+            with open(path, 'w') as f:
+                f.write('media data')
+
+        with patch('core.auth.is_authenticated', return_value=True):
+            response = api_client.delete(f'/api/detections/{detection_id}')
+
+        assert response.status_code == 200
+        assert response.get_json()['files_deleted'] == [
+            filenames['audio_filename'],
+            filenames['spectrogram_filename'],
+        ]
+        assert not os.path.exists(audio_file)
+        assert not os.path.exists(spectrogram_file)
 
 
 class TestDetectionsDatabaseMethods:
@@ -743,8 +751,10 @@ class TestExportDetectionsAPI:
 
     def test_export_blocked_when_auth_enabled(self, api_client, real_db_manager):
         """Test that export returns 401 when auth is enabled but not authenticated."""
-        # Enable auth
-        with patch('core.auth.is_auth_enabled', return_value=True):
+        # require_auth consults is_authenticated(), which folds in the
+        # auth-enabled check and the session epoch — patch that, not the
+        # enabled flag it reads internally.
+        with patch('core.auth.is_authenticated', return_value=False):
             response = api_client.get('/api/detections/export')
             assert response.status_code == 401
 

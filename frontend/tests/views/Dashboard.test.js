@@ -107,6 +107,24 @@ const mountDashboard = () => mount(Dashboard, {
   }
 })
 
+// Controllable matchMedia stub: Dashboard reads .matches at setup and
+// listens for 'change' — dispatch() drives a tier flip.
+const stubViewportTier = (matches) => {
+  const listeners = new Set()
+  const mql = {
+    matches,
+    addEventListener: (_, fn) => listeners.add(fn),
+    removeEventListener: (_, fn) => listeners.delete(fn),
+    dispatch (next) {
+      this.matches = next
+      listeners.forEach(fn => fn({ matches: next }))
+    },
+    get listenerCount () { return listeners.size }
+  }
+  vi.stubGlobal('matchMedia', vi.fn(() => mql))
+  return mql
+}
+
 describe('Dashboard', () => {
   let getContextSpy
   let mockStopAudio
@@ -622,28 +640,15 @@ describe('Dashboard', () => {
       hourlyActivity: [1, ...Array(23).fill(0)]
     }))
 
-    // Controllable matchMedia stub: Dashboard reads .matches at setup and
-    // listens for 'change' — dispatch() drives a tier flip.
-    const stubViewportTier = (matches) => {
-      const listeners = new Set()
-      const mql = {
-        matches,
-        addEventListener: (_, fn) => listeners.add(fn),
-        removeEventListener: (_, fn) => listeners.delete(fn),
-        dispatch (next) {
-          this.matches = next
-          listeners.forEach(fn => fn({ matches: next }))
-        },
-        get listenerCount () { return listeners.size }
-      }
-      vi.stubGlobal('matchMedia', vi.fn(() => mql))
-      return mql
+    const useSpeciesCount = (n) => {
+      const state = baseState()
+      state.detailedBirdActivityData.value = speciesRows(n)
+      useFetchBirdData.mockReturnValue(state)
+      return state
     }
 
     beforeEach(() => {
-      const state = baseState()
-      state.detailedBirdActivityData.value = speciesRows(20)
-      useFetchBirdData.mockReturnValue(state)
+      useSpeciesCount(20)
     })
 
     it('renders 10 rows in the compact card on laptop-sized viewports', async () => {
@@ -664,6 +669,30 @@ describe('Dashboard', () => {
       expect(useBirdCharts().createTotalObservationsChart.mock.lastCall[1]).toHaveLength(15)
       expect(useBirdCharts().createHourlyActivityHeatmap.mock.lastCall[1]).toHaveLength(15)
       expect(wrapper.html()).toContain('lg:h-[500px]')
+    })
+
+    it('keeps the 10-row height on tall viewports with 10 or fewer species', async () => {
+      useSpeciesCount(7)
+      stubViewportTier(true)
+      const wrapper = mountDashboard()
+      await flushPromises()
+
+      expect(useBirdCharts().createTotalObservationsChart.mock.lastCall[1]).toHaveLength(7)
+      expect(wrapper.html()).toContain('lg:h-[375px]')
+    })
+
+    it('grows the tall card row by row between 11 and 14 species', async () => {
+      const state = useSpeciesCount(12)
+      stubViewportTier(true)
+      const wrapper = mountDashboard()
+      await flushPromises()
+
+      expect(wrapper.html()).toContain('lg:h-[425px]')
+
+      // Height tracks the live species count as new species arrive
+      state.detailedBirdActivityData.value = speciesRows(14)
+      await nextTick()
+      expect(wrapper.html()).toContain('lg:h-[475px]')
     })
 
     it('gates the tall tier on lg width and the tall-viewport height', async () => {
@@ -700,6 +729,78 @@ describe('Dashboard', () => {
 
       wrapper.unmount()
       expect(mql.listenerCount).toBe(0)
+    })
+  })
+
+  describe('recent observations and hourly activity sizing', () => {
+    const recentRows = (n) => Array.from({ length: n }, (_, i) => ({
+      id: i + 1,
+      common_name: `Species ${i}`,
+      timestamp: '2024-01-01T12:00:00Z',
+      confidence: 0.9,
+      bird_song_file_name: `song${i}.mp3`
+    }))
+
+    // More rows than the tall tier shows — the client must slice down to
+    // its tier's count in both modes.
+    const useRecentRows = (n = 10) => {
+      const state = baseState()
+      state.recentObservationsData.value = recentRows(n)
+      state.hourlyBirdActivityError.value = null // render the chart container
+      useFetchBirdData.mockReturnValue(state)
+      return state
+    }
+
+    // The recent list is the only ul with space-y-2 (summary uses space-y-1)
+    const recentListItems = (wrapper) => wrapper.findAll('ul.space-y-2 > li')
+    const hourlyChartBox = (wrapper) =>
+      wrapper.find({ ref: 'hourlyActivityChart' }).element.parentElement
+
+    it('shows 7 recent rows on laptop viewports', async () => {
+      useRecentRows()
+      stubViewportTier(false)
+      const wrapper = mountDashboard()
+      await flushPromises()
+
+      expect(recentListItems(wrapper)).toHaveLength(7)
+    })
+
+    it('shows 8 recent rows on tall viewports', async () => {
+      useRecentRows()
+      stubViewportTier(true)
+      const wrapper = mountDashboard()
+      await flushPromises()
+
+      expect(recentListItems(wrapper)).toHaveLength(8)
+    })
+
+    it('adapts the recent row count when the media query flips', async () => {
+      useRecentRows()
+      const mql = stubViewportTier(false)
+      const wrapper = mountDashboard()
+      await flushPromises()
+
+      mql.dispatch(true)
+      await flushPromises()
+      expect(recentListItems(wrapper)).toHaveLength(8)
+
+      mql.dispatch(false)
+      await flushPromises()
+      expect(recentListItems(wrapper)).toHaveLength(7)
+    })
+
+    // The hourly chart carries no per-tier height: it flex-fills its card,
+    // which the grid row stretches level with the recent list, with a
+    // min-height floor for mobile/short viewports.
+    it('lets the hourly chart flex-fill the card to track the recent list height', async () => {
+      useRecentRows()
+      stubViewportTier(false)
+      const wrapper = mountDashboard()
+      await flushPromises()
+
+      const box = hourlyChartBox(wrapper)
+      expect(box.className).toContain('flex-1')
+      expect(box.className).toContain('min-h-[220px]')
     })
   })
 

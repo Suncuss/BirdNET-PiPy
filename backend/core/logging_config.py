@@ -6,6 +6,7 @@ import os
 import sys
 from datetime import UTC, datetime
 
+from core.native_lock import native_rlock
 from core.timezone_service import get_timezone
 
 # Standard LogRecord attributes to exclude when collecting extra fields
@@ -113,6 +114,20 @@ class StructuredFormatter(logging.Formatter):
         except ValueError:
             return json.dumps(make_json_safe(log_obj))
 
+def _with_native_lock(handler):
+    """Swap a handler's lock for a native (unpatched) RLock.
+
+    Handlers created after gevent's monkey.patch_all() get a patched RLock.
+    DB-lane jobs log from a native worker thread while request greenlets log
+    per request, and a patched lock contended across that boundary loses
+    waiter wakeups (see core/native_lock.py) — a single contended emit could
+    strand a DB job past its whole timeout. A native handler lock is safe
+    here: formatting and stream/file writes never yield to gevent.
+    """
+    handler.lock = native_rlock()
+    return handler
+
+
 # Map service names to log filenames
 _SERVICE_LOG_FILES = {
     'main': 'main.log',
@@ -149,7 +164,7 @@ def setup_logging(service_name, log_level=None, format_type=None):
     logger.handlers = []
 
     # Create console handler with appropriate formatter
-    handler = logging.StreamHandler(sys.stdout)
+    handler = _with_native_lock(logging.StreamHandler(sys.stdout))
 
     if format_type == 'json':
         handler.setFormatter(StructuredFormatter(service_name))
@@ -166,11 +181,11 @@ def setup_logging(service_name, log_level=None, format_type=None):
 
             os.makedirs(LOGS_DIR, exist_ok=True)
             log_path = os.path.join(LOGS_DIR, _SERVICE_LOG_FILES[service_name])
-            file_handler = logging.handlers.RotatingFileHandler(
+            file_handler = _with_native_lock(logging.handlers.RotatingFileHandler(
                 log_path,
                 maxBytes=LOG_MAX_BYTES,
                 backupCount=LOG_BACKUP_COUNT,
-            )
+            ))
             file_handler.setFormatter(StructuredFormatter(service_name))
             logger.addHandler(file_handler)
 
@@ -186,6 +201,11 @@ def setup_logging(service_name, log_level=None, format_type=None):
             # Don't fail startup if log directory is not writable; stdout
             # stays at the root level as the only sink
             print(f"Warning: could not set up file logging for {service_name}: {e}")
+
+    # The fallback handler for loggers that bypass this setup must not carry
+    # a patched lock either.
+    if logging.lastResort is not None:
+        _with_native_lock(logging.lastResort)
 
     # Mark as configured to prevent duplicate setup
     logger._birdnet_configured = True

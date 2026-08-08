@@ -214,6 +214,13 @@ def auth_change_password():
         # Validation is handled by change_password() - no duplicate check needed
 
         change_password(current, new)
+
+        # The epoch evicts other sessions at the HTTP gates; sockets are
+        # authenticated once at connect, so they need an explicit kick.
+        # Function-local import: core.api imports this module's blueprint.
+        from core.api import revoke_owner_sockets
+        revoke_owner_sockets()
+
         return jsonify({'success': True, 'message': 'Password changed successfully'}), 200
 
     except ValueError as e:

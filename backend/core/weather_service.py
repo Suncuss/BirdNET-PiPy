@@ -38,7 +38,7 @@ class WeatherService:
         self._lon = lon
         self._cache: dict | None = None
         self._cache_time: float | None = None  # time.time() based
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()  # hub-only: weather runs in the main process, no gevent
         self._stop_event = threading.Event()
         self._fetch_thread = threading.Thread(target=self._fetch_loop, daemon=True)
         self._fetch_thread.start()
@@ -155,7 +155,7 @@ class WeatherService:
 
 # Singleton
 _weather_service: WeatherService | None = None
-_weather_service_lock = threading.Lock()
+_weather_service_lock = threading.Lock()  # hub-only: main process, no gevent
 
 
 def get_weather_service(lat: float | None = None, lon: float | None = None) -> WeatherService | None:

@@ -174,6 +174,7 @@ class TestSystemAPI:
             data = response.get_json()
             assert 'error' in data
             assert 'Failed to check for updates' in data['error']
+            assert 'Network error' in data['error']
 
     def test_check_for_updates_missing_version(self, api_client):
         """Test update check handles missing version.json"""

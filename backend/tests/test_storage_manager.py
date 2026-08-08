@@ -3,10 +3,9 @@ Tests for the storage_manager module.
 
 Tests cover:
 - Disk usage calculation
-- File path construction
 - Protected species detection
 - Cleanup candidate selection
-- File deletion logic
+- File deletion and filename-variant resolution
 """
 import os
 import sys
@@ -248,8 +247,8 @@ class TestGetCleanupScanBatch:
         keys = [(d['timestamp'], d['id']) for d in seen]
         assert keys == sorted(keys)
 
-    def test_returns_extra_column(self, test_db_manager):
-        """Scan rows include extra for filename reconstruction."""
+    def test_returns_filename_metadata(self, test_db_manager):
+        """Scan rows include source metadata for filename reconstruction."""
         import json
 
         base_time = datetime(2024, 1, 15, 10, 0, 0)
@@ -269,6 +268,7 @@ class TestGetCleanupScanBatch:
             if isinstance(extra, str):
                 extra = json.loads(extra)
             assert extra.get('source_label') == 'Backyard_Mic'
+            assert detection['audio_source'] == 'alsa_input.usb-test'
 
 
 class TestGetDiskUsage:
@@ -292,99 +292,6 @@ class TestGetDiskUsage:
             usage = get_disk_usage('/tmp')
 
             assert 0 <= usage['percent_used'] <= 100
-
-
-class TestGetDetectionFiles:
-    """Tests for storage_manager.get_detection_files()"""
-
-    def test_constructs_correct_paths(self):
-        """Should construct correct file paths from detection data."""
-        with patch('config.settings.EXTRACTED_AUDIO_DIR', '/app/data/audio/extracted_songs'):
-            with patch('config.settings.SPECTROGRAM_DIR', '/app/data/spectrograms'):
-                from core.storage_manager import get_detection_files
-
-                detection = {
-                    'common_name': 'American Robin',
-                    'confidence': 0.85,
-                    'timestamp': '2024-01-15T10:30:00'
-                }
-
-                paths = get_detection_files(detection)
-
-                assert paths['audio_path'].endswith('.mp3')
-                assert paths['spectrogram_path'].endswith('.webp')
-                assert 'American_Robin' in paths['audio_path']
-                assert 'American_Robin' in paths['spectrogram_path']
-                assert '85' in paths['audio_path']  # Confidence as percentage
-
-    def test_constructs_paths_with_source_label(self):
-        """Should include source_label suffix in filenames when present in extra."""
-        with patch('config.settings.EXTRACTED_AUDIO_DIR', '/app/data/audio/extracted_songs'):
-            with patch('config.settings.SPECTROGRAM_DIR', '/app/data/spectrograms'):
-                from core.storage_manager import get_detection_files
-
-                detection = {
-                    'common_name': 'American Robin',
-                    'confidence': 0.85,
-                    'timestamp': '2024-01-15T10:30:00',
-                    'extra': '{"source_label": "Backyard_Mic"}',
-                }
-
-                paths = get_detection_files(detection)
-
-                assert paths['audio_path'].endswith('_Backyard_Mic.mp3')
-                assert paths['spectrogram_path'].endswith('_Backyard_Mic.webp')
-
-    def test_fallback_to_legacy_colon_pattern(self, storage_dirs):
-        """Should fall back to legacy colon-pattern files if dash-pattern not found."""
-        audio_dir, spectrogram_dir = storage_dirs
-
-        # Create legacy files with colon pattern
-        legacy_audio = os.path.join(audio_dir, 'Test_Bird_85_2024-01-15-birdnet-10:30:00.mp3')
-        legacy_spectrogram = os.path.join(spectrogram_dir, 'Test_Bird_85_2024-01-15-birdnet-10:30:00.webp')
-        with open(legacy_audio, 'w') as f:
-            f.write('audio')
-        with open(legacy_spectrogram, 'w') as f:
-            f.write('spectrogram')
-
-        from core.storage_manager import get_detection_files
-
-        detection = {
-            'common_name': 'Test Bird',
-            'confidence': 0.85,
-            'timestamp': '2024-01-15T10:30:00'
-        }
-
-        paths = get_detection_files(detection)
-
-        # Should return the legacy paths since dash-pattern doesn't exist
-        assert paths['audio_path'] == legacy_audio
-        assert paths['spectrogram_path'] == legacy_spectrogram
-
-    def test_prefers_dash_pattern_when_exists(self, storage_dirs):
-        """Should prefer dash-pattern files when they exist."""
-        audio_dir, _ = storage_dirs
-
-        # Create both dash and colon pattern files
-        dash_audio = os.path.join(audio_dir, 'Test_Bird_85_2024-01-15-birdnet-10-30-00.mp3')
-        colon_audio = os.path.join(audio_dir, 'Test_Bird_85_2024-01-15-birdnet-10:30:00.mp3')
-        with open(dash_audio, 'w') as f:
-            f.write('dash audio')
-        with open(colon_audio, 'w') as f:
-            f.write('colon audio')
-
-        from core.storage_manager import get_detection_files
-
-        detection = {
-            'common_name': 'Test Bird',
-            'confidence': 0.85,
-            'timestamp': '2024-01-15T10:30:00'
-        }
-
-        paths = get_detection_files(detection)
-
-        # Should return the dash-pattern path (new format)
-        assert paths['audio_path'] == dash_audio
 
 
 class TestEstimateDeletableSize:
@@ -419,63 +326,153 @@ class TestEstimateDeletableSize:
                 assert estimated_bytes == 0
 
 
+def write_media_file(path, size=100):
+    with open(path, 'wb') as f:
+        f.write(b'x' * size)
+
+
 class TestDeleteDetectionFiles:
-    """Tests for storage_manager.delete_detection_files()"""
+    """Tests for storage_manager.delete_detection_files()
+
+    Deletion resolves every filename variant a row can own (source label,
+    transition-era source id, unsuffixed, legacy colon pattern) and removes
+    all copies it finds — a survivor would be orphaned forever, since
+    cleanup only ever revisits DB rows.
+    """
 
     def test_deletes_existing_files(self, storage_dirs):
-        """Should delete files that exist and return bytes freed."""
+        """Canonical dash-pattern files are deleted and reported audio-first."""
         audio_dir, spectrogram_dir = storage_dirs
-
-        # Create test files
-        audio_file = os.path.join(audio_dir, 'test.mp3')
-        spectrogram_file = os.path.join(spectrogram_dir, 'test.webp')
-
-        with open(audio_file, 'wb') as f:
-            f.write(b'x' * 1000)  # 1KB audio
-        with open(spectrogram_file, 'wb') as f:
-            f.write(b'x' * 500)  # 0.5KB spectrogram
+        audio_file = os.path.join(
+            audio_dir, 'Test_Bird_85_2024-01-15-birdnet-10-30-00.mp3')
+        spectrogram_file = os.path.join(
+            spectrogram_dir, 'Test_Bird_85_2024-01-15-birdnet-10-30-00.webp')
+        write_media_file(audio_file, 1000)
+        write_media_file(spectrogram_file, 500)
 
         from core.storage_manager import delete_detection_files
 
-        detection = {
-            'common_name': 'Test Bird',
-            'confidence': 0.85,
-            'timestamp': '2024-01-15T10:30:00'
-        }
+        result = delete_detection_files(make_detection('2024-01-15T10:30:00'))
 
-        with patch('core.storage_manager.get_detection_files') as mock_get_files:
-            mock_get_files.return_value = {
-                'audio_path': audio_file,
-                'spectrogram_path': spectrogram_file
-            }
+        assert result['deleted_filenames'] == [
+            'Test_Bird_85_2024-01-15-birdnet-10-30-00.mp3',
+            'Test_Bird_85_2024-01-15-birdnet-10-30-00.webp',
+        ]
+        assert result['bytes_freed'] == 1500
+        assert not os.path.exists(audio_file)
+        assert not os.path.exists(spectrogram_file)
 
-            result = delete_detection_files(detection)
+    def test_handles_missing_files_gracefully(self, storage_dirs):
+        """No files on disk means an empty report, not an error."""
+        from core.storage_manager import delete_detection_files
 
-            assert result['deleted_audio']
-            assert result['deleted_spectrogram']
-            assert result['bytes_freed'] == 1500
-            assert not os.path.exists(audio_file)
-            assert not os.path.exists(spectrogram_file)
+        result = delete_detection_files(make_detection('2024-01-15T10:30:00'))
 
-    def test_handles_missing_files_gracefully(self):
-        """Should handle missing files without error."""
-        with patch('config.settings.BASE_DIR', '/tmp'):
-            with patch('config.settings.EXTRACTED_AUDIO_DIR', '/nonexistent/audio'):
-                with patch('config.settings.SPECTROGRAM_DIR', '/nonexistent/spectrograms'):
-                    with patch('config.settings.user_settings', {'storage': {}}):
-                        from core.storage_manager import delete_detection_files
+        assert result == {'deleted_filenames': [], 'bytes_freed': 0}
 
-                        detection = {
-                            'common_name': 'Test Bird',
-                            'confidence': 0.85,
-                            'timestamp': '2024-01-15T10:30:00'
-                        }
+    def test_deletes_source_label_files(self, storage_dirs):
+        """Rows with a saved source label delete their suffixed files."""
+        audio_dir, spectrogram_dir = storage_dirs
 
-                        result = delete_detection_files(detection)
+        from core.utils import build_detection_filenames
 
-                        assert not result['deleted_audio']
-                        assert not result['deleted_spectrogram']
-                        assert result['bytes_freed'] == 0
+        names = build_detection_filenames(
+            'Test Bird', 0.85, '2024-01-15T10:30:00',
+            audio_source='Backyard_Mic')
+        write_media_file(os.path.join(audio_dir, names['audio_filename']))
+        write_media_file(
+            os.path.join(spectrogram_dir, names['spectrogram_filename']))
+
+        from core.storage_manager import delete_detection_files
+
+        result = delete_detection_files(make_detection(
+            '2024-01-15T10:30:00',
+            extra='{"source_label": "Backyard_Mic"}',
+            audio_source='source_0'))
+
+        assert result['deleted_filenames'] == [
+            names['audio_filename'], names['spectrogram_filename']]
+
+    def test_deletes_legacy_source_id_files(self, storage_dirs):
+        """Transition-era rows delete files suffixed with the raw source id."""
+        audio_dir, spectrogram_dir = storage_dirs
+
+        from core.utils import build_detection_filenames
+
+        names = build_detection_filenames(
+            'Test Bird', 0.85, '2024-01-15T10:30:00', audio_source='source_0')
+        write_media_file(os.path.join(audio_dir, names['audio_filename']))
+        write_media_file(
+            os.path.join(spectrogram_dir, names['spectrogram_filename']))
+
+        from core.storage_manager import delete_detection_files
+
+        result = delete_detection_files(make_detection(
+            '2024-01-15T10:30:00', extra='{}', audio_source='source_0'))
+
+        assert result['deleted_filenames'] == [
+            names['audio_filename'], names['spectrogram_filename']]
+
+    def test_source_id_row_deletes_unsuffixed_files(self, storage_dirs):
+        """Imported rows with a source id can still own unsuffixed files."""
+        audio_dir, _ = storage_dirs
+        unsuffixed_audio = os.path.join(
+            audio_dir, 'Test_Bird_85_2024-01-15-birdnet-10-30-00.mp3')
+        write_media_file(unsuffixed_audio)
+
+        from core.storage_manager import delete_detection_files
+
+        result = delete_detection_files(make_detection(
+            '2024-01-15T10:30:00', extra='{}', audio_source='source_0'))
+
+        assert result['deleted_filenames'] == [
+            'Test_Bird_85_2024-01-15-birdnet-10-30-00.mp3']
+        assert not os.path.exists(unsuffixed_audio)
+
+    def test_deletes_legacy_colon_pattern_files(self, storage_dirs):
+        """Legacy colon-pattern files are found and reported by their real names."""
+        audio_dir, spectrogram_dir = storage_dirs
+        colon_audio = os.path.join(
+            audio_dir, 'Test_Bird_85_2024-01-15-birdnet-10:30:00.mp3')
+        colon_spectrogram = os.path.join(
+            spectrogram_dir, 'Test_Bird_85_2024-01-15-birdnet-10:30:00.webp')
+        write_media_file(colon_audio)
+        write_media_file(colon_spectrogram)
+
+        from core.storage_manager import delete_detection_files
+
+        result = delete_detection_files(make_detection('2024-01-15T10:30:00'))
+
+        assert result['deleted_filenames'] == [
+            'Test_Bird_85_2024-01-15-birdnet-10:30:00.mp3',
+            'Test_Bird_85_2024-01-15-birdnet-10:30:00.webp',
+        ]
+        assert not os.path.exists(colon_audio)
+        assert not os.path.exists(colon_spectrogram)
+
+    def test_deletes_all_coexisting_variants(self, storage_dirs):
+        """A row owning copies under several naming eras loses all of them."""
+        audio_dir, _ = storage_dirs
+
+        from core.utils import build_detection_filenames
+
+        suffixed = build_detection_filenames(
+            'Test Bird', 0.85, '2024-01-15T10:30:00',
+            audio_source='source_0')['audio_filename']
+        unsuffixed = 'Test_Bird_85_2024-01-15-birdnet-10-30-00.mp3'
+        colon = 'Test_Bird_85_2024-01-15-birdnet-10:30:00.mp3'
+        for name in (suffixed, unsuffixed, colon):
+            write_media_file(os.path.join(audio_dir, name), 100)
+
+        from core.storage_manager import delete_detection_files
+
+        result = delete_detection_files(make_detection(
+            '2024-01-15T10:30:00', extra='{}', audio_source='source_0'))
+
+        assert sorted(result['deleted_filenames']) == sorted(
+            [suffixed, unsuffixed, colon])
+        assert result['bytes_freed'] == 300
+        assert not os.listdir(audio_dir)
 
 
 class TestCleanupStorage:
@@ -573,6 +570,39 @@ class TestCleanupStorage:
         # filenames lacked the _Backyard_Mic suffix
         assert result['skipped_missing'] == 0
         assert result['files_deleted'] == 10  # 70 - 60 protected
+
+    def test_cleanup_deletes_legacy_source_id_files(self, test_db_manager,
+                                                    storage_dirs):
+        """Cleanup finds files created before source-label filenames."""
+        audio_dir, spectrogram_dir = storage_dirs
+
+        from core.utils import build_detection_filenames
+
+        for i in range(3):
+            timestamp = f'2024-01-15T10:0{i}:00'
+            detection = make_detection(
+                timestamp, extra={}, audio_source='source_0')
+            test_db_manager.insert_detection(detection)
+            names = build_detection_filenames(
+                'Test Bird', 0.85, timestamp, audio_source='source_0')
+            for name, directory in (
+                    (names['audio_filename'], audio_dir),
+                    (names['spectrogram_filename'], spectrogram_dir)):
+                with open(os.path.join(directory, name), 'wb') as f:
+                    f.write(b'x' * 100)
+
+        with patch('core.storage_manager.get_disk_usage',
+                   return_value=mock_disk_usage_needing(10 * 1024**3)):
+            from core.storage_manager import cleanup_storage
+
+            result = cleanup_storage(
+                test_db_manager, target_percent=80,
+                keep_per_species=0, keep_recent_per_species=0)
+
+        assert result['skipped_missing'] == 0
+        assert result['files_deleted'] == 3
+        assert len(os.listdir(audio_dir)) == 0
+        assert len(os.listdir(spectrogram_dir)) == 0
 
     def test_cleanup_deletes_legacy_colon_files(self, test_db_manager, storage_dirs):
         """Rows whose files still use the legacy colon pattern are found via

@@ -331,12 +331,9 @@ def delete_detection(detection_id):
     # Clean up associated files using shared utility
     delete_result = delete_detection_files(detection)
 
-    # Build files_deleted list for response
-    files_deleted = []
-    if delete_result['deleted_audio']:
-        files_deleted.append(detection['audio_filename'])
-    if delete_result['deleted_spectrogram']:
-        files_deleted.append(detection['spectrogram_filename'])
+    # Report the resolved names that were actually removed. These can differ
+    # from the canonical DB filenames for source-ID and colon-pattern files.
+    files_deleted = delete_result['deleted_filenames']
 
     logger.info("Detection deleted with files", extra={
         'detection_id': detection_id,

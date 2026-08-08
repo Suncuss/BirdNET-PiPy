@@ -1463,28 +1463,44 @@ class TestSimpleAPI:
         assert len(data['hourlyActivity']) == 24
         assert data['activityOverview'] == {'most': [], 'least': []}
 
-    def test_dashboard_activity_overview_caps_species(self, api_client, real_db_manager):
-        """activityOverview ships at most 15 species per order (the client
-        slices down to what fits its viewport)."""
+    @staticmethod
+    def _seed_distinct_species(db_manager, count):
+        """Insert `count` same-day detections, each a distinct species."""
         from datetime import timedelta
 
         from core.timezone_service import local_now
         base_time = local_now().replace(hour=10, minute=0, second=0,
                                         microsecond=0)
 
-        for i in range(30):
+        for i in range(count):
             insert_detection(
-                real_db_manager,
+                db_manager,
                 timestamp=(base_time + timedelta(minutes=i)).isoformat(),
                 common_name=f'Species {i}',
                 scientific_name=f'Genus species{i}',
             )
+
+    def test_dashboard_activity_overview_caps_species(self, api_client, real_db_manager):
+        """activityOverview ships at most 15 species per order (the client
+        slices down to what fits its viewport)."""
+        self._seed_distinct_species(real_db_manager, 30)
 
         response = api_client.get('/api/dashboard')
         assert response.status_code == 200
         overview = response.get_json()['activityOverview']
         assert len(overview['most']) == 15
         assert len(overview['least']) == 15
+
+    def test_dashboard_recent_observations_cap(self, api_client, real_db_manager):
+        """recentObservations ships at most 8 rows per mode (the client
+        slices down to what fits its viewport)."""
+        self._seed_distinct_species(real_db_manager, 15)
+
+        response = api_client.get('/api/dashboard')
+        assert response.status_code == 200
+        recent = response.get_json()['recentObservations']
+        assert len(recent['all']) == 8
+        assert len(recent['unique']) == 8
 
     def test_dashboard_summary_endpoint_returns_requested_period(self, api_client, real_db_manager):
         """Test lazy-loaded dashboard summary periods."""

@@ -172,3 +172,32 @@ class TestRecorderStatusOwnerOnly:
             assert 'recorder_status' not in anon_events
             owner.disconnect()
             anon.disconnect()
+
+
+class TestOwnerSocketRevocation:
+    """Password changes must be enforced by the server, not client JavaScript."""
+
+    def test_revoke_disconnects_owner_but_not_public_listener(self):
+        with _auth_live_feed_ws_app() as (app, socketio, _):
+            flask_client = app.test_client()
+            flask_client.post('/api/auth/setup',
+                              data=json.dumps({'password': AUTH_TEST_PASSWORD}),
+                              content_type='application/json')
+            owner = socketio.test_client(app, flask_test_client=flask_client)
+            anon = socketio.test_client(app, flask_test_client=app.test_client())
+            assert owner.is_connected()
+            assert anon.is_connected()
+
+            response = flask_client.post(
+                '/api/auth/change-password',
+                data=json.dumps({
+                    'current_password': AUTH_TEST_PASSWORD,
+                    'new_password': 'newpass456',
+                }),
+                content_type='application/json',
+            )
+
+            assert response.status_code == 200
+            assert not owner.is_connected()
+            assert anon.is_connected()
+            anon.disconnect()

@@ -355,13 +355,16 @@ export function useServiceRestart() {
             restartMessage.value = 'Services ready!'
 
             if (autoReload) {
+              // Keep isRestarting true: the page is about to be replaced,
+              // and clearing it early lets the banner chain fall through to
+              // "update available" for the last second before the reload.
               restartMessage.value = 'Reloading...'
               setTimeout(() => {
                 window.location.reload()
               }, 1000)
+            } else {
+              isRestarting.value = false
             }
-
-            isRestarting.value = false
             resolve(true)
           }, postConnectDelay)
         } catch (_error) {

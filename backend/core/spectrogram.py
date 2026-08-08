@@ -67,7 +67,7 @@ _STFT_NPERSEG = 256
 _STFT_NOVERLAP = 128
 
 _render_runtime = None
-_render_runtime_lock = threading.Lock()
+_render_runtime_lock = threading.Lock()  # hub-only: renders run in request greenlets / main process, never the DB lane
 
 
 def _rotated_text_mask(text, font):

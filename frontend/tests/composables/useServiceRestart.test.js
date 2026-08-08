@@ -173,7 +173,8 @@ describe('useServiceRestart', () => {
       baseline: BASELINE,
       initialDelay: 100,
       pollInterval: 100,
-      postConnectDelay: 0 // Skip post-connect delay in tests
+      postConnectDelay: 0, // Skip post-connect delay in tests
+      autoReload: false
     })
 
     expect(isRestarting.value).toBe(true)
@@ -183,6 +184,32 @@ describe('useServiceRestart', () => {
     await promise
 
     expect(isRestarting.value).toBe(false)
+  })
+
+  it('keeps isRestarting true through the reload window when autoReload is on', async () => {
+    // Clearing it before the reload lands lets the Settings banner chain
+    // fall through to "System update available" for the final second.
+    mockApi.get.mockResolvedValue(RESTARTED_SERVER)
+
+    const { isRestarting, restartMessage, waitForRestart } = useServiceRestart()
+
+    const promise = waitForRestart({
+      baseline: BASELINE,
+      initialDelay: 100,
+      pollInterval: 100,
+      postConnectDelay: 0,
+      autoReload: true
+    })
+
+    await vi.advanceTimersByTimeAsync(200)
+    await promise
+
+    expect(restartMessage.value).toBe('Reloading...')
+    expect(isRestarting.value).toBe(true)
+
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(window.location.reload).toHaveBeenCalled()
+    expect(isRestarting.value).toBe(true)
   })
 
   it('flags managedWaitActive for the wait lifetime (suppresses the update overlay)', async () => {

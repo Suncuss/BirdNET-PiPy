@@ -11,7 +11,8 @@ const mockApi = vi.hoisted(() => ({
 }))
 
 vi.mock('@/services/api', () => ({
-  default: mockApi
+  default: mockApi,
+  SLOW_QUERY_TIMEOUT: 45000
 }))
 
 // Mock useLogger

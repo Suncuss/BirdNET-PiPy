@@ -12,7 +12,8 @@ const mockApi = vi.hoisted(() => ({
 }))
 
 vi.mock('@/services/api', () => ({
-  default: mockApi
+  default: mockApi,
+  SLOW_QUERY_TIMEOUT: 45000
 }))
 
 // Mock useLogger
@@ -176,7 +177,8 @@ describe('useTableData', () => {
           per_page: 25,
           sort: 'timestamp',
           order: 'desc'
-        }
+        },
+        timeout: 45000
       })
 
       expect(detections.value).toEqual(mockResponse.data.detections)
@@ -206,7 +208,8 @@ describe('useTableData', () => {
           start_date: '2024-01-01',
           end_date: '2024-01-31',
           species: 'Blue Jay'
-        }
+        },
+        timeout: 45000
       })
     })
 
@@ -226,7 +229,8 @@ describe('useTableData', () => {
           sort: 'timestamp',
           order: 'desc',
           hour: 14
-        }
+        },
+        timeout: 45000
       })
 
       // hour 0 is falsy but valid — it must still be sent
@@ -239,7 +243,8 @@ describe('useTableData', () => {
           sort: 'timestamp',
           order: 'desc',
           hour: 0
-        }
+        },
+        timeout: 45000
       })
 
       // null means "any hour" — param omitted entirely
@@ -251,8 +256,68 @@ describe('useTableData', () => {
           per_page: 25,
           sort: 'timestamp',
           order: 'desc'
+        },
+        timeout: 45000
+      })
+    })
+
+    it('discards a stale response that resolves after a newer fetch', async () => {
+      let resolveSlow
+      const slowResponse = new Promise(resolve => {
+        resolveSlow = resolve
+      })
+      mockApi.get
+        .mockReturnValueOnce(slowResponse)
+        .mockResolvedValueOnce({
+          data: {
+            detections: [{ id: 2, common_name: 'Cardinal', confidence: 0.8 }],
+            pagination: { total_items: 1, total_pages: 1 }
+          }
+        })
+
+      const { fetchDetections, detections, isLoading } = useTableData()
+
+      const stale = fetchDetections() // request A, still in flight
+      await fetchDetections() // request B supersedes it
+
+      resolveSlow({
+        data: {
+          detections: [{ id: 1, common_name: 'Robin', confidence: 0.9 }],
+          pagination: { total_items: 1, total_pages: 1 }
         }
       })
+      await stale
+
+      // The late response must not overwrite the newer results or restart
+      // the spinner.
+      expect(detections.value).toEqual([{ id: 2, common_name: 'Cardinal', confidence: 0.8 }])
+      expect(isLoading.value).toBe(false)
+    })
+
+    it('a stale failure does not blank results from a newer fetch', async () => {
+      let rejectSlow
+      const slowResponse = new Promise((resolve, reject) => {
+        rejectSlow = reject
+      })
+      mockApi.get
+        .mockReturnValueOnce(slowResponse)
+        .mockResolvedValueOnce({
+          data: {
+            detections: [{ id: 2, common_name: 'Cardinal', confidence: 0.8 }],
+            pagination: { total_items: 1, total_pages: 1 }
+          }
+        })
+
+      const { fetchDetections, detections, error } = useTableData()
+
+      const stale = fetchDetections()
+      await fetchDetections()
+
+      rejectSlow(new Error('timeout of 45000ms exceeded'))
+      await stale
+
+      expect(detections.value).toEqual([{ id: 2, common_name: 'Cardinal', confidence: 0.8 }])
+      expect(error.value).toBe(null)
     })
 
     it('handles API errors', async () => {
@@ -324,7 +389,8 @@ describe('useTableData', () => {
 	          per_page: 25,
 	          sort: 'timestamp',
 	          order: 'desc'
-	        }
+	        },
+	        timeout: 45000
 	      })
 	      expect(mockApi.get).toHaveBeenNthCalledWith(2, '/detections', {
 	        params: {
@@ -332,7 +398,8 @@ describe('useTableData', () => {
 	          per_page: 25,
 	          sort: 'timestamp',
 	          order: 'desc'
-	        }
+	        },
+	        timeout: 45000
 	      })
 	      expect(detections.value).toEqual([{ id: 99, common_name: 'Robin', confidence: 0.9 }])
 	    })
@@ -353,7 +420,7 @@ describe('useTableData', () => {
       const result = await deleteDetection(1)
 
       expect(result).toBe(true)
-      expect(mockApi.delete).toHaveBeenCalledWith('/detections/1')
+      expect(mockApi.delete).toHaveBeenCalledWith('/detections/1', { timeout: 45000 })
       expect(mockApi.get).toHaveBeenCalled() // Should refresh after delete
     })
 

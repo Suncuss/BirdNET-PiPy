@@ -5,16 +5,27 @@ from __future__ import annotations
 import copy
 import logging
 import os
-import threading
 from typing import Any
 
 from config.settings import USER_SETTINGS_PATH, load_user_settings
+from core.native_lock import native_lock
 
 logger = logging.getLogger(__name__)
 
-_settings_lock = threading.Lock()
+# Native lock: taken from request greenlets AND from the DB-lane worker
+# (cache builders call load_user_settings) — a patched lock loses wakeups
+# across that boundary (see core/native_lock.py). Guards only the cache
+# check/assignments; the file parse (which can log and even rewrite the
+# file on migration paths) runs outside it, because nothing that can log
+# or block may run under a native lock.
+_settings_lock = native_lock()
 _cached_settings: dict[str, Any] | None = None
 _cached_mtime: float | None = None
+# Bumped by invalidate_runtime_settings_cache(); a reload that started before
+# an invalidation must not publish over it (its mtime could coarsely equal the
+# new file's, which would pin stale data past the very race invalidation
+# exists to catch).
+_settings_generation = 0
 
 
 def _safe_mtime(path: str) -> float | None:
@@ -40,12 +51,22 @@ def _load_cached_settings(force_reload: bool = False) -> dict[str, Any]:
             or _cached_settings is None
             or _cached_mtime != file_mtime
         )
-        if needs_reload:
-            _cached_settings = load_user_settings()
-            _cached_mtime = _safe_mtime(USER_SETTINGS_PATH)
+        if not needs_reload:
+            return _cached_settings or {}
+        generation = _settings_generation
 
+    # Parse outside the lock: migration paths inside load_user_settings can
+    # log (formatters re-enter the timezone/settings caches) and rewrite the
+    # file on disk. Concurrent reloads duplicate the parse; last publish wins
+    # and any staleness self-corrects on the next mtime check.
+    fresh = load_user_settings()
+    fresh_mtime = _safe_mtime(USER_SETTINGS_PATH)
+    with _settings_lock:
+        if _settings_generation == generation:
+            _cached_settings = fresh
+            _cached_mtime = fresh_mtime
         # load_user_settings() always returns a dict, but keep this guard for safety
-        return _cached_settings or {}
+        return fresh or {}
 
 
 def get_runtime_settings(force_reload: bool = False) -> dict[str, Any]:
@@ -86,10 +107,11 @@ def resolve_source_label(source_id: str, fallback: str = '') -> str:
 
 def invalidate_runtime_settings_cache() -> None:
     """Force the next read to reload from disk."""
-    global _cached_settings, _cached_mtime
+    global _cached_settings, _cached_mtime, _settings_generation
     with _settings_lock:
         _cached_settings = None
         _cached_mtime = None
+        _settings_generation += 1
 
 
 def deep_merge_settings(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:

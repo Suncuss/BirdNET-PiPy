@@ -1,0 +1,37 @@
+version: 2
+
+# Keep production image bases pinned, but surface refreshes as reviewed PRs
+# instead of allowing mutable tags to invalidate every station's layer cache.
+updates:
+  - package-ecosystem: docker
+    directory: /backend
+    target-branch: dev
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: America/New_York
+    commit-message:
+      prefix: "chore"
+
+  - package-ecosystem: docker
+    directory: /frontend
+    target-branch: dev
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: America/New_York
+    commit-message:
+      prefix: "chore"
+
+  - package-ecosystem: docker
+    directory: /deployment/audio
+    target-branch: dev
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: America/New_York
+    commit-message:
+      prefix: "chore"

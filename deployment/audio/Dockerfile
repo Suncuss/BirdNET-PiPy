@@ -1,4 +1,5 @@
-FROM debian:bookworm-slim
+# Pin the multi-platform index so routine source updates keep their base layers.
+FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
 
 # Build arguments for user/group IDs
 ARG UID=1000

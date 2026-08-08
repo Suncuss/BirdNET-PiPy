@@ -32,7 +32,8 @@ Prefer simple, modular code with small focused components.
 
 **Build & Deploy:**
 ```bash
-./build.sh                  # Builds frontend + backend, then deploys
+./build.sh                  # Builds all Docker images (frontend + backend); does NOT deploy
+docker compose up -d        # Deploy: recreate containers on the newly built images
 ./build.sh --test           # Run tests before building
 ./build.sh --help           # Show all options
 ```

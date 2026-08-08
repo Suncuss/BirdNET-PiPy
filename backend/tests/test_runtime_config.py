@@ -1,5 +1,8 @@
-"""Tests for runtime setting change classification."""
+"""Tests for runtime setting change classification and the settings cache."""
 
+import pytest
+
+import core.runtime_config as rc
 from core.runtime_config import _sources_only_labels_changed, classify_setting_changes
 
 
@@ -257,3 +260,45 @@ class TestSourcesOnlyLabelsChanged:
         old = _make_settings([{"id": "s0", "type": "pulseaudio", "device": "default", "label": "Mic"}])
         new = _make_settings([{"id": "s0", "type": "pulseaudio", "device": "default"}])
         assert _sources_only_labels_changed(old, new) is True
+
+
+class TestSettingsCacheInvalidationRace:
+    """A reload that raced an invalidation must not publish over it.
+
+    The settings parse runs outside _settings_lock (it can log and rewrite
+    the file on migration paths — nothing that can log may run under a
+    native lock). A save whose rewrite keeps a coarsely-equal mtime relies
+    on invalidate_runtime_settings_cache() to force the next read; a stale
+    in-flight parse publishing after that invalidation would pin old
+    settings until the next mtime change.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_cache(self):
+        rc.invalidate_runtime_settings_cache()
+        yield
+        rc.invalidate_runtime_settings_cache()
+
+    def test_reload_racing_invalidation_does_not_pin_stale_cache(self, monkeypatch):
+        loads = []
+
+        def fake_load():
+            loads.append(1)
+            if len(loads) == 1:
+                # A save lands mid-parse: same coarse mtime, so only the
+                # invalidation can force the next read to reload.
+                rc.invalidate_runtime_settings_cache()
+                return {"stale": True}
+            return {"fresh": True}
+
+        monkeypatch.setattr(rc, "load_user_settings", fake_load)
+        monkeypatch.setattr(rc, "_safe_mtime", lambda path: 1000.0)
+
+        # The racing caller gets its own (stale) read — same as before the
+        # parse moved out of the lock — but must not publish it.
+        assert rc._load_cached_settings() == {"stale": True}
+        # The invalidation survived, so the next read reloads and wins.
+        assert rc._load_cached_settings() == {"fresh": True}
+        # And the fresh result is now cached (no third parse).
+        assert rc._load_cached_settings() == {"fresh": True}
+        assert len(loads) == 2

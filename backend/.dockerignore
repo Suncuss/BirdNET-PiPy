@@ -38,6 +38,14 @@ htmlcov
 *~
 
 # ============================================
+# Runtime Data
+# The container bind-mounts ./data at runtime; a leftover backend/data from
+# running the backend outside Docker holds the database, auth secrets, and
+# station coordinates — never bake it into an image
+# ============================================
+data/
+
+# ============================================
 # Logs & Temporary Files
 # ============================================
 *.log

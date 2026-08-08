@@ -30,6 +30,7 @@ from core.api_utils import (
 )
 from core.auth import (
     configure_session,
+    get_request_tier,
     is_authenticated,
     is_feature_public,
     require_auth,
@@ -65,12 +66,20 @@ def get_stream_config():
     sources = audio.get('sources', [])
     enabled = [s for s in sources if s.get('enabled', True)]
 
+    # Owner-chosen labels stay owner-only: they can hint at the station's
+    # location or layout, which is why _strip_public_metadata drops
+    # source_label and /api/recorder/status is owner-room-only. Anonymous
+    # live-feed listeners get a positional name instead — enough to tell two
+    # streams apart in the picker.
+    is_public = get_request_tier() == 'public'
+
     streams = []
-    for source in enabled:
+    for index, source in enumerate(enabled, start=1):
         sid = source.get('id', '')
+        label = f'Source {index}' if is_public else (source.get('label') or sid)
         streams.append({
             'source_id': sid,
-            'label': source.get('label') or sid,
+            'label': label,
             'url': f'stream/{sid}.mp3',
         })
 
@@ -276,6 +285,30 @@ def create_app(async_mode='threading'):
         logger.info('WebSocket client disconnected')
 
     return app, socketio
+
+def revoke_owner_sockets():
+    """Evict every socket currently in the owner room.
+
+    HTTP gates re-check the session epoch on each request, but a WebSocket is
+    authenticated once at connect and would otherwise keep receiving
+    recorder_status — source labels and ffmpeg error text that can echo RTSP
+    credentials — for the life of the tab. The event explains the reason to
+    cooperative clients, while server-side disconnects enforce revocation even
+    when a client ignores it.
+    """
+    global socketio
+    if not socketio:
+        return
+
+    participants = tuple(
+        socketio.server.manager.get_participants('/', _OWNER_ROOM)
+    )
+    socketio.emit('session_revoked', {'reason': 'password_changed'},
+                  room=_OWNER_ROOM)
+    for sid, _ in participants:
+        socketio.server.disconnect(sid, namespace='/')
+    logger.info("Owner sockets revoked", extra={'count': len(participants)})
+
 
 def broadcast_detection(detection_data):
     """Function to broadcast detection to all connected clients"""

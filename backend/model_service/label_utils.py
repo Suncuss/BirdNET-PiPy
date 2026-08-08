@@ -8,7 +8,29 @@ import csv
 import logging
 import os
 import sys
-import threading
+
+
+def _native_lock():
+    """A real OS lock, immune to gevent monkey-patching.
+
+    These label caches are filled both from API request greenlets and from
+    the API's DB-lane native worker thread (localization inside cache
+    builders); gevent's patched Lock loses waiter wakeups across that
+    boundary — see core/native_lock.py for the full story. Inlined as a
+    copy of core/native_lock.py rather than imported: backend/Dockerfile's
+    asset-validation stage copies only this module plus the *_assets
+    modules (no core/) before running ``python -m
+    model_service.geomodel_assets``, so a core import passes every test
+    but breaks the image build. Keep the two copies in sync — the sentinel
+    test test_patched_lock_still_exhibits_the_gevent_bug signals when the
+    workaround itself is due for a revisit.
+    """
+    try:
+        from gevent import monkey
+        return monkey.get_original('_thread', 'allocate_lock')()
+    except ImportError:
+        import threading
+        return threading.Lock()  # native-fallback: no gevent to patch it
 
 logger = logging.getLogger(__name__)
 
@@ -33,11 +55,11 @@ _synonym_to_idx: dict[str, int] | None = None
 _sci_to_group: dict[str, tuple[str, ...]] | None = None
 _in_v2: list[bool] | None = None
 _in_v3: list[bool] | None = None
-_loading_lock = threading.Lock()
+_loading_lock = _native_lock()
 
 # Per-language label arrays, loaded on first request for that language.
 _lang_columns: dict[str, list[str]] = {}
-_lang_lock = threading.Lock()
+_lang_lock = _native_lock()
 
 
 def _epithet_stem(sci_name: str) -> str:
@@ -123,84 +145,87 @@ def _ensure_loaded() -> None:
     Reads the canonical columns plus ``label_en`` and ``label_en_uk`` to build
     a case-folded English-synonym index. Other ``label_*`` translation columns
     are loaded lazily by :func:`_ensure_language_loaded` on first request.
+
+    The CSV parse and its log lines run OUTSIDE _loading_lock: nothing that
+    can log or block may run under a native lock (see _native_lock). Racing
+    cold-start callers may parse twice; the loser is discarded at publish.
     """
     global _sci_to_idx, _sci_names, _common_to_idx, _common_names
     global _synonym_to_idx, _sci_to_group, _in_v2, _in_v3
     if _sci_to_idx is not None:
         return
 
+    sci_to_idx: dict[str, int] = {}
+    sci_names: list[str] = []
+    common_to_idx: dict[str, int] = {}
+    common_names: list[str] = []
+    # casefold(english name) -> [row idx, ...], over canonical common_names
+    # and label_en/label_en_uk alike. Feeds _build_taxon_groups after the
+    # loop and is dropped afterwards; the synonym indexes below can't serve
+    # that job because they keep only one idx per name.
+    name_to_idxs: dict[str, list[int]] = {}
+    in_v2: list[bool] = []
+    in_v3: list[bool] = []
+    # Collected during the row loop and merged afterwards so that
+    # canonical common_names always shadow label_en / label_en_uk aliases
+    # — without this, an earlier row's UK alias (e.g. Aegypius monachus
+    # label_en_uk = "Black Vulture") would mis-route the canonical
+    # "Black Vulture" (Coragyps atratus) by virtue of CSV row order.
+    canonical_synonyms: dict[str, int] = {}
+    alias_synonyms: dict[str, int] = {}
+
+    try:
+        with open(_SPECIES_TABLE_PATH, encoding='utf-8') as f:
+            reader = csv.DictReader(f, delimiter=';')
+            for idx, row in enumerate(reader):
+                sci = sys.intern(row['sci_name'])
+                sci_to_idx[sci] = idx
+                sci_names.append(sci)
+                common = sys.intern(row.get('common_name', ''))
+                common_names.append(common)
+                if common:
+                    common_to_idx[common] = idx
+                    # Canonical wins on collision: overwrite, not setdefault.
+                    # Two rows sharing a canonical common_name would still
+                    # collide here, but that's an authoritative ambiguity in
+                    # the species table itself.
+                    folded = common.casefold()
+                    canonical_synonyms[folded] = idx
+                    name_to_idxs.setdefault(folded, []).append(idx)
+                for col in ('label_en', 'label_en_uk'):
+                    val = (row.get(col) or '').strip()
+                    if val:
+                        # Aliases use setdefault — first occurrence wins
+                        # when nothing canonical claims the same key.
+                        folded_alias = val.casefold()
+                        alias_synonyms.setdefault(folded_alias, idx)
+                        # All appends for one row are consecutive, so this
+                        # dedupes label_en == common_name (the usual case).
+                        seen_idxs = name_to_idxs.setdefault(folded_alias, [])
+                        if not seen_idxs or seen_idxs[-1] != idx:
+                            seen_idxs.append(idx)
+                in_v2.append(row.get('in_v2') == 'True')
+                in_v3.append(row.get('in_v3') == 'True')
+
+        # Merge: aliases first, then canonical so canonical always wins.
+        synonym_to_idx: dict[str, int] = {**alias_synonyms, **canonical_synonyms}
+        sci_to_group = _build_taxon_groups(sci_names, name_to_idxs)
+        logger.info(
+            "Loaded species table",
+            extra={
+                'species_count': len(sci_to_idx),
+                'synonym_count': len(synonym_to_idx),
+                'ambiguous_species_count': len(sci_to_group),
+            },
+        )
+    except Exception:
+        logger.exception("Failed to load species table from %s", _SPECIES_TABLE_PATH)
+        synonym_to_idx = {}
+        sci_to_group = {}
+
     with _loading_lock:
         if _sci_to_idx is not None:
-            return
-
-        sci_to_idx: dict[str, int] = {}
-        sci_names: list[str] = []
-        common_to_idx: dict[str, int] = {}
-        common_names: list[str] = []
-        # casefold(english name) -> [row idx, ...], over canonical common_names
-        # and label_en/label_en_uk alike. Feeds _build_taxon_groups after the
-        # loop and is dropped afterwards; the synonym indexes below can't serve
-        # that job because they keep only one idx per name.
-        name_to_idxs: dict[str, list[int]] = {}
-        in_v2: list[bool] = []
-        in_v3: list[bool] = []
-        # Collected during the row loop and merged afterwards so that
-        # canonical common_names always shadow label_en / label_en_uk aliases
-        # — without this, an earlier row's UK alias (e.g. Aegypius monachus
-        # label_en_uk = "Black Vulture") would mis-route the canonical
-        # "Black Vulture" (Coragyps atratus) by virtue of CSV row order.
-        canonical_synonyms: dict[str, int] = {}
-        alias_synonyms: dict[str, int] = {}
-
-        try:
-            with open(_SPECIES_TABLE_PATH, encoding='utf-8') as f:
-                reader = csv.DictReader(f, delimiter=';')
-                for idx, row in enumerate(reader):
-                    sci = sys.intern(row['sci_name'])
-                    sci_to_idx[sci] = idx
-                    sci_names.append(sci)
-                    common = sys.intern(row.get('common_name', ''))
-                    common_names.append(common)
-                    if common:
-                        common_to_idx[common] = idx
-                        # Canonical wins on collision: overwrite, not setdefault.
-                        # Two rows sharing a canonical common_name would still
-                        # collide here, but that's an authoritative ambiguity in
-                        # the species table itself.
-                        folded = common.casefold()
-                        canonical_synonyms[folded] = idx
-                        name_to_idxs.setdefault(folded, []).append(idx)
-                    for col in ('label_en', 'label_en_uk'):
-                        val = (row.get(col) or '').strip()
-                        if val:
-                            # Aliases use setdefault — first occurrence wins
-                            # when nothing canonical claims the same key.
-                            folded_alias = val.casefold()
-                            alias_synonyms.setdefault(folded_alias, idx)
-                            # All appends for one row are consecutive, so this
-                            # dedupes label_en == common_name (the usual case).
-                            seen_idxs = name_to_idxs.setdefault(folded_alias, [])
-                            if not seen_idxs or seen_idxs[-1] != idx:
-                                seen_idxs.append(idx)
-                    in_v2.append(row.get('in_v2') == 'True')
-                    in_v3.append(row.get('in_v3') == 'True')
-
-            # Merge: aliases first, then canonical so canonical always wins.
-            synonym_to_idx: dict[str, int] = {**alias_synonyms, **canonical_synonyms}
-            sci_to_group = _build_taxon_groups(sci_names, name_to_idxs)
-            logger.info(
-                "Loaded species table",
-                extra={
-                    'species_count': len(sci_to_idx),
-                    'synonym_count': len(synonym_to_idx),
-                    'ambiguous_species_count': len(sci_to_group),
-                },
-            )
-        except Exception:
-            logger.exception("Failed to load species table from %s", _SPECIES_TABLE_PATH)
-            synonym_to_idx = {}
-            sci_to_group = {}
-
+            return  # another thread published while we parsed
         _common_to_idx = common_to_idx
         _common_names = common_names
         _synonym_to_idx = synonym_to_idx
@@ -217,43 +242,42 @@ def _ensure_language_loaded(language: str) -> list[str] | None:
     Returns the column array (idx -> translated name), or None if loading
     failed. The CSV is reread once per language; the OS page cache makes
     the second pass effectively free.
+
+    The parse and its log lines run outside _lang_lock (nothing that can
+    log or block may run under a native lock — see _native_lock); a racing
+    duplicate parse defers to whichever column published first.
     """
     column = _lang_columns.get(language)
     if column is not None:
         return column
 
+    col_name = f'label_{language}'
+    values: list[str] = []
+    try:
+        with open(_SPECIES_TABLE_PATH, encoding='utf-8') as f:
+            reader = csv.DictReader(f, delimiter=';')
+            if col_name not in (reader.fieldnames or ()):
+                logger.warning(
+                    "Requested language column missing",
+                    extra={'language': language, 'column': col_name},
+                )
+                return None
+            for row in reader:
+                values.append(sys.intern(row.get(col_name, '')))
+        logger.info(
+            "Loaded species language column",
+            extra={'language': language, 'species_count': len(values)},
+        )
+    except Exception:
+        logger.exception(
+            "Failed to load language column %s from %s",
+            col_name,
+            _SPECIES_TABLE_PATH,
+        )
+        return None
+
     with _lang_lock:
-        column = _lang_columns.get(language)
-        if column is not None:
-            return column
-
-        col_name = f'label_{language}'
-        values: list[str] = []
-        try:
-            with open(_SPECIES_TABLE_PATH, encoding='utf-8') as f:
-                reader = csv.DictReader(f, delimiter=';')
-                if col_name not in (reader.fieldnames or ()):
-                    logger.warning(
-                        "Requested language column missing",
-                        extra={'language': language, 'column': col_name},
-                    )
-                    return None
-                for row in reader:
-                    values.append(sys.intern(row.get(col_name, '')))
-            logger.info(
-                "Loaded species language column",
-                extra={'language': language, 'species_count': len(values)},
-            )
-        except Exception:
-            logger.exception(
-                "Failed to load language column %s from %s",
-                col_name,
-                _SPECIES_TABLE_PATH,
-            )
-            return None
-
-        _lang_columns[language] = values
-        return values
+        return _lang_columns.setdefault(language, values)
 
 
 def clear_species_cache() -> None:
