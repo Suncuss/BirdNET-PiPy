@@ -12,13 +12,13 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 COPY requirements.txt .
 
-# Use piwheels for pre-compiled ARM packages. Keep numpy separate so its pinned
-# ABI is established before resolving the remaining ML dependencies.
+# Keep numpy separate so its pinned ABI is established before resolving the
+# remaining ML dependencies. No piwheels index: it publishes only armv6l and
+# armv7l wheels, so it never matched the arm64/amd64 images we build, and
+# 32-bit hosts are rejected by install.sh anyway.
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --extra-index-url https://www.piwheels.org/simple \
-    numpy==1.26.4 && \
-    pip install --extra-index-url https://www.piwheels.org/simple \
-    -r requirements.txt
+    pip install numpy==1.26.4 && \
+    pip install -r requirements.txt
 
 # Prune bundled models out of the per-release source layer. They ship in the
 # dedicated COPY layers below instead, so a routine source change pushes a few
