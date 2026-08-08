@@ -3,14 +3,10 @@
 # both the AMD64 and ARM64 images built by CI.
 FROM python:3.11-slim@sha256:94c50be2dc994b873b55bc123e95e6dbade08095b3dfd790f51c34de3f08cbb7 AS python-deps
 
-# Build native wheels in a disposable stage. timezonefinder currently builds
-# from source on ARM64, so a compiler is still required during image creation,
-# but none of this toolchain needs to ship to stations.
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends \
-    build-essential
-
+# Assemble the venv in a disposable stage. Every dependency ships a prebuilt
+# ARM64 wheel, so no compiler toolchain is installed; if a future dependency
+# starts building from source, pip fails loudly here instead of silently
+# requiring one.
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
@@ -24,6 +20,15 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --extra-index-url https://www.piwheels.org/simple \
     -r requirements.txt
 
+# Prune bundled models out of the per-release source layer. They ship in the
+# dedicated COPY layers below instead, so a routine source change pushes a few
+# megabytes, not the ~55MB of model blobs. The prune must be explicit: BuildKit
+# only dedupes files identical to lower layers on some builders (CI yes,
+# local dockerd no), so leaving them in COPY . . re-ships them from local builds.
+FROM python:3.11-slim@sha256:94c50be2dc994b873b55bc123e95e6dbade08095b3dfd790f51c34de3f08cbb7 AS source
+COPY . /src
+RUN rm -rf /src/model_service/models
+
 # Use the same pinned multi-platform base for the shipped runtime image.
 FROM python:3.11-slim@sha256:94c50be2dc994b873b55bc123e95e6dbade08095b3dfd790f51c34de3f08cbb7
 
@@ -31,7 +36,7 @@ FROM python:3.11-slim@sha256:94c50be2dc994b873b55bc123e95e6dbade08095b3dfd790f51
 ARG UID=1000
 ARG GID=1000
 
-# Install runtime libraries only; the compiler toolchain stays in python-deps.
+# Install runtime libraries only.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
@@ -43,8 +48,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /app
 
-# Copy only the finished environment; build-essential and intermediate wheel
-# caches remain in the discarded python-deps stage.
+# Copy only the finished environment; intermediate wheel caches remain in the
+# discarded python-deps stage.
 COPY --from=python-deps /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
@@ -70,7 +75,15 @@ RUN python -m model_service.birdnet_v3_assets
 # Compose bind-mounts the checkout over /app, so runtime loaders repeat the
 # authoritative checks against the bytes each service actually reads.
 
-COPY --chown=${UID}:${GID} . .
+# Remaining bundled model data in its own rarely-invalidated layers, after the
+# gates so a species-table refresh does not re-run the memory-intensive checks.
+COPY --chown=${UID}:${GID} model_service/models/v2.4 ./model_service/models/v2.4
+COPY --chown=${UID}:${GID} model_service/models/species_table.csv \
+     model_service/models/ebird_codes.json \
+     ./model_service/models/
+
+# Source code last: the only layer that changes on a routine release.
+COPY --from=source --chown=${UID}:${GID} /src ./
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh /usr/local/bin/

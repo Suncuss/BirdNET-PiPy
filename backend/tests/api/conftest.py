@@ -208,6 +208,23 @@ def media_dirs():
 
 
 @pytest.fixture
+def storage_media_dirs():
+    """Patch storage_manager's audio/spectrogram directories to empty temp dirs.
+
+    Detection deletion resolves and removes media files through
+    core.storage_manager; tests create files here to control what gets
+    deleted and reported."""
+    with tempfile.TemporaryDirectory() as tmp:
+        audio_dir = os.path.join(tmp, 'extracted_songs')
+        spectrogram_dir = os.path.join(tmp, 'spectrograms')
+        os.makedirs(audio_dir)
+        os.makedirs(spectrogram_dir)
+        with patch('core.storage_manager.EXTRACTED_AUDIO_DIR', audio_dir), \
+             patch('core.storage_manager.SPECTROGRAM_DIR', spectrogram_dir):
+            yield audio_dir, spectrogram_dir
+
+
+@pytest.fixture
 def create_recording_files(media_dirs):
     """Factory that creates on-disk audio+spectrogram files for a species'
     recordings, so the recordings endpoint's media filter treats them as present.

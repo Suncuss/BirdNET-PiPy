@@ -6,7 +6,6 @@ services pick the new values up live. Persistence itself lives in
 core.settings_store. Registered on the shared ``api`` blueprint at import.
 """
 import re
-import threading
 
 from flask import jsonify, request
 
@@ -42,32 +41,21 @@ from core.utils import normalize_site_url
 logger = get_logger(__name__)
 
 
-# Singleton TimezoneFinder (loads ~40MB shape data on first use). The import
-# itself is deferred into _get_timezone_finder(): it drags numpy/cffi/h3 into
-# the worker, and the only caller is the settings handler resolving a newly
-# saved location — a station that never edits its location never pays for it.
-_timezone_finder = None
-_tz_finder_lock = threading.Lock()  # hub-only: timezone lookup runs in settings-route greenlets, never the DB lane
-
-
-def _get_timezone_finder():
-    """Lazy-import and lazy-load TimezoneFinder (loads ~40MB shape data)."""
-    global _timezone_finder
-    with _tz_finder_lock:
-        if _timezone_finder is None:
-            from timezonefinder import TimezoneFinder
-            _timezone_finder = TimezoneFinder()
-        return _timezone_finder
-
-
 def get_timezone_for_location(lat: float, lon: float) -> str | None:
-    """Offline timezone lookup. Returns IANA timezone or None on failure."""
+    """Offline timezone lookup. Returns IANA timezone or None on failure.
+
+    tzfpy's simplified polygons leave rare hairline gaps at zone borders
+    (and at exactly ±180° longitude) where lookup returns nothing; retrying
+    a few km to each side recovers a point sitting in such a gap. The import
+    stays deferred so only the location-save path ever pays for it.
+    """
     try:
-        tf = _get_timezone_finder()
-        timezone = tf.timezone_at(lat=lat, lng=lon)
-        if timezone:
-            logger.info(f"Resolved timezone: {timezone}")
-            return timezone
+        from tzfpy import get_tz
+        for dlat, dlon in ((0, 0), (0.1, 0), (-0.1, 0), (0, 0.1), (0, -0.1)):
+            timezone = get_tz(lon + dlon, lat + dlat)  # tzfpy takes lng first
+            if timezone:
+                logger.info(f"Resolved timezone: {timezone}")
+                return timezone
         logger.warning(f"No timezone found for ({lat}, {lon})")
         return None
     except Exception as e:

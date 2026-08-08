@@ -1,10 +1,10 @@
-"""Tests for offline timezone lookup using timezonefinder."""
+"""Tests for offline timezone lookup using tzfpy."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 
 class TestOfflineTimezoneLookup:
-    """Test the get_timezone_for_location function using timezonefinder."""
+    """Test the get_timezone_for_location function using tzfpy."""
 
     def test_new_york_coordinates(self):
         """Test timezone lookup for New York City."""
@@ -39,91 +39,68 @@ class TestOfflineTimezoneLookup:
     def test_returns_valid_iana_string_or_none(self):
         """Test that result is a valid IANA timezone string or None."""
         from core.routes.settings import get_timezone_for_location
-        # Ocean coordinates - may return None
+        # Ocean coordinates - resolves to an Etc/GMT± ocean zone
         result = get_timezone_for_location(30.0, -40.0)
         # Either None or a valid IANA timezone string
         assert result is None or (isinstance(result, str) and '/' in result)
 
     def test_handles_exception_gracefully(self):
         """Test that exceptions are handled and return None."""
-        with patch('core.routes.settings._get_timezone_finder') as mock_finder:
-            mock_tf = MagicMock()
-            mock_tf.timezone_at.side_effect = Exception("Test error")
-            mock_finder.return_value = mock_tf
-
+        with patch('tzfpy.get_tz', side_effect=Exception("Test error")):
             from core.routes.settings import get_timezone_for_location
             result = get_timezone_for_location(40.7128, -74.0060)
             assert result is None
 
     def test_logs_warning_for_no_timezone(self):
         """Test that a warning is logged when no timezone is found."""
-        with patch('core.routes.settings._get_timezone_finder') as mock_finder, \
+        with patch('tzfpy.get_tz', return_value=''), \
              patch('core.routes.settings.logger') as mock_logger:
-            mock_tf = MagicMock()
-            mock_tf.timezone_at.return_value = None
-            mock_finder.return_value = mock_tf
-
             from core.routes.settings import get_timezone_for_location
             result = get_timezone_for_location(30.0, -40.0)
 
             assert result is None
             mock_logger.warning.assert_called()
 
-
-class TestTimezoneFinderSingleton:
-    """Test the TimezoneFinder singleton pattern."""
-
-    def test_singleton_reuses_instance(self):
-        """Test that _get_timezone_finder returns same instance."""
-        from core.routes.settings import _get_timezone_finder
-
-        # First call creates instance
-        tf1 = _get_timezone_finder()
-
-        # Second call should return same instance
-        tf2 = _get_timezone_finder()
-
-        assert tf1 is tf2
-
-    def test_thread_safe_singleton(self):
-        """Test that singleton is thread-safe."""
-        import threading
-
-        instances = []
-        errors = []
-
-        def get_finder():
-            try:
-                from core.routes.settings import _get_timezone_finder
-                tf = _get_timezone_finder()
-                instances.append(tf)
-            except Exception as e:
-                errors.append(e)
-
-        threads = [threading.Thread(target=get_finder) for _ in range(10)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        assert len(errors) == 0
-        assert len(instances) == 10
-        # All should be the same instance
-        assert all(i is instances[0] for i in instances)
+    def test_out_of_range_returns_none(self):
+        """Nonsense coordinates must not raise; the caller expects None."""
+        from core.routes.settings import get_timezone_for_location
+        assert get_timezone_for_location(91.0, 0.0) is None
+        assert get_timezone_for_location(-95.0, 400.0) is None
 
 
-class TestTimezoneFinderLazyImport:
-    """The timezonefinder import must stay out of the API's startup path."""
+class TestBorderGapFallback:
+    """tzfpy's simplified polygons leave rare hairline gaps at zone borders;
+    the neighbor-nudge fallback must recover points sitting in one."""
 
-    def test_importing_api_does_not_import_timezonefinder(self):
-        """core.api pulls timezonefinder (and its numpy/cffi/h3 stack, ~15-25MB
-        resident) only when a location lookup actually runs, never at import."""
+    def test_polygon_gap_resolves_via_nudge(self):
+        """(54.0, -90.0) sits in a known data gap in tzfpy 1.3.x (rural NW
+        Ontario, surrounded by America/Winnipeg on all sides). A bare get_tz
+        returns nothing there; the nudge must recover the surrounding zone.
+        Still passes if a future tzfpy data update closes the gap."""
+        from core.routes.settings import get_timezone_for_location
+        result = get_timezone_for_location(54.0, -90.0)
+        assert result == "America/Winnipeg"
+
+    def test_exact_antimeridian_resolves_via_nudge(self):
+        """Exactly ±180° longitude returns nothing from tzfpy; the nudge must
+        land in one of the adjacent ocean zones instead of failing."""
+        from core.routes.settings import get_timezone_for_location
+        result = get_timezone_for_location(0.0, 180.0)
+        assert result is not None and result.startswith("Etc/GMT")
+
+
+class TestTzfpyLazyImport:
+    """The tzfpy import must stay out of the API's startup path."""
+
+    def test_importing_api_does_not_import_tzfpy(self):
+        """core.api pulls tzfpy only when a location lookup actually runs,
+        never at import."""
         import subprocess
         import sys
 
         code = (
             "import sys; import core.routes.settings; "
-            "sys.exit(1 if 'timezonefinder' in sys.modules else 0)"
+            "sys.exit(1 if 'tzfpy' in sys.modules else 0)"
         )
         result = subprocess.run(
             [sys.executable, "-c", code],

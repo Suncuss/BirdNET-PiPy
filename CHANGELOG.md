@@ -2,9 +2,12 @@
 
 ## [Unreleased]
 
+- Fixed detection deletion removing only one copy of a recording's media when duplicates existed under different naming eras (source-ID transition, legacy colon pattern); the surviving copy was orphaned on disk forever. Deletion now removes every variant it finds
 - Fixed detection deletion responses reporting the generated filename instead of the legacy media file actually removed
 - Fixed automatic storage cleanup skipping audio and spectrogram files created during the source-ID filename transition, allowing upgraded stations to reclaim those legacy recordings
 - Improved native updates on Raspberry Pis by stabilizing Docker base layers between releases and removing the backend compiler toolchain from the runtime image, reducing both routine downloads and slow SD-card extraction
+- Improved update download size again: bundled model files (V2.4 model, species table, eBird codes) now live in their own cached image layers instead of re-downloading with every release, shrinking a routine update's backend download from ~55MB to a few megabytes
+- Changed the offline timezone lookup (used when saving a station location) to a much smaller library, trimming ~55MB from the backend image and removing the last need for a compiler during image builds
 - Fixed failed update checks exposing the exact installed commit to anonymous visitors through detailed GitHub error URLs; diagnostics remain available to signed-in owners and in logs
 - Fixed authentication and settings temporary files being readable by other local users while sensitive content was still being written; private files now start owner-only
 - Fixed a password-change race that could leave previously issued audio links valid until the API service restarted
