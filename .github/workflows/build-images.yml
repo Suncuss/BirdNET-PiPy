@@ -67,12 +67,9 @@ jobs:
           # back to main's scope, because a branch's own entries expire after a
           # week of quiet and a fully cold rebuild churns every layer digest
           # just as badly as the contamination this avoids.
-          # The unsuffixed scope is the old shared one, kept only to warm the
-          # cutover; drop that line once main and staging have each built here.
           cache-from: |
             type=gha,scope=${{ env.CACHE_SCOPE }}-${{ github.ref_name }}
             type=gha,scope=${{ env.CACHE_SCOPE }}-main
-            type=gha,scope=${{ env.CACHE_SCOPE }}
           cache-to: type=gha,mode=max,scope=${{ env.CACHE_SCOPE }}-${{ github.ref_name }}
 
       - name: Export digest
