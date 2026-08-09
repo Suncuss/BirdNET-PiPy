@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fixed Docker build caches crossing between staging and main, which could make an unchanged staging image download new layers after a release promotion
+
 ## [0.8.6] - 2026-08-08
 
 - Fixed detection deletion removing only one copy of a recording's media when duplicates existed under different naming eras (source-ID transition, legacy colon pattern); the surviving copy was orphaned on disk forever. Deletion now removes every variant it finds
