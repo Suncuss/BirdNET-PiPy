@@ -9,14 +9,15 @@
         content="Transform your Raspberry Pi into a bird detection station. Real-time identification using BirdNET model.">
     <link rel="canonical" href="https://suncuss.github.io/BirdNET-PiPy/">
 
-    <!-- Favicons resolve to the hostname root, not this subdirectory. Google keeps one
-         favicon per hostname, so these files live in the suncuss.github.io repo and are
-         shared by every project page served from this domain. -->
-    <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
-    <link rel="icon" type="image/svg+xml" href="/icon.svg">
-    <link rel="icon" type="image/png" sizes="96x96" href="/favicon-96.png">
-    <link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png">
-    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <!-- Relative paths, so these resolve inside this project site rather than the hostname
+         root, which serves nothing. Browsers, tabs and iOS home-screen icons all use them.
+         Google Search will not: it takes a site's favicon only from the hostname's home
+         page, and suncuss.github.io/ has no site, so results fall back to a generic icon. -->
+    <link rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48">
+    <link rel="icon" type="image/svg+xml" href="icon.svg">
+    <link rel="icon" type="image/png" sizes="96x96" href="favicon-96.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="favicon-192.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
 
     <!-- Link preview card (iMessage, Slack, Discord, Facebook, LinkedIn) -->
     <meta property="og:type" content="website">
