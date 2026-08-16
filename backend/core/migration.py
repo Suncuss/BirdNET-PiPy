@@ -11,6 +11,8 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime
 
+import core.db_rollups as db_rollups
+from core import maintenance_lease, media_ownership
 from core.db_schema import TIMESTAMP_FORMAT
 from core.logging_config import get_logger
 
@@ -274,7 +276,25 @@ class BirdNETPiMigrator:
                     'errors': result['errors']
                 })
 
+        # Sustained-writer coordination (media-ownership design): wait
+        # politely while the one-time index build holds the maintenance
+        # lease, then hold it ourselves, renewing every batch so a fixed
+        # TTL can never expire a live import. Bounded wait: the build's
+        # own TTL is the worst case.
+        lease_owner = maintenance_lease.mint_owner_token()
+
         try:
+            try:
+                maintenance_lease.acquire_with_wait(
+                    self.db_manager, 'db_import', lease_owner,
+                    maintenance_lease.IMPORT_TTL_SECONDS,
+                    on_wait=lambda: update_progress('waiting_maintenance'),
+                    yield_control=yield_control)
+            except maintenance_lease.MaintenanceInProgressError as exc:
+                # Preserve this entry point's historical error shape.
+                raise RuntimeError(
+                    'maintenance lease unavailable (index build stuck?)') from exc
+
             update_progress('running')
 
             # Duplicate checking probes the (scientific_name, timestamp)
@@ -333,6 +353,9 @@ class BirdNETPiMigrator:
                         result['errors'] += errors
                         batch = []
                         batch_keys.clear()
+                        maintenance_lease.renew(
+                            self.db_manager, lease_owner,
+                            maintenance_lease.IMPORT_TTL_SECONDS)
                         update_progress()
                         if yield_control:
                             yield_control()
@@ -366,6 +389,7 @@ class BirdNETPiMigrator:
                     'errors': result['errors']
                 })
         finally:
+            maintenance_lease.release(self.db_manager, lease_owner)
             # _insert_batch writes detections directly, bypassing
             # insert_detection's species-rollup upkeep — recompute the
             # rollup for anything that landed, even on a partial failure.
@@ -525,19 +549,30 @@ class BirdNETPiMigrator:
                 record['cutoff'],
                 record['sensitivity'],
                 record['overlap'],
-                extra
+                extra,
+                # Imported rows are born resolved-and-empty with their own
+                # media identity, exactly like live inserts — Stage 2/3 need
+                # the per-row nonce to name the media they later publish.
+                0,
+                media_ownership.mint_media_nonce()
             ))
 
         query = """
         INSERT INTO detections (timestamp, group_timestamp, scientific_name, common_name, confidence,
-                                latitude, longitude, cutoff, sensitivity, overlap, extra)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                latitude, longitude, cutoff, sensitivity, overlap, extra,
+                                media_bytes, media_nonce)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
 
         try:
             with self.db_manager.get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.executemany(query, batch_data)
+                # Bulk inserts bypass insert_detection's rollup hooks:
+                # record this batch's dates durably IN THE SAME transaction
+                # (a completion-only enqueue would lose batches on a crash).
+                db_rollups.enqueue_dirty_days(
+                    cursor, {row[0][:10] for row in batch_data})
                 conn.commit()
                 return len(records), 0
         except Exception as e:

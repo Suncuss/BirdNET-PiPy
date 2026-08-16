@@ -46,7 +46,13 @@ class TestDatabaseBasicOperations:
             'sensitivity': 0.75,
             'overlap': 0.25
         }
-        test_db_manager.insert_detection(detection)
+        detection_id = test_db_manager.insert_detection(detection)
+        # Synthesized names apply to unresolved (legacy) rows — resolved
+        # rows serve recorded names (see test_media_ownership).
+        with test_db_manager.get_db_connection() as conn:
+            conn.execute("UPDATE detections SET media_bytes = NULL, "
+                         "media_nonce = NULL WHERE id = ?", (detection_id,))
+            conn.commit()
 
         results = test_db_manager.get_latest_detections(1)
         assert len(results) == 1

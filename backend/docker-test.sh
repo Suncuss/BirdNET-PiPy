@@ -25,14 +25,29 @@ docker build -f Dockerfile.test -t "$IMAGE" .
 # containers used to leave files the host can't modify or clean up).
 # HOME points at /tmp because the image has no home directory for an
 # arbitrary --user uid (matplotlib and friends want a writable HOME).
+# Hard memory cap (RAM+swap combined): a runaway test OOMs its own
+# container instead of filling the host's 8GB swapfile and thrashing
+# the machine into a multi-hour lockout. (2026-08-16 incident: an
+# unbounded loop in a review probe container grew to ~2GB RSS
+# overnight, exhausted swap, and froze the box for 9 hours until the
+# kernel OOM killer fired. The full suite peaks well under this cap.)
+#
+# BOTH layers are needed: Raspberry Pi OS ships with the memory cgroup
+# controller DISABLED, so Docker silently discards --memory there
+# ("WARNING: No memory limit support" in docker info). The in-container
+# ulimit -v (RLIMIT_AS, no cgroups required) is the fallback that
+# actually bites on such hosts; --memory takes over where the
+# controller exists (CI, or after cgroup_enable=memory cgroup_memory=1
+# is added to /boot/firmware/cmdline.txt and the host rebooted).
 docker run --rm \
     --user "$(id -u):$(id -g)" \
+    --memory=4g --memory-swap=4g \
     -e HOME=/tmp \
     -v "$(pwd):/app" \
     -w /app \
     -e PYTHONPATH=/app \
     "$IMAGE" \
-    bash -c "./run-tests.sh $*"
+    bash -c "ulimit -v 6291456; ./run-tests.sh $*"
 
 # If coverage was requested, remind about the report
 if [[ "$@" == *"coverage"* ]]; then

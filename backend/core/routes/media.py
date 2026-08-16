@@ -90,17 +90,25 @@ def _media_request_authorized(filename):
     )
 
 
+def _follow_rename_in_ownership(old_name, new_name):
+    """Keep detection_media in step with the lazy colon->dash rename (a
+    no-op for unresolved legacy rows, which have no ownership record yet)."""
+    _run_db(infra.db_manager.rename_detection_media, old_name, new_name)
+
+
 @api.route('/api/audio/<filename>')
 def serve_audio(filename):
     if not _media_request_authorized(filename):
         return jsonify({'error': 'Authentication required'}), 401
-    return serve_file_with_fallback(EXTRACTED_AUDIO_DIR, filename, DEFAULT_AUDIO_PATH, "audio")
+    return serve_file_with_fallback(EXTRACTED_AUDIO_DIR, filename, DEFAULT_AUDIO_PATH, "audio",
+                                    on_rename=_follow_rename_in_ownership)
 
 @api.route('/api/spectrogram/<filename>')
 def serve_spectrogram(filename):
     if not _media_request_authorized(filename):
         return jsonify({'error': 'Authentication required'}), 401
-    return serve_file_with_fallback(SPECTROGRAM_DIR, filename, DEFAULT_IMAGE_PATH, "spectrogram")
+    return serve_file_with_fallback(SPECTROGRAM_DIR, filename, DEFAULT_IMAGE_PATH, "spectrogram",
+                                    on_rename=_follow_rename_in_ownership)
 
 # Extra recordings fetched beyond the requested page so that filtering out rows
 # whose audio/spectrogram files are missing from disk still fills the page.

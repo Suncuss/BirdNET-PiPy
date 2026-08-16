@@ -40,7 +40,18 @@ def test_db_manager():
 
 @pytest.fixture(autouse=True)
 def reset_imports():
-    """Reset imports between tests to avoid state pollution."""
+    """Reset imports between tests to avoid state pollution.
+
+    NOTE: the bare packages ('core', 'config', 'model_service') survive
+    deliberately — popping them trips import-time side effects suite-wide.
+    The cost: a surviving package's stale submodule attributes satisfy
+    `from core import X` in the next test's re-import, splitting module
+    state and exception-class identity between generations. Modules whose
+    identity must match across the import graph therefore use direct
+    `import core.x as x` (sys.modules-resolved) instead of the package-attr
+    form — see core/db.py — and tests patch state via the live instance
+    the code under test actually holds.
+    """
     yield
     # Clean up any cached imports
     modules_to_remove = [m for m in sys.modules if m.startswith('core.') or m.startswith('config.') or m.startswith('model_service.')]

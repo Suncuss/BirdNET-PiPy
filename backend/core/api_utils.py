@@ -94,7 +94,8 @@ def validate_date_param(param_name='date', required=False, default_today=True):
     return decorator
 
 
-def serve_file_with_fallback(directory, filename, default_file_path, file_type="file"):
+def serve_file_with_fallback(directory, filename, default_file_path, file_type="file",
+                             on_rename=None):
     """
     Generic file serving function with fallback to default file
 
@@ -103,6 +104,10 @@ def serve_file_with_fallback(directory, filename, default_file_path, file_type="
         filename: Name of the file to serve
         default_file_path: Full path to default file if requested file not found
         file_type: Type of file for logging (e.g., "audio", "spectrogram")
+        on_rename: Optional callback(old_name, new_name) fired after the lazy
+            colon->dash rename, so media ownership records can follow the
+            on-disk name (media-ownership design: every rename goes through
+            the ownership boundary). Callback errors must not fail the serve.
 
     Returns:
         Flask response object
@@ -158,6 +163,13 @@ def serve_file_with_fallback(directory, filename, default_file_path, file_type="
                         'new_file': filename,
                         'file_type': file_type
                     })
+                    if on_rename is not None:
+                        try:
+                            on_rename(legacy_filename, filename)
+                        except Exception:
+                            logger.warning(
+                                f"Ownership record update failed after {file_type} rename",
+                                exc_info=True)
                     return make_response(send_from_directory(directory, filename))
                 except OSError as e:
                     # Rename failed, serve from old location

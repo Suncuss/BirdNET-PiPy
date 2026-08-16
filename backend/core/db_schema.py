@@ -38,11 +38,16 @@ CREATE TABLE IF NOT EXISTS detections (
     overlap DECIMAL(4,3) CHECK(overlap >= 0 AND overlap <= 1),
     week INT GENERATED ALWAYS AS (strftime('%W', timestamp)) STORED,
     extra TEXT DEFAULT '{}',
-    audio_source TEXT
+    audio_source TEXT,
+    media_bytes INTEGER,
+    media_nonce TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_detections_timestamp ON detections(timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_detections_timestamp_date ON detections(date(timestamp));
+-- Load-bearing via its common_name PREFIX (the migration-3 single-column
+-- name-index drop relied on it): legacy English-name lookups must stay
+-- index searches. Its date() second column is vestigial but a replacement
+-- would cost an O(n log n) startup rebuild — not worth it (M7 verdict).
 CREATE INDEX IF NOT EXISTS idx_detections_species_date ON detections(common_name, date(timestamp));
 CREATE INDEX IF NOT EXISTS idx_detections_scientific_timestamp ON detections(scientific_name, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_detections_group_timestamp ON detections(group_timestamp);
@@ -61,7 +66,61 @@ CREATE TABLE IF NOT EXISTS species (
     last_detected TEXT NOT NULL,
     latest_id INTEGER NOT NULL
 ) WITHOUT ROWID;
+
+-- Media ownership: the authoritative list of files each detection owns
+-- (design: internal_docs/MEDIA_OWNERSHIP_AND_ROLLUPS_2026-08-15.md).
+-- filename PK = exclusive owner; the partial unique index makes canonical
+-- (rank 0) selection per kind a database invariant, not a convention.
+CREATE TABLE IF NOT EXISTS detection_media (
+    filename     TEXT PRIMARY KEY,
+    detection_id INTEGER NOT NULL,
+    kind         TEXT NOT NULL CHECK (kind IN ('audio', 'spectrogram')),
+    rank         INTEGER NOT NULL CHECK (rank >= 0),
+    bytes        INTEGER NOT NULL CHECK (bytes >= 0)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_detection_media_det ON detection_media(detection_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_detection_media_canonical
+    ON detection_media(detection_id, kind) WHERE rank = 0;
+
+-- Durable key/value state (resolution-frontier cursor, maintenance lease,
+-- rollup readiness/revision) and the rollup dirty-day repair queue.
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS rollup_dirty_day (date TEXT PRIMARY KEY) WITHOUT ROWID;
+
+-- Time-axis rollups (core/db_rollups.py): per-day species and hour
+-- aggregates, maintained in-transaction by writers, rebuilt per day-bucket
+-- from detections on drift. Whole-table dashboard aggregates read these.
+CREATE TABLE IF NOT EXISTS species_day (
+    species_key TEXT NOT NULL,
+    date TEXT NOT NULL,
+    count INTEGER NOT NULL,
+    sum_confidence REAL NOT NULL,
+    max_confidence REAL NOT NULL,
+    first_ts TEXT NOT NULL,
+    last_ts TEXT NOT NULL,
+    PRIMARY KEY (species_key, date)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_species_day_date ON species_day(date);
+
+CREATE TABLE IF NOT EXISTS hour_day (
+    date TEXT NOT NULL,
+    hour INTEGER NOT NULL,
+    count INTEGER NOT NULL,
+    PRIMARY KEY (date, hour)
+) WITHOUT ROWID;
 '''
+
+# Oldest-first walk over only the rows that still own files. NOT part of
+# DATABASE_SCHEMA: ensure_schema executes that script against EVERY database
+# before migrations run, and a pre-migration-4 database has no media_bytes
+# column (the statement would fail) while a migrated one would pay the O(rows)
+# predicate scan during startup. Fresh databases create it here (empty table,
+# instant); existing databases get it from the main container's one-time
+# coordinated build before its processing threads start.
+LIVE_MEDIA_INDEX_SQL = (
+    "CREATE INDEX IF NOT EXISTS idx_detections_live_media "
+    "ON detections(timestamp) WHERE media_bytes > 0"
+)
 
 
 def _existing_columns(cursor):
@@ -93,12 +152,39 @@ def _drop_legacy_indexes(cursor):
         cursor.execute(f"DROP INDEX IF EXISTS {index_name}")
 
 
+def _add_media_ownership_columns(cursor):
+    # Guarded like migrations 1-2 so odd restored states (column present,
+    # version stamp behind) upgrade cleanly. The detection_media/meta/
+    # rollup_dirty_day tables ride DATABASE_SCHEMA's IF NOT EXISTS on every
+    # startup; only the detections columns need a versioned step. The
+    # partial live-media index is deliberately NOT created here — see
+    # LIVE_MEDIA_INDEX_SQL.
+    existing = _existing_columns(cursor)
+    if 'media_bytes' not in existing:
+        cursor.execute("ALTER TABLE detections ADD COLUMN media_bytes INTEGER")
+    if 'media_nonce' not in existing:
+        cursor.execute("ALTER TABLE detections ADD COLUMN media_nonce TEXT")
+
+
+def _drop_date_expression_indexes(cursor):
+    # EXPLAIN-verified unused after the time-rollup conversions: trends
+    # reads hour_day (sargable raw fallback off the plain timestamp index
+    # when not ready) and nothing filters on bare date(timestamp) anymore.
+    # idx_detections_species_date SURVIVED the same verification — its
+    # common_name prefix serves legacy English-name equality lookups
+    # (the migration-3 drop of the single-column name indexes depends on
+    # it), so it stays despite its vestigial date() column.
+    cursor.execute("DROP INDEX IF EXISTS idx_detections_timestamp_date")
+
+
 # Append-only. Never renumber or edit a shipped entry — databases in the
 # field record which steps they have run via user_version.
 MIGRATIONS = [
     (1, "add 'extra' column", _add_extra_column),
     (2, "add 'audio_source' column", _add_audio_source_column),
     (3, "drop unused legacy indexes", _drop_legacy_indexes),
+    (4, "add media ownership columns", _add_media_ownership_columns),
+    (5, "drop the unused date-expression index", _drop_date_expression_indexes),
 ]
 
 SCHEMA_VERSION = MIGRATIONS[-1][0]
@@ -125,6 +211,9 @@ def ensure_schema(cursor):
     cursor.executescript(DATABASE_SCHEMA)
 
     if is_fresh:
+        # Empty table, so the partial-index predicate scan is instant here;
+        # existing databases build it later, coordinated (see LIVE_MEDIA_INDEX_SQL).
+        cursor.execute(LIVE_MEDIA_INDEX_SQL)
         cursor.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         return
 

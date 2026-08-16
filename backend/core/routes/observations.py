@@ -316,6 +316,16 @@ def _serve_single_flight(entry, lock, ttl, builder, *args):
     return payload
 
 
+def _build_versioned_summary_payload(period):
+    """Builder for the summary single-flight cache: the payload wrapped
+    with the rollup revision read BEFORE the data query (conservative —
+    any transition during the build makes the stored revision older than
+    current, so the next hit rebuilds)."""
+    revision = infra.db_manager.get_rollup_revision()
+    return {'revision': revision,
+            'data': _build_summary_period_payload(period)}
+
+
 def _build_summary_period_payload(period, *, settings=None, now=None):
     now = now or local_now()
     settings = settings or load_user_settings()
@@ -327,10 +337,53 @@ def _build_summary_period_payload(period, *, settings=None, now=None):
 
 
 def _get_summary_period_payload(period):
-    return _serve_single_flight(
-        _summary_cache[period], _summary_cache_lock,
-        _SUMMARY_CACHE_TTL_SECONDS[period], _build_summary_period_payload, period,
-    )
+    entry = _summary_cache[period]
+    # Durable cross-process cache validation (rollup design): any rollup
+    # ready/dirty transition — in EITHER container — bumps rollup_revision
+    # in meta; a cached payload built under an older revision is stale no
+    # matter how much TTL remains. One indexed read per request; survives
+    # either process dying, unlike callback invalidation. The revision is
+    # captured INSIDE the builder job, BEFORE the data query, so a waiter
+    # joining an in-flight build can never stamp a pre-transition payload
+    # with a post-transition revision (implementation review finding 4) —
+    # a transition mid-build leaves the stored revision older, which
+    # invalidates in the safe direction.
+    # Bounded retry (implementation re-review R4): a waiter that observed
+    # revision N can join an in-flight job started under N-1 and receive
+    # pre-transition data. If the joined result's build revision is older
+    # than what this request observed, discard it and rebuild once — the
+    # second pass starts fresh at the current revision.
+    for _attempt in range(2):
+        try:
+            current_revision = _run_db(infra.db_manager.get_rollup_revision)
+        except Exception:
+            current_revision = None
+        if current_revision is not None:
+            with _summary_cache_lock:
+                cached = entry['payload']
+                if (cached is not None
+                        and cached.get('revision') != current_revision):
+                    entry['payload'] = None
+                    entry['expires_at'] = 0.0
+        wrapped = _serve_single_flight(
+            entry, _summary_cache_lock,
+            _SUMMARY_CACHE_TTL_SECONDS[period],
+            _build_versioned_summary_payload, period,
+        )
+        if (current_revision is None
+                or wrapped['revision'] >= current_revision):
+            return wrapped['data']
+        with _summary_cache_lock:
+            if entry['payload'] is wrapped:
+                entry['payload'] = None
+                entry['expires_at'] = 0.0
+    # Exhaustion is a non-returning state for stale data (second
+    # re-review S3): under sustained revision churn (batched imports),
+    # competing waiters can hand this request two consecutive
+    # pre-transition joins. Build directly, uncached — a fresh read of
+    # current state can never be older than any revision this request
+    # observed. The next request repopulates the cache.
+    return _run_db(_build_versioned_summary_payload, period)['data']
 
 
 def _build_sightings_payload(most_frequent):

@@ -12,7 +12,8 @@ import requests
 from flask import jsonify, request
 
 from config.settings import BASE_DIR
-from core.api_infra import api
+from core import api_infra as infra
+from core.api_infra import _run_db, api
 from core.api_utils import handle_api_errors
 from core.auth import get_request_tier, require_auth, require_scope
 from core.ha_mode import get_runtime_mode, is_home_assistant_mode
@@ -79,6 +80,27 @@ def _cache_and_return_update_result(result, cache_key, now):
 # homeassistant.update_entity (fire-and-forget) before giving up.
 _HA_ENTITY_POLL_TIMEOUT_SECONDS = 15
 _HA_ENTITY_POLL_INTERVAL_SECONDS = 0.5
+
+
+@api.route('/api/system/storage/cleanup-preview', methods=['GET'])
+@require_auth
+@log_api_request
+@handle_api_errors
+def get_cleanup_preview():
+    """Dry-run for a cleanup policy: what would it delete right now?
+
+    Query param ``policy``: retention | budget | pressure. The response's
+    ``exact`` flag is False while the resolution frontier is still
+    stamping history — the UI labels the figure partial until then.
+    Owner-only: this exists to preview destructive settings.
+    """
+    from core.storage_manager import preview_policy
+
+    policy = request.args.get('policy', 'pressure')
+    if policy not in ('retention', 'budget', 'pressure'):
+        return jsonify({'error': 'policy must be retention, budget, or pressure'}), 400
+    preview = _run_db(preview_policy, infra.db_manager, policy)
+    return jsonify(preview)
 
 
 @api.route('/api/system/storage', methods=['GET'])

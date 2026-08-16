@@ -149,7 +149,8 @@ def build_detection_filenames(common_name, confidence, timestamp, audio_extensio
 
 
 def extract_audio_segment(source_file_path, output_mp3_path, start, end,
-                          bitrate="320k", normalize=False, timeout=60):
+                          bitrate="320k", normalize=False, timeout=60,
+                          output_format=None):
     """Extract [start, end] from a WAV and encode it to MP3 in one ffmpeg run.
 
     Replaces the former sox-trim + ffmpeg-encode pair: one process spawn and
@@ -170,6 +171,9 @@ def extract_audio_segment(source_file_path, output_mp3_path, start, end,
         normalize: Apply loudness normalization (falls back to a plain
             conversion if the loudnorm pass fails, rather than lose the clip)
         timeout: Maximum time to wait in seconds (default: 60)
+        output_format: Explicit ffmpeg output format (e.g. 'mp3') for
+            destinations whose suffix doesn't say (atomic-publication temp
+            files end in .part)
 
     Raises:
         subprocess.TimeoutExpired: If ffmpeg exceeds timeout
@@ -188,8 +192,12 @@ def extract_audio_segment(source_file_path, output_mp3_path, start, end,
             "-ac", "1",  # Convert to mono
             "-codec:a", "libmp3lame",
             "-b:a", bitrate,
-            output_mp3_path,
         ]
+        if output_format:
+            # ffmpeg infers the container from the destination suffix; a
+            # temp path like clip.mp3.part needs the format stated.
+            command += ["-f", output_format]
+        command.append(output_mp3_path)
         subprocess.run(command, check=True, timeout=timeout, capture_output=True)
 
     if normalize:

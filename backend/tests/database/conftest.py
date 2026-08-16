@@ -74,3 +74,41 @@ def populated_db(test_db_manager, multiple_species_data):
             test_db_manager.insert_detection(detection)
 
     return test_db_manager
+
+
+def insert_legacy(db, timestamp, common='American Robin',
+                  scientific='Turdus migratorius', confidence=0.9,
+                  extra='{}', audio_source=None):
+    """A row as downgraded/pre-migration code would leave it: media_bytes
+    and media_nonce both NULL (unresolved, the frontier's job)."""
+    with db.get_db_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO detections (timestamp, group_timestamp, "
+            "scientific_name, common_name, confidence, extra, audio_source, "
+            "media_bytes, media_nonce) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)",
+            (timestamp, timestamp, scientific, common, confidence,
+             extra, audio_source))
+        conn.commit()
+        return cur.lastrowid
+
+
+def media_rows(db, detection_id):
+    with db.get_db_connection() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT filename, kind, rank, bytes FROM detection_media "
+            "WHERE detection_id = ? ORDER BY kind, rank",
+            (detection_id,)).fetchall()]
+
+
+def media_count(db):
+    with db.get_db_connection() as conn:
+        return conn.execute(
+            "SELECT COUNT(*) FROM detection_media").fetchone()[0]
+
+
+def stamped_bytes(db, detection_id):
+    with db.get_db_connection() as conn:
+        return conn.execute(
+            "SELECT media_bytes FROM detections WHERE id = ?",
+            (detection_id,)).fetchone()[0]

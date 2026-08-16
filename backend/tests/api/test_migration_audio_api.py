@@ -643,7 +643,8 @@ class TestMigrationSpectrogramGenerateEndpoint:
         """Test generate returns running job ID when another generation is in progress."""
         block_event = threading.Event()
 
-        def blocking_generate(audio_files, generation_id, yield_control=None):
+        def blocking_generate(audio_files, generation_id, yield_control=None,
+                              db_manager=None):
             from core.migration_audio import set_spectrogram_progress
             total = len(audio_files)
             set_spectrogram_progress(generation_id, {
@@ -816,7 +817,10 @@ class TestCooperativeYieldHooks:
         matched = [(1, '/nonexistent/a.mp3', 0), (2, '/nonexistent/b.mp3', 0)]
 
         with tempfile.TemporaryDirectory() as dest_dir:
-            with patch('core.migration_audio.EXTRACTED_AUDIO_DIR', dest_dir):
+            with patch('core.migration_audio.EXTRACTED_AUDIO_DIR', dest_dir), \
+                 patch('core.migration_audio.maintenance_lease.acquire_with_wait'), \
+                 patch('core.migration_audio.maintenance_lease.renew'), \
+                 patch('core.migration_audio.maintenance_lease.release'):
                 import_audio_files(db, matched, 'imp_yield_test',
                                    yield_control=yielder)
 

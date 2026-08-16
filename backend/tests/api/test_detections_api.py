@@ -3,7 +3,7 @@
 import os
 from unittest.mock import patch
 
-from tests.api.conftest import insert_detection
+from tests.api.conftest import insert_detection, make_rows_legacy
 
 
 class TestDetectionsAPI:
@@ -485,6 +485,7 @@ class TestDetectionsAPI:
             'sensitivity': 0.75,
             'overlap': 0.25
         })
+        make_rows_legacy(real_db_manager)  # synthesized names = legacy-row path
 
         response = api_client.get('/api/detections')
         data = response.get_json()
@@ -567,6 +568,7 @@ class TestDeleteDetectionAPI:
         """Test that deletion also removes associated files."""
         audio_dir, spectrogram_dir = storage_media_dirs
         detection_id = insert_detection(real_db_manager)
+        make_rows_legacy(real_db_manager)  # legacy station: pattern-named files
 
         # Get the detection to know the filenames
         detection = real_db_manager.get_detection_by_id(detection_id)
@@ -596,6 +598,7 @@ class TestDeleteDetectionAPI:
         detection_id = insert_detection(
             real_db_manager, timestamp=timestamp, confidence=0.85,
             extra={}, audio_source='source_0')
+        make_rows_legacy(real_db_manager)  # transition-era row: pattern-named files
 
         from core.utils import build_detection_filenames
 
@@ -992,3 +995,31 @@ class TestExportDetectionsDatabaseMethods:
         """Test fetch on empty database."""
         detections = real_db_manager.get_detections_for_export_batch(limit=100)
         assert len(detections) == 0
+
+
+class TestDeleteMaintenanceContract:
+    """While the index build holds the maintenance lease, deletes return an
+    explicit retryable maintenance response with zero side effects."""
+
+    def test_delete_returns_retryable_503_during_build(
+            self, api_client, real_db_manager, monkeypatch):
+        from core import maintenance_lease
+        detection_id = insert_detection(real_db_manager)
+        maintenance_lease.acquire(real_db_manager, 'index_build', 'builder', 120)
+        monkeypatch.setattr(
+            'core.routes.detections._MAINTENANCE_RETRY_SECONDS', 0)
+
+        with patch('core.auth.is_authenticated', return_value=True):
+            response = api_client.delete(f'/api/detections/{detection_id}')
+
+        assert response.status_code == 503
+        body = response.get_json()
+        assert body['retryable'] is True
+        # zero side effects: the row survives untouched
+        assert real_db_manager.get_detection_by_id(detection_id) is not None
+
+        # lease released -> the same call succeeds
+        maintenance_lease.release(real_db_manager, 'builder')
+        with patch('core.auth.is_authenticated', return_value=True):
+            response = api_client.delete(f'/api/detections/{detection_id}')
+        assert response.status_code == 200

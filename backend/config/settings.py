@@ -62,7 +62,12 @@ DEFAULT_SETTINGS = {
         "target_percent": 80,
         "keep_per_species": 60,
         "keep_recent_per_species": 16,
-        "check_interval_minutes": 30
+        "check_interval_minutes": 30,
+        # Scheduled cleanup policies (media-ownership design, pillar 1;
+        # 0 = disabled). Protections always win: every policy deletes only
+        # rows outside the keep_per_species / keep_recent_per_species sets.
+        "retention_days": 0,       # delete media older than N days, daily
+        "media_budget_gb": 0       # keep total media at or under N GB, daily
     },
     "updates": {
         "channel": "release"  # "release" = main branch, "latest" = staging branch

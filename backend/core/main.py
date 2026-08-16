@@ -34,6 +34,14 @@ from core.db import DatabaseManager
 from core.fd_diagnostics import log_fd_exhaustion_if_needed
 from core.internal_auth import INTERNAL_SECRET_HEADER, get_or_create_internal_secret
 from core.logging_config import get_logger, setup_logging
+from core.media_ownership import (
+    KIND_AUDIO,
+    KIND_SPECTROGRAM,
+    PART_SUFFIX,
+    DetectionMissingError,
+    publish_media_file,
+    with_media_suffix,
+)
 from core.notification_service import get_notification_service
 from core.runtime_config import get_runtime_settings, resolve_source_label
 from core.spectrogram import generate_spectrogram
@@ -498,7 +506,7 @@ def continuous_audio_recording(thread_logger):
         thread_logger.info("🔴 Stopping audio recording")
         _stop_all()
 
-def extract_detection_audio(detection: dict[str, Any], input_file_path: str) -> str:
+def extract_detection_audio(detection: dict[str, Any], input_file_path: str) -> tuple[str, int]:
     """Extract audio segment for detection and convert to MP3.
 
     The frontend's analysis-window bar mirrors this start/end math from the
@@ -509,7 +517,7 @@ def extract_detection_audio(detection: dict[str, Any], input_file_path: str) -> 
         input_file_path: Path to the source audio file
 
     Returns:
-        Path to the MP3 file
+        Tuple of (path to the MP3 file, size in bytes)
     """
     analysis_chunk_length = _get_analysis_chunk_length()
     step_seconds = detection.get('step_seconds', analysis_chunk_length)
@@ -522,12 +530,17 @@ def extract_detection_audio(detection: dict[str, Any], input_file_path: str) -> 
         EXTRACTED_AUDIO_DIR, detection['bird_song_file_name']).replace('.wav', '.mp3')
 
     normalize = get_runtime_settings().get('playback', {}).get('normalize', False)
-    extract_audio_segment(input_file_path, mp3_path, start_time, end_time,
-                          normalize=normalize)
-    return mp3_path
+    # Atomic publication: ffmpeg writes the temp name (explicit -f, since
+    # .part hides the container), then the final name is claimed without
+    # ever exposing a partial file under it.
+    part_path = mp3_path + PART_SUFFIX
+    extract_audio_segment(input_file_path, part_path, start_time, end_time,
+                          normalize=normalize, output_format='mp3')
+    size = publish_media_file(part_path, mp3_path)
+    return mp3_path, size
 
 
-def create_detection_spectrogram(detection: dict[str, Any], input_file_path: str) -> str:
+def create_detection_spectrogram(detection: dict[str, Any], input_file_path: str) -> tuple[str, int]:
     """Generate spectrogram image for detection.
 
     Args:
@@ -535,7 +548,7 @@ def create_detection_spectrogram(detection: dict[str, Any], input_file_path: str
         input_file_path: Path to the source audio file
 
     Returns:
-        Path to the spectrogram image
+        Tuple of (path to the spectrogram image, size in bytes)
     """
     analysis_chunk_length = _get_analysis_chunk_length()
     step_seconds = detection.get('step_seconds', analysis_chunk_length)
@@ -549,9 +562,13 @@ def create_detection_spectrogram(detection: dict[str, Any], input_file_path: str
     start_time = step_seconds * detection['chunk_index']
     end_time = start_time + analysis_chunk_length
 
-    generate_spectrogram(input_file_path, spectrogram_path, title,
+    # Atomic publication (Pillow's format comes from the explicit 'WEBP'
+    # arg, so the .part suffix is fine as a write target).
+    part_path = spectrogram_path + PART_SUFFIX
+    generate_spectrogram(input_file_path, part_path, title,
                         start_time=start_time, end_time=end_time)
-    return spectrogram_path
+    size = publish_media_file(part_path, spectrogram_path)
+    return spectrogram_path, size
 
 
 def save_detection_to_db(detection: dict[str, Any]) -> None:
@@ -621,7 +638,14 @@ def broadcast_detection(detection: dict[str, Any], thread_logger) -> None:
 
 
 def handle_detection(detection: dict[str, Any], input_file_path: str, thread_logger) -> None:
-    """Process a single bird detection: create audio, spectrogram, save to DB, broadcast.
+    """Process a single bird detection: save to DB, create media, broadcast.
+
+    Row-first creation (media-ownership design): the detection row is
+    committed before any file exists, media files are published under
+    id+nonce names, and ownership is recorded before anything downstream
+    sees the detection. A crash mid-way leaves either a file-less row
+    (normal) or a nonce-named orphan reconciliation can repair — never an
+    unrecognizable state.
 
     Args:
         detection: Detection dictionary from BirdNet analysis
@@ -634,16 +658,14 @@ def handle_detection(detection: dict[str, Any], input_file_path: str, thread_log
         'time': detection['timestamp'].split('T')[1].split('.')[0]
     })
 
-    extract_detection_audio(detection, input_file_path)
-    create_detection_spectrogram(detection, input_file_path)
-
     runtime_settings = get_runtime_settings()
     location = runtime_settings.get('location', {})
     lat = location.get('latitude', LAT)
     lon = location.get('longitude', LON)
     location_configured = location.get('configured', LOCATION_CONFIGURED)
 
-    # Attach weather data if location is configured (explicit None check for 0-coordinate support)
+    # Attach weather data if location is configured (explicit None check for
+    # 0-coordinate support). Before the save so it lands in the stored row.
     if location_configured and lat is not None and lon is not None:
         weather_service = get_weather_service(lat, lon)
         if weather_service:
@@ -662,6 +684,44 @@ def handle_detection(detection: dict[str, Any], input_file_path: str, thread_log
                     'temp': weather_data.get('temp')
                 })
 
+    thread_logger.debug("Saving detection to database", extra={
+        'species': detection['common_name'],
+        'scientific_name': detection['scientific_name']
+    })
+    save_detection_to_db(detection)
+
+    # The row's id + persisted nonce name the media files; every consumer
+    # from here on (broadcast, notifications, API reads) sees these names.
+    nonce = db_manager.get_media_nonce(detection['id'])
+    detection['bird_song_file_name'] = with_media_suffix(
+        detection['bird_song_file_name'].replace('.wav', '.mp3'),
+        detection['id'], nonce)
+    detection['spectrogram_file_name'] = with_media_suffix(
+        detection['spectrogram_file_name'], detection['id'], nonce)
+
+    audio_path, audio_bytes = extract_detection_audio(detection, input_file_path)
+    spectrogram_path, spectrogram_bytes = create_detection_spectrogram(
+        detection, input_file_path)
+
+    try:
+        db_manager.record_detection_media(detection['id'], [
+            {'filename': detection['bird_song_file_name'],
+             'kind': KIND_AUDIO, 'rank': 0, 'bytes': audio_bytes},
+            {'filename': detection['spectrogram_file_name'],
+             'kind': KIND_SPECTROGRAM, 'rank': 0, 'bytes': spectrogram_bytes},
+        ])
+    except DetectionMissingError:
+        # A delete won the race between the insert and here — leave no
+        # ownership residue and no unowned files behind.
+        thread_logger.info("Detection deleted mid-creation; removing media", extra={
+            'detection_id': detection['id']})
+        for path in (audio_path, spectrogram_path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        return
+
     # Upload to BirdWeather if configured
     birdweather_id = runtime_settings.get('birdweather', {}).get('id', BIRDWEATHER_ID)
     if birdweather_id:
@@ -673,11 +733,6 @@ def handle_detection(detection: dict[str, Any], input_file_path: str, thread_log
             bw_end_time = bw_start_time + analysis_chunk_length
             bw_service.publish(detection, input_file_path, bw_start_time, bw_end_time)
 
-    thread_logger.debug("Saving detection to database", extra={
-        'species': detection['common_name'],
-        'scientific_name': detection['scientific_name']
-    })
-    save_detection_to_db(detection)
     broadcast_detection(detection, thread_logger)
 
     # Send notification if configured (service reads config from file per-detection)
@@ -1065,6 +1120,14 @@ if __name__ == "__main__":
     lon = location.get('longitude', LON)
     if lat is not None and lon is not None:
         get_weather_service(lat, lon)
+
+    # One-time live-media index build BEFORE any local writer exists
+    # (media-ownership design: the build holds the writer lock for its
+    # whole duration; deferred under the maintenance lease if the API
+    # container's bulk importer is running). Function-local import:
+    # media_frontier imports storage_manager.
+    from core.media_frontier import ensure_live_media_index
+    ensure_live_media_index(db_manager)
 
     # Start the recording thread
     recording_logger = get_logger(f"{__name__}.recording")

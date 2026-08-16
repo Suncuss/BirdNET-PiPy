@@ -194,5 +194,30 @@ def maybe_run_health_cycle(db_manager, now=None):
         pass
     os.utime(marker, (now, now))
 
+    # Weekly corrective rewind (media-ownership design, pillar 2): a NULL
+    # row behind a caught-up frontier means an older release's importer
+    # wrote historical rows the monotone cursor can't see — pull the
+    # cursor back so the ordinary walk re-closes the gap. Function-local
+    # import: media_frontier imports storage_manager, which imports here.
+    from core.media_frontier import corrective_rewind
+    corrective_rewind(db_manager)
+
+    # Weekly media reconciliation: repair disk<->DB ownership drift in
+    # both directions (recognizable states repaired, the rest reported).
+    from core.media_reconciliation import run_reconciliation
+    try:
+        run_reconciliation(db_manager)
+    except Exception:
+        logger.error("Media reconciliation failed", exc_info=True)
+
+    # Weekly rollup audit: complete-bucket comparison in both directions
+    # (a count-only backstop can't see cross-day net-zero drift from
+    # downgraded writers); mismatched days re-enter the dirty queue.
+    from core.db_rollups import audit_rollups
+    try:
+        audit_rollups(db_manager)
+    except Exception:
+        logger.error("Rollup audit failed", exc_info=True)
+
     if backup_due:
         create_backup(db_manager, now=now)
