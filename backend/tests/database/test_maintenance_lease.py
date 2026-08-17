@@ -74,11 +74,11 @@ class TestCoordinatedIndexBuild:
     def test_builds_when_absent_and_releases_lease(self, test_db_manager):
         from core import media_frontier as mf
         self._drop_index(test_db_manager)
-        assert not mf.live_media_index_exists(test_db_manager)
+        assert not mf.live_media_indexes_exist(test_db_manager)
 
         assert mf.ensure_live_media_index(test_db_manager) is True
 
-        assert mf.live_media_index_exists(test_db_manager)
+        assert mf.live_media_indexes_exist(test_db_manager)
         # lease released: an importer can acquire immediately
         assert lease.acquire(test_db_manager, 'db_import', 'imp', 60)
 
@@ -93,7 +93,7 @@ class TestCoordinatedIndexBuild:
         lease.acquire(test_db_manager, 'db_import', 'importer', 120)
 
         assert mf.ensure_live_media_index(test_db_manager) is False
-        assert not mf.live_media_index_exists(test_db_manager)
+        assert not mf.live_media_indexes_exist(test_db_manager)
         # cleanup stays gated; a later start (post-import) builds it
         lease.release(test_db_manager, 'importer')
         assert mf.ensure_live_media_index(test_db_manager) is True
@@ -133,7 +133,7 @@ class TestCoordinatedIndexBuild:
             conn.execute("DELETE FROM meta WHERE key = 'maintenance_lease'")
             conn.commit()
         assert mf.ensure_live_media_index(test_db_manager) is True
-        assert mf.live_media_index_exists(test_db_manager)
+        assert mf.live_media_indexes_exist(test_db_manager)
 
 
 class TestSlowedBuildContention:

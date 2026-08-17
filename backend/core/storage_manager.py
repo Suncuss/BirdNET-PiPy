@@ -302,7 +302,7 @@ def run_scheduled_policies(db_manager, today=None):
     only on frontier-resolved rows (their previews say so until the
     frontier completes). Returns per-policy results, or None when nothing
     was due or enabled."""
-    from core.media_frontier import live_media_index_exists
+    from core.media_frontier import cleanup_index_exists
     from core.timezone_service import local_now
 
     config = _get_storage_config()
@@ -310,7 +310,7 @@ def run_scheduled_policies(db_manager, today=None):
     budget_gb = config.get('media_budget_gb', 0) or 0
     if retention_days <= 0 and budget_gb <= 0:
         return None
-    if not live_media_index_exists(db_manager):
+    if not cleanup_index_exists(db_manager):
         return None
 
     today = today if today is not None else local_now().strftime('%Y-%m-%d')
@@ -438,8 +438,8 @@ def cleanup_storage(db_manager, target_percent=None, keep_per_species=None,
         target_achievable, target_reached, frontier_complete
     """
     from core.media_frontier import (
+        cleanup_index_exists,
         frontier_complete,
-        live_media_index_exists,
     )
 
     config = _get_storage_config()
@@ -469,7 +469,7 @@ def cleanup_storage(db_manager, target_percent=None, keep_per_species=None,
         result['target_reached'] = True
         return result
 
-    if not live_media_index_exists(db_manager):
+    if not cleanup_index_exists(db_manager):
         # The one-time coordinated build hasn't happened yet (deferred
         # behind a bulk import, or first boot after upgrade) — cleanup
         # stays gated rather than falling back to a full-table walk.

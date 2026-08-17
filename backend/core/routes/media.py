@@ -39,6 +39,7 @@ from core.detection_presenter import (
 )
 from core.logging_config import get_logger, log_api_request
 from core.media_access import verify_media_signature
+from core.media_frontier import frontier_complete
 from core.og_card import (
     OG_CARD_IMAGE_PATH,
     format_og_description,
@@ -128,6 +129,25 @@ RECORDINGS_MAX_LIMIT = 500
 RECORDINGS_PUBLIC_MAX = 30
 
 
+def _fetch_recordings_page(db_manager, common, sort, limit, sci, since,
+                           fetch_limit):
+    """Gate + query as ONE db-executor job — a second _run_db would take a
+    second FIFO turn behind whatever heavy job is queued. This is also the
+    single place the require_media pairing is made: passing True while the
+    frontier is mid-backfill would silently hide every unresolved row.
+
+    Known corner: frontier_complete cannot see historical NULL rows a
+    DOWNGRADED importer inserted behind its cursor, so those stay hidden
+    from the exact branch until the weekly corrective rewind — the designed
+    healer for all downgrade-era writes — re-opens the walk.
+    Returns (exact, rows)."""
+    exact = frontier_complete(db_manager)
+    rows = db_manager.get_bird_recordings(
+        common, sort, limit if exact else fetch_limit,
+        scientific_name=sci, since=since, require_media=exact)
+    return exact, rows
+
+
 @api.route('/api/bird/<species_name>/recordings', methods=['GET'])
 @require_scope('public:read')
 @log_api_request
@@ -165,20 +185,20 @@ def get_bird_recordings(species_name):
     settings = load_user_settings()
     sci, common = _resolve_species_filter(species_name)
 
-    # Skip recordings whose audio/spectrogram files are gone from disk (storage
-    # cleanup removes the files but keeps the row; spectrogram generation can
-    # also fail independently). Over-fetch a small constant beyond the requested
-    # page so dropping those doesn't leave the grid short — the displayed records
-    # normally sit inside cleanup's protected window, so few (if any) are dropped.
-    fetch_limit = limit + RECORDINGS_MEDIA_OVERFETCH
-    fetched = _run_db(
-        infra.db_manager.get_bird_recordings,
-        common,
-        sort,
-        fetch_limit,
-        scientific_name=sci,
-        since=since,
-    )
+    exact, fetched = _run_db(
+        _fetch_recordings_page, infra.db_manager, common, sort, limit,
+        sci, since, limit + RECORDINGS_MEDIA_OVERFETCH)
+    # Ownership decides candidacy — on the exact branch the query fills the
+    # page with playable rows and ranks 'best' over what still exists. The
+    # stat filter on the final page is drift insurance on top: a crash
+    # between unlink and ownership removal, an out-of-band deletion, or a
+    # restored backup can leave stale ownership rows until the weekly audit
+    # heals them, and a dead player must never render meanwhile. On the
+    # exact branch a dropped row shortens the page; only drift does that.
+    # Once the fleet is past the backfill window (target: two releases
+    # after 0.8.7), the transitional half — RECORDINGS_MEDIA_OVERFETCH and
+    # the require_media=False arm in _fetch_recordings_page — can be
+    # deleted; this filter stays.
     present = [
         r for r in fetched
         if recording_has_media(r, EXTRACTED_AUDIO_DIR, SPECTROGRAM_DIR)
@@ -192,7 +212,7 @@ def get_bird_recordings(species_name):
         'resolved_scientific': sci,
         'sort': sort,
         'limit': limit,
-        'fetched_count': len(fetched),
+        'media_exact': exact,
         'records_count': len(recordings)
     })
     return jsonify(recordings)

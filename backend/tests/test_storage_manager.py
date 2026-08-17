@@ -514,6 +514,27 @@ class TestCleanupStorage:
         assert result['files_deleted'] == 0
         assert not result['target_reached']
 
+    def test_not_gated_by_other_features_indexes(
+            self, test_db_manager, monkeypatch, tmp_path):
+        """Cleanup gates on ITS index only: the recordings feature's
+        confidence index being absent (build deferred behind an import)
+        must not disable the disk-full safety valve."""
+        self._media_env(monkeypatch, tmp_path)
+        with test_db_manager.get_db_connection() as conn:
+            conn.execute(
+                "DROP INDEX IF EXISTS idx_detections_live_media_confidence")
+            conn.commit()
+        with patch('core.storage_manager.get_disk_usage',
+                   return_value=mock_disk_usage_needing(10 * 1024**3)):
+            from core.storage_manager import cleanup_storage
+            result = cleanup_storage(test_db_manager, target_percent=80)
+        # Nothing to delete in the empty DB, but the walk RAN: the gate
+        # did not trip (a gated run reports target_reached False AND
+        # target_achievable True with the warning; an ungated empty walk
+        # reports target_achievable False — it looked and found nothing).
+        assert result['files_deleted'] == 0
+        assert not result['target_achievable']
+
     def test_deletes_oldest_unprotected_until_target(
             self, test_db_manager, monkeypatch, tmp_path):
         mo, audio_dir, _ = self._media_env(monkeypatch, tmp_path)

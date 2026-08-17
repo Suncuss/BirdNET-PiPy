@@ -102,6 +102,7 @@ class TestMigration4:
     def test_fresh_database_gets_live_media_index(self, temp_db_path):
         DatabaseManager(db_path=temp_db_path)
         assert 'idx_detections_live_media' in index_names(temp_db_path)
+        assert 'idx_detections_live_media_confidence' in index_names(temp_db_path)
         assert 'ux_detection_media_canonical' in index_names(temp_db_path)
 
     def test_migration_is_idempotent(self, temp_db_path):

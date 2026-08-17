@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Improved the bird details Recordings section: "Best" and "Most Recent" now rank only clips whose files still exist, so pages fill with genuinely playable recordings instead of coming up short (or empty) when a species' top detections have aged out of storage
 - Improved dashboard summary and trends performance on large databases dramatically: the all-time summary dropped from ~10 seconds to ~26 milliseconds on a 1.1M-detection station, served from new per-day aggregate tables that build themselves in the background after upgrading
 - Improved automatic storage cleanup for small devices (Pi Zero 2W class): it no longer holds an in-memory listing of every media file (~95MB on a full card) or re-scans the whole detection table when the disk is full of non-BirdNET data, and its space accounting now uses real recorded file sizes instead of a per-file average
 - Added optional cleanup policies alongside the existing disk-threshold cleanup: keep only the last N days of recordings, or cap total media at N GB (both off by default), with a preview endpoint that reports exactly what a policy would delete before enabling it

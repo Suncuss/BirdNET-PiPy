@@ -4,6 +4,8 @@ Tests for fundamental CRUD operations and simple queries.
 """
 from datetime import datetime, timedelta
 
+from tests.database.conftest import insert_legacy
+
 
 class TestDatabaseBasicOperations:
     """Tests for basic database operations."""
@@ -250,6 +252,79 @@ class TestDatabaseBasicOperations:
         # Check file names
         assert 'audio_filename' in recordings[0]
         assert 'spectrogram_filename' in recordings[0]
+
+    def test_get_bird_recordings_require_media(self, test_db_manager):
+        """require_media=True returns only rows with BOTH kinds recorded in
+        detection_media — resolved-empty, audio-only, and unresolved legacy
+        rows are all excluded, regardless of confidence rank."""
+        species = 'Wood Thrush'
+
+        def insert(conf, minute):
+            return test_db_manager.insert_detection({
+                'timestamp': f'2024-01-15T10:{minute:02d}:00',
+                'group_timestamp': f'2024-01-15T10:{minute:02d}:00',
+                'scientific_name': 'Hylocichla mustelina',
+                'common_name': species,
+                'confidence': conf,
+                'latitude': 40.7128,
+                'longitude': -74.0060,
+                'cutoff': 0.5,
+                'sensitivity': 0.75,
+                'overlap': 0.25
+            })
+
+        full_id = insert(0.90, 30)
+        test_db_manager.record_detection_media(full_id, [
+            {'filename': f'full_{full_id}.mp3', 'kind': 'audio',
+             'rank': 0, 'bytes': 10},
+            {'filename': f'full_{full_id}.webp', 'kind': 'spectrogram',
+             'rank': 0, 'bytes': 5},
+        ])
+        insert(0.99, 31)  # resolved, owns nothing (media_bytes = 0)
+        audio_only_id = insert(0.95, 32)
+        test_db_manager.record_detection_media(audio_only_id, [
+            {'filename': f'ao_{audio_only_id}.mp3', 'kind': 'audio',
+             'rank': 0, 'bytes': 10},
+        ])
+        insert_legacy(test_db_manager, '2024-01-15T10:33:00', common=species,
+                      scientific='Hylocichla mustelina', confidence=0.97)
+
+        playable = test_db_manager.get_bird_recordings(
+            species, sort='best', limit=10, require_media=True)
+        assert [r['id'] for r in playable] == [full_id]
+        assert playable[0]['audio_filename'] == f'full_{full_id}.mp3'
+
+        # Default (require_media=False) stays the blind legacy query.
+        blind = test_db_manager.get_bird_recordings(
+            species, sort='best', limit=10)
+        assert len(blind) == 4
+        assert blind[0]['confidence'] == 0.99
+
+    def test_require_media_query_rides_the_partial_indexes(
+            self, test_db_manager):
+        """Plan guard for the exact recordings shape: the species+confidence
+        scan must use idx_detections_live_media_confidence with NO sort step
+        (O(page) is the entire reason the index is built on every station),
+        and each EXISTS probe must answer from ux_detection_media_canonical."""
+        import core.db as db_module
+        from core.media_ownership import KIND_AUDIO, KIND_SPECTROGRAM
+        query = f"""
+        EXPLAIN QUERY PLAN
+        SELECT id FROM detections
+        WHERE scientific_name IN (?)
+        {db_module.PLAYABLE_MEDIA_CLAUSE}
+        ORDER BY confidence DESC
+        LIMIT 16
+        """
+        with test_db_manager.get_db_connection() as conn:
+            plan = [row[3] for row in conn.execute(
+                query, ('Turdus migratorius', KIND_AUDIO, KIND_SPECTROGRAM,
+                        )).fetchall()]
+        assert any('idx_detections_live_media_confidence' in step
+                   for step in plan), plan
+        assert any('ux_detection_media_canonical' in step
+                   for step in plan), plan
+        assert not any('TEMP B-TREE' in step for step in plan), plan
 
     def test_get_bird_recordings_sort_recent(self, test_db_manager):
         """Test get_bird_recordings sorted by timestamp (recent)."""

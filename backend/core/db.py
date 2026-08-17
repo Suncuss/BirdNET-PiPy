@@ -176,6 +176,24 @@ def _species_where(column, values):
     return f"{column} IN ({placeholders})", list(values)
 
 
+# The definition of a "playable" detection row: media resolved to at least
+# one file AND a canonical (rank 0) audio and spectrogram recorded — rank 0
+# is exactly the row whose filename the page presents (_canonical_media_map
+# reads rank 0), and it lets each EXISTS probe answer index-only from
+# ux_detection_media_canonical. The species+confidence scan itself rides
+# idx_detections_live_media_confidence (db_schema.LIVE_MEDIA_INDEXES).
+# Two bound params: KIND_AUDIO, KIND_SPECTROGRAM.
+PLAYABLE_MEDIA_CLAUSE = """
+    AND media_bytes > 0
+    AND EXISTS (SELECT 1 FROM detection_media m
+                WHERE m.detection_id = detections.id
+                AND m.kind = ? AND m.rank = 0)
+    AND EXISTS (SELECT 1 FROM detection_media m
+                WHERE m.detection_id = detections.id
+                AND m.kind = ? AND m.rank = 0)
+"""
+
+
 def _summary_stats_bucket(total, unique, hour, most_key, rare_key, names):
     """Build the 7-key summary-stats dict shared by the per-period and
     all-periods queries. ``names`` maps a species key to its resolved
@@ -1209,7 +1227,8 @@ class DatabaseManager:
         }
 
     def get_bird_recordings(self, species_name=None, sort='recent', limit=None,
-                             *, scientific_name=None, since=None):
+                             *, scientific_name=None, since=None,
+                             require_media=False):
         """
         Get recordings for a species with sorting options.
 
@@ -1225,6 +1244,11 @@ class DatabaseManager:
             since: Optional ISO timestamp lower bound (timestamp >= since), used
                 to restrict anonymous callers to a recent window so the public
                 view can't surface old all-time clips (incl. via 'best' sort).
+            require_media: Only rows whose audio AND spectrogram files are
+                recorded in detection_media (playable-page-exact). Callers may
+                pass True only once the resolution frontier is complete —
+                unresolved (NULL) rows can't be judged in SQL and would be
+                wrongly hidden.
 
         Returns:
             List of recording dicts with id, timestamp, common_name, confidence,
@@ -1242,12 +1266,16 @@ class DatabaseManager:
         species_clause, species_params = _species_where(filter_col, filter_values)
         window_clause = "AND timestamp >= ?" if since else ""
         order_by = "confidence DESC" if sort == 'best' else "timestamp DESC"
+        # The "both audio AND spectrogram" page rule (spectrogram
+        # generation can fail independently) — see PLAYABLE_MEDIA_CLAUSE.
+        media_clause = PLAYABLE_MEDIA_CLAUSE if require_media else ""
         query = f"""
         SELECT id, timestamp, common_name, confidence, extra, audio_source,
                media_bytes
         FROM detections
         WHERE {species_clause}
         {window_clause}
+        {media_clause}
         ORDER BY {order_by}
         LIMIT ?
         """
@@ -1257,6 +1285,9 @@ class DatabaseManager:
         params = list(species_params)
         if since:
             params.append(since)
+        if require_media:
+            params.extend((media_ownership.KIND_AUDIO,
+                           media_ownership.KIND_SPECTROGRAM))
         params.append(limit_param)
 
         with self.get_db_connection() as conn:

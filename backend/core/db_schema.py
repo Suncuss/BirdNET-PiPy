@@ -110,16 +110,37 @@ CREATE TABLE IF NOT EXISTS hour_day (
 ) WITHOUT ROWID;
 '''
 
-# Oldest-first walk over only the rows that still own files. NOT part of
-# DATABASE_SCHEMA: ensure_schema executes that script against EVERY database
-# before migrations run, and a pre-migration-4 database has no media_bytes
-# column (the statement would fail) while a migrated one would pay the O(rows)
-# predicate scan during startup. Fresh databases create it here (empty table,
-# instant); existing databases get it from the main container's one-time
-# coordinated build before its processing threads start.
-LIVE_MEDIA_INDEX_SQL = (
-    "CREATE INDEX IF NOT EXISTS idx_detections_live_media "
-    "ON detections(timestamp) WHERE media_bytes > 0"
+# Partial indexes over only the rows that still own files — the ONE list
+# every consumer derives from (fresh-DB creation below, the coordinated
+# build and existence gate in media_frontier). NOT part of DATABASE_SCHEMA:
+# ensure_schema executes that script against EVERY database before
+# migrations run, and a pre-migration-4 database has no media_bytes column
+# (the statements would fail) while a migrated one would pay the O(rows)
+# predicate scan during startup. Fresh databases create them at creation
+# (empty table, instant); existing ones get the one-time coordinated build
+# before the main container's processing threads start — idempotent per
+# index, so a release that adds an entry here re-triggers the build for
+# just the missing one.
+#
+#   idx_detections_live_media — cleanup's oldest-first candidate walk.
+#   idx_detections_live_media_confidence — the bird-details 'best
+#   available recordings' query (PLAYABLE_MEDIA_CLAUSE in core.db):
+#   O(page) when matched rows normally own both kinds; worst case
+#   O(matching live-media rows) when one-kind rows dominate (mid-import,
+#   spectrogram loss) — unlike the pre-feature query, which always
+#   stopped after limit+overfetch index entries. A tighter bound would
+#   require denormalized playable state, not merely another partial
+#   index. Deliberately coexists with the full
+#   idx_detections_scientific_confidence: cleanup's keep-per-species
+#   protections rank over ALL rows, file-less included.
+LIVE_MEDIA_INDEXES = (
+    ('idx_detections_live_media',
+     "CREATE INDEX IF NOT EXISTS idx_detections_live_media "
+     "ON detections(timestamp) WHERE media_bytes > 0"),
+    ('idx_detections_live_media_confidence',
+     "CREATE INDEX IF NOT EXISTS idx_detections_live_media_confidence "
+     "ON detections(scientific_name, confidence DESC) "
+     "WHERE media_bytes > 0"),
 )
 
 
@@ -157,8 +178,8 @@ def _add_media_ownership_columns(cursor):
     # version stamp behind) upgrade cleanly. The detection_media/meta/
     # rollup_dirty_day tables ride DATABASE_SCHEMA's IF NOT EXISTS on every
     # startup; only the detections columns need a versioned step. The
-    # partial live-media index is deliberately NOT created here — see
-    # LIVE_MEDIA_INDEX_SQL.
+    # partial live-media indexes are deliberately NOT created here — see
+    # LIVE_MEDIA_INDEXES.
     existing = _existing_columns(cursor)
     if 'media_bytes' not in existing:
         cursor.execute("ALTER TABLE detections ADD COLUMN media_bytes INTEGER")
@@ -211,9 +232,10 @@ def ensure_schema(cursor):
     cursor.executescript(DATABASE_SCHEMA)
 
     if is_fresh:
-        # Empty table, so the partial-index predicate scan is instant here;
-        # existing databases build it later, coordinated (see LIVE_MEDIA_INDEX_SQL).
-        cursor.execute(LIVE_MEDIA_INDEX_SQL)
+        # Empty table, so the partial-index predicate scans are instant here;
+        # existing databases build them later, coordinated (see LIVE_MEDIA_INDEXES).
+        for _name, index_sql in LIVE_MEDIA_INDEXES:
+            cursor.execute(index_sql)
         cursor.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         return
 

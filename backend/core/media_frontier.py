@@ -21,7 +21,7 @@ import os
 import time
 
 from core import maintenance_lease
-from core.db_schema import LIVE_MEDIA_INDEX_SQL
+from core.db_schema import LIVE_MEDIA_INDEXES
 from core.logging_config import get_logger
 from core.media_ownership import KIND_AUDIO, KIND_DIRS, KIND_SPECTROGRAM
 from core.storage_manager import _detection_filename_candidates
@@ -186,12 +186,33 @@ def advance_frontier(db_manager, batch_rows=BATCH_ROWS):
     return result
 
 
-def live_media_index_exists(db_manager):
+def _indexes_exist(db_manager, names):
     with db_manager.get_db_connection() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='index' "
-            "AND name='idx_detections_live_media'").fetchone()
-        return row is not None
+        placeholders = ','.join('?' * len(names))
+        count = conn.execute(
+            f"SELECT COUNT(*) FROM sqlite_master WHERE type='index' "
+            f"AND name IN ({placeholders})", names).fetchone()[0]
+    return count == len(names)
+
+
+def live_media_indexes_exist(db_manager):
+    """True only when every index in LIVE_MEDIA_INDEXES exists — a release
+    that adds an entry re-triggers the coordinated build, which is
+    idempotent per index (IF NOT EXISTS). This is the BUILD trigger; it
+    must not gate any feature that needs only its own index (see
+    cleanup_index_exists)."""
+    return _indexes_exist(db_manager,
+                          [name for name, _sql in LIVE_MEDIA_INDEXES])
+
+
+def cleanup_index_exists(db_manager):
+    """Whether cleanup's own index — the timestamp-ordered live-media
+    walk — exists. Cleanup is the disk-full safety valve, so it gates on
+    exactly this index and never on the whole LIVE_MEDIA_INDEXES set: a
+    deferred build (a bulk import holding the maintenance lease) would
+    otherwise disable cleanup precisely while that import is consuming
+    disk."""
+    return _indexes_exist(db_manager, ['idx_detections_live_media'])
 
 
 def ensure_live_media_index(db_manager):
@@ -205,7 +226,7 @@ def ensure_live_media_index(db_manager):
     next start. Fresh databases get the index at creation and return here
     immediately. Returns True when the index exists on exit.
     """
-    if live_media_index_exists(db_manager):
+    if live_media_indexes_exist(db_manager):
         return True
     owner = maintenance_lease.mint_owner_token()
     if not maintenance_lease.acquire(
@@ -221,9 +242,10 @@ def ensure_live_media_index(db_manager):
                     "the DB writer lock for the duration)")
         started = time.monotonic()
         with db_manager.get_db_connection() as conn:
-            conn.execute(LIVE_MEDIA_INDEX_SQL)
+            for _name, index_sql in LIVE_MEDIA_INDEXES:
+                conn.execute(index_sql)
             conn.commit()
-        logger.info("Live-media partial index built", extra={
+        logger.info("Live-media partial indexes built", extra={
             'seconds': round(time.monotonic() - started, 2)})
         return True
     finally:
