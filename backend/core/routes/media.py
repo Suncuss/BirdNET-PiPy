@@ -39,7 +39,7 @@ from core.detection_presenter import (
 )
 from core.logging_config import get_logger, log_api_request
 from core.media_access import verify_media_signature
-from core.media_frontier import frontier_complete
+from core.media_frontier import resolution_complete
 from core.og_card import (
     OG_CARD_IMAGE_PATH,
     format_og_description,
@@ -135,13 +135,17 @@ def _fetch_recordings_page(db_manager, common, sort, limit, sci, since,
     second FIFO turn behind whatever heavy job is queued. This is also the
     single place the require_media pairing is made: passing True while the
     frontier is mid-backfill would silently hide every unresolved row.
+    The gate is resolution_complete — the durable "every historical row
+    resolved" latch — NOT frontier_complete, whose cursor-at-edge state
+    flips False whenever a new (born-resolved) detection arrives between
+    idle slices.
 
-    Known corner: frontier_complete cannot see historical NULL rows a
-    DOWNGRADED importer inserted behind its cursor, so those stay hidden
-    from the exact branch until the weekly corrective rewind — the designed
-    healer for all downgrade-era writes — re-opens the walk.
+    Known corner: the latch cannot see historical NULL rows a DOWNGRADED
+    importer inserted behind the cursor, so those stay hidden from the
+    exact branch until the weekly corrective rewind — the designed healer
+    for all downgrade-era writes — clears it.
     Returns (exact, rows)."""
-    exact = frontier_complete(db_manager)
+    exact = resolution_complete(db_manager)
     rows = db_manager.get_bird_recordings(
         common, sort, limit if exact else fetch_limit,
         scientific_name=sci, since=since, require_media=exact)

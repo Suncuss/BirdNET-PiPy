@@ -19,7 +19,7 @@ def set_frontier(monkeypatch):
     target."""
     def _set(complete):
         import core.routes.media as media_routes
-        monkeypatch.setattr(media_routes, 'frontier_complete',
+        monkeypatch.setattr(media_routes, 'resolution_complete',
                             lambda db: complete)
     return _set
 

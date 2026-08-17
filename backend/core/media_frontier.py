@@ -30,6 +30,7 @@ from core.utils import get_legacy_filename
 logger = get_logger(__name__)
 
 _CURSOR_KEY = 'media_frontier_cursor'
+_BACKFILL_DONE_KEY = 'media_backfill_complete'
 
 # Rows per transaction: bounds memory and the write-lock hold time.
 BATCH_ROWS = 500
@@ -55,10 +56,35 @@ def _store_cursor(cursor, position):
         (_CURSOR_KEY, json.dumps([position[0], None, position[1]])))
 
 
+def _set_backfill_done(cursor):
+    cursor.execute(
+        "INSERT INTO meta (key, value) VALUES (?, '1') "
+        "ON CONFLICT(key) DO UPDATE SET value = '1'", (_BACKFILL_DONE_KEY,))
+
+
+def resolution_complete(db_manager):
+    """Whether every historical row has been resolved — the recordings
+    exact-branch gate. DISTINCT from frontier_complete (cursor at edge):
+    new detections are born resolved, so this latch stays True while the
+    live edge advances past the cursor between idle slices — the state in
+    which frontier_complete is False almost all the time on an active
+    station. Set in the same transaction that first catches the edge;
+    cleared only by the corrective rewind discovering downgrade-era NULL
+    rows behind the cursor (until that weekly probe such rows stay hidden
+    from exact consumers — the accepted corner documented at the gate)."""
+    with db_manager.get_db_connection() as conn:
+        row = conn.execute("SELECT value FROM meta WHERE key = ?",
+                           (_BACKFILL_DONE_KEY,)).fetchone()
+    return bool(row and row[0] == '1')
+
+
 def frontier_complete(db_manager):
-    """Whether every row at the live edge is behind the cursor. Computed
-    fresh each call — never stored, so downgrade-era writes re-open it
-    naturally."""
+    """Whether every row at the live edge is behind the cursor — the
+    WALK-scheduling state (idle slices, pressure-driven advance,
+    accounting conservatism). For "may I trust media_bytes on every row"
+    use resolution_complete: this predicate flips False whenever a new
+    (born-resolved) detection moves the edge. Computed fresh each call —
+    never stored, so downgrade-era writes re-open it naturally."""
     with db_manager.get_db_connection() as conn:
         cur = conn.cursor()
         cur.execute("SELECT timestamp, id FROM detections "
@@ -150,6 +176,8 @@ def advance_frontier(db_manager, batch_rows=BATCH_ROWS):
 
         if not batch:
             result['complete'] = True
+            _set_backfill_done(cur)
+            conn.commit()
             return result
 
         dirty_days = set()
@@ -180,9 +208,12 @@ def advance_frontier(db_manager, batch_rows=BATCH_ROWS):
 
         last = batch[-1]
         _store_cursor(cur, (last['timestamp'], last['id']))
+        complete = len(batch) < batch_rows
+        if complete:
+            _set_backfill_done(cur)
         conn.commit()
 
-    result['complete'] = len(batch) < batch_rows
+    result['complete'] = complete
     return result
 
 
@@ -270,6 +301,7 @@ def corrective_rewind(db_manager):
         if min_null is None or (min_null, -1) >= position:
             return False
         _store_cursor(cur, (min_null, -1))
+        cur.execute("DELETE FROM meta WHERE key = ?", (_BACKFILL_DONE_KEY,))
         conn.commit()
     logger.info("Frontier rewound behind unresolved rows", extra={
         'rewound_to': min_null, 'previous': position[0]})

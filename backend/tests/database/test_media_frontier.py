@@ -129,6 +129,44 @@ class TestAdvanceFrontier:
         assert mf.frontier_complete(db)
 
 
+class TestResolutionLatch:
+
+    def test_latch_survives_new_detections(self, frontier_env,
+                                           sample_detection):
+        """THE production bug pin: once backfill completes, a new
+        (born-resolved) detection moves the live edge past the cursor —
+        frontier_complete flips False until the next idle slice, but
+        resolution_complete must stay True or the recordings exact branch
+        turns off on every active station."""
+        mf, db, _, _ = frontier_env
+        insert_legacy(db, '2024-01-10T08:00:00')
+        while not mf.advance_frontier(db)['complete']:
+            pass
+        assert mf.resolution_complete(db)
+
+        db.insert_detection(sample_detection)  # edge moves, row resolved
+        assert not mf.frontier_complete(db)
+        assert mf.resolution_complete(db)
+
+    def test_rewind_clears_and_readvance_restores(self, frontier_env):
+        """Downgrade-era NULL rows behind the cursor: the weekly rewind
+        clears the latch (exact consumers fall back) and the ordinary walk
+        re-closes the gap and restores it."""
+        mf, db, _, _ = frontier_env
+        insert_legacy(db, '2024-02-10T08:00:00')
+        while not mf.advance_frontier(db)['complete']:
+            pass
+        assert mf.resolution_complete(db)
+
+        insert_legacy(db, '2024-01-05T07:00:00')  # behind the cursor
+        assert mf.corrective_rewind(db)
+        assert not mf.resolution_complete(db)
+
+        while not mf.advance_frontier(db)['complete']:
+            pass
+        assert mf.resolution_complete(db)
+
+
 class TestCursorRollbackCompat:
 
     def test_persisted_cursor_stays_three_element(self, frontier_env):
