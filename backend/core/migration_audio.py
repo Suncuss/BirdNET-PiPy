@@ -11,8 +11,10 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 
 from config.settings import BASE_DIR, EXTRACTED_AUDIO_DIR, SPECTROGRAM_DIR
+from core import maintenance_lease, media_ownership
 from core.bird_name_utils import get_spectrogram_common_name_from_english
 from core.logging_config import get_logger
 from core.spectrogram import generate_spectrogram
@@ -408,6 +410,18 @@ def check_disk_space(required_bytes):
     }
 
 
+def _publish_or_adopt(part_path, final_path):
+    """Publish atomically; on EEXIST the file can only be OUR OWN prior
+    run's copy (the name embeds this row's id+nonce) — a crash between
+    publish and record — so adopt it instead of failing.
+    Returns the final file's size."""
+    try:
+        return media_ownership.publish_media_file(part_path, final_path)
+    except media_ownership.MediaCollisionError:
+        os.unlink(part_path)
+        return os.path.getsize(final_path)
+
+
 def import_audio_files(db_manager, matched_files, import_id, yield_control=None):
     """Import audio files, renaming to BirdNET-PiPy format.
 
@@ -440,12 +454,31 @@ def import_audio_files(db_manager, matched_files, import_id, yield_control=None)
             'errors': result['errors']
         })
 
+    lease_owner = maintenance_lease.mint_owner_token()
     try:
+        # Sustained-writer coordination: wait out a live index build (its
+        # own TTL bounds the wait), then hold the lease with per-file
+        # renewal so a fixed timeout can never expire a long audio import.
+        maintenance_lease.acquire_with_wait(
+            db_manager, 'audio_import', lease_owner,
+            maintenance_lease.IMPORT_TTL_SECONDS,
+            on_wait=lambda: update_progress('waiting_maintenance'),
+            yield_control=yield_control)
+
         update_progress('running')
 
+        last_renewal = time.monotonic()
         for detection_id, source_path, _size_bytes in matched_files:
             if yield_control:
                 yield_control()
+            # Renewal is a cross-process write transaction; per-file it
+            # would contend with the live pipeline ~150K times per big
+            # import. Time-gated at a quarter of the TTL, lease-loss
+            # semantics unchanged.
+            if time.monotonic() - last_renewal > maintenance_lease.IMPORT_TTL_SECONDS / 4:
+                maintenance_lease.renew(db_manager, lease_owner,
+                                        maintenance_lease.IMPORT_TTL_SECONDS)
+                last_renewal = time.monotonic()
             try:
                 # Get detection record
                 detection = db_manager.get_detection_by_id(detection_id)
@@ -455,29 +488,54 @@ def import_audio_files(db_manager, matched_files, import_id, yield_control=None)
                     update_progress()
                     continue
 
-                # Generate new filename (mp3 only - scan only includes mp3 files)
+                # Already owns audio (re-run of a completed import)
+                owned = db_manager.get_detection_media(detection_id)
+                if any(f['kind'] == media_ownership.KIND_AUDIO for f in owned):
+                    result['skipped'] += 1
+                    update_progress()
+                    continue
+
+                # Rows created by older code have no nonce yet; initialize
+                # it before any file exists under the derived name.
+                nonce = db_manager.get_or_create_media_nonce(detection_id)
+
+                # Generate new filename (mp3 only - scan only includes mp3
+                # files), bound to this row by its id+nonce suffix.
                 filenames = build_detection_filenames(
                     detection['common_name'],
                     detection['confidence'],
                     detection['timestamp'],
                     audio_extension='mp3'
                 )
+                audio_name = media_ownership.with_media_suffix(
+                    filenames['audio_filename'], detection_id, nonce)
+                dest_path = os.path.join(EXTRACTED_AUDIO_DIR, audio_name)
 
-                dest_path = os.path.join(EXTRACTED_AUDIO_DIR, filenames['audio_filename'])
+                # Atomic publication: copy to the temp name, claim the final
+                # name without replacement. EEXIST can only be our own file
+                # (the name embeds this row's nonce) — a prior run's crash
+                # between publish and record; recording it completes that run.
+                part_path = dest_path + media_ownership.PART_SUFFIX
+                shutil.copy2(source_path, part_path)
+                size = _publish_or_adopt(part_path, dest_path)
 
-                # Skip if file already exists at destination
-                if os.path.exists(dest_path):
-                    result['skipped'] += 1
+                try:
+                    db_manager.record_detection_media(detection_id, [
+                        {'filename': audio_name,
+                         'kind': media_ownership.KIND_AUDIO,
+                         'rank': 0, 'bytes': size}])
+                except media_ownership.DetectionMissingError:
+                    # A delete won the race — leave nothing behind.
+                    os.remove(dest_path)
+                    result['errors'] += 1
                     update_progress()
                     continue
 
-                # Copy file
-                shutil.copy2(source_path, dest_path)
                 result['imported'] += 1
 
                 logger.debug("Imported audio file", extra={
                     'source': os.path.basename(source_path),
-                    'dest': filenames['audio_filename']
+                    'dest': audio_name
                 })
 
             except Exception as e:
@@ -506,6 +564,8 @@ def import_audio_files(db_manager, matched_files, import_id, yield_control=None)
             'skipped': result['skipped'],
             'errors': result['errors']
         })
+    finally:
+        maintenance_lease.release(db_manager, lease_owner)
 
     return result
 
@@ -608,10 +668,18 @@ def _build_spectrogram_title_from_audio_filename(audio_filename: str) -> str:
         Species Name (0.85) - 2024-01-15T10:30:45
     """
     base_name = os.path.splitext(audio_filename)[0]
+    # New-era names append the ownership identity (_id-nonce) after the
+    # timestamp and optional source label — strip it so titles keep
+    # showing species/confidence/time, not the implementation suffix.
+    base_name = re.sub(r'_\d+-[0-9a-f]{32}$', '', base_name)
 
     # Accept both colon (HH:MM:SS) and dash (HH-MM-SS) time patterns
+    # An optional trailing source label (multi-source recordings append
+    # `_<label>` after the timestamp) is accepted and ignored — titles
+    # show species/confidence/time, matching live spectrograms
+    # (implementation re-review R5).
     match = re.match(
-        r"^(?P<species>.+)_(?P<confidence>\d{1,3})_(?P<date>\d{4}-\d{2}-\d{2})-birdnet-(?P<time>\d{2}[:\-]\d{2}[:\-]\d{2})$",
+        r"^(?P<species>.+)_(?P<confidence>\d{1,3})_(?P<date>\d{4}-\d{2}-\d{2})-birdnet-(?P<time>\d{2}[:\-]\d{2}[:\-]\d{2})(?:_.+)?$",
         base_name
     )
     if match:
@@ -627,7 +695,8 @@ def _build_spectrogram_title_from_audio_filename(audio_filename: str) -> str:
     return base_name.replace('_', ' ')
 
 
-def generate_spectrograms_batch(audio_files, generation_id, yield_control=None):
+def generate_spectrograms_batch(audio_files, generation_id, yield_control=None,
+                                db_manager=None):
     """Generate spectrograms for a batch of audio files.
 
     Args:
@@ -635,6 +704,9 @@ def generate_spectrograms_batch(audio_files, generation_id, yield_control=None):
         generation_id: Unique identifier for progress tracking
         yield_control: Optional no-arg callable invoked once per file so a
             cooperative (e.g. gevent) caller can release the worker.
+        db_manager: DatabaseManager for recording spectrogram ownership when
+            the source audio is owned; None skips ownership recording (the
+            frontier resolves legacy-named files later either way).
     """
     # Ensure destination directory exists
     os.makedirs(SPECTROGRAM_DIR, exist_ok=True)
@@ -654,12 +726,30 @@ def generate_spectrograms_batch(audio_files, generation_id, yield_control=None):
             'errors': result['errors']
         })
 
+    lease_owner = maintenance_lease.mint_owner_token()
     try:
+        if db_manager is not None:
+            # A sustained record_media writer once running — same
+            # coordination as the imports; without a db_manager no DB
+            # writes happen and no lease is needed.
+            maintenance_lease.acquire_with_wait(
+                db_manager, 'spectrogram_generation', lease_owner,
+                maintenance_lease.IMPORT_TTL_SECONDS,
+                on_wait=lambda: update_progress('waiting_maintenance'),
+                yield_control=yield_control)
+
         update_progress('running')
 
+        last_renewal = time.monotonic()
         for audio_filename in audio_files:
             if yield_control:
                 yield_control()
+            if (db_manager is not None
+                    and time.monotonic() - last_renewal
+                    > maintenance_lease.IMPORT_TTL_SECONDS / 4):
+                maintenance_lease.renew(db_manager, lease_owner,
+                                        maintenance_lease.IMPORT_TTL_SECONDS)
+                last_renewal = time.monotonic()
             audio_path = os.path.join(EXTRACTED_AUDIO_DIR, audio_filename)
             temp_wav = None
 
@@ -688,8 +778,29 @@ def generate_spectrograms_batch(audio_files, generation_id, yield_control=None):
 
                 title = _build_spectrogram_title_from_audio_filename(audio_filename)
 
-                # Generate spectrogram
-                generate_spectrogram(wav_path, spectrogram_path, title)
+                # Generate to the temp name, publish atomically. EEXIST can
+                # only be a concurrent/prior run's copy of this same name.
+                part_path = spectrogram_path + media_ownership.PART_SUFFIX
+                generate_spectrogram(wav_path, part_path, title)
+                size = _publish_or_adopt(part_path, spectrogram_path)
+
+                # Record ownership when the source audio is owned; audio
+                # still under legacy names has no owner yet — its row is
+                # unresolved, and the frontier will claim both files later.
+                owner_id = (db_manager.get_media_owner(audio_filename)
+                            if db_manager is not None else None)
+                if owner_id is not None:
+                    try:
+                        db_manager.record_detection_media(owner_id, [
+                            {'filename': spectrogram_filename,
+                             'kind': media_ownership.KIND_SPECTROGRAM,
+                             'rank': 0, 'bytes': size}])
+                    except media_ownership.DetectionMissingError:
+                        os.remove(spectrogram_path)
+                        result['errors'] += 1
+                        update_progress()
+                        continue
+
                 result['generated'] += 1
 
                 logger.debug("Generated spectrogram", extra={
@@ -729,5 +840,8 @@ def generate_spectrograms_batch(audio_files, generation_id, yield_control=None):
             'generated': result['generated'],
             'errors': result['errors']
         })
+    finally:
+        if db_manager is not None:
+            maintenance_lease.release(db_manager, lease_owner)
 
     return result

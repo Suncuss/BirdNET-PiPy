@@ -4,11 +4,24 @@ import json
 import os
 import tempfile
 from datetime import datetime
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
 
 from tests.api.conftest import insert_detection
+
+
+@pytest.fixture
+def set_frontier(monkeypatch):
+    """Pin the recordings gate: set_frontier(True) forces the exact branch,
+    False the transitional one — the single place tests name the patch
+    target."""
+    def _set(complete):
+        import core.routes.media as media_routes
+        monkeypatch.setattr(media_routes, 'resolution_complete',
+                            lambda db: complete)
+    return _set
 
 
 class TestSimpleAPI:
@@ -881,6 +894,74 @@ class TestSimpleAPI:
         # Only the record with BOTH files present survives the filter.
         assert len(data) == 1
         assert data[0]['audio_filename'] == recordings[0]['audio_filename']
+
+    @staticmethod
+    def _seed_owned_recording(real_db_manager):
+        """A resolved Veery owning both kinds in detection_media — no files
+        on disk unless the test writes them."""
+        detection_id = insert_detection(
+            real_db_manager, timestamp='2024-02-10T08:00:00',
+            common_name='Veery', scientific_name='Catharus fuscescens')
+        real_db_manager.record_detection_media(detection_id, [
+            {'filename': f'owned_{detection_id}.mp3', 'kind': 'audio',
+             'rank': 0, 'bytes': 10},
+            {'filename': f'owned_{detection_id}.webp', 'kind': 'spectrogram',
+             'rank': 0, 'bytes': 5},
+        ])
+        return detection_id
+
+    @pytest.mark.parametrize('complete', [True, False])
+    def test_recordings_drift_never_renders_dead_players(
+            self, api_client, real_db_manager, media_dirs, set_frontier,
+            complete):
+        """Stale ownership rows (a crash between unlink and ownership
+        removal, an out-of-band deletion, a restored backup) must shorten
+        the page, never serve a dead player — on either branch. The weekly
+        ownership audit heals the rows; the final-page stat filter covers
+        the window in between."""
+        set_frontier(complete)
+        self._seed_owned_recording(real_db_manager)  # no files on disk
+
+        response = api_client.get('/api/bird/Veery/recordings?sort=best')
+        assert response.status_code == 200
+        assert response.get_json() == []
+
+    def test_recordings_transitional_gap_is_bounded_by_the_gate(
+            self, api_client, real_db_manager, create_recording_files,
+            set_frontier):
+        """The accepted transition trade, pinned: unresolved (NULL) rows
+        with real files on disk serve via the legacy arm but are invisible
+        to the exact query — which is exactly why the frontier gate keeps
+        the exact arm off until no unresolved rows remain (and why the
+        weekly corrective rewind covers the downgraded-importer corner)."""
+        insert_detection(real_db_manager, common_name='Veery',
+                         scientific_name='Catharus fuscescens')
+        create_recording_files(real_db_manager, species_name='Veery')
+
+        set_frontier(False)
+        legacy = api_client.get('/api/bird/Veery/recordings').get_json()
+        assert len(legacy) == 1
+
+        set_frontier(True)
+        exact = api_client.get('/api/bird/Veery/recordings').get_json()
+        assert exact == []
+
+    @pytest.mark.parametrize('complete', [True, False])
+    def test_recordings_branches_agree_when_files_exist(
+            self, api_client, real_db_manager, media_dirs, set_frontier,
+            complete):
+        """Both branches are independently correct: a row whose owned files
+        are also on disk is served identically either way (a wrong or
+        flapping gate degrades performance, never results)."""
+        detection_id = self._seed_owned_recording(real_db_manager)
+        audio_dir, spectrogram_dir = media_dirs
+        Path(audio_dir, f'owned_{detection_id}.mp3').write_bytes(b'a' * 10)
+        Path(spectrogram_dir, f'owned_{detection_id}.webp').write_bytes(b's' * 5)
+
+        set_frontier(complete)
+        response = api_client.get('/api/bird/Veery/recordings')
+        assert response.status_code == 200
+        assert [r['id'] for r in response.get_json()] == [detection_id]
 
     def test_bird_recordings_overfetch_fills_page(self, api_client, real_db_manager, create_recording_files):
         """Over-fetch backfills the page from older records when the newest are

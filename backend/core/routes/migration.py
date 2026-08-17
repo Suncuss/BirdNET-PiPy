@@ -632,7 +632,8 @@ def migration_spectrogram_generate():
     def run_generation():
         try:
             generate_spectrograms_batch(scan_result['files_needing'], generation_id,
-                                        yield_control=_cooperative_yield)
+                                        yield_control=_cooperative_yield,
+                                        db_manager=infra.db_manager)
         finally:
             # Clear progress tracking after a delay
             def cleanup_progress():

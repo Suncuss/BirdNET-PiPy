@@ -178,7 +178,9 @@ def test_dashboard_summary_is_submitted_to_executor(
         response = api_client.get('/api/dashboard/summary?period=week')
 
         assert response.status_code == 200
-        assert ('submit', '_build_summary_period_payload') in recorder.calls
+        # builder renamed: the versioned wrapper carries the rollup
+        # revision captured inside the job (implementation review fix 4)
+        assert ('submit', '_build_versioned_summary_payload') in recorder.calls
     finally:
         obs_module.invalidate_dashboard_cache()
 
@@ -476,7 +478,12 @@ def test_broadcast_detection_expires_dashboard_and_today_only(
         import core.api_infra as api_infra
         monkeypatch.setattr(api_infra, 'db_executor', recorder)
         assert api_client.get('/api/dashboard/summary?period=week').status_code == 200
-        assert recorder.calls == []
+        # Warm hit: no summary recompute. The single get_rollup_revision
+        # read is the designed cross-process cache validation (a rollup
+        # revision bump in EITHER container must invalidate cached
+        # payloads regardless of remaining TTL).
+        assert [c for c in recorder.calls
+                if c[1] != 'get_rollup_revision'] == []
         assert api_client.get('/api/dashboard').status_code == 200
         assert ('submit', '_build_dashboard_payload') in recorder.calls
     finally:

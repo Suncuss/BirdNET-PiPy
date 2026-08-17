@@ -26,9 +26,14 @@ class TestNormalizeDetection:
         }
         detection_id = test_db_manager.insert_detection(detection)
 
-        # Get the raw row
+        # Synthesized names are the UNRESOLVED-row behavior (resolved rows
+        # use recorded names; see test_media_ownership.TestReadContract) —
+        # model a legacy pre-migration row.
         with test_db_manager.get_db_connection() as conn:
             cur = conn.cursor()
+            cur.execute("UPDATE detections SET media_bytes = NULL, "
+                        "media_nonce = NULL WHERE id = ?", (detection_id,))
+            conn.commit()
             cur.execute("SELECT * FROM detections WHERE id = ?", (detection_id,))
             row = cur.fetchone()
 

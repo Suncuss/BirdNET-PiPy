@@ -18,6 +18,7 @@ from tests.api.conftest import (
     insert_detection,
     iso_ago,
     login_owner,
+    make_rows_legacy,
 )
 
 
@@ -342,6 +343,7 @@ class TestObservationsContract:
 
     def _seed(self, db_manager, species='American Robin'):
         insert_detection(db_manager, timestamp=iso_ago(days_ago=1), common_name=species)
+        make_rows_legacy(db_manager)  # signed synthesized names = legacy path
 
     def test_latest_and_recent_include_media_signatures(self, real_db_manager):
         self._seed(real_db_manager)

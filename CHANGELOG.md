@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.8.7] - 2026-08-16
+
+- Added optional cleanup policies alongside the existing disk-threshold cleanup: keep only the last N days of recordings, or cap total media at N GB (both off by default), with a preview endpoint that reports exactly what a policy would delete before enabling it
+- Improved dashboard summary and trends performance on large databases dramatically: the all-time summary dropped from ~10 seconds to ~26 milliseconds on a 1.1M-detection station, served from new per-day aggregate tables that build themselves in the background after upgrading
+- Improved automatic storage cleanup for small devices (Pi Zero 2W class): it no longer holds an in-memory listing of every media file (~95MB on a full card) or re-scans the whole detection table when the disk is full of non-BirdNET data, and its space accounting now uses real recorded file sizes instead of a per-file average
+- Improved the bird details Recordings section: "Best" and "Most Recent" now rank only clips whose files still exist, so pages fill with genuinely playable recordings instead of coming up short (or empty) when a species' top detections have aged out of storage
+- Improved crash-safety of recordings: media files are now published atomically and tracked per detection, so an interruption mid-write can no longer leave partial files behind, and files orphaned by a crash are automatically repaired or cleaned up by a weekly maintenance sweep
+- Changed new recordings' filenames to include a unique per-detection suffix, preventing same-second detections of one species from ever colliding on disk
+- Fixed Docker build caches crossing between staging and main, which could make an unchanged staging image download new layers after a release promotion
+
+## [0.8.6] - 2026-08-08
+
 - Fixed detection deletion removing only one copy of a recording's media when duplicates existed under different naming eras (source-ID transition, legacy colon pattern); the surviving copy was orphaned on disk forever. Deletion now removes every variant it finds
 - Fixed detection deletion responses reporting the generated filename instead of the legacy media file actually removed
 - Fixed automatic storage cleanup skipping audio and spectrogram files created during the source-ID filename transition, allowing upgraded stations to reclaim those legacy recordings

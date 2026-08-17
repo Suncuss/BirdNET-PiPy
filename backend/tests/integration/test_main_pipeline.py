@@ -460,6 +460,7 @@ class TestHandleDetection:
              patch('core.main.BROADCAST_TIMEOUT', 5), \
              patch('core.main.select_audio_chunks') as mock_select, \
              patch('core.main.extract_audio_segment') as mock_extract, \
+             patch('core.main.publish_media_file', return_value=100), \
              patch('core.main.generate_spectrogram') as mock_spec, \
              patch('core.main.db_manager') as mock_db, \
              patch('core.main.requests.post') as mock_post, \
@@ -486,7 +487,7 @@ class TestHandleDetection:
             mock_extract.assert_called_once()
             extract_args = mock_extract.call_args[0]
             assert extract_args[0] == input_file  # source file
-            assert extract_args[1].endswith('.mp3')  # clip goes straight to MP3
+            assert extract_args[1].endswith('.mp3.part')  # temp name, published to .mp3
             assert extract_args[2] == 0  # start time (0 * 3 seconds)
             assert extract_args[3] == 9  # end time (2 * 3 + 3 = 9 seconds)
 
@@ -540,6 +541,7 @@ class TestHandleDetection:
              patch('core.main.API_PORT', 5002), \
              patch('core.main.select_audio_chunks') as mock_select, \
              patch('core.main.extract_audio_segment'), \
+             patch('core.main.publish_media_file', return_value=100), \
              patch('core.main.generate_spectrogram'), \
              patch('core.main.db_manager'), \
              patch('core.main.requests.post'), \
@@ -573,6 +575,7 @@ class TestHandleDetection:
              patch('core.main.API_PORT', 5002), \
              patch('core.main.select_audio_chunks') as mock_select, \
              patch('core.main.extract_audio_segment'), \
+             patch('core.main.publish_media_file', return_value=100), \
              patch('core.main.generate_spectrogram'), \
              patch('core.main.db_manager'), \
              patch('core.main.requests.post'), \
@@ -608,6 +611,7 @@ class TestHandleDetection:
              patch('core.main.API_PORT', 5002), \
              patch('core.main.select_audio_chunks') as mock_select, \
              patch('core.main.extract_audio_segment'), \
+             patch('core.main.publish_media_file', return_value=100), \
              patch('core.main.generate_spectrogram'), \
              patch('core.main.db_manager'), \
              patch('core.main.requests.post'), \
@@ -640,13 +644,16 @@ class TestHandleDetection:
              patch('core.main.API_PORT', 5002), \
              patch('core.main.select_audio_chunks') as mock_select, \
              patch('core.main.extract_audio_segment') as mock_extract, \
+             patch('core.main.publish_media_file', return_value=100), \
              patch('core.main.generate_spectrogram'), \
-             patch('core.main.db_manager'), \
+             patch('core.main.db_manager') as mock_db, \
              patch('core.main.requests.post'), \
              patch('core.main.os.remove'), \
              patch('core.main.get_logger') as mock_get_logger:
 
             mock_select.return_value = (0, 2)  # 3 chunks (0, 1, 2) inclusive
+            mock_db.insert_detection.return_value = 7
+            mock_db.get_media_nonce.return_value = 'ab' * 16
             mock_logger = Mock()
             mock_get_logger.return_value = mock_logger
 
@@ -662,7 +669,9 @@ class TestHandleDetection:
             assert args[0] == input_file
 
             # Check output file path — the clip goes straight to MP3
-            assert args[1].endswith('American_Robin_95_test.mp3')
+            # under its ownership-suffixed temp name
+            assert args[1].endswith(
+                f"American_Robin_95_test_7-{'ab' * 16}.mp3.part")
             assert temp_extraction_dirs['extracted'] in args[1]
 
             # Check start and end times
@@ -684,13 +693,16 @@ class TestHandleDetection:
              patch('core.main.API_PORT', 5002), \
              patch('core.main.select_audio_chunks') as mock_select, \
              patch('core.main.extract_audio_segment'), \
+             patch('core.main.publish_media_file', return_value=100), \
              patch('core.main.generate_spectrogram') as mock_spec, \
-             patch('core.main.db_manager'), \
+             patch('core.main.db_manager') as mock_db, \
              patch('core.main.requests.post'), \
              patch('core.main.os.remove'), \
              patch('core.main.get_logger') as mock_get_logger:
 
             mock_select.return_value = (0, 2)  # inclusive range
+            mock_db.insert_detection.return_value = 7
+            mock_db.get_media_nonce.return_value = 'ab' * 16
             mock_logger = Mock()
             mock_get_logger.return_value = mock_logger
 
@@ -706,8 +718,9 @@ class TestHandleDetection:
             # Check input file
             assert args[0] == input_file
 
-            # Check output file path
-            assert args[1].endswith('American_Robin_95_test.webp')
+            # Check output file path (ownership-suffixed temp name)
+            assert args[1].endswith(
+                f"American_Robin_95_test_7-{'ab' * 16}.webp.part")
             assert temp_extraction_dirs['spectrogram'] in args[1]
 
             # Check title contains species name and confidence
@@ -735,6 +748,7 @@ class TestHandleDetection:
              patch('core.main.API_PORT', 5002), \
              patch('core.main.select_audio_chunks') as mock_select, \
              patch('core.main.extract_audio_segment'), \
+             patch('core.main.publish_media_file', return_value=100), \
              patch('core.main.generate_spectrogram'), \
              patch('core.main.db_manager') as mock_db, \
              patch('core.main.requests.post'), \
@@ -781,6 +795,7 @@ class TestHandleDetection:
              patch('core.main.BROADCAST_TIMEOUT', 5), \
              patch('core.main.select_audio_chunks') as mock_select, \
              patch('core.main.extract_audio_segment'), \
+             patch('core.main.publish_media_file', return_value=100), \
              patch('core.main.generate_spectrogram'), \
              patch('core.main.db_manager'), \
              patch('core.main.requests.post') as mock_post, \
@@ -808,8 +823,11 @@ class TestHandleDetection:
             assert payload['common_name'] == 'American Robin'
             assert payload['scientific_name'] == 'Turdus migratorius'
             assert payload['confidence'] == 0.95
-            assert payload['bird_song_file_name'] == 'American_Robin_95_test.mp3'  # MP3, not WAV
-            assert payload['spectrogram_file_name'] == 'American_Robin_95_test.webp'
+            # MP3 (not WAV), under the recorded ownership-suffixed name
+            assert payload['bird_song_file_name'].endswith('.mp3')
+            assert payload['bird_song_file_name'].startswith('American_Robin_95_test_')
+            assert payload['spectrogram_file_name'].endswith('.webp')
+            assert payload['spectrogram_file_name'].startswith('American_Robin_95_test_')
 
             # Check timeout
             assert mock_post.call_args[1]['timeout'] == 5
@@ -829,6 +847,7 @@ class TestHandleDetection:
              patch('core.main.API_PORT', 5002), \
              patch('core.main.select_audio_chunks') as mock_select, \
              patch('core.main.extract_audio_segment') as mock_extract, \
+             patch('core.main.publish_media_file', return_value=100), \
              patch('core.main.generate_spectrogram') as mock_spec, \
              patch('core.main.db_manager') as mock_db, \
              patch('core.main.requests.post') as mock_post, \
@@ -869,6 +888,7 @@ class TestHandleDetection:
              patch('core.main.API_PORT', 5002), \
              patch('core.main.select_audio_chunks') as mock_select, \
              patch('core.main.extract_audio_segment'), \
+             patch('core.main.publish_media_file', return_value=100), \
              patch('core.main.generate_spectrogram'), \
              patch('core.main.db_manager'), \
              patch('core.main.requests.post'), \
@@ -1729,6 +1749,7 @@ class TestHandleDetectionErrors:
              patch('core.main.ANALYSIS_CHUNK_LENGTH', 3), \
              patch('core.main.select_audio_chunks', return_value=(0, 3)), \
              patch('core.main.extract_audio_segment') as mock_extract, \
+             patch('core.main.publish_media_file', return_value=100), \
              patch('core.main.get_logger') as mock_logger:
 
             # Mock extract_audio_segment to raise subprocess error
@@ -1760,6 +1781,7 @@ class TestHandleDetectionErrors:
              patch('core.main.ANALYSIS_CHUNK_LENGTH', 3), \
              patch('core.main.select_audio_chunks', return_value=(0, 3)), \
              patch('core.main.extract_audio_segment'), \
+             patch('core.main.publish_media_file', return_value=100), \
              patch('os.remove'), \
              patch('core.main.generate_spectrogram') as mock_spec, \
              patch('core.main.get_logger') as mock_logger:
@@ -1999,6 +2021,7 @@ class TestEdgeCasesAndResilience:
              patch('core.main.ANALYSIS_CHUNK_LENGTH', 3), \
              patch('core.main.select_audio_chunks', return_value=(0, 3)), \
              patch('core.main.extract_audio_segment'), \
+             patch('core.main.publish_media_file', return_value=100), \
              patch('core.main.generate_spectrogram'), \
              patch('core.main.db_manager') as mock_db, \
              patch('core.main.get_logger') as mock_logger, \

@@ -6,6 +6,7 @@ caches they falsify. Registered on the shared ``api`` blueprint at import.
 """
 import csv
 import io
+import time
 from datetime import datetime
 
 from flask import Response, jsonify, request
@@ -25,12 +26,12 @@ from core.detection_presenter import (
     _public_window_cutoff_date,
 )
 from core.logging_config import get_logger, log_api_request
+from core.maintenance_lease import MaintenanceInProgressError
 from core.routes.observations import (
     invalidate_dashboard_cache,
     invalidate_gallery_cache,
 )
 from core.settings_store import load_user_settings
-from core.storage_manager import delete_detection_files
 from core.timezone_service import local_now
 
 logger = get_logger(__name__)
@@ -46,6 +47,27 @@ def _cooperative_yield():
 # is a quick lane job holding ~1MB, large enough that a million-row export
 # stays a few thousand round trips rather than a million.
 _EXPORT_BATCH_ROWS = 1000
+
+# One bounded retry before surfacing a retryable maintenance response —
+# the one-time index build usually finishes in seconds.
+_MAINTENANCE_RETRY_SECONDS = 2
+
+
+def _delete_with_maintenance_retry(detection_id):
+    """delete_detection with the interactive-write contract: the DB layer
+    refuses BEFORE any unlink while the index build holds the writer lock;
+    retry once, then let the caller answer with an explicit retryable
+    maintenance response (never a generic 500, never after side effects)."""
+    try:
+        return _run_db(infra.db_manager.delete_detection, detection_id)
+    except MaintenanceInProgressError:
+        time.sleep(_MAINTENANCE_RETRY_SECONDS)
+        return _run_db(infra.db_manager.delete_detection, detection_id)
+
+
+_MAINTENANCE_RESPONSE = (
+    {'error': 'Maintenance in progress, please retry shortly',
+     'retryable': True}, 503)
 
 
 
@@ -318,9 +340,15 @@ def delete_detection(detection_id):
 
     Requires authentication.
     """
-    # delete_detection returns the detection row so we can clean up the
-    # associated audio + spectrogram files below.
-    detection = _run_db(infra.db_manager.delete_detection, detection_id)
+    # delete_detection unlinks the row's media BEFORE deleting the record
+    # (ownership design: a crash can orphan a row, never leak files) and
+    # reports the names actually removed — recorded names for resolved
+    # rows, resolved pattern candidates for legacy ones.
+    try:
+        detection = _delete_with_maintenance_retry(detection_id)
+    except MaintenanceInProgressError:
+        body, status = _MAINTENANCE_RESPONSE
+        return jsonify(body), status
 
     if not detection:
         return jsonify({'error': 'Detection not found'}), 404
@@ -328,12 +356,7 @@ def delete_detection(detection_id):
     invalidate_dashboard_cache()
     invalidate_gallery_cache()
 
-    # Clean up associated files using shared utility
-    delete_result = delete_detection_files(detection)
-
-    # Report the resolved names that were actually removed. These can differ
-    # from the canonical DB filenames for source-ID and colon-pattern files.
-    files_deleted = delete_result['deleted_filenames']
+    files_deleted = detection['files_deleted']
 
     logger.info("Detection deleted with files", extra={
         'detection_id': detection_id,
@@ -382,13 +405,16 @@ def delete_detections_batch():
             failed.append({'id': detection_id, 'error': 'Invalid ID type'})
             continue
 
-        detection = _run_db(infra.db_manager.delete_detection, detection_id)
+        # File cleanup happens inside delete_detection, before the row goes.
+        try:
+            detection = _delete_with_maintenance_retry(detection_id)
+        except MaintenanceInProgressError:
+            body, status = _MAINTENANCE_RESPONSE
+            return jsonify({**body, 'deleted': len(deleted),
+                            'deleted_ids': deleted}), status
         if not detection:
             failed.append({'id': detection_id, 'error': 'Not found'})
             continue
-
-        # Clean up associated files using shared utility
-        delete_detection_files(detection)
 
         deleted.append(detection_id)
 

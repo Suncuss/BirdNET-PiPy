@@ -24,6 +24,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      CACHE_SCOPE: ${{ matrix.image.name }}-${{ matrix.platform.arch }}
     strategy:
       # Let the other legs finish on a failure: warms their build cache and
       # shows whether the breakage is arch-specific
@@ -59,8 +61,16 @@ jobs:
           context: ${{ matrix.image.context }}
           platforms: linux/${{ matrix.platform.arch }}
           outputs: type=image,name=${{ env.IMAGE_PREFIX }}/${{ matrix.image.name }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=${{ matrix.image.name }}-${{ matrix.platform.arch }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image.name }}-${{ matrix.platform.arch }}
+          # Keep staging and main on independent cache lineages: each branch
+          # only ever writes its own scope, so an unrelated main rebuild can no
+          # longer replace otherwise stable staging layers. Reads still fall
+          # back to main's scope, because a branch's own entries expire after a
+          # week of quiet and a fully cold rebuild churns every layer digest
+          # just as badly as the contamination this avoids.
+          cache-from: |
+            type=gha,scope=${{ env.CACHE_SCOPE }}-${{ github.ref_name }}
+            type=gha,scope=${{ env.CACHE_SCOPE }}-main
+          cache-to: type=gha,mode=max,scope=${{ env.CACHE_SCOPE }}-${{ github.ref_name }}
 
       - name: Export digest
         run: |

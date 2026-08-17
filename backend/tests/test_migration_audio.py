@@ -73,3 +73,27 @@ class TestBuildSpectrogramTitleFromAudioFilename:
             )
 
         assert title == 'Amsel (0.85) - 2025-11-24T10:30:45'
+
+
+class TestTitleParserWithOwnershipSuffix:
+
+    def test_new_era_filename_titles_hide_the_identity_suffix(self):
+        """Implementation review finding 7: id+nonce must not leak into
+        spectrogram titles."""
+        from core.migration_audio import _build_spectrogram_title_from_audio_filename
+        nonce = 'ab' * 16
+        title = _build_spectrogram_title_from_audio_filename(
+            f'American_Robin_85_2024-01-15-birdnet-10-30-45_42-{nonce}.mp3')
+        assert nonce not in title
+        assert '42-' not in title
+        assert 'American Robin' in title and '10:30:45' in title
+
+    def test_source_labeled_identity_filename_still_parses(self):
+        """Re-review R5: a multi-source name keeps its structured title
+        after the identity suffix strip — the label is accepted and
+        ignored, matching live spectrogram titles."""
+        from core.migration_audio import _build_spectrogram_title_from_audio_filename
+        nonce = 'cd' * 16
+        title = _build_spectrogram_title_from_audio_filename(
+            f'American_Robin_85_2024-01-15-birdnet-10-30-45_Backyard_Mic_42-{nonce}.mp3')
+        assert title == 'American Robin (0.85) - 2024-01-15T10:30:45'

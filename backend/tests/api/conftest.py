@@ -224,6 +224,17 @@ def storage_media_dirs():
             yield audio_dir, spectrogram_dir
 
 
+def make_rows_legacy(db_manager):
+    """Reset all rows to the pre-migration NULL media state, so tests that
+    model legacy stations (synthesized filenames, files without ownership
+    suffixes) keep exercising that path. insert_detection stamps new rows
+    resolved-and-empty, which presents no media until record_media runs."""
+    with db_manager.get_db_connection() as conn:
+        conn.execute(
+            "UPDATE detections SET media_bytes = NULL, media_nonce = NULL")
+        conn.commit()
+
+
 @pytest.fixture
 def create_recording_files(media_dirs):
     """Factory that creates on-disk audio+spectrogram files for a species'
@@ -236,6 +247,7 @@ def create_recording_files(media_dirs):
     audio_dir, spectrogram_dir = media_dirs
 
     def _create(db_manager, *, species_name=None, scientific_name=None, choices=None):
+        make_rows_legacy(db_manager)
         recordings = db_manager.get_bird_recordings(
             species_name=species_name, scientific_name=scientific_name, sort='recent',
         )

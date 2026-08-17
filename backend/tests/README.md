@@ -144,7 +144,7 @@ Tests for Flask API endpoints with real database integration.
 | `test_simple_api.py` | 37 | Core endpoints: detections, species, activity, sightings, recordings, settings |
 | `test_stream_test.py` | 4 | RTSP stream test endpoint |
 | `test_system_api.py` | 35 | System endpoints: version info, update checks, update triggers |
-| `test_timezone_lookup.py` | 10 | Offline timezone lookup via timezonefinder |
+| `test_timezone_lookup.py` | 12 | Offline timezone lookup via tzfpy, including border-gap fallback |
 | `test_utilities.py` | 10 | API utilities: image caching, settings management, flag files |
 
 **Key Fixtures:**
