@@ -69,8 +69,9 @@ class TestRtspStreamProbe:
 class TestCreateRecorderFactory:
     """Test the create_recorder factory function."""
 
-    def test_creates_pulseaudio_recorder(self, temp_output_dir):
-        """Test factory creates PulseAudioRecorder for pulseaudio mode."""
+    def test_creates_pulseaudio_recorder(self, temp_output_dir, monkeypatch):
+        """Test factory creates PulseAudioRecorder in segment capture mode."""
+        monkeypatch.setenv('BIRDNET_CAPTURE_MODE', 'segment')
         recorder = create_recorder(
             recording_mode='pulseaudio',
             chunk_duration=3.0,
@@ -81,8 +82,9 @@ class TestCreateRecorderFactory:
         assert isinstance(recorder, PulseAudioRecorder)
         assert recorder.source_name == 'test_source'
 
-    def test_creates_rtsp_recorder(self, temp_output_dir):
-        """Test factory creates RtspRecorder for rtsp mode."""
+    def test_creates_rtsp_recorder(self, temp_output_dir, monkeypatch):
+        """Test factory creates RtspRecorder in segment capture mode."""
+        monkeypatch.setenv('BIRDNET_CAPTURE_MODE', 'segment')
         recorder = create_recorder(
             recording_mode='rtsp',
             chunk_duration=3.0,
@@ -113,8 +115,9 @@ class TestCreateRecorderFactory:
                 target_sample_rate=48000
             )
 
-    def test_pulseaudio_defaults_to_default_source(self, temp_output_dir):
+    def test_pulseaudio_defaults_to_default_source(self, temp_output_dir, monkeypatch):
         """Test pulseaudio mode defaults source_name to 'default'."""
+        monkeypatch.setenv('BIRDNET_CAPTURE_MODE', 'segment')
         recorder = create_recorder(
             recording_mode='pulseaudio',
             chunk_duration=3.0,

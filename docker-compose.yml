@@ -93,6 +93,9 @@ services:
       - LOG_FORMAT=human
       - LOG_LEVEL=INFO
       - CONSOLE_LOG_LEVEL=${CONSOLE_LOG_LEVEL:-WARNING}
+      # Pass-through: persistent (code default) = gapless one-ffmpeg-per-
+      # source capture; segment = legacy per-segment capture (escape hatch)
+      - BIRDNET_CAPTURE_MODE
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

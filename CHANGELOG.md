@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Improved audio capture to be gapless: each source now records through one persistent ffmpeg stream (restarted automatically on failure) instead of a new process per segment, eliminating the dead air between recordings that cost slower devices like the Pi Zero 2W ~25-30% of all audio. Segments are also written in a single burst, which lets short-lived queue files avoid the SD card entirely on most systems; set `BIRDNET_CAPTURE_MODE=segment` to revert to per-segment capture
+
 ## [0.8.7] - 2026-08-16
 
 - Added optional cleanup policies alongside the existing disk-threshold cleanup: keep only the last N days of recordings, or cap total media at N GB (both off by default), with a preview endpoint that reports exactly what a policy would delete before enabling it
