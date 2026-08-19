@@ -26,6 +26,36 @@ logger = logging.getLogger(__name__)
 RTSP_SOCKET_TIMEOUT_US = '10000000'
 RTSP_PROBE_TIMEOUT_SECONDS = 20
 
+# Queue filename format; also parsed by the inference server and relied on
+# by main's *.wav glob (leading dot hides in-flight temp files).
+TIMESTAMP_FORMAT = "%Y%m%d_%H%M%S"
+
+
+def rtsp_input_args(rtsp_url: str) -> list:
+    """ffmpeg input arguments for RTSP capture — the single source of truth.
+
+    Consumed by the stream probe and by both capture modes, so camera
+    tuning (transport, timeouts) cannot silently diverge between what the
+    probe validates and what a recorder actually uses. Restricting the
+    demuxer to audio avoids unnecessary video parsing errors, while
+    regenerating timestamps prevents broken output when cameras emit
+    non-monotonic RTP timing.
+    """
+    return [
+        '-rtsp_flags', 'prefer_tcp',
+        '-timeout', RTSP_SOCKET_TIMEOUT_US,
+        '-allowed_media_types', 'audio',
+        '-fflags', '+genpts+discardcorrupt',
+        '-use_wallclock_as_timestamps', '1',
+        '-i', rtsp_url,
+        '-map', '0:a:0',
+    ]
+
+
+def pulse_input_args(source_name: str) -> list:
+    """ffmpeg input arguments for PulseAudio capture."""
+    return ['-f', 'pulse', '-i', source_name]
+
 # ffmpeg stderr prefixes to skip (boilerplate + redundant wrappers)
 _FFMPEG_SKIP_PREFIXES = (
     # Build/version boilerplate
@@ -95,17 +125,7 @@ def test_stream_url(url: str) -> tuple:
 
     try:
         result = subprocess.run(
-            [
-                'ffmpeg',
-                '-rtsp_flags', 'prefer_tcp',
-                '-timeout', RTSP_SOCKET_TIMEOUT_US,
-                '-allowed_media_types', 'audio',
-                '-fflags', '+genpts+discardcorrupt',
-                '-use_wallclock_as_timestamps', '1',
-                '-i', url,
-                '-t', '1',
-                '-f', 'null', '-',
-            ],
+            ['ffmpeg'] + rtsp_input_args(url) + ['-t', '1', '-f', 'null', '-'],
             timeout=RTSP_PROBE_TIMEOUT_SECONDS,
             capture_output=True,
             text=True,
@@ -124,10 +144,12 @@ def test_stream_url(url: str) -> tuple:
 
 class BaseRecorder(ABC):
     """
-    Abstract base class for audio recorders.
+    Abstract lifecycle/health base for audio recorders.
 
-    Provides common functionality for recording fixed-duration audio chunks
-    with timestamp-based filenames and atomic file operations.
+    Owns the recording thread, health bookkeeping, and the on-disk queue
+    contract (timestamp-named WAVs published via hidden ``.tmp.wav`` +
+    atomic rename). Per-segment ffmpeg execution lives in SegmentRecorder;
+    persistent capture lives in core.persistent_recorder.
     """
 
     # Rate limit interval for error logging (seconds)
@@ -161,35 +183,31 @@ class BaseRecorder(ABC):
         pass
 
     @abstractmethod
-    def _execute_recording(self, temp_path: str) -> bool:
-        """
-        Execute the recording command.
-
-        Args:
-            temp_path: Path to write temporary recording file
-
-        Returns:
-            True if recording succeeded, False otherwise
-        """
+    def _recording_loop(self):
+        """Body of the recording thread."""
         pass
 
-    def _get_ffmpeg_output_args(self, temp_path: str) -> list:
-        """
-        Get common ffmpeg output arguments for WAV recording.
+    def _segment_paths(self, moment) -> tuple:
+        """(temp_path, final_path) for a segment starting at ``moment``.
 
-        Args:
-            temp_path: Path to write output file
-
-        Returns:
-            List of ffmpeg arguments for output format
+        The hidden ``.tmp.wav`` + rename pair is the queue's publish
+        contract: a visible ``.wav`` is always complete.
         """
-        return [
-            '-t', str(self.chunk_duration),
-            '-ar', str(self.target_sample_rate),
-            '-ac', '1',
-            '-acodec', 'pcm_s16le',
-            '-y', temp_path
-        ]
+        timestamp = moment.strftime(TIMESTAMP_FORMAT)
+        return (
+            os.path.join(self.output_dir, f".{timestamp}.tmp.wav"),
+            os.path.join(self.output_dir, f"{timestamp}.wav"),
+        )
+
+    def _note_success(self) -> None:
+        """Record a successful capture for health reporting."""
+        self.consecutive_failures = 0
+        self.last_success_time = time.time()
+
+    def _note_failure(self) -> None:
+        """Record a failed capture for health reporting."""
+        self.consecutive_failures += 1
+        self.last_error_time = time.time()
 
     def _log_recording_error(self, message: str) -> None:
         """
@@ -207,72 +225,9 @@ class BaseRecorder(ABC):
             self._last_error_logged = current_time
             logger.error(message)
 
-    def _record_chunk(self) -> str | None:
-        """
-        Record a single audio chunk with timestamp filename.
-        Uses atomic rename to ensure file only appears when complete.
-
-        Returns:
-            Path to recorded file if successful, None otherwise
-        """
-        # Generate timestamp-based filenames
-        timestamp = local_now().strftime("%Y%m%d_%H%M%S")
-        temp_path = os.path.join(self.output_dir, f".{timestamp}.tmp.wav")
-        final_path = os.path.join(self.output_dir, f"{timestamp}.wav")
-
-        try:
-            if self._execute_recording(temp_path):
-                # Verify file was created and has content
-                if os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
-                    # Atomic rename - file only appears when complete
-                    os.rename(temp_path, final_path)
-                    self.consecutive_failures = 0
-                    self.last_success_time = time.time()
-                    logger.info("🔴 Audio recorded", extra={
-                        'file': os.path.basename(final_path),
-                        'duration': self.chunk_duration,
-                    })
-                    return final_path
-        except subprocess.TimeoutExpired:
-            logger.warning("Recording timed out", extra={'temp_path': temp_path})
-            self.last_error_message = "Recording timed out"
-        except Exception as e:
-            log_fd_exhaustion_if_needed(e, logger, 'recording', extra={
-                'temp_path': temp_path,
-                'recorder': self.__class__.__name__,
-            })
-            logger.warning(f"Recording failed: {e}", extra={'temp_path': temp_path})
-            self.last_error_message = f"Recording failed: {e}"
-        finally:
-            # Clean up temp file if it still exists (wasn't renamed)
-            # Use try-except to handle race conditions where file may have been removed
-            try:
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
-            except OSError:
-                pass  # File already removed or inaccessible
-
-        self.consecutive_failures += 1
-        self.last_error_time = time.time()
-        return None
-
     def _get_retry_delay(self) -> float:
         """Return delay in seconds before retrying after failure."""
         return 1.0
-
-    def _recording_loop(self):
-        """Main recording loop - runs in separate thread"""
-        while self.is_running:
-            try:
-                chunk_path = self._record_chunk()
-
-                if not chunk_path:
-                    # Recording failed, brief pause before retry
-                    time.sleep(self._get_retry_delay())
-
-            except Exception as e:
-                logger.error(f"Recording error: {e}")
-                time.sleep(self._get_retry_delay() * 2)
 
     def _cleanup_stale_temp_files(self) -> None:
         """Remove orphaned ``.tmp.wav`` files left in output_dir by a prior run.
@@ -322,8 +277,13 @@ class BaseRecorder(ABC):
             return
 
         self.is_running = False
+        self._interrupt()
         if self.recording_thread and self.recording_thread.is_alive():
             self.recording_thread.join(timeout=5)
+
+    def _interrupt(self) -> None:  # noqa: B027 — optional hook, deliberately concrete
+        """Unblock the recording thread during stop(). No-op by default;
+        recorders holding a long-lived capture process override this."""
 
     def is_healthy(self) -> bool:
         """Check if recording thread is still running"""
@@ -365,7 +325,105 @@ class BaseRecorder(ABC):
         self.start()
 
 
-class RtspRecorder(BaseRecorder):
+class SegmentRecorder(BaseRecorder):
+    """Per-segment capture: one short-lived ffmpeg process per chunk.
+
+    The legacy capture mode (BIRDNET_CAPTURE_MODE=segment): simple and
+    self-healing, at the cost of a capture gap (process spawn + source
+    handshake) between consecutive segments.
+    """
+
+    @abstractmethod
+    def _execute_recording(self, temp_path: str) -> bool:
+        """
+        Execute the recording command.
+
+        Args:
+            temp_path: Path to write temporary recording file
+
+        Returns:
+            True if recording succeeded, False otherwise
+        """
+        pass
+
+    def _get_ffmpeg_output_args(self, temp_path: str) -> list:
+        """
+        Get common ffmpeg output arguments for WAV recording.
+
+        Args:
+            temp_path: Path to write output file
+
+        Returns:
+            List of ffmpeg arguments for output format
+        """
+        return [
+            '-t', str(self.chunk_duration),
+            '-ar', str(self.target_sample_rate),
+            '-ac', '1',
+            '-acodec', 'pcm_s16le',
+            '-y', temp_path
+        ]
+
+    def _record_chunk(self) -> str | None:
+        """
+        Record a single audio chunk with timestamp filename.
+        Uses atomic rename to ensure file only appears when complete.
+
+        Returns:
+            Path to recorded file if successful, None otherwise
+        """
+        temp_path, final_path = self._segment_paths(local_now())
+
+        try:
+            if self._execute_recording(temp_path):
+                # Verify file was created and has content
+                if os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
+                    # Atomic rename - file only appears when complete
+                    os.rename(temp_path, final_path)
+                    self._note_success()
+                    logger.info("🔴 Audio recorded", extra={
+                        'file': os.path.basename(final_path),
+                        'duration': self.chunk_duration,
+                    })
+                    return final_path
+        except subprocess.TimeoutExpired:
+            logger.warning("Recording timed out", extra={'temp_path': temp_path})
+            self.last_error_message = "Recording timed out"
+        except Exception as e:
+            log_fd_exhaustion_if_needed(e, logger, 'recording', extra={
+                'temp_path': temp_path,
+                'recorder': self.__class__.__name__,
+            })
+            logger.warning(f"Recording failed: {e}", extra={'temp_path': temp_path})
+            self.last_error_message = f"Recording failed: {e}"
+        finally:
+            # Clean up temp file if it still exists (wasn't renamed)
+            # Use try-except to handle race conditions where file may have been removed
+            try:
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+            except OSError:
+                pass  # File already removed or inaccessible
+
+        self._note_failure()
+        return None
+
+    def _recording_loop(self):
+        """Main recording loop - runs in separate thread"""
+        while self.is_running:
+            try:
+                chunk_path = self._record_chunk()
+
+                if not chunk_path:
+                    # Recording failed, brief pause before retry
+                    time.sleep(self._get_retry_delay())
+
+            except Exception as e:
+                logger.error(f"Recording error: {e}")
+                time.sleep(self._get_retry_delay() * 2)
+
+
+class RtspRecorder(SegmentRecorder):
     """
     RTSP audio stream recorder.
     Records fixed-duration chunks from RTSP streams (IP cameras, etc).
@@ -392,30 +450,12 @@ class RtspRecorder(BaseRecorder):
         """RTSP needs longer delay for reconnection."""
         return 2.0
 
-    def _get_ffmpeg_rtsp_args(self) -> list:
-        """
-        Build RTSP ffmpeg arguments for unstable camera streams.
-
-        Restricting the demuxer to audio avoids unnecessary video parsing
-        errors, while regenerating timestamps prevents broken output when
-        cameras emit non-monotonic RTP timing.
-        """
-        return [
-            '-rtsp_flags', 'prefer_tcp',
-            '-timeout', RTSP_SOCKET_TIMEOUT_US,
-            '-allowed_media_types', 'audio',
-            '-fflags', '+genpts+discardcorrupt',
-            '-use_wallclock_as_timestamps', '1',
-            '-i', self.rtsp_url,
-            '-map', '0:a:0',
-        ]
-
     def _execute_recording(self, temp_path: str) -> bool:
         """
         Execute ffmpeg command for RTSP stream recording.
         Uses argument list to prevent shell injection.
         """
-        cmd = ['ffmpeg'] + self._get_ffmpeg_rtsp_args() + self._get_ffmpeg_output_args(temp_path)
+        cmd = ['ffmpeg'] + rtsp_input_args(self.rtsp_url) + self._get_ffmpeg_output_args(temp_path)
 
         result = subprocess.run(
             cmd,
@@ -433,7 +473,7 @@ class RtspRecorder(BaseRecorder):
         return result.returncode == 0
 
 
-class PulseAudioRecorder(BaseRecorder):
+class PulseAudioRecorder(SegmentRecorder):
     """
     PulseAudio audio recorder.
     Records fixed-duration chunks from PulseAudio server via socket.
@@ -462,11 +502,7 @@ class PulseAudioRecorder(BaseRecorder):
         Execute ffmpeg command for PulseAudio recording.
         Uses argument list to prevent shell injection.
         """
-        cmd = [
-            'ffmpeg',
-            '-f', 'pulse',
-            '-i', self.source_name,
-        ] + self._get_ffmpeg_output_args(temp_path)
+        cmd = ['ffmpeg'] + pulse_input_args(self.source_name) + self._get_ffmpeg_output_args(temp_path)
 
         result = subprocess.run(
             cmd,
@@ -481,6 +517,15 @@ class PulseAudioRecorder(BaseRecorder):
             )
 
         return result.returncode == 0
+
+
+def _use_persistent_capture() -> bool:
+    """Whether to capture via one long-lived ffmpeg per source (default).
+
+    BIRDNET_CAPTURE_MODE=segment reverts to the per-segment recorders as an
+    escape hatch for sources that misbehave with a persistent session.
+    """
+    return os.environ.get('BIRDNET_CAPTURE_MODE', 'persistent') != 'segment'
 
 
 def create_recorder(
@@ -509,25 +554,46 @@ def create_recorder(
         ValueError: If recording_mode is invalid or required URL/source is missing
     """
     if recording_mode == RecordingMode.PULSEAUDIO:
-        return PulseAudioRecorder(
-            source_name=source_name or 'default',
-            chunk_duration=chunk_duration,
-            output_dir=output_dir,
-            target_sample_rate=target_sample_rate
-        )
+        source_name = source_name or 'default'
+        input_args = pulse_input_args(source_name)
+        label = source_name
+
+        def segment_recorder():
+            return PulseAudioRecorder(
+                source_name=source_name,
+                chunk_duration=chunk_duration,
+                output_dir=output_dir,
+                target_sample_rate=target_sample_rate,
+            )
     elif recording_mode == RecordingMode.RTSP:
         if not rtsp_url:
             raise ValueError("rtsp_url required for rtsp recording mode")
         if not rtsp_url.startswith(('rtsp://', 'rtsps://')):
             raise ValueError("rtsp_url must start with rtsp:// or rtsps://")
-        return RtspRecorder(
-            rtsp_url=rtsp_url,
-            chunk_duration=chunk_duration,
-            output_dir=output_dir,
-            target_sample_rate=target_sample_rate
-        )
+        input_args = rtsp_input_args(rtsp_url)
+        label = sanitize_url(rtsp_url)
+
+        def segment_recorder():
+            return RtspRecorder(
+                rtsp_url=rtsp_url,
+                chunk_duration=chunk_duration,
+                output_dir=output_dir,
+                target_sample_rate=target_sample_rate,
+            )
     else:
         raise ValueError(
             f"Unknown recording mode: {recording_mode}. "
             f"Valid modes: {', '.join(VALID_RECORDING_MODES)}"
         )
+
+    if _use_persistent_capture():
+        # Local import: persistent_recorder imports from this module.
+        from core.persistent_recorder import PersistentCaptureRecorder
+        return PersistentCaptureRecorder(
+            input_args=input_args,
+            chunk_duration=chunk_duration,
+            output_dir=output_dir,
+            target_sample_rate=target_sample_rate,
+            label=label,
+        )
+    return segment_recorder()
