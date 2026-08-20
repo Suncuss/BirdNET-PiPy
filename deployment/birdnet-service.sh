@@ -256,8 +256,141 @@ cleanup_orphaned_containers() {
     log_info "Cleaning up any orphaned containers..."
     cd "$PROJECT_ROOT"
 
-    # Remove any stopped containers from this project
-    docker compose down --remove-orphans 2>/dev/null || true
+    # Remove any stopped containers from this project. Failures here usually
+    # foreshadow `compose up` failing too, so surface them - a swallowed error
+    # at this step once left a dead station with no diagnosable journal.
+    local output
+    if ! output=$(docker compose down --remove-orphans 2>&1); then
+        log_warning "Pre-start cleanup failed (continuing):"
+        log_warning "$output"
+    fi
+}
+
+# The Docker daemon can be left holding "ghost" container records after an
+# unclean shutdown: metadata dirs whose overlay2 RW layer was lost, which the
+# daemon half-loads on every start - `docker ps -a` lists them under our
+# compose project, but `docker inspect` fails ("no such object"). Compose
+# tries to start them by ID, the daemon errors "No such container", and
+# `compose up` aborts with the stack half-started - and `compose down` /
+# `docker rm` cannot remove them either. Restarting the daemon does NOT help
+# (it re-loads the same broken records); the durable fix is deleting the
+# orphaned metadata dirs while the daemon is stopped, which
+# docker-ghost-heal.sh does as root.
+DOCKER_HEAL_MARKER="$PROJECT_ROOT/data/flags/docker-heal-boot-id"
+
+# Start the Docker daemon if it is not running and wait until it responds.
+# Covers a heal that got killed mid-surgery (leaving the daemon stopped) and
+# a daemon that is still coming up at boot - without this, every compose
+# attempt fails until a human notices Docker itself is down.
+ensure_docker_running() {
+    docker info >/dev/null 2>&1 && return 0
+    log_warning "Docker daemon not responding; attempting to start it..."
+    sudo -n systemctl start docker.socket docker.service 2>/dev/null || true
+    local waited=0
+    until docker info >/dev/null 2>&1; do
+        if [ $waited -ge 60 ]; then
+            log_error "Docker daemon did not come up after ${waited}s"
+            return 1
+        fi
+        sleep 2
+        waited=$((waited + 2))
+    done
+    log_info "Docker daemon is up"
+}
+
+find_ghost_containers() {
+    local compose_config project ids id
+    # Compose matches containers by project name, so ghosts must be found by
+    # that same key - and only under the name compose actually resolves to
+    # right now (covering .env, COMPOSE_PROJECT_NAME, top-level `name:`, and
+    # moved checkouts). `docker compose config` is the authority on that.
+    # Note: this function's stdout is the ghost list, so warnings go to
+    # stderr, and unresolvable config fails closed (no ghosts, no surgery).
+    if ! compose_config=$(docker compose config 2>/dev/null); then
+        log_warning "Cannot resolve Compose configuration; skipping ghost detection" >&2
+        return 1
+    fi
+
+    project=$(printf '%s\n' "$compose_config" | sed -n 's/^name:[[:space:]]*//p')
+    if ! [[ "$project" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+        log_warning "Cannot resolve a valid Compose project name" >&2
+        return 1
+    fi
+
+    if ! ids=$(docker ps -aq --no-trunc \
+        --filter "label=com.docker.compose.project=$project" 2>/dev/null); then
+        return 1
+    fi
+
+    while IFS= read -r id; do
+        [ -n "$id" ] || continue
+        docker inspect "$id" >/dev/null 2>&1 || printf '%s\n' "$id"
+    done <<< "$ids"
+}
+
+recover_ghost_containers() {
+    local ghosts
+    ghosts=$(find_ghost_containers)
+    if [ -z "$ghosts" ]; then
+        return 1
+    fi
+    log_warning "Ghost container records detected (listed but not inspectable):"
+    log_warning "$ghosts"
+
+    # Cheap path first; rm typically fails for true ghosts.
+    echo "$ghosts" | xargs -r docker rm -f 2>/dev/null || true
+    if [ -z "$(find_ghost_containers)" ]; then
+        log_info "Ghost containers removed"
+        return 0
+    fi
+
+    # The heal stops the Docker daemon (bouncing every running container), so
+    # at most once per boot: if it did not clear the ghosts a human is needed,
+    # and systemd's retries must not keep bouncing the daemon.
+    local boot_id
+    boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)
+    if [ -z "$boot_id" ]; then
+        log_error "Cannot read boot id; refusing unguarded surgery"
+        return 1
+    fi
+    if [ "$(cat "$DOCKER_HEAL_MARKER" 2>/dev/null)" = "$boot_id" ]; then
+        log_warning "Ghost heal already attempted this boot; not doing it again"
+        return 1
+    fi
+    # Fail closed: if the marker cannot be persisted the surgery would repeat
+    # on every systemd retry, bouncing the daemon forever - e.g. on a disk
+    # that just went read-only, the same failure that makes the heal fail.
+    if ! echo "$boot_id" > "$DOCKER_HEAL_MARKER" 2>/dev/null; then
+        log_error "Cannot write heal marker $DOCKER_HEAL_MARKER; skipping surgery"
+        return 1
+    fi
+
+    log_warning "Ghosts survived removal; removing their records with the daemon stopped..."
+    # shellcheck disable=SC2086  # ghost IDs are intentionally word-split
+    if ! sudo -n "$PROJECT_ROOT/deployment/docker-ghost-heal.sh" $ghosts; then
+        log_error "Ghost heal failed (sudoers rule missing? re-run install.sh)"
+        return 1
+    fi
+
+    ensure_docker_running || return 1
+
+    if [ -n "$(find_ghost_containers)" ]; then
+        log_error "Ghost containers still present after heal"
+        return 1
+    fi
+    log_info "Ghost containers healed, Docker daemon responding"
+}
+
+# Run `docker compose up -d` (with any extra args); on failure, attempt
+# ghost-container recovery and retry once.
+compose_up_with_recovery() {
+    ensure_docker_running || return 1
+    if docker compose up -d "$@"; then
+        return 0
+    fi
+    log_warning "compose up failed, checking for ghost container records..."
+    recover_ghost_containers || return 1
+    docker compose up -d "$@"
 }
 
 # Function to start Docker containers
@@ -268,7 +401,7 @@ start_containers() {
     # Clean up orphaned containers first
     cleanup_orphaned_containers
 
-    if docker compose up -d; then
+    if compose_up_with_recovery; then
         log_info "Docker containers started successfully"
         # A full stack start means any update is over; drop the stage file so
         # /update-progress doesn't keep serving the last stage between
@@ -287,7 +420,7 @@ restart_containers() {
 
     cd "$PROJECT_ROOT"
     # Use --force-recreate to ensure fresh network connections and avoid nginx DNS cache issues
-    if docker compose up -d --force-recreate; then
+    if compose_up_with_recovery --force-recreate; then
         log_info "Containers restarted successfully"
         # Remove the restart flag
         rm -f "$RESTART_FLAG_FILE"

@@ -208,14 +208,16 @@ if [ -f "$SETTINGS_FILE" ]; then
 
     if [ "$SOURCE_COUNT" -gt 0 ]; then
         # Check if any pulseaudio source exists
-        PA_COUNT=$(jq -r '[.audio.sources[] | select(.type == "pulseaudio" and .enabled == true)] | length' "$SETTINGS_FILE" 2>/dev/null || echo 0)
+        PA_COUNT=$(jq -r '[.audio.sources[] | select(.type == "pulseaudio" and .enabled != false)] | length' "$SETTINGS_FILE" 2>/dev/null || echo 0)
         if [ "$PA_COUNT" -gt 0 ]; then
             wait_for_pulseaudio || exit 1
         fi
 
         # Launch a stream loop per enabled source
         for i in $(seq 0 $((SOURCE_COUNT - 1))); do
-            ENABLED=$(jq -r ".audio.sources[$i].enabled // true" "$SETTINGS_FILE")
+            # NOTE: not `.enabled // true` — jq's // replaces false as well
+            # as null, which made disabled sources stream anyway.
+            ENABLED=$(jq -r ".audio.sources[$i].enabled != false" "$SETTINGS_FILE")
             [ "$ENABLED" = "false" ] && continue
 
             SID=$(jq -r ".audio.sources[$i].id" "$SETTINGS_FILE")

@@ -849,11 +849,16 @@ create_service_file() {
 Description=BirdNET-PiPy Bird Detection Service
 Documentation=https://github.com/Suncuss/BirdNET-PiPy
 After=docker.service network.target
-Requires=docker.service
+# Wants (not Requires): ghost-container recovery in birdnet-service.sh stops
+# and restarts the Docker daemon, and a Requires= dependency would make that
+# stop propagate back and kill the service mid-recovery (deadlocking until
+# systemd's stop timeout).
+Wants=docker.service
 
-# Rate limiting: max 5 restarts in 5 minutes to prevent infinite loops
-StartLimitBurst=5
-StartLimitIntervalSec=300
+# Never stop retrying: this is an appliance, and a start failure that
+# outlasts a burst limit (slow daemon, transient corruption) must not leave
+# the station dead until someone reboots it. RestartSec paces the retries.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -866,7 +871,7 @@ StandardError=journal
 # Auto-restart on any exit (crash recovery + update support)
 # After a successful update, the service exits and systemd restarts it with new code
 Restart=always
-RestartSec=10
+RestartSec=30
 
 # Graceful shutdown (90s for slow systems like Pi Zero)
 TimeoutStopSec=90
@@ -923,6 +928,15 @@ $ACTUAL_USER ALL=(ALL) NOPASSWD: $(_bin rm) -f /run/pulse/pid
 
 # Enable swap (optional, only if /swapfile-birdnet-pipy exists)
 $ACTUAL_USER ALL=(ALL) NOPASSWD: $(_bin swapon) /swapfile-birdnet-pipy
+
+# Ghost-container surgery, used at most once per boot: stops Docker, removes
+# corrupted container records, starts it again (see docker-ghost-heal.sh and
+# recover_ghost_containers in birdnet-service.sh)
+$ACTUAL_USER ALL=(ALL) NOPASSWD: $PROJECT_ROOT/deployment/docker-ghost-heal.sh *
+
+# Start a stopped Docker daemon (recovery from an interrupted ghost heal;
+# see ensure_docker_running in birdnet-service.sh)
+$ACTUAL_USER ALL=(ALL) NOPASSWD: $(_bin systemctl) start docker.socket docker.service
 
 # System update via install.sh --update (with optional --branch)
 $ACTUAL_USER ALL=(ALL) NOPASSWD: $PROJECT_ROOT/install.sh --update
