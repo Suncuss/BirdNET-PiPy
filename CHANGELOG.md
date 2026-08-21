@@ -2,9 +2,11 @@
 
 ## [Unreleased]
 
-- Fixed startup dying permanently when Docker is left with corrupted container records after an unclean shutdown: the service now detects them, repairs them once per boot (removing the broken records with the daemon stopped), and retries — and it keeps retrying failed starts indefinitely instead of giving up after five attempts, with the underlying Docker error now logged instead of swallowed
-- Fixed the live-stream service starting an encoder for disabled audio sources; a disabled source could keep an ffmpeg reconnect loop running against its camera 24/7
+## [0.8.8] - 2026-08-21
+
 - Improved audio capture to be gapless: each source now records through one persistent ffmpeg stream (restarted automatically on failure) instead of a new process per segment, eliminating the dead air between recordings that cost slower devices like the Pi Zero 2W ~25-30% of all audio. Segments are also written in a single burst, which lets short-lived queue files avoid the SD card entirely on most systems; set `BIRDNET_CAPTURE_MODE=segment` to revert to per-segment capture
+- Fixed startup dying permanently when Docker is left with corrupted container records after an unclean shutdown: the service now detects and repairs them once per boot (removing the broken records with the daemon stopped) and retries, keeps retrying failed starts indefinitely instead of giving up after five attempts, and logs the underlying Docker error instead of swallowing it
+- Fixed the live-stream service starting an encoder for disabled audio sources; a disabled source could keep an ffmpeg reconnect loop running against its camera 24/7
 
 ## [0.8.7] - 2026-08-16
 
