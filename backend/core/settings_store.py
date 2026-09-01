@@ -5,8 +5,9 @@ reads go through the runtime-settings cache (core.runtime_config) and writes
 are atomic. The routes in core/routes/settings.py own request parsing and the
 restart-required classification; this module owns the file.
 """
-from config.settings import USER_SETTINGS_PATH
+from config.settings import USER_SETTINGS_PATH, get_default_settings
 from core.logging_config import get_logger
+from core.recording_schedule import validate_quiet_hours
 from core.runtime_config import (
     get_runtime_settings,
     invalidate_runtime_settings_cache,
@@ -85,3 +86,32 @@ def _persist_no_restart_setting(section, key, value):
     current_settings[section][key] = value
     save_user_settings(current_settings)
     invalidate_runtime_settings_cache()
+
+
+def update_quiet_hours(incoming):
+    """Merge a (possibly partial) quiet_hours object over the stored one and persist.
+
+    Omitted fields keep their stored value (defaults underneath). Returns
+    ``(merged, None)`` on success or ``(None, error)`` when the merged result
+    fails validation — nothing is written in that case. No restart: the main
+    container re-evaluates schedule.* from the settings file every tick.
+    """
+    current_settings = load_user_settings()
+    schedule = current_settings.get('schedule')
+    if not isinstance(schedule, dict):
+        schedule = {}
+    current = schedule.get('quiet_hours')
+    merged = {
+        **get_default_settings()['schedule']['quiet_hours'],
+        **(current if isinstance(current, dict) else {}),
+        **incoming,
+    }
+    error = validate_quiet_hours(merged)
+    if error:
+        return None, error
+
+    schedule['quiet_hours'] = merged
+    current_settings['schedule'] = schedule
+    save_user_settings(current_settings)
+    invalidate_runtime_settings_cache()
+    return merged, None

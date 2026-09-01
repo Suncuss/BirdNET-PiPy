@@ -7,6 +7,7 @@ Tests the core functions:
 - process_audio_files() (directory scanning)
 """
 import os
+from datetime import datetime
 from unittest.mock import ANY, Mock, patch
 
 import pytest
@@ -1653,6 +1654,133 @@ class TestRecordingThread:
 
             # Verify recorder.stop() was called in finally block
             mock_recorder.stop.assert_called_once()
+
+    # ---- Quiet hours (core.recording_schedule) ----
+
+    @staticmethod
+    def _settings_with_quiet_hours(start='22:00', end='06:00'):
+        return {
+            'audio': {
+                'sources': [
+                    {'id': 'source_0', 'type': 'pulseaudio', 'device': 'default', 'label': 'Microphone', 'enabled': True}
+                ],
+                'next_source_id': 1,
+                'recording_length': 9,
+            },
+            'schedule': {'quiet_hours': {'enabled': True, 'start': start, 'end': end}},
+        }
+
+    def test_quiet_hours_skip_recorder_start_and_broadcast_paused(
+        self, mock_recorder, controllable_stop_flag
+    ):
+        """Starting inside quiet hours: no recorder, status 'paused' with resume time."""
+        with patch('core.main.get_runtime_settings', return_value=self._settings_with_quiet_hours()), \
+             patch('core.main.create_recorder', return_value=mock_recorder) as mock_create, \
+             patch('core.main.local_now', return_value=datetime(2026, 8, 24, 23, 0, 0)), \
+             patch('core.main.FILE_SCAN_INTERVAL', 0.01), \
+             patch('core.main.stop_flag') as mock_stop, \
+             patch('core.main.broadcast_recorder_status') as mock_broadcast, \
+             patch('time.sleep'):
+
+            mock_stop.is_set.side_effect = controllable_stop_flag(iterations=1)
+
+            from core.main import continuous_audio_recording
+            continuous_audio_recording(Mock())
+
+            mock_create.assert_not_called()
+            mock_recorder.start.assert_not_called()
+            mock_broadcast.assert_called_once()
+            args, kwargs = mock_broadcast.call_args
+            assert args[0] == 'paused'
+            assert kwargs['pause'] == {'reason': 'quiet_hours', 'resumes_at': '2026-08-25T06:00'}
+
+    def test_quiet_hours_stop_recorders_on_entry_and_restart_on_exit(
+        self, mock_recorder, controllable_stop_flag
+    ):
+        """Recording -> quiet hours -> recording: stop once, start again, states follow."""
+        clock = [
+            datetime(2026, 8, 24, 21, 59),  # init: recording
+            datetime(2026, 8, 24, 21, 59),  # iter 1: still recording
+            datetime(2026, 8, 24, 22, 0),   # iter 2: quiet hours begin
+            datetime(2026, 8, 24, 22, 30),  # iter 3: still paused (no restart)
+            datetime(2026, 8, 25, 6, 0),    # iter 4: quiet hours end
+        ]
+        with patch('core.main.get_runtime_settings', return_value=self._settings_with_quiet_hours()), \
+             patch('core.main.create_recorder', return_value=mock_recorder) as mock_create, \
+             patch('core.main.local_now', side_effect=clock), \
+             patch('core.main.FILE_SCAN_INTERVAL', 0.01), \
+             patch('core.main.stop_flag') as mock_stop, \
+             patch('core.main.broadcast_recorder_status') as mock_broadcast, \
+             patch('time.sleep'):
+
+            mock_stop.is_set.side_effect = controllable_stop_flag(iterations=4)
+
+            from core.main import continuous_audio_recording
+            continuous_audio_recording(Mock())
+
+            assert mock_create.call_count == 2          # init + resume
+            assert mock_recorder.start.call_count == 2
+            assert mock_recorder.stop.call_count == 2   # pause + shutdown
+            states = [c.args[0] for c in mock_broadcast.call_args_list]
+            assert states == ['running', 'paused', 'running']
+            assert mock_broadcast.call_args_list[-1].kwargs['pause'] is None
+
+    def test_paused_status_rebroadcasts_when_window_end_changes(
+        self, mock_recorder, controllable_stop_flag
+    ):
+        """Editing the end time while paused re-broadcasts the new resume time
+        immediately rather than waiting for the periodic refresh."""
+        settings = [
+            self._settings_with_quiet_hours(end='06:00'),  # init
+            self._settings_with_quiet_hours(end='06:00'),  # iter 1
+            self._settings_with_quiet_hours(end='07:00'),  # iter 2: user edits end
+        ]
+        with patch('core.main.get_runtime_settings', side_effect=settings), \
+             patch('core.main.create_recorder', return_value=mock_recorder), \
+             patch('core.main.local_now', return_value=datetime(2026, 8, 24, 23, 0, 0)), \
+             patch('core.main.FILE_SCAN_INTERVAL', 0.01), \
+             patch('core.main.stop_flag') as mock_stop, \
+             patch('core.main.broadcast_recorder_status') as mock_broadcast, \
+             patch('time.sleep'):
+
+            mock_stop.is_set.side_effect = controllable_stop_flag(iterations=2)
+
+            from core.main import continuous_audio_recording
+            continuous_audio_recording(Mock())
+
+            resumes = [c.kwargs['pause']['resumes_at'] for c in mock_broadcast.call_args_list]
+            assert resumes == ['2026-08-25T06:00', '2026-08-25T07:00']
+
+    def test_quiet_hours_are_invisible_to_audio_status_notifier(
+        self, mock_recorder, controllable_stop_flag
+    ):
+        """A pause never reaches the notifier, and the state after resuming is
+        judged against the state before the pause (stopped -> running = recovery)."""
+        clock = [
+            datetime(2026, 8, 24, 21, 59),  # init
+            datetime(2026, 8, 24, 21, 59),  # iter 1: recorder unhealthy -> 'stopped'
+            datetime(2026, 8, 24, 22, 0),   # iter 2: pause
+            datetime(2026, 8, 24, 22, 30),  # iter 3: paused
+            datetime(2026, 8, 25, 6, 0),    # iter 4: resume, healthy -> 'running'
+        ]
+        # iter 1: health check, then re-check after restart; iter 4: healthy
+        mock_recorder.is_healthy.side_effect = [False, False, True]
+        with patch('core.main.get_runtime_settings', return_value=self._settings_with_quiet_hours()), \
+             patch('core.main.create_recorder', return_value=mock_recorder), \
+             patch('core.main.local_now', side_effect=clock), \
+             patch('core.main.FILE_SCAN_INTERVAL', 0.01), \
+             patch('core.main.stop_flag') as mock_stop, \
+             patch('core.main.broadcast_recorder_status'), \
+             patch('core.main._maybe_notify_audio_status') as mock_notify, \
+             patch('time.sleep'):
+
+            mock_stop.is_set.side_effect = controllable_stop_flag(iterations=4)
+
+            from core.main import continuous_audio_recording
+            continuous_audio_recording(Mock())
+
+            transitions = [c.args[:2] for c in mock_notify.call_args_list]
+            assert transitions == [('stopped', None), ('running', 'stopped')]
 
 
 class TestThreadCoordination:

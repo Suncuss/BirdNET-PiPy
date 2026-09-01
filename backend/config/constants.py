@@ -19,6 +19,8 @@ class RecorderState:
     RUNNING = 'running'
     DEGRADED = 'degraded'
     STOPPED = 'stopped'
+    # Intentionally not recording (schedule / quiet hours) — not a fault.
+    PAUSED = 'paused'
 
 
 class RecordingMode:

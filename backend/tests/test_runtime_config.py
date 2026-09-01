@@ -12,6 +12,17 @@ def _make_settings(sources):
 
 
 class TestClassifySettingChanges:
+    def test_schedule_is_hot_applied(self):
+        """schedule.* must stay hot-applied: the main container re-evaluates
+        quiet hours from the settings file every recorder tick (no restart)."""
+        paths = ["schedule.quiet_hours.enabled", "schedule.quiet_hours.start"]
+
+        plan = classify_setting_changes(paths)
+
+        assert plan["full_restart_required"] is False
+        assert plan["component_restarts"] == []
+        assert plan["hot_applied"] == paths
+
     def test_model_switch_requires_full_restart(self):
         plan = classify_setting_changes(["model.type"])
 

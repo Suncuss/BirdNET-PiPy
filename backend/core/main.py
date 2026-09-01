@@ -43,10 +43,11 @@ from core.media_ownership import (
     with_media_suffix,
 )
 from core.notification_service import get_notification_service
+from core.recording_schedule import ScheduleDecision, evaluate_schedule
 from core.runtime_config import get_runtime_settings, resolve_source_label
 from core.spectrogram import generate_spectrogram
 from core.storage_manager import storage_monitor_loop
-from core.timezone_service import get_timezone_str
+from core.timezone_service import get_timezone_str, local_now
 from core.utils import (
     build_detection_filenames,
     extract_audio_segment,
@@ -87,10 +88,6 @@ stop_flag = threading.Event()
 # Ensure directories exist
 for dir in [RECORDING_DIR, EXTRACTED_AUDIO_DIR, SPECTROGRAM_DIR]:
     os.makedirs(dir, exist_ok=True)
-
-def _get_audio_settings() -> dict[str, Any]:
-    return get_runtime_settings().get('audio', {})
-
 
 def _get_enabled_sources(audio_settings: dict[str, Any]) -> list[dict]:
     """Get list of enabled source entries from audio settings."""
@@ -240,8 +237,13 @@ def broadcast_recorder_status(
     state: str, recorders: dict[str, BaseRecorder],
     sources: list[dict], thread_logger,
     health_cache: dict[str, bool] | None = None,
+    pause: dict | None = None,
 ) -> bool:
     """Send recorder health status to API for WebSocket broadcast.
+
+    ``pause`` (see _pause_payload) marks an intentional stop: sources
+    without a recorder then report 'paused' rather than 'stopped' so the
+    UI can tell quiet hours from a fault.
 
     Returns True if broadcast succeeded, False otherwise.
     """
@@ -262,13 +264,14 @@ def broadcast_recorder_status(
                 per_source[sid] = {
                     'label': source.get('label', sid),
                     'type': source.get('type', ''),
-                    'state': RecorderState.STOPPED,
+                    'state': RecorderState.PAUSED if pause else RecorderState.STOPPED,
                     **BaseRecorder.default_health_status(),
                 }
 
         status_data = {
             'state': state,
             'sources': per_source,
+            'pause': pause,
         }
         resp = requests.post(
             f'http://{API_HOST}:{API_PORT}/api/broadcast/recorder-status',
@@ -398,6 +401,35 @@ def _maybe_notify_audio_status(
     })
 
 
+def _pause_payload(decision: ScheduleDecision) -> dict | None:
+    """Status-broadcast fragment for an intentional pause; None when recording.
+
+    ``resumes_at`` is station-local naive ISO (minutes), matching the
+    convention detection timestamps already use.
+    """
+    if decision.record:
+        return None
+    resumes_at = decision.resumes_at
+    return {
+        'reason': decision.reason,
+        'resumes_at': resumes_at.isoformat(timespec='minutes') if resumes_at else None,
+    }
+
+
+def _log_schedule_error(
+    decision: ScheduleDecision, previous_error: str | None, thread_logger,
+) -> str | None:
+    """Warn once when an enabled schedule is being ignored, and once when it
+    becomes usable again. Returns the error to carry into the next tick."""
+    if decision.error != previous_error:
+        if decision.error:
+            thread_logger.warning("Recording schedule invalid, recording continues",
+                                  extra={'error': decision.error})
+        else:
+            thread_logger.info("Recording schedule valid again")
+    return decision.error
+
+
 def continuous_audio_recording(thread_logger):
     """Continuous audio recording from one or more audio sources.
 
@@ -407,9 +439,12 @@ def continuous_audio_recording(thread_logger):
     recorders: dict[str, BaseRecorder] = {}  # source_id → recorder
     current_signature: tuple | None = None
     last_broadcast_state: str | None = None
+    last_broadcast_pause: dict | None = None
     last_broadcast_time: float = 0.0
     last_notify_state: str | None = None
     audio_alert_tracker = _AudioAlertTracker()
+    paused = False  # intentionally not recording (schedule), not a fault
+    schedule_error: str | None = None
 
     def _start_all(audio_settings, sig):
         nonlocal current_signature
@@ -434,11 +469,29 @@ def continuous_audio_recording(thread_logger):
                 thread_logger.debug(f"Error stopping recorder {sid}: {e}")
         recorders.clear()
 
+    def _apply_schedule(decision: ScheduleDecision) -> None:
+        """Enter or leave the paused state, logging once per transition."""
+        nonlocal paused
+        if decision.record:
+            if paused:
+                thread_logger.info("▶️ Quiet hours ended, resuming recording")
+                paused = False
+            return
+        if not paused:
+            thread_logger.info("⏸️ Quiet hours started, pausing recording",
+                               extra=_pause_payload(decision))
+            paused = True
+        if recorders:
+            _stop_all()
+
     try:
-        # Initialize recorders on startup
+        # Initialize recorders on startup (unless the schedule says not to)
         try:
-            initial_audio_settings = _get_audio_settings()
-            _start_all(initial_audio_settings, _get_recorder_signature(initial_audio_settings))
+            initial_settings = get_runtime_settings()
+            initial_audio_settings = initial_settings.get('audio', {})
+            _apply_schedule(evaluate_schedule(initial_settings, local_now()))
+            if not paused:
+                _start_all(initial_audio_settings, _get_recorder_signature(initial_audio_settings))
         except Exception as e:
             log_fd_exhaustion_if_needed(e, thread_logger, 'recording_loop_init')
             thread_logger.error("Recording loop error", extra={'error': str(e)}, exc_info=True)
@@ -446,10 +499,16 @@ def continuous_audio_recording(thread_logger):
 
         while not stop_flag.is_set():
             try:
-                audio_settings = _get_audio_settings()
+                settings = get_runtime_settings()
+                audio_settings = settings.get('audio', {})
                 new_signature = _get_recorder_signature(audio_settings)
+                decision = evaluate_schedule(settings, local_now())
+                schedule_error = _log_schedule_error(decision, schedule_error, thread_logger)
+                _apply_schedule(decision)
 
-                if not recorders:
+                if paused:
+                    pass  # recorders are down on purpose; nothing to (re)start
+                elif not recorders:
                     _start_all(audio_settings, new_signature)
                 elif new_signature != current_signature:
                     thread_logger.info("🔴 Audio settings changed, reloading recorders")
@@ -469,26 +528,43 @@ def continuous_audio_recording(thread_logger):
 
                 # Broadcast status on state change or periodic refresh
                 enabled_sources = _get_enabled_sources(audio_settings)
-                current_state = _get_aggregate_state(recorders, health_cache)
-                state_changed = current_state != last_broadcast_state
+                pause_info = _pause_payload(decision) if paused else None
+                current_state = (
+                    RecorderState.PAUSED if paused
+                    else _get_aggregate_state(recorders, health_cache)
+                )
+                # Pause metadata counts as state: editing the window's end
+                # while paused must not leave a stale resumes_at until the
+                # next periodic refresh.
+                state_changed = (
+                    current_state != last_broadcast_state
+                    or pause_info != last_broadcast_pause
+                )
                 refresh_due = (time.time() - last_broadcast_time) >= STATUS_REFRESH_INTERVAL
                 if state_changed or refresh_due:
                     ok = broadcast_recorder_status(
                         current_state, recorders, enabled_sources, thread_logger,
-                        health_cache,
+                        health_cache, pause=pause_info,
                     )
                     if ok:
                         last_broadcast_state = current_state
+                        last_broadcast_pause = pause_info
                         last_broadcast_time = time.time()
 
                 # Runs even if the broadcast above failed, so a flaky API
-                # socket can't mask audio degradation.
-                _maybe_notify_audio_status(
-                    current_state, last_notify_state, recorders,
-                    enabled_sources, health_cache, audio_alert_tracker,
-                    thread_logger,
-                )
-                last_notify_state = current_state
+                # socket can't mask audio degradation. A scheduled pause is
+                # invisible to the notifier: it is not a problem, and by not
+                # advancing last_notify_state through it, the first state
+                # after resuming is judged against the state before the
+                # pause — an unresolved degradation still gets its recovery
+                # alert, and a stream that died during the pause still alerts.
+                if not paused:
+                    _maybe_notify_audio_status(
+                        current_state, last_notify_state, recorders,
+                        enabled_sources, health_cache, audio_alert_tracker,
+                        thread_logger,
+                    )
+                    last_notify_state = current_state
 
                 time.sleep(FILE_SCAN_INTERVAL)
 

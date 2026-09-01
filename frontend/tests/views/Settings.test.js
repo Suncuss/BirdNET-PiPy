@@ -146,6 +146,9 @@ const mockSettings = {
   updates: {
     channel: 'release'
   },
+  schedule: {
+    quiet_hours: { enabled: false, start: '22:00', end: '06:00' }
+  },
   storage: {
     auto_cleanup_enabled: true,
     trigger_percent: 85,
@@ -1287,6 +1290,208 @@ describe('Settings', () => {
     })
   })
 
+  describe('Quiet Hours', () => {
+    const summary = (wrapper) => wrapper.find('[data-testid="quiet-hours-summary"]').text()
+
+    it('renders inside the Detection section with the stored window', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      expect(wrapper.find('#quietHoursStart').element.value).toBe('22:00')
+      expect(wrapper.find('#quietHoursEnd').element.value).toBe('06:00')
+      expect(wrapper.vm.quietHours.enabled).toBe(false)
+      expect(summary(wrapper)).toBe('Recording runs around the clock.')
+    })
+
+    it('toggling saves immediately via the schedule endpoint without marking unsaved changes', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      mockApi.put.mockResolvedValueOnce({
+        data: { success: true, quiet_hours: { enabled: true, start: '22:00', end: '06:00' } }
+      })
+      await wrapper.vm.toggleQuietHours(true)
+      await flushPromises()
+
+      expect(mockApi.put).toHaveBeenCalledWith('/settings/schedule', { quiet_hours: { enabled: true } })
+      expect(wrapper.vm.settings.schedule.quiet_hours.enabled).toBe(true)
+      expect(wrapper.vm.hasUnsavedChanges).toBe(false)
+      expect(summary(wrapper)).toContain('every day (8 h)')
+      expect(summary(wrapper)).toContain('wrap past midnight')
+    })
+
+    it('saves a committed time change as the full start/end pair', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      mockApi.put.mockResolvedValueOnce({
+        data: { success: true, quiet_hours: { enabled: false, start: '21:30', end: '06:00' } }
+      })
+      wrapper.vm.quietHoursDraft.start = '21:30'
+      await wrapper.vm.saveQuietHoursTime()
+      await flushPromises()
+
+      expect(mockApi.put).toHaveBeenCalledWith('/settings/schedule', { quiet_hours: { start: '21:30', end: '06:00' } })
+      expect(wrapper.vm.settings.schedule.quiet_hours.start).toBe('21:30')
+      expect(wrapper.find('#quietHoursStart').element.value).toBe('21:30')
+    })
+
+    it('does not save an unchanged pair', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      await wrapper.vm.saveQuietHoursTime()
+      expect(mockApi.put).not.toHaveBeenCalled()
+    })
+
+    it('flags an equal pair inline, keeps the draft and saves nothing', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      wrapper.vm.quietHoursDraft.end = '22:00'
+      await wrapper.vm.saveQuietHoursTime()
+      await flushPromises()
+
+      expect(mockApi.put).not.toHaveBeenCalled()
+      expect(wrapper.vm.quietHoursDraft.end).toBe('22:00')
+      expect(wrapper.find('[data-testid="quiet-hours-error"]').text()).toBe('Start and end must differ — not saved yet.')
+      expect(wrapper.find('[data-testid="quiet-hours-summary"]').exists()).toBe(false)
+      expect(wrapper.vm.settings.schedule.quiet_hours.end).toBe('06:00')
+    })
+
+    it('lets a swap through: the pair saves once both fields are valid again', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      // 22:00–06:00 → 06:00–22:00 necessarily passes through 06:00–06:00
+      wrapper.vm.quietHoursDraft.start = '06:00'
+      await wrapper.vm.saveQuietHoursTime()
+      expect(mockApi.put).not.toHaveBeenCalled()
+
+      mockApi.put.mockResolvedValueOnce({
+        data: { success: true, quiet_hours: { enabled: false, start: '06:00', end: '22:00' } }
+      })
+      wrapper.vm.quietHoursDraft.end = '22:00'
+      await wrapper.vm.saveQuietHoursTime()
+      await flushPromises()
+
+      expect(mockApi.put).toHaveBeenCalledTimes(1)
+      expect(mockApi.put).toHaveBeenCalledWith('/settings/schedule', { quiet_hours: { start: '06:00', end: '22:00' } })
+      expect(wrapper.vm.settings.schedule.quiet_hours).toEqual({ enabled: false, start: '06:00', end: '22:00' })
+      expect(wrapper.find('[data-testid="quiet-hours-error"]').exists()).toBe(false)
+    })
+
+    it('flags a cleared field inline without saving', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      wrapper.vm.quietHoursDraft.start = ''
+      await wrapper.vm.saveQuietHoursTime()
+
+      expect(mockApi.put).not.toHaveBeenCalled()
+      expect(wrapper.find('[data-testid="quiet-hours-error"]').text()).toContain('HH:MM')
+    })
+
+    it('keeps a half-entered draft when the toggle saves', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      wrapper.vm.quietHoursDraft.start = '06:00'  // invalid pair, deliberately unsaved
+      mockApi.put.mockResolvedValueOnce({
+        data: { success: true, quiet_hours: { enabled: true, start: '22:00', end: '06:00' } }
+      })
+      await wrapper.vm.toggleQuietHours(true)
+      await flushPromises()
+
+      expect(wrapper.vm.quietHoursDraft.start).toBe('06:00')
+    })
+
+    it('reverts both inputs and surfaces the server error when the save is rejected', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      mockApi.put.mockRejectedValueOnce({
+        response: { data: { error: 'quiet_hours.start must be a time in HH:MM (24-hour) format' } }
+      })
+      wrapper.vm.quietHoursDraft.start = '23:15'
+      await wrapper.vm.saveQuietHoursTime()
+      await flushPromises()
+
+      expect(wrapper.vm.quietHoursDraft.start).toBe('22:00')
+      expect(wrapper.vm.quietHoursDraft.end).toBe('06:00')
+      expect(wrapper.vm.settings.schedule.quiet_hours.start).toBe('22:00')
+      expect(wrapper.vm.saveStatus.type).toBe('error')
+      expect(wrapper.vm.saveStatus.message).toContain('HH:MM')
+    })
+
+    it('locks full-settings save paths while a quiet-hours request is pending, and vice versa', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+      const saveButton = () => wrapper.findAll('button').find(b => b.text().startsWith('Save'))
+
+      let resolveRequest
+      mockApi.put.mockImplementationOnce(() => new Promise((resolve) => { resolveRequest = resolve }))
+      const pending = wrapper.vm.toggleQuietHours(true)
+      await wrapper.vm.$nextTick()
+      expect(wrapper.vm.quietHoursSaving).toBe(true)
+      expect(saveButton().attributes('disabled')).toBeDefined()
+
+      wrapper.vm.showUnsavedModal = true
+      await wrapper.vm.$nextTick()
+      const unsavedModal = wrapper.findComponent({ name: 'UnsavedChangesModal' })
+      expect(unsavedModal.props('saving')).toBe(true)
+
+      // Defend against direct/programmatic callers as well as the disabled UI.
+      await wrapper.vm.handleUnsavedSave()
+      expect(mockApi.put).toHaveBeenCalledTimes(1)
+      expect(wrapper.vm.showUnsavedModal).toBe(true)
+
+      resolveRequest({ data: { success: true, quiet_hours: { enabled: true, start: '22:00', end: '06:00' } } })
+      await pending
+      await wrapper.vm.$nextTick()
+      expect(saveButton().attributes('disabled')).toBeUndefined()
+      expect(unsavedModal.props('saving')).toBe(false)
+
+      // Main Save in flight → quiet-hours controls locked
+      wrapper.vm.loading = true
+      await wrapper.vm.$nextTick()
+      expect(wrapper.find('#quietHoursStart').attributes('disabled')).toBeDefined()
+      expect(wrapper.find('[aria-labelledby="quietHoursLabel"]').attributes('disabled')).toBeDefined()
+    })
+
+    it('gives the switch an accessible name from its label', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      const toggle = wrapper.find('[role="switch"][aria-labelledby="quietHoursLabel"]')
+      expect(toggle.exists()).toBe(true)
+      expect(wrapper.find('#quietHoursLabel').text()).toBe('Quiet Hours')
+    })
+
+    it('falls back to defaults when the settings payload predates the schedule section', async () => {
+      mockApi.get.mockImplementation((url) => {
+        if (url === '/settings') {
+          const legacy = createMockSettings()
+          delete legacy.schedule
+          return Promise.resolve({ data: legacy })
+        }
+        return defaultGetResponse(url)
+      })
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      expect(wrapper.vm.quietHours).toEqual({ enabled: false, start: '22:00', end: '06:00' })
+
+      mockApi.put.mockResolvedValueOnce({
+        data: { success: true, quiet_hours: { enabled: true, start: '22:00', end: '06:00' } }
+      })
+      await wrapper.vm.toggleQuietHours(true)
+      await flushPromises()
+
+      expect(wrapper.vm.settings.schedule.quiet_hours.enabled).toBe(true)
+    })
+  })
+
   describe('Notifications Section', () => {
     it('displays Notifications section', async () => {
       const wrapper = mountSettings()
@@ -1505,7 +1710,7 @@ describe('Settings', () => {
   })
 
   describe('Recorder Status & Error Display', () => {
-    const { RUNNING, DEGRADED, STOPPED } = RECORDER_STATES
+    const { RUNNING, DEGRADED, STOPPED, PAUSED } = RECORDER_STATES
 
     // Helper: build a multi-source status object matching the backend shape
     const makeStatus = (state, sources = {}) => ({ state, sources })
@@ -1606,6 +1811,33 @@ describe('Settings', () => {
       await wrapper.vm.$nextTick()
       expect(wrapper.vm.recorderStateLabel).toBe('Audio Stopped')
       expect(wrapper.vm.recorderDotClass).toContain('bg-red-500')
+    })
+
+    it('shows a blue paused badge with the resume time and hides error details', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      wrapper.vm.recorderStatus = {
+        ...makeStatus(PAUSED, { source_0: makeSource('Mic', PAUSED) }),
+        pause: { reason: 'quiet_hours', resumes_at: '2026-08-25T06:00' }
+      }
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.vm.recorderStateLabel).toMatch(/^Paused until /)
+      expect(wrapper.vm.recorderStateLabel).toContain('6:00')
+      expect(wrapper.vm.recorderDotClass).toBe('bg-blue-400')
+      expect(wrapper.vm.recorderStateLabelClass).toBe('text-blue-600')
+      expect(wrapper.vm.showRecorderError).toBe(false)
+    })
+
+    it('falls back to a plain paused label without a resume time', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      wrapper.vm.recorderStatus = { ...makeStatus(PAUSED, {}), pause: null }
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.vm.recorderStateLabel).toBe('Paused')
     })
 
   })

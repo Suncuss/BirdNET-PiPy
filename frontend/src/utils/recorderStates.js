@@ -5,4 +5,5 @@ export const RECORDER_STATES = {
   RUNNING: 'running',
   DEGRADED: 'degraded',
   STOPPED: 'stopped',
+  PAUSED: 'paused',
 }

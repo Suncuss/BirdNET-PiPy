@@ -739,6 +739,121 @@ class TestSimpleAPI:
                 assert response.status_code == 400
                 mock_save.assert_not_called()
 
+    def test_update_schedule_setting(self):
+        """Quiet hours instant-save endpoint: merge, validate, persist, no restart."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+                 patch('core.db.DatabaseManager') as MockDB, \
+                 patch('core.settings_store.load_user_settings') as mock_load, \
+                 patch('core.settings_store.save_user_settings') as mock_save, \
+                 patch('core.update_service.write_flag') as mock_flag:
+
+                MockDB.return_value = Mock()
+
+                from core.api import create_app
+                app, _ = create_app()
+                client = app.test_client()
+
+                def put(payload):
+                    return client.put('/api/settings/schedule',
+                                      data=json.dumps(payload),
+                                      content_type='application/json')
+
+                # Full object on a file with no schedule section yet
+                mock_load.return_value = {'audio': {'samplerate': 48000}}
+                quiet = {'enabled': True, 'start': '21:00', 'end': '05:30'}
+                response = put({'quiet_hours': quiet})
+                assert response.status_code == 200
+                assert response.get_json() == {'success': True, 'quiet_hours': quiet}
+                mock_save.assert_called_once_with({
+                    'audio': {'samplerate': 48000},
+                    'schedule': {'quiet_hours': quiet},
+                })
+                mock_flag.assert_not_called()  # No restart needed
+
+                # Partial update keeps the stored window
+                mock_save.reset_mock()
+                mock_load.return_value = {'schedule': {'quiet_hours': dict(quiet, enabled=False)}}
+                response = put({'quiet_hours': {'enabled': True}})
+                assert response.status_code == 200
+                assert response.get_json()['quiet_hours'] == quiet
+                mock_save.assert_called_once()
+
+                # Partial update on a bare file falls back to defaults for the rest
+                mock_save.reset_mock()
+                mock_load.return_value = {}
+                response = put({'quiet_hours': {'enabled': True}})
+                assert response.status_code == 200
+                assert response.get_json()['quiet_hours'] == {
+                    'enabled': True, 'start': '22:00', 'end': '06:00',
+                }
+
+                # Rejected payloads write nothing
+                for bad in (
+                    {'quiet_hours': {'enabled': True, 'start': '25:00', 'end': '06:00'}},
+                    {'quiet_hours': {'enabled': True, 'start': '06:00', 'end': '06:00'}},
+                    {'quiet_hours': {'enabled': 'yes'}},
+                    {'quiet_hours': {'enabled': True, 'days': [1]}},
+                    {'quiet_hours': '22:00-06:00'},
+                    {},
+                ):
+                    mock_save.reset_mock()
+                    response = put(bad)
+                    assert response.status_code == 400, bad
+                    assert 'error' in response.get_json()
+                    mock_save.assert_not_called()
+
+    def test_settings_schedule_validation(self):
+        """The main PUT validates schedule.* on the merged result and hot-applies it."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
+                 patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
+                 patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
+                 patch('core.db.DatabaseManager') as MockDB, \
+                 patch('core.routes.settings.load_user_settings') as mock_load, \
+                 patch('core.routes.settings.save_user_settings') as mock_save, \
+                 patch('core.update_service.write_flag') as mock_flag:
+
+                MockDB.return_value = Mock()
+
+                from core.api import create_app
+                app, _ = create_app()
+                client = app.test_client()
+
+                def put(payload):
+                    return client.put('/api/settings',
+                                      data=json.dumps(payload),
+                                      content_type='application/json')
+
+                mock_load.return_value = {
+                    'schedule': {'quiet_hours': {'enabled': False, 'start': '22:00', 'end': '06:00'}}
+                }
+
+                # Partial change merges over the stored window and needs no restart
+                response = put({'schedule': {'quiet_hours': {'enabled': True}}})
+                assert response.status_code == 200
+                data = response.get_json()
+                assert data['settings']['schedule']['quiet_hours'] == {
+                    'enabled': True, 'start': '22:00', 'end': '06:00',
+                }
+                assert data['changes']['full_restart_required'] is False
+                assert data['changes']['hot_applied'] == ['schedule.quiet_hours.enabled']
+                mock_save.assert_called_once()
+                mock_flag.assert_not_called()
+
+                for bad in (
+                    {'schedule': {'quiet_hours': {'start': '22:00', 'end': '22:00'}}},
+                    {'schedule': {'quiet_hours': {'end': '6pm'}}},
+                    {'schedule': {'pause_until': '2026-08-25T06:00'}},
+                    {'schedule': 'never'},
+                ):
+                    mock_save.reset_mock()
+                    response = put(bad)
+                    assert response.status_code == 400, bad
+                    mock_save.assert_not_called()
+
     def test_bird_detail_endpoints(self):
         """Test bird detail endpoints."""
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -129,6 +129,15 @@ describe('useRecorderHealth', () => {
       expect(showRecorderWarning.value).toBe(true)
     })
 
+    it('does not show warning when state is paused by the schedule (not a fault)', async () => {
+      mockApi.get.mockResolvedValue({ data: { state: 'paused', pause: { reason: 'quiet_hours', resumes_at: '2026-08-25T06:00' } } })
+      const { checkStatus, showRecorderWarning } = useRecorderHealth()
+
+      await checkStatus()
+
+      expect(showRecorderWarning.value).toBe(false)
+    })
+
     it('does not show warning when state is running', async () => {
       mockApi.get.mockResolvedValue({ data: { state: 'running' } })
       const { checkStatus, showRecorderWarning } = useRecorderHealth()

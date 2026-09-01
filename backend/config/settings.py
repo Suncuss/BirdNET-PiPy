@@ -56,6 +56,14 @@ DEFAULT_SETTINGS = {
         # (Settings → "Normalize Recording"); off by default. See GH #54.
         "normalize": False
     },
+    "schedule": {
+        # Quiet hours: a daily station-local window during which recording
+        # (and therefore detection) is paused. start > end wraps past
+        # midnight. Re-evaluated live by the main container every recorder
+        # tick — no restart. Keep this section top-level: schedule.* is
+        # hot-applied by classify_setting_changes, audio.* is not.
+        "quiet_hours": {"enabled": False, "start": "22:00", "end": "06:00"}
+    },
     "storage": {
         "auto_cleanup_enabled": True,
         "trigger_percent": 85,

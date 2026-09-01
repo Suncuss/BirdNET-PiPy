@@ -24,6 +24,7 @@ from core.bird_name_utils import (
 )
 from core.ha_mode import is_home_assistant_mode
 from core.logging_config import get_logger, log_api_request
+from core.recording_schedule import validate_schedule_settings
 from core.runtime_config import (
     classify_setting_changes,
     deep_merge_settings,
@@ -35,6 +36,7 @@ from core.settings_store import (
     _validate_notification_settings,
     load_user_settings,
     save_user_settings,
+    update_quiet_hours,
 )
 from core.utils import normalize_site_url
 
@@ -250,6 +252,42 @@ def update_playback_setting():
         return jsonify({'error': str(e)}), 500
 
 
+@api.route('/api/settings/schedule', methods=['PUT'])
+@log_api_request
+@require_auth
+def update_schedule_setting():
+    """Update the recording schedule (quiet hours) without triggering a restart.
+
+    The main container re-evaluates schedule.* from the settings file on every
+    recorder tick, so the change takes effect within seconds. Accepts a
+    partial quiet_hours object; omitted fields keep their current value.
+    """
+    try:
+        data = request.json
+        if not data or 'quiet_hours' not in data:
+            return jsonify({'error': 'quiet_hours field required'}), 400
+        incoming = data['quiet_hours']
+        if not isinstance(incoming, dict):
+            return jsonify({'error': 'quiet_hours must be a JSON object'}), 400
+
+        merged, error = update_quiet_hours(incoming)
+        if error:
+            return jsonify({'error': error}), 400
+
+        logger.info("Quiet hours changed", extra={'quiet_hours': merged})
+
+        return jsonify({
+            'success': True,
+            'quiet_hours': merged
+        }), 200
+
+    except Exception as e:
+        logger.error("Failed to update schedule setting", extra={
+            'error': str(e)
+        }, exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
 @api.route('/api/settings/notifications', methods=['PUT'])
 @log_api_request
 @require_auth
@@ -391,6 +429,13 @@ def update_settings():
         # Validate notification settings
         if 'notifications' in incoming_settings:
             error = _validate_notification_settings(incoming_settings['notifications'])
+            if error:
+                return jsonify({'error': error}), 400
+
+        # Validate the recording schedule (quiet hours) on the merged result,
+        # so a partial update is checked against the values it will land on
+        if 'schedule' in incoming_settings:
+            error = validate_schedule_settings(new_settings.get('schedule'))
             if error:
                 return jsonify({'error': error}), 400
 

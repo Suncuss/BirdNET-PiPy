@@ -17,7 +17,7 @@
         class="shrink-0 ml-4"
         :loading="loading"
         loading-text="Saving..."
-        :disabled="serviceRestart.isRestarting.value || systemUpdate.isRestarting.value || systemUpdate.updating.value"
+        :disabled="serviceRestart.isRestarting.value || systemUpdate.isRestarting.value || systemUpdate.updating.value || quietHoursSaving"
         @click="saveSettings"
       >
         Save
@@ -566,6 +566,72 @@
               </select>
             </div>
           </div>
+        </div>
+
+        <!-- Quiet Hours — saves immediately (no restart): the recorder
+             re-evaluates the schedule every few seconds. -->
+        <div class="pt-4 border-t border-gray-100">
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <label
+                id="quietHoursLabel"
+                class="text-sm text-gray-600"
+              >Quiet Hours</label>
+              <p class="text-xs text-gray-400">
+                Pause recording and detection every day between these times. Applies within seconds, no restart.
+              </p>
+            </div>
+            <ToggleSwitch
+              aria-labelledby="quietHoursLabel"
+              :model-value="quietHours.enabled"
+              :disabled="quietHoursSaving || loading"
+              @update:model-value="toggleQuietHours"
+            />
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mt-3">
+            <div>
+              <label
+                for="quietHoursStart"
+                class="block text-sm text-gray-600 mb-1"
+              >Start</label>
+              <input
+                id="quietHoursStart"
+                v-model="quietHoursDraft.start"
+                type="time"
+                :disabled="quietHoursSaving || loading"
+                class="block w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                @change="saveQuietHoursTime"
+              >
+            </div>
+            <div>
+              <label
+                for="quietHoursEnd"
+                class="block text-sm text-gray-600 mb-1"
+              >End</label>
+              <input
+                id="quietHoursEnd"
+                v-model="quietHoursDraft.end"
+                type="time"
+                :disabled="quietHoursSaving || loading"
+                class="block w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+                @change="saveQuietHoursTime"
+              >
+            </div>
+          </div>
+          <p
+            v-if="quietHoursDraftError"
+            data-testid="quiet-hours-error"
+            class="text-xs text-red-500 mt-1"
+          >
+            {{ quietHoursDraftError }}
+          </p>
+          <p
+            v-else
+            data-testid="quiet-hours-summary"
+            class="text-xs text-gray-400 mt-1"
+          >
+            {{ quietHoursSummary }}
+          </p>
         </div>
       </CollapsibleSection>
 
@@ -1487,7 +1553,7 @@
     <!-- Unsaved Changes Modal -->
     <UnsavedChangesModal
       v-if="showUnsavedModal"
-      :saving="loading"
+      :saving="loading || quietHoursSaving"
       :error="settingsSaveError"
       @save="handleUnsavedSave"
       @discard="handleUnsavedDiscard"
@@ -1529,7 +1595,7 @@
 </template>
 
   <script>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
 import { io } from 'socket.io-client'
 import { useSystemUpdate } from '@/composables/useSystemUpdate'
@@ -1544,6 +1610,7 @@ import { limitDecimals } from '@/utils/inputHelpers'
 import { recordingSegment } from '@/utils/detectionLinks'
 import { FILTER_DEFAULTS, modelTypeOptions } from '@/utils/modelDefaults'
 import { RECORDER_STATES } from '@/utils/recorderStates'
+import { QUIET_HOURS_DEFAULTS, describeQuietHours, parseHHMM, pausedLabel } from '@/utils/quietHours'
 import api, { createLongRequest } from '@/services/api'
 import { SOCKET_PATH } from '@/services/baseUrl'
 import SpeciesFilterModal from '@/components/SpeciesFilterModal.vue'
@@ -1667,6 +1734,7 @@ export default {
       if (!recorderStatus.value) return false
       if (serviceRestart.isRestarting.value) return false
       if (recorderStatus.value.state === RECORDER_STATES.RUNNING) return false
+      if (recorderStatus.value.state === RECORDER_STATES.PAUSED) return false
       return sourceErrors.value.length > 0
     })
 
@@ -1683,6 +1751,7 @@ export default {
       if (state === RECORDER_STATES.RUNNING) return 'bg-green-500 animate-pulse'
       if (state === RECORDER_STATES.DEGRADED) return 'bg-amber-500'
       if (state === RECORDER_STATES.STOPPED) return 'bg-red-500'
+      if (state === RECORDER_STATES.PAUSED) return 'bg-blue-400'
       return 'bg-gray-300'
     })
 
@@ -1692,6 +1761,9 @@ export default {
       if (state === RECORDER_STATES.RUNNING) return 'Audio Healthy'
       if (state === RECORDER_STATES.DEGRADED) return 'Audio Degraded'
       if (state === RECORDER_STATES.STOPPED) return 'Audio Stopped'
+      if (state === RECORDER_STATES.PAUSED) {
+        return pausedLabel(recorderStatus.value?.pause, timeFormatSettings.formatTime)
+      }
       return 'Audio Unknown'
     })
 
@@ -1701,6 +1773,7 @@ export default {
       if (state === RECORDER_STATES.RUNNING) return 'text-green-600'
       if (state === RECORDER_STATES.DEGRADED) return 'text-amber-600'
       if (state === RECORDER_STATES.STOPPED) return 'text-red-600'
+      if (state === RECORDER_STATES.PAUSED) return 'text-blue-600'
       return 'text-gray-400'
     })
 
@@ -1912,6 +1985,66 @@ export default {
         showStatus('error', 'Failed to save normalization setting')
       } finally {
         playbackNormalizeSaving.value = false
+      }
+    }
+
+    // Quiet hours — saves immediately via its own endpoint, never the main
+    // Save: the main container re-evaluates schedule.* every recorder tick,
+    // so the change applies within seconds and needs no restart.
+    const quietHoursSaving = ref(false)
+    const quietHours = computed(() => ({
+      ...QUIET_HOURS_DEFAULTS,
+      ...(settings.value?.schedule?.quiet_hours || {})
+    }))
+    // Local copy for the time inputs so a rejected edit can be rolled back.
+    const quietHoursDraft = reactive({ start: QUIET_HOURS_DEFAULTS.start, end: QUIET_HOURS_DEFAULTS.end })
+    for (const field of ['start', 'end']) {
+      watch(() => quietHours.value[field], (value) => { quietHoursDraft[field] = value }, { immediate: true })
+    }
+    // Inline validation of the draft pair. A swap (22:00–06:00 → 06:00–22:00)
+    // necessarily passes through an equal pair, so an invalid draft is kept
+    // and flagged rather than reverted; it saves once both fields are valid.
+    const quietHoursDraftError = computed(() => {
+      if (parseHHMM(quietHoursDraft.start) == null || parseHHMM(quietHoursDraft.end) == null) {
+        return 'Enter both times as HH:MM — not saved yet.'
+      }
+      if (quietHoursDraft.start === quietHoursDraft.end) {
+        return 'Start and end must differ — not saved yet.'
+      }
+      return null
+    })
+    const quietHoursSummary = computed(() =>
+      describeQuietHours(quietHours.value, timeFormatSettings.formatTime))
+
+    const saveQuietHours = async (patch) => {
+      if (quietHoursSaving.value) return false
+      try {
+        quietHoursSaving.value = true
+        const { data } = await api.put('/settings/schedule', { quiet_hours: patch })
+        if (!settings.value.schedule) settings.value.schedule = {}
+        settings.value.schedule.quiet_hours = data?.quiet_hours || { ...quietHours.value, ...patch }
+        showStatus('success', 'Settings applied.')
+        return true
+      } catch (error) {
+        console.error('Error saving quiet hours:', error)
+        showStatus('error', error.response?.data?.error || 'Failed to save quiet hours')
+        return false
+      } finally {
+        quietHoursSaving.value = false
+      }
+    }
+
+    const toggleQuietHours = (value) => saveQuietHours({ enabled: value })
+
+    // Time inputs save on commit (change) — both fields together, so the
+    // stored window is always the pair the user is looking at.
+    const saveQuietHoursTime = async () => {
+      if (quietHoursDraftError.value) return
+      const patch = { start: quietHoursDraft.start, end: quietHoursDraft.end }
+      if (patch.start === quietHours.value.start && patch.end === quietHours.value.end) return
+      if (!(await saveQuietHours(patch))) {
+        quietHoursDraft.start = quietHours.value.start
+        quietHoursDraft.end = quietHours.value.end
       }
     }
 
@@ -2166,6 +2299,9 @@ export default {
 
     // Save settings to API (returns response payload on success, null on failure)
     const saveSettingsOnly = async () => {
+      // Do not let a stale full-document save overlap the schedule endpoint.
+      if (quietHoursSaving.value) return false
+
       // Validate RTSP sources have valid URLs
       const sources = settings.value.audio.sources || []
       const invalidRtsp = sources.find(s => s.type === 'rtsp' && !s.url?.trim())
@@ -2873,6 +3009,13 @@ export default {
       toggleTimeFormat,
       togglePlaybackNormalize,
       playbackNormalizeSaving,
+      quietHours,
+      quietHoursDraft,
+      quietHoursSaving,
+      quietHoursSummary,
+      quietHoursDraftError,
+      toggleQuietHours,
+      saveQuietHoursTime,
       timeFormatSettings,
       showRecorderError,
       limitDecimals,
