@@ -14,8 +14,10 @@ vi.mock('@/services/api', () => ({
 // Mock socket.io client
 const onMock = vi.fn()
 const emitMock = vi.fn()
+const connectMock = vi.fn()
 const disconnectMock = vi.fn()
 const ioMock = vi.hoisted(() => vi.fn())
+let socketConnected = false
 
 vi.mock('socket.io-client', () => ({
   io: ioMock
@@ -68,8 +70,12 @@ describe('LiveFeed', () => {
     ioMock.mockImplementation(() => ({
       on: onMock,
       emit: emitMock,
+      connect: connectMock,
+      get connected() { return socketConnected },
       disconnect: disconnectMock
     }))
+    socketConnected = false
+    connectMock.mockReset()
 
     // Decoded-stream composable defaults: decoder available, connect succeeds.
     icecastMock.canDecode.mockReset().mockResolvedValue(true)
@@ -183,6 +189,25 @@ describe('LiveFeed', () => {
     await flushPromises()
 
     expect(ioMock).toHaveBeenCalledWith({ path: '/socket.io' })
+  })
+
+  it('reconnects a public feed after logout only once the owner socket closes', async () => {
+    const addListener = vi.spyOn(window, 'addEventListener')
+    const wrapper = mountLiveFeed()
+    await flushPromises()
+    const loggedOutHandler = addListener.mock.calls
+      .find(([event]) => event === 'auth:logged-out')[1]
+    const disconnectedHandler = onMock.mock.calls
+      .find(([event]) => event === 'disconnect')[1]
+    socketConnected = true
+
+    loggedOutHandler()
+    expect(connectMock).not.toHaveBeenCalled()
+
+    socketConnected = false
+    disconnectedHandler('io server disconnect')
+    expect(connectMock).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
   })
 
   describe('multi-stream source selection', () => {

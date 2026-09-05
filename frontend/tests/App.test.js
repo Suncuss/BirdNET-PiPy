@@ -5,6 +5,8 @@ import App from '@/App.vue'
 import { DISPLAY_NAME } from '@/version'
 import { useSettings } from '@/composables/useSettings'
 import { useAppStatus } from '@/composables/useAppStatus'
+import { useRecorderHealth } from '@/composables/useRecorderHealth'
+import MoonIcon from '@/components/icons/MoonIcon.vue'
 
 let infoSpy
 let debugSpy
@@ -42,6 +44,17 @@ vi.mock('@/services/api', () => ({
   default: mockApi,
   createLongRequest: () => mockApi
 }))
+
+// Mock socket.io — App opens the app-wide recorder-status socket on mount
+const socketHandlers = vi.hoisted(() => ({}))
+const socketMock = vi.hoisted(() => ({
+  on: vi.fn((event, handler) => { socketHandlers[event] = handler }),
+  once: vi.fn((event, handler) => { socketHandlers[event] = handler }),
+  connect: vi.fn(),
+  disconnect: vi.fn()
+}))
+
+vi.mock('socket.io-client', () => ({ io: vi.fn(() => socketMock) }))
 
 // Mock vue-router
 vi.mock('vue-router', () => ({
@@ -84,11 +97,12 @@ describe('App', () => {
     authMock.current = {
       authStatus: ref({ authEnabled: false, setupComplete: true, authenticated: false, publicFeatures: [] }),
       needsLogin: ref(false),
+      isAuthenticated: ref(true),
       loading: ref(false),
       error: ref(''),
       checkAuthStatus: vi.fn().mockResolvedValue(undefined),
       ensureAuthLoaded: vi.fn().mockResolvedValue(undefined),
-      logout: vi.fn().mockResolvedValue(undefined),
+      logout: vi.fn().mockResolvedValue(true),
       clearError: vi.fn()
     }
 
@@ -131,6 +145,125 @@ describe('App', () => {
     expect(useLoggerMock).toHaveBeenCalledWith('App')
     expect(infoSpy).toHaveBeenCalledWith('Application mounted')
     expect(debugSpy).toHaveBeenCalledTimes(1)
+  })
+
+  describe('quiet-hours status FAB', () => {
+    const RECORDER_URL = '/recorder/status'
+    const settingsPayload = {
+      location: { configured: true, timezone: 'America/New_York' },
+      display: { use_metric_units: true, time_format: null }
+    }
+
+    const withRecorderStatus = (status) => {
+      mockApi.get.mockImplementation((url) =>
+        Promise.resolve({ data: url === RECORDER_URL ? status : settingsPayload })
+      )
+    }
+
+    const pausedFab = (wrapper) =>
+      wrapper.findAll('a').find(a => a.text().includes('Paused'))
+
+    // The composable is a module-level singleton — hand it back a clean state
+    // so a paused test can't leak into the next one.
+    afterEach(async () => {
+      withRecorderStatus({ state: 'running' })
+      await useRecorderHealth().checkStatus()
+    })
+
+    it('shows a paused pill with the resume time while quiet hours are active', async () => {
+      withRecorderStatus({
+        state: 'paused',
+        pause: { reason: 'quiet_hours', resumes_at: '2026-08-25T06:00' }
+      })
+
+      const wrapper = mountApp()
+      await flushPromises()
+
+      const fab = pausedFab(wrapper)
+      expect(fab).toBeDefined()
+      expect(fab.text()).toContain('6:00')
+      expect(fab.classes()).toContain('bg-blue-600')
+      expect(fab.attributes('title')).toBe('Recording is paused by quiet hours')
+      expect(fab.findComponent(MoonIcon).exists()).toBe(true)
+      // Informational: it links to Settings but is not a dismissible warning
+      expect(wrapper.text()).not.toContain('Audio Recording Issues')
+    })
+
+    it('shows the same pill, without a moon, when no source is active', async () => {
+      withRecorderStatus({
+        state: 'paused',
+        pause: { reason: 'no_sources', resumes_at: null }
+      })
+
+      const wrapper = mountApp()
+      await flushPromises()
+
+      const fab = pausedFab(wrapper)
+      expect(fab).toBeDefined()
+      expect(fab.text()).toBe('Audio Paused')
+      expect(fab.classes()).toContain('bg-blue-600')
+      expect(fab.attributes('title')).toBe('Recording is paused — no audio source is active')
+      // A moon reads as night, which this pause is not.
+      expect(fab.findComponent(MoonIcon).exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('Audio Recording Issues')
+    })
+
+    it('follows a pause pushed after the page loaded, with no refetch', async () => {
+      withRecorderStatus({ state: 'running' })
+
+      const wrapper = mountApp()
+      await flushPromises()
+      expect(pausedFab(wrapper)).toBeUndefined()
+
+      // What the recorder broadcasts when the last source is switched off.
+      socketHandlers.recorder_status({
+        state: 'paused',
+        pause: { reason: 'no_sources', resumes_at: null }
+      })
+      await wrapper.vm.$nextTick()
+
+      expect(pausedFab(wrapper).text()).toBe('Audio Paused')
+    })
+
+    it('shows no pill while recording', async () => {
+      withRecorderStatus({ state: 'running' })
+
+      const wrapper = mountApp()
+      await flushPromises()
+
+      expect(pausedFab(wrapper)).toBeUndefined()
+    })
+
+    it('yields the corner to the recorder-fault warning', async () => {
+      withRecorderStatus({ state: 'stopped' })
+
+      const wrapper = mountApp()
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('Audio Recording Issues')
+      expect(pausedFab(wrapper)).toBeUndefined()
+    })
+
+    it('takes the corner ahead of an available update', async () => {
+      withRecorderStatus({
+        state: 'paused',
+        pause: { reason: 'quiet_hours', resumes_at: '2026-08-25T06:00' }
+      })
+
+      const wrapper = mountApp()
+      await flushPromises()
+      // showUpdateIndicator is a computed — driving it means setting the
+      // updateAvailable ref it derives from, or the assignment is a silent
+      // no-op and this test passes without an update indicator to outrank.
+      wrapper.vm.systemUpdate.updateAvailable.value = true
+      await wrapper.vm.$nextTick()
+      expect(wrapper.vm.systemUpdate.showUpdateIndicator.value).toBe(true)
+
+      expect(pausedFab(wrapper)).toBeDefined()
+      expect(wrapper.text()).not.toContain('Update Available')
+
+      wrapper.vm.systemUpdate.updateAvailable.value = false
+    })
   })
 
   describe('settings bootstrap failure', () => {

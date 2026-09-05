@@ -105,7 +105,10 @@
       </div>
     </div>
 
-    <div class="space-y-4">
+    <div
+      v-if="loaded"
+      class="space-y-4"
+    >
       <!-- Location & Audio -->
       <div class="bg-white rounded-lg shadow-sm border border-gray-100 p-5">
         <div class="flex items-center justify-between mb-3">
@@ -182,7 +185,7 @@
             :key="source.id"
             type="button"
             class="group inline-flex items-center rounded-full border cursor-pointer transition-all duration-200"
-            :class="source.enabled
+            :class="isSourceEnabled(source)
               ? 'border-blue-300 bg-blue-50 hover:bg-blue-100 shadow-sm'
               : 'border-gray-200 bg-gray-50 hover:bg-gray-100 opacity-50'"
             title="Click to edit"
@@ -190,7 +193,7 @@
           >
             <span
               class="px-3.5 py-1.5 text-sm font-medium truncate max-w-48 md:group-hover:pr-1 transition-[padding] duration-200"
-              :class="source.enabled ? 'text-gray-800' : 'text-gray-600'"
+              :class="isSourceEnabled(source) ? 'text-gray-800' : 'text-gray-600'"
               :title="source.type === 'rtsp' ? source.url : 'Local Microphone'"
             >{{ source.label || (source.type === 'rtsp' ? 'RTSP Stream' : 'Local Mic') }}</span>
             <!-- Edit icon: hover-reveal on desktop, always visible on mobile -->
@@ -235,6 +238,13 @@
             Add
           </button>
         </div>
+        <p
+          v-if="noActiveSourceHint"
+          data-testid="no-active-source-hint"
+          class="text-xs text-blue-600 mt-2"
+        >
+          {{ noActiveSourceHint }}
+        </p>
 
         <!-- Stream Source Modal -->
         <StreamSourceModal
@@ -429,20 +439,13 @@
             for="modelType"
             class="block text-sm text-gray-600 mb-1"
           >Detection Model</label>
-          <select
+          <AppListbox
             id="modelType"
             v-model="settings.model.type"
-            class="block w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
+            :options="modelTypeOptions"
+            fluid
             @change="onModelTypeChange"
-          >
-            <option
-              v-for="m in modelTypeOptions"
-              :key="m.value"
-              :value="m.value"
-            >
-              {{ m.label }}
-            </option>
-          </select>
+          />
           <p class="text-xs text-gray-400 mt-1">
             V3.1 is a bundled FP16 developer preview with 11K species; devices with at least 1 GB RAM are recommended.
           </p>
@@ -532,38 +535,24 @@
                 for="recordingLength"
                 class="block text-sm text-gray-600 mb-1"
               >Chunk Length</label>
-              <select
+              <AppListbox
                 id="recordingLength"
-                v-model.number="settings.audio.recording_length"
-                class="block w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
-              >
-                <option
-                  v-for="len in recordingLengthOptions"
-                  :key="len.value"
-                  :value="len.value"
-                >
-                  {{ len.label }}
-                </option>
-              </select>
+                v-model="settings.audio.recording_length"
+                :options="recordingLengthOptions"
+                fluid
+              />
             </div>
             <div>
               <label
                 for="overlap"
                 class="block text-sm text-gray-600 mb-1"
               >Overlap</label>
-              <select
+              <AppListbox
                 id="overlap"
-                v-model.number="settings.audio.overlap"
-                class="block w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
-              >
-                <option
-                  v-for="ov in overlapOptions"
-                  :key="ov.value"
-                  :value="ov.value"
-                >
-                  {{ ov.label }}
-                </option>
-              </select>
+                v-model="settings.audio.overlap"
+                :options="overlapOptions"
+                fluid
+              />
             </div>
           </div>
         </div>
@@ -594,28 +583,24 @@
                 for="quietHoursStart"
                 class="block text-sm text-gray-600 mb-1"
               >Start</label>
-              <input
+              <AppTimeSelect
                 id="quietHoursStart"
                 v-model="quietHoursDraft.start"
-                type="time"
                 :disabled="quietHoursSaving || loading"
-                class="block w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
                 @change="saveQuietHoursTime"
-              >
+              />
             </div>
             <div>
               <label
                 for="quietHoursEnd"
                 class="block text-sm text-gray-600 mb-1"
               >End</label>
-              <input
+              <AppTimeSelect
                 id="quietHoursEnd"
                 v-model="quietHoursDraft.end"
-                type="time"
                 :disabled="quietHoursSaving || loading"
-                class="block w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
                 @change="saveQuietHoursTime"
-              >
+              />
             </div>
           </div>
           <p
@@ -1074,19 +1059,12 @@
             for="birdNameLanguage"
             class="block text-sm text-gray-600 mb-1"
           >Bird Name Language</label>
-          <select
+          <AppListbox
             id="birdNameLanguage"
             v-model="settings.display.bird_name_language"
-            class="block w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-400"
-          >
-            <option
-              v-for="option in birdNameLanguageOptions"
-              :key="option.value"
-              :value="option.value"
-            >
-              {{ option.label }}
-            </option>
-          </select>
+            :options="birdNameLanguageOptions"
+            fluid
+          />
           <p class="text-xs text-gray-400 mt-1">
             Used for bird names shown across the app. Save to apply.
           </p>
@@ -1317,6 +1295,30 @@
           class="mt-3 p-2 text-xs rounded-lg text-center"
         >
           {{ systemUpdate.statusMessage.value }}
+        </div>
+      </div>
+    </div>
+
+    <!-- Cold-load skeleton: shown only on a genuine first load (no cached
+         settings yet). The warm path seeds the form before paint, so this
+         rarely appears — it keeps empty-state text from flashing while the
+         first payload is in flight. -->
+    <div
+      v-else
+      class="space-y-4"
+      aria-hidden="true"
+      data-testid="settings-skeleton"
+    >
+      <div
+        v-for="n in 4"
+        :key="n"
+        class="bg-white rounded-lg shadow-sm border border-gray-100 p-5 animate-pulse"
+      >
+        <div class="h-5 w-40 bg-gray-200 rounded mb-4" />
+        <div class="space-y-3">
+          <div class="h-4 w-3/4 bg-gray-100 rounded" />
+          <div class="h-4 w-1/2 bg-gray-100 rounded" />
+          <div class="h-9 w-full bg-gray-100 rounded" />
         </div>
       </div>
     </div>
@@ -1597,7 +1599,6 @@
   <script>
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
-import { io } from 'socket.io-client'
 import { useSystemUpdate } from '@/composables/useSystemUpdate'
 import { captureRestartBaseline, requestRestart, useServiceRestart } from '@/composables/useServiceRestart'
 import { useAuth } from '@/composables/useAuth'
@@ -1606,16 +1607,18 @@ import { useTimeFormat } from '@/composables/useTimeFormat'
 import { useAppStatus } from '@/composables/useAppStatus'
 import { useSettings } from '@/composables/useSettings'
 import { useModalDismiss } from '@/composables/useModalDismiss'
+import { useRecorderHealth } from '@/composables/useRecorderHealth'
 import { limitDecimals } from '@/utils/inputHelpers'
 import { recordingSegment } from '@/utils/detectionLinks'
 import { FILTER_DEFAULTS, modelTypeOptions } from '@/utils/modelDefaults'
-import { RECORDER_STATES } from '@/utils/recorderStates'
-import { QUIET_HOURS_DEFAULTS, describeQuietHours, parseHHMM, pausedLabel } from '@/utils/quietHours'
+import { RECORDER_STATES, pausedLabel } from '@/utils/recorderStates'
+import { QUIET_HOURS_DEFAULTS, describeQuietHours, parseHHMM } from '@/utils/quietHours'
 import api, { createLongRequest } from '@/services/api'
-import { SOCKET_PATH } from '@/services/baseUrl'
 import SpeciesFilterModal from '@/components/SpeciesFilterModal.vue'
 import AlertBanner from '@/components/AlertBanner.vue'
 import AppButton from '@/components/AppButton.vue'
+import AppListbox from '@/components/AppListbox.vue'
+import AppTimeSelect from '@/components/AppTimeSelect.vue'
 import UnsavedChangesModal from '@/components/UnsavedChangesModal.vue'
 import MigrationModal from '@/components/MigrationModal.vue'
 import AddNotificationModal from '@/components/AddNotificationModal.vue'
@@ -1636,6 +1639,8 @@ export default {
     SpeciesFilterModal,
     AlertBanner,
     AppButton,
+    AppListbox,
+    AppTimeSelect,
     UnsavedChangesModal,
     MigrationModal,
     AddNotificationModal,
@@ -1693,6 +1698,10 @@ export default {
 
     // State
     const loading = ref(false)
+    // False until the first settings payload has been adopted. Gates the form
+    // body and the empty-state hints so nothing derived from the empty draft
+    // skeleton (e.g. "recording is paused") flashes before real data arrives.
+    const loaded = ref(false)
     const saveStatus = ref(null)
     const settingsSaveError = ref('')
     const showUpdateConfirm = ref(false)
@@ -1701,11 +1710,13 @@ export default {
     // Storage state
     const storage = ref(null)
 
-    // Recorder health status (populated via WebSocket + REST)
-    const recorderStatus = ref(null)
+    // Recorder health status — owned by useRecorderHealth (REST for an
+    // immediate value, socket for everything after), so this badge and the
+    // app-wide status pill can never disagree.
+    const recorderHealth = useRecorderHealth()
+    const recorderStatus = recorderHealth.recorderStatus
     const modelStatus = ref(null)
     const errorCopied = ref(false)
-    let settingsSocket = null
     let modelStatusRetryTimer = null
     let modelStatusPollingStopped = false
 
@@ -1717,9 +1728,30 @@ export default {
       (settings.value.audio.sources || []).some(s => s.type === 'pulseaudio')
     )
 
+    // Matches recording_schedule.enabled_sources(): a source saved before the
+    // toggle existed has no `enabled` key and is recorded. Reading this as
+    // truthiness would show "recording is paused" for a station that is in fact
+    // recording.
+    const isSourceEnabled = (source) => source?.enabled !== false
+
+    // Legend for the source pills: only meaningful while some are highlighted
+    // and some are not.
     const hasInactiveSource = computed(() => {
       const sources = settings.value.audio?.sources || []
-      return sources.length > 1 && sources.some(s => !s.enabled)
+      return sources.some(isSourceEnabled) && sources.some(s => !isSourceEnabled(s))
+    })
+
+    // Nothing to record: every source is off, or none exist yet. The recorder
+    // reports this as a pause (not a fault), so say so where it is fixable.
+    const noActiveSourceHint = computed(() => {
+      // Don't guess before the real payload lands — the empty draft would
+      // read as "no sources" and wrongly claim recording is paused.
+      if (!loaded.value) return ''
+      const sources = settings.value.audio?.sources || []
+      if (sources.some(isSourceEnabled)) return ''
+      return sources.length
+        ? 'No active source — recording is paused. Enable a source to resume.'
+        : 'No audio source — recording is paused. Add a source to start.'
     })
 
     const sourceErrors = computed(() => {
@@ -1979,6 +2011,7 @@ export default {
         if (!settings.value.playback) settings.value.playback = {}
         await api.put('/settings/playback', { normalize: value })
         settings.value.playback.normalize = value
+        settingsStore.patchSettings({ playback: { normalize: value } })
         showStatus('success', 'Settings applied.')
       } catch (error) {
         console.error('Error saving normalization setting:', error)
@@ -2006,7 +2039,7 @@ export default {
     // and flagged rather than reverted; it saves once both fields are valid.
     const quietHoursDraftError = computed(() => {
       if (parseHHMM(quietHoursDraft.start) == null || parseHHMM(quietHoursDraft.end) == null) {
-        return 'Enter both times as HH:MM — not saved yet.'
+        return 'Start and end must both be set — not saved yet.'
       }
       if (quietHoursDraft.start === quietHoursDraft.end) {
         return 'Start and end must differ — not saved yet.'
@@ -2022,7 +2055,9 @@ export default {
         quietHoursSaving.value = true
         const { data } = await api.put('/settings/schedule', { quiet_hours: patch })
         if (!settings.value.schedule) settings.value.schedule = {}
-        settings.value.schedule.quiet_hours = data?.quiet_hours || { ...quietHours.value, ...patch }
+        const savedQuietHours = data?.quiet_hours || { ...quietHours.value, ...patch }
+        settings.value.schedule.quiet_hours = savedQuietHours
+        settingsStore.patchSettings({ schedule: { quiet_hours: savedQuietHours } })
         showStatus('success', 'Settings applied.')
         return true
       } catch (error) {
@@ -2089,17 +2124,6 @@ export default {
       }
     }
 
-    const loadRecorderStatus = async () => {
-      try {
-        const { data } = await api.get('/recorder/status')
-        if (data && 'state' in data) {
-          recorderStatus.value = data
-        }
-      } catch (error) {
-        console.warn('Recorder status fetch failed:', error)
-      }
-    }
-
     const scheduleModelStatusRetry = () => {
       if (modelStatusPollingStopped || modelStatusRetryTimer) return
       modelStatusRetryTimer = setTimeout(() => {
@@ -2120,33 +2144,8 @@ export default {
       }
     }
 
-    // Initialize WebSocket for live recorder status updates.
-    // The REST fetch above provides an initial/fallback value if the socket
-    // handshake is delayed or unavailable behind a proxy.
     const scrollToSystemUpdates = () => {
       document.getElementById('system-updates')?.scrollIntoView({ behavior: 'smooth' })
-    }
-
-    const initSettingsSocket = () => {
-      settingsSocket = io({ path: SOCKET_PATH })
-
-      settingsSocket.once('connect_error', (error) => {
-        console.warn('Recorder status WebSocket connection failed:', error)
-        loadRecorderStatus()
-      })
-
-      settingsSocket.on('recorder_status', (status) => {
-        recorderStatus.value = status
-      })
-
-      // A password change evicts every other device: the server closes the
-      // owner room and says so. Reconnect rather than reload — the socket
-      // re-authenticates on connect, so the owner whose own change triggered
-      // this rejoins transparently while an evicted session does not.
-      settingsSocket.on('session_revoked', () => {
-        settingsSocket.disconnect()
-        settingsSocket.connect()
-      })
     }
 
     // Load species list (shared with SpeciesFilterModal)
@@ -2255,8 +2254,20 @@ export default {
       }
     }
 
+    // Adopt a fetched payload as the editable draft: normalize, install it,
+    // snapshot for change-tracking, and mark the form loaded so the body and
+    // empty-state hints render. `data` must already be owned by the caller
+    // (a fresh response or a deep copy) — the form mutates it.
+    const adoptSettings = (data) => {
+      normalizeSettingsData(data)
+      settings.value = data
+      takeSnapshot()
+      confirmedNotifications.value = cloneNotif()
+      loaded.value = true
+    }
+
     // Load settings from API with retry and fallback to defaults
-    const loadSettings = async (retryCount = 0) => {
+    const loadSettings = async (retryCount = 0, initialDraft = JSON.stringify(settings.value)) => {
       try {
         loading.value = true
         // useSettings owns the /settings fetch and syncs display prefs.
@@ -2265,28 +2276,28 @@ export default {
         if (!ok || !settingsStore.settings.value) {
           throw new Error('settings unavailable')
         }
-        const data = JSON.parse(JSON.stringify(settingsStore.settings.value))
-        normalizeSettingsData(data)
-        settings.value = data
         if (saveStatus.value?.type === 'error') {
           saveStatus.value = null
         }
-        // Take snapshot for unsaved changes tracking
-        takeSnapshot()
-        confirmedNotifications.value = cloneNotif()
+        // A warm form is editable while this request runs. Only replace it if
+        // it is still byte-for-byte the draft we started with; otherwise keep
+        // the user's changes and leave the refreshed payload in the store.
+        if (!loaded.value || JSON.stringify(settings.value) === initialDraft) {
+          adoptSettings(JSON.parse(JSON.stringify(settingsStore.settings.value)))
+        }
       } catch (error) {
         console.error('Error loading settings:', error)
         if (retryCount < 2) {
-          setTimeout(() => loadSettings(retryCount + 1), 2000)
+          setTimeout(() => loadSettings(retryCount + 1, initialDraft), 2000)
+        } else if (loaded.value) {
+          // Revalidation failed, but the warm path already has a known-good
+          // payload. Never replace that real configuration with defaults.
+          showStatus('error', 'Could not refresh settings. Showing last loaded settings.')
         } else {
           // Fallback to defaults on failure
           try {
             const { data } = await api.get('/settings/defaults')
-            normalizeSettingsData(data)
-            settings.value = data
-            // Take snapshot for unsaved changes tracking
-            takeSnapshot()
-            confirmedNotifications.value = JSON.parse(JSON.stringify(data.notifications || {}))
+            adoptSettings(data)
           } catch (defaultsErr) {
             console.error('Failed to load defaults:', defaultsErr)
             showStatus('error', 'Failed to load settings')
@@ -2452,6 +2463,7 @@ export default {
         // Save immediately via dedicated endpoint (no restart needed)
         await api.put('/settings/channel', { channel: newChannel })
         settings.value.updates.channel = newChannel
+        settingsStore.patchSettings({ updates: { channel: newChannel } })
         showStatus('success', `Switched to ${newChannel === 'latest' ? 'latest' : 'release'} channel`)
       } catch (error) {
         console.error('Error saving channel setting:', error)
@@ -2473,6 +2485,7 @@ export default {
           // doesn't overwrite the just-saved preference with the stale value.
           if (!settings.value.display) settings.value.display = {}
           settings.value.display.time_format = target
+          settingsStore.patchSettings({ display: { time_format: target } })
         }
         showStatus(ok ? 'success' : 'error', ok ? 'Settings applied.' : 'Failed to save time format setting')
       } finally {
@@ -2491,6 +2504,7 @@ export default {
         // Save immediately via dedicated endpoint (no restart needed)
         await api.put('/settings/units', { use_metric_units: newValue })
         settings.value.display.use_metric_units = newValue
+        settingsStore.patchSettings({ display: { use_metric_units: newValue } })
 
         // Update the shared composable state so other components see the change
         unitSettings.setUseMetricUnits(newValue)
@@ -2614,6 +2628,7 @@ export default {
         if (seq > notifAppliedSeq) {
           notifAppliedSeq = seq
           confirmedNotifications.value = JSON.parse(JSON.stringify(payload))
+          settingsStore.patchSettings({ notifications: payload })
         }
       } catch {
         if (seq === notifSaveSeq) {
@@ -2819,6 +2834,8 @@ export default {
       const success = await auth.saveAccessSettings({ [featureKey]: newValue })
       if (!success) {
         settings.value.access[featureKey] = !newValue
+      } else {
+        settingsStore.patchSettings({ access: { [featureKey]: newValue } })
       }
     }
 
@@ -2962,14 +2979,21 @@ export default {
 
     // Load settings on component mount
     onMounted(() => {
+      // Warm path: App.vue usually loaded /settings into the store at startup.
+      // Adopt that copy synchronously so the form is fully populated on the
+      // first paint — no empty-state flash — then loadSettings() revalidates
+      // against the server. Only a genuine cold load falls through to the
+      // skeleton.
+      if (settingsStore.settings.value) {
+        adoptSettings(JSON.parse(JSON.stringify(settingsStore.settings.value)))
+      }
       loadSettings()
       loadStorageInfo()
-      loadRecorderStatus()
+      recorderHealth.checkStatus()
       loadModelStatus()
       loadSpeciesList()
       systemUpdate.loadVersionInfo()
       auth.ensureAuthLoaded()
-      initSettingsSocket()
       window.addEventListener('beforeunload', handleBeforeUnload)
     })
 
@@ -2982,16 +3006,13 @@ export default {
         clearTimeout(modelStatusRetryTimer)
         modelStatusRetryTimer = null
       }
-      if (settingsSocket) {
-        settingsSocket.disconnect()
-        settingsSocket = null
-      }
     })
 
     return {
       scrollToSystemUpdates,
       settings,
       loading,
+      loaded,
       saveStatus,
       showUpdateConfirm,
       showLogsModal,
@@ -3066,7 +3087,9 @@ export default {
       recorderDotClass,
       recorderStateLabel,
       recorderStateLabelClass,
+      isSourceEnabled,
       hasInactiveSource,
+      noActiveSourceHint,
       sourceErrors,
       errorCopied,
       copyErrorToClipboard,
@@ -3119,18 +3142,6 @@ export default {
 </script>
 
   <style scoped>
-  /* Custom select styling - normalize Safari appearance */
-  select {
-    -webkit-appearance: none;
-    -moz-appearance: none;
-    appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3E%3C/svg%3E");
-    background-position: right 0.5rem center;
-    background-repeat: no-repeat;
-    background-size: 1.5em 1.5em;
-    padding-right: 2.5rem;
-  }
-
   /* Custom range slider styling - cross-browser */
   input[type="range"] {
     -webkit-appearance: none;

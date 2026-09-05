@@ -31,6 +31,7 @@ from core.api_utils import (
 from core.auth import (
     configure_session,
     get_request_tier,
+    get_session_id,
     is_authenticated,
     is_feature_public,
     require_auth,
@@ -40,6 +41,7 @@ from core.detection_presenter import (
     _localize_detection,
 )
 from core.logging_config import get_logger, log_api_request
+from core.recording_schedule import enabled_sources
 from core.routes.observations import (
     expire_dashboard_cache,
     invalidate_dashboard_cache,
@@ -63,8 +65,7 @@ def get_stream_config():
     """Provide stream configuration for frontend based on enabled sources."""
     settings = load_user_settings()
     audio = settings.get('audio') or {}
-    sources = audio.get('sources', [])
-    enabled = [s for s in sources if s.get('enabled', True)]
+    enabled = enabled_sources(audio)
 
     # Owner-chosen labels stay owner-only: they can hint at the station's
     # location or layout, which is why _strip_public_metadata drops
@@ -218,6 +219,12 @@ _recorder_status = {}
 # — which carries source labels/types and ffmpeg error text that can echo RTSP
 # credentials — is broadcast to owners only, matching the @require_auth REST route.
 _OWNER_ROOM = 'owners'
+_OWNER_SESSION_ROOM_PREFIX = 'owner-session:'
+
+
+def _owner_session_room(session_id):
+    """Return the private Socket.IO room for one browser login."""
+    return f'{_OWNER_SESSION_ROOM_PREFIX}{session_id}'
 
 def create_app(async_mode='threading'):
     # The 'threading' default is load-bearing, not cosmetic. requirements.txt
@@ -277,6 +284,9 @@ def create_app(async_mode='threading'):
         # only them (see broadcast_recorder_status_endpoint).
         if is_owner:
             join_room(_OWNER_ROOM)
+            session_id = get_session_id()
+            if session_id:
+                join_room(_owner_session_room(session_id))
             if _recorder_status:
                 emit('recorder_status', _recorder_status)
 
@@ -286,7 +296,7 @@ def create_app(async_mode='threading'):
 
     return app, socketio
 
-def revoke_owner_sockets():
+def revoke_owner_sockets(reason='password_changed'):
     """Evict every socket currently in the owner room.
 
     HTTP gates re-check the session epoch on each request, but a WebSocket is
@@ -295,6 +305,10 @@ def revoke_owner_sockets():
     credentials — for the life of the tab. The event explains the reason to
     cooperative clients, while server-side disconnects enforce revocation even
     when a client ignores it.
+
+    Every owner socket is evicted, not just the caller's: a session owns no
+    identifiable set of sids. Devices whose session is still valid reconnect
+    and rejoin transparently; the revoked one is refused at connect.
     """
     global socketio
     if not socketio:
@@ -303,11 +317,34 @@ def revoke_owner_sockets():
     participants = tuple(
         socketio.server.manager.get_participants('/', _OWNER_ROOM)
     )
-    socketio.emit('session_revoked', {'reason': 'password_changed'},
+    socketio.emit('session_revoked', {'reason': reason},
                   room=_OWNER_ROOM)
     for sid, _ in participants:
         socketio.server.disconnect(sid, namespace='/')
     logger.info("Owner sockets revoked", extra={'count': len(participants)})
+
+
+def revoke_owner_session_sockets(session_id):
+    """Disconnect sockets belonging to one logged-out browser session.
+
+    Do not emit ``session_revoked`` here. Its cooperative client handler
+    reconnects after password changes, but during logout that reconnect can
+    beat the HTTP response that clears the signed session cookie and rejoin as
+    an owner. A server-initiated disconnect does not auto-reconnect.
+    """
+    global socketio
+    if not socketio or not session_id:
+        return
+
+    room = _owner_session_room(session_id)
+    participants = tuple(
+        socketio.server.manager.get_participants('/', room)
+    )
+    for sid, _ in participants:
+        socketio.server.disconnect(sid, namespace='/')
+    logger.info("Owner session sockets revoked", extra={
+        'count': len(participants),
+    })
 
 
 def broadcast_detection(detection_data):

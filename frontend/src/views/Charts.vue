@@ -155,31 +155,14 @@
         </h2>
         <div class="flex flex-wrap items-stretch gap-2 justify-center lg:justify-end">
           <!-- Time Range Dropdown -->
-          <select
+          <AppListbox
             v-model="trendsTimeRange"
+            :options="trendsRangeOptions"
             :disabled="isUpdatingTrends"
-            class="hidden sm:block h-9 px-3 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm"
+            size="sm"
+            aria-label="Time range"
             @change="onTrendsTimeRangeChange"
-          >
-            <option value="7">
-              Week
-            </option>
-            <option value="14">
-              Two Week
-            </option>
-            <option value="30">
-              Month
-            </option>
-            <option value="90">
-              3 Month
-            </option>
-            <option value="180">
-              6 Month
-            </option>
-            <option value="365">
-              Year
-            </option>
-          </select>
+          />
 
           <!-- Date Navigation -->
           <button
@@ -288,87 +271,43 @@
         </h2>
         <div class="flex flex-wrap items-center gap-4 justify-center lg:justify-end">
           <!-- Species Dropdown -->
-          <div class="relative">
-            <div class="flex items-center space-x-2">
-              <div class="relative">
-                <input
-                  v-model="searchQuery"
-                  type="text"
-                  placeholder="Search or select species..."
-                  class="h-9 px-3 pr-8 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm w-56 sm:w-64 lg:w-72"
-                  :disabled="isLoadingSpecies"
-                  @focus="showDropdown = true"
-                  @blur="handleBlur"
-                  @input="filterSpecies"
-                >
-                <button
-                  class="absolute right-0 top-0 h-full px-2 text-gray-400 hover:text-gray-600"
-                  :disabled="isLoadingSpecies"
-                  @click="toggleDropdown"
-                >
-                  <ChevronIcon
-                    direction="down"
-                    class="h-4 w-4"
-                  />
-                </button>
-                                
-                <!-- Dropdown List -->
-                <div
-                  v-show="showDropdown && !isLoadingSpecies" 
-                  class="absolute z-10 mt-1 w-full bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-auto"
-                >
-                  <div
-                    v-if="filteredSpecies.length === 0"
-                    class="px-3 py-2 text-sm text-gray-500"
-                  >
-                    No species found
-                  </div>
-                  <button
-                    v-for="species in filteredSpecies"
-                    :key="species.common_name"
-                    class="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 focus:bg-gray-100 focus:outline-none"
-                    @mousedown="selectSpecies(species)"
-                  >
-                    <div class="font-medium">
-                      {{ getDisplayCommonName(species) }}
-                    </div>
-                    <div class="text-xs text-gray-500">
-                      {{ species.scientific_name }}
-                    </div>
-                  </button>
-                </div>
+          <AppCombobox
+            :model-value="selectedSpecies"
+            :options="allSpecies"
+            :get-label="getDisplayCommonName"
+            :filter="matchesBirdQuery"
+            :option-key="speciesKey"
+            placeholder="Search or select species..."
+            aria-label="Species"
+            empty-text="No species found"
+            size="sm"
+            :disabled="isLoadingSpecies"
+            class="w-56 sm:w-64 lg:w-72"
+            @update:model-value="onSpeciesPicked"
+          >
+            <template #option="{ option }">
+              <div class="font-medium">
+                {{ getDisplayCommonName(option) }}
               </div>
-            </div>
-          </div>
+              <div class="text-xs text-gray-500">
+                {{ option.scientific_name }}
+              </div>
+            </template>
+          </AppCombobox>
 
           <!-- View Options and Navigation -->
           <div
             v-if="selectedSpecies"
-            class="flex items-center space-x-2 lg:space-x-4"
+            class="flex flex-wrap items-center justify-center gap-2 lg:gap-4"
           >
-            <select
-              :value="speciesView"
+            <AppListbox
+              :model-value="speciesView"
+              :options="speciesViewOptions"
               :disabled="isUpdatingSpecies"
+              size="sm"
               aria-label="View period"
-              class="hidden sm:block h-9 px-3 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm"
-              @change="onSpeciesViewChange($event.target.value)"
-            >
-              <option value="day">
-                Day
-              </option>
-              <option value="week">
-                Week
-              </option>
-              <option value="month">
-                Month
-              </option>
-              <option value="6month">
-                6 Month
-              </option>
-              <option value="year">
-                Year
-              </option>
-            </select>
+              @change="onSpeciesViewChange"
+            />
 
             <!-- Navigation buttons -->
             <div class="flex items-center space-x-2">
@@ -466,10 +405,11 @@ import { useChartHelpers } from '@/composables/useChartHelpers'
 import api from '@/services/api'
 import AppButton from '@/components/AppButton.vue'
 import AppDatePicker from '@/components/AppDatePicker.vue'
+import AppListbox from '@/components/AppListbox.vue'
 import CenteredMessage from '@/components/CenteredMessage.vue'
 import SpeciesAxisLinks from '@/components/SpeciesAxisLinks.vue'
 import TimeAxisLinks from '@/components/TimeAxisLinks.vue'
-import ChevronIcon from '@/components/icons/ChevronIcon.vue'
+import AppCombobox from '@/components/AppCombobox.vue'
 import { getDisplayCommonName, matchesBirdQuery } from '@/utils/birdNames'
 
 Chart.register(MatrixController, MatrixElement)
@@ -479,10 +419,11 @@ export default {
     components: {
         AppButton,
         AppDatePicker,
+        AppListbox,
+        AppCombobox,
         CenteredMessage,
         SpeciesAxisLinks,
         TimeAxisLinks,
-        ChevronIcon
     },
     setup() {
         const {
@@ -538,10 +479,7 @@ export default {
 
         // Species dropdown and chart
         const allSpecies = ref([])
-        const filteredSpecies = ref([])
         const selectedSpecies = ref(null)
-        const searchQuery = ref('')
-        const showDropdown = ref(false)
         const isLoadingSpecies = ref(false)
         const speciesChart = ref(null)
         const speciesChartInstance = ref(null)
@@ -622,6 +560,13 @@ export default {
             year: 'Year'
         }
 
+        // The two range pickers read from the label maps above, so a label only
+        // ever has to be changed in one place.
+        const toOptions = (labelMap) =>
+            Object.entries(labelMap).map(([value, label]) => ({ value, label }))
+        const trendsRangeOptions = toOptions(trendsRangeLabels)
+        const speciesViewOptions = toOptions(speciesViewLabels)
+
         const TRENDS_FETCH_ERROR = 'Failed to load detection trends'
 
         // Methods
@@ -692,7 +637,6 @@ export default {
             try {
                 const { data } = await api.get('/species/all')
                 allSpecies.value = data
-                filteredSpecies.value = data
             } catch (error) {
                 console.error('Error fetching species list:', error)
                 speciesChartError.value = 'Failed to load species list'
@@ -701,36 +645,13 @@ export default {
             }
         }
 
-        const filterSpecies = () => {
-            filteredSpecies.value = allSpecies.value.filter(species =>
-                matchesBirdQuery(species, searchQuery.value)
-            )
-        }
+        // common_name is unique per species, so it is a stable option key.
+        const speciesKey = (species) => species.common_name
 
-        const selectSpecies = (species) => {
+        const onSpeciesPicked = (species) => {
             selectedSpecies.value = species
-            searchQuery.value = getDisplayCommonName(species)
-            showDropdown.value = false
             speciesChartError.value = null
-            updateSpeciesChart()
-        }
-
-        const toggleDropdown = () => {
-            showDropdown.value = !showDropdown.value
-            if (showDropdown.value) {
-                searchQuery.value = ''
-                filteredSpecies.value = allSpecies.value
-            }
-        }
-
-        const handleBlur = () => {
-            // Delay to allow click on dropdown items
-            setTimeout(() => {
-                showDropdown.value = false
-                if (selectedSpecies.value) {
-                    searchQuery.value = getDisplayCommonName(selectedSpecies.value)
-                }
-            }, 200)
+            updateSpeciesChart()  // no-op guard when species is null (cleared)
         }
 
         const updateSpeciesChart = async () => {
@@ -1077,20 +998,17 @@ export default {
             goToToday,
             // Species dropdown and chart
             allSpecies,
-            filteredSpecies,
             selectedSpecies,
-            searchQuery,
-            showDropdown,
             isLoadingSpecies,
             getDisplayCommonName,
+            matchesBirdQuery,
             speciesView,
+            speciesViewOptions,
             speciesChart,
             speciesChartError,
             isUpdatingSpecies,
-            filterSpecies,
-            selectSpecies,
-            toggleDropdown,
-            handleBlur,
+            onSpeciesPicked,
+            speciesKey,
             updateSpeciesChart,
             speciesDateDisplay,
             canGoForwardSpecies,
@@ -1100,6 +1018,7 @@ export default {
             // Detection Trends chart
             trendsChart,
             trendsTimeRange,
+            trendsRangeOptions,
             trendsEndDate,
             trendsMaxDate,
             trendsChartData,

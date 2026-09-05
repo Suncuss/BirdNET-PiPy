@@ -5,6 +5,9 @@ reads go through the runtime-settings cache (core.runtime_config) and writes
 are atomic. The routes in core/routes/settings.py own request parsing and the
 restart-required classification; this module owns the file.
 """
+from functools import wraps
+from threading import Lock
+
 from config.settings import USER_SETTINGS_PATH, get_default_settings
 from core.logging_config import get_logger
 from core.recording_schedule import validate_quiet_hours
@@ -15,6 +18,22 @@ from core.runtime_config import (
 from core.secure_file import atomic_write_private_json
 
 logger = get_logger(__name__)
+
+# hub-only: every settings mutation runs in an API request greenlet; in the
+# threading/HA entrypoint the same object is a normal thread lock. Serializing
+# the complete handler (not only its final save) prevents two whole-document
+# read/modify/write operations from silently overwriting each other.
+_settings_write_lock = Lock()  # hub-only: API request handlers only
+
+
+def serialize_settings_write(func):
+    """Serialize a settings handler's complete read/modify/write transaction."""
+    @wraps(func)
+    def serialized(*args, **kwargs):
+        with _settings_write_lock:
+            return func(*args, **kwargs)
+    serialized._serializes_settings_write = True
+    return serialized
 
 
 def load_user_settings():

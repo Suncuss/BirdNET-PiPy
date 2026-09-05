@@ -236,27 +236,29 @@ describe('Table.vue', () => {
 
 	      const wrapper = await mountTable()
 
-	      const input = wrapper.find('input[type="text"]')
+	      const input = wrapper.find('input[role="combobox"]')
 	      await input.trigger('focus')
 
 	      // Initial focus shows all options
-	      expect(wrapper.findAll('button').some(b => b.text().includes('American Robin'))).toBe(true)
-	      expect(wrapper.findAll('button').some(b => b.text().includes('Blue Jay'))).toBe(true)
+	      const optionTexts = () => wrapper.findAll('li[role="option"]').map(o => o.text())
+	      expect(optionTexts().some(t => t.includes('American Robin'))).toBe(true)
+	      expect(optionTexts().some(t => t.includes('Blue Jay'))).toBe(true)
 
 	      // Narrow list via search
 	      await input.setValue('robin')
-	      expect(wrapper.findAll('button').some(b => b.text().includes('American Robin'))).toBe(true)
-	      expect(wrapper.findAll('button').some(b => b.text().includes('Blue Jay'))).toBe(false)
+	      expect(optionTexts().some(t => t.includes('American Robin'))).toBe(true)
+	      expect(optionTexts().some(t => t.includes('Blue Jay'))).toBe(false)
 
-	      // Select the filtered option (handler is on mousedown)
-	      const robinOption = wrapper.findAll('button').find(b => b.text().includes('American Robin'))
+	      // Select the filtered option
+	      const robinOption = wrapper.findAll('li[role="option"]').find(o => o.text().includes('American Robin'))
 	      await robinOption.trigger('mousedown')
 	      await flushPromises()
 
-	      // Refocus shows all options again (no stale filtered list)
+	      // Refocus shows all options again: the query resets to the committed
+	      // label, which lists everything rather than only the current pick.
 	      await input.trigger('focus')
-	      expect(wrapper.findAll('button').some(b => b.text().includes('American Robin'))).toBe(true)
-	      expect(wrapper.findAll('button').some(b => b.text().includes('Blue Jay'))).toBe(true)
+	      expect(optionTexts().some(t => t.includes('American Robin'))).toBe(true)
+	      expect(optionTexts().some(t => t.includes('Blue Jay'))).toBe(true)
 	    })
 
 	    it('renders table with detections', async () => {
@@ -300,7 +302,7 @@ describe('Table.vue', () => {
       const wrapper = await mountTable()
 
       expect(wrapper.text()).toContain('100 total')
-      expect(wrapper.find('select').exists()).toBe(true)
+      expect(wrapper.find('button[aria-label="Rows per page"]').exists()).toBe(true)
     })
   })
 
@@ -333,7 +335,7 @@ describe('Table.vue', () => {
   })
 
   describe('hour filter', () => {
-    it('renders a desktop-only custom hour dropdown, blank by default + 24 hours', async () => {
+    it('renders a desktop-only hour dropdown: Any hour + 24 hours', async () => {
       const wrapper = await mountTable()
 
       const hourLabel = wrapper.findAll('label').find(l => l.text() === 'Hour')
@@ -344,54 +346,47 @@ describe('Table.vue', () => {
       expect(container.className).toContain('hidden')
       expect(container.className).toContain('lg:block')
 
-      const buttons = [...container.querySelectorAll('button')]
-      // Trigger (blank until a hour is picked) + 24 hour options
-      expect(buttons[0].textContent.trim()).toBe('')
-      const hourOptions = buttons.slice(1)
-      expect(hourOptions).toHaveLength(24)
+      const trigger = container.querySelector('button[aria-label="Hour"]')
+      expect(trigger).toBeTruthy()
+      await trigger.click()
+      await wrapper.vm.$nextTick()
+
+      const options = [...container.querySelectorAll('li[role="option"]')]
+      // Leading "no filter" option + 24 hours
+      expect(options).toHaveLength(25)
+      expect(options[0].textContent.trim()).toBe('Any hour')
     })
 
-    it('selecting an hour applies it as a detections filter', async () => {
+    it('selecting an hour applies it as a detections filter, as a number', async () => {
       const wrapper = await mountTable()
 
       const container = wrapper
         .findAll('label')
         .find(l => l.text() === 'Hour')
         .element.parentElement
-      // buttons[0] is the trigger; the rest are hours 0..23 in order
-      const hourOptions = wrapper
-        .findAll('button')
-        .filter(b => container.contains(b.element))
-        .slice(1)
+      const trigger = wrapper.find('button[aria-label="Hour"]')
+      await trigger.trigger('click')
 
-      await hourOptions[14].trigger('mousedown')
+      // Options are [Any hour, 0, 1, ... 23]; index 15 is hour 14.
+      const options = [...container.querySelectorAll('li[role="option"]')]
+      options[15].click()
       await flushPromises()
 
       const detectionCalls = mockApi.get.mock.calls.filter(
         ([url]) => url === '/detections'
       )
+      // Not "14": AppListbox restores the option's original numeric type.
       expect(detectionCalls.at(-1)[1].params.hour).toBe(14)
     })
 
-    it('keeps the hour trigger box-aligned with the other filter controls', async () => {
+    it('keeps the hour control box-aligned with the other filter controls', async () => {
       const wrapper = await mountTable()
 
-      const hourContainer = wrapper
-        .findAll('label')
-        .find(l => l.text() === 'Hour')
-        .element.parentElement
-      const trigger = hourContainer.querySelector('button')
+      const trigger = wrapper.find('button[aria-label="Hour"]')
 
-      // Regression guard: the trigger must be a flex box, not the default
-      // inline-block. An inline-block button adds a ~6px baseline descender
-      // gap below it, which made the Hour box render 6px higher than the
-      // From/To/Species controls. happy-dom has no layout engine so we can't
-      // measure rects here — assert the structural cause instead.
-      expect(trigger.className).toContain('flex')
-      expect(trigger.className).toContain('items-center')
-
-      // ...and it must share the h-10 height the sibling controls use.
-      expect(trigger.className).toContain('h-10')
+      // The Hour control must share the h-10 height its From/To/Species
+      // siblings use, or the filter row stops lining up.
+      expect(trigger.classes()).toContain('h-10')
       const speciesInput = wrapper.find('input[placeholder="All species"]')
       expect(speciesInput.classes()).toContain('h-10')
     })
@@ -670,14 +665,13 @@ describe('Table.vue', () => {
 
       const wrapper = await mountTable()
 
-      // The filter bar also has an hour <select>; target the per-page one.
-      const select = wrapper.findAll('select').find(s => s.text().includes('25'))
-      expect(select).toBeTruthy()
+      const trigger = wrapper.find('button[aria-label="Rows per page"]')
+      expect(trigger.exists()).toBe(true)
+      await trigger.trigger('click')
 
-      const options = select.findAll('option')
-      expect(options.map(o => o.text())).toContain('25')
-      expect(options.map(o => o.text())).toContain('50')
-      expect(options.map(o => o.text())).toContain('100')
+      const options = trigger.element.parentElement.querySelectorAll('li[role="option"]')
+      const labels = [...options].map(o => o.textContent.trim())
+      expect(labels).toEqual(['25', '50', '100', '200'])
     })
   })
 
@@ -758,8 +752,12 @@ describe('Table.vue', () => {
 
       const wrapper = await mountTable()
 
-      // Pagination footer nav buttons are [first, prev, next, last].
-      const navButtons = wrapper.find('.bg-gray-50.border-t').findAll('button')
+      // Footer holds the per-page listbox trigger plus the nav buttons; drop
+      // the listbox trigger so the nav buttons are [first, prev, next, last].
+      const navButtons = wrapper
+        .find('.bg-gray-50.border-t')
+        .findAll('button')
+        .filter(b => b.attributes('aria-haspopup') !== 'listbox')
       await navButtons[2].trigger('click') // next page
       await flushPromises()
 

@@ -1,10 +1,13 @@
-"""Tests for core.recording_schedule — quiet-hours evaluation and validation."""
+"""Tests for core.recording_schedule — recording gate, quiet hours, validation."""
 from datetime import datetime
 
 import pytest
 
 from core.recording_schedule import (
+    REASON_NO_SOURCES,
     REASON_QUIET_HOURS,
+    enabled_sources,
+    evaluate_recording_gate,
     evaluate_schedule,
     parse_hhmm,
     validate_quiet_hours,
@@ -168,3 +171,61 @@ class TestValidateScheduleSettings:
         assert 'differ' in validate_schedule_settings({'quiet_hours': {
             'enabled': True, 'start': '06:00', 'end': '06:00',
         }})
+
+
+def _audio(*enabled_flags):
+    return {'audio': {'sources': [
+        {'id': f'source_{i}', 'type': 'rtsp', 'url': 'rtsp://x', 'enabled': flag}
+        for i, flag in enumerate(enabled_flags)
+    ]}}
+
+
+class TestEnabledSources:
+    def test_missing_flag_counts_as_enabled(self):
+        # Sources saved before the toggle existed have no 'enabled' key.
+        assert len(enabled_sources({'sources': [{'id': 'source_0'}]})) == 1
+
+    def test_filters_disabled(self):
+        audio = _audio(True, False)['audio']
+        assert [s['id'] for s in enabled_sources(audio)] == ['source_0']
+
+    @pytest.mark.parametrize('audio', [{}, {'sources': []}])
+    def test_no_sources(self, audio):
+        assert enabled_sources(audio) == []
+
+
+class TestEvaluateRecordingGate:
+    def test_records_with_an_active_source_and_no_schedule(self):
+        decision = evaluate_recording_gate(_audio(True), _at(12, 0))
+        assert decision.record is True
+        assert decision.reason is None
+
+    @pytest.mark.parametrize('settings', [_audio(False), _audio(False, False), {}])
+    def test_no_active_source_pauses_without_a_resume_time(self, settings):
+        decision = evaluate_recording_gate(settings, _at(12, 0))
+        assert decision.record is False
+        assert decision.reason == REASON_NO_SOURCES
+        assert decision.resumes_at is None
+
+    def test_one_active_source_is_enough(self):
+        assert evaluate_recording_gate(_audio(False, True), _at(12, 0)).record is True
+
+    def test_quiet_hours_still_apply_with_an_active_source(self):
+        settings = {**_audio(True), **_settings()}
+        decision = evaluate_recording_gate(settings, _at(23, 0))
+        assert decision.reason == REASON_QUIET_HOURS
+        assert decision.resumes_at is not None
+
+    def test_no_sources_outranks_quiet_hours(self):
+        settings = {**_audio(False), **_settings()}
+        decision = evaluate_recording_gate(settings, _at(23, 0))
+        assert decision.reason == REASON_NO_SOURCES
+        assert decision.resumes_at is None
+
+    def test_schedule_error_survives_a_no_source_pause(self):
+        # Otherwise a malformed window would stop being reported (and would log
+        # "valid again") for as long as every source is disabled.
+        settings = {**_audio(False), **_settings(start='06:00', end='06:00')}
+        decision = evaluate_recording_gate(settings, _at(23, 0))
+        assert decision.reason == REASON_NO_SOURCES
+        assert 'quiet hours ignored' in decision.error

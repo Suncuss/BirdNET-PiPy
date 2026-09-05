@@ -36,6 +36,7 @@ from core.settings_store import (
     _validate_notification_settings,
     load_user_settings,
     save_user_settings,
+    serialize_settings_write,
     update_quiet_hours,
 )
 from core.utils import normalize_site_url
@@ -106,6 +107,7 @@ def get_default_settings_endpoint():
 @api.route('/api/settings/channel', methods=['PUT'])
 @log_api_request
 @require_auth
+@serialize_settings_write
 def update_channel_setting():
     """Update the update channel setting without triggering a restart.
 
@@ -151,6 +153,7 @@ def update_channel_setting():
 @api.route('/api/settings/units', methods=['PUT'])
 @log_api_request
 @require_auth
+@serialize_settings_write
 def update_units_setting():
     """Update the display units setting without triggering a restart.
 
@@ -185,6 +188,7 @@ def update_units_setting():
 @api.route('/api/settings/time-format', methods=['PUT'])
 @log_api_request
 @require_auth
+@serialize_settings_write
 def update_time_format_setting():
     """Update the display time-format setting without triggering a restart.
 
@@ -220,6 +224,7 @@ def update_time_format_setting():
 @api.route('/api/settings/playback', methods=['PUT'])
 @log_api_request
 @require_auth
+@serialize_settings_write
 def update_playback_setting():
     """Update the recording-normalization setting without triggering a restart.
 
@@ -255,6 +260,7 @@ def update_playback_setting():
 @api.route('/api/settings/schedule', methods=['PUT'])
 @log_api_request
 @require_auth
+@serialize_settings_write
 def update_schedule_setting():
     """Update the recording schedule (quiet hours) without triggering a restart.
 
@@ -291,6 +297,7 @@ def update_schedule_setting():
 @api.route('/api/settings/notifications', methods=['PUT'])
 @log_api_request
 @require_auth
+@serialize_settings_write
 def update_notification_settings():
     """Update notification settings without triggering a restart.
 
@@ -336,6 +343,7 @@ def update_notification_settings():
 @api.route('/api/settings', methods=['PUT'])
 @log_api_request
 @require_auth
+@serialize_settings_write
 def update_settings():
     """Update user settings and apply changes without container restart."""
     try:

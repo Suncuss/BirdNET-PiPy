@@ -640,6 +640,18 @@ export default {
       }
     }
 
+    let reconnectAfterLogout = false
+    const handleLoggedOut = () => {
+      if (!socket) return
+      if (socket.connected) {
+        // The HTTP response and WebSocket close travel independently. If the
+        // close is still in flight, reconnect from its callback below.
+        reconnectAfterLogout = true
+      } else {
+        socket.connect()
+      }
+    }
+
     const initWebSocket = () => {
       socket = io({ path: SOCKET_PATH })
 
@@ -649,6 +661,10 @@ export default {
 
       socket.on('disconnect', (reason) => {
         console.log(`[LiveFeed] WebSocket disconnected: ${reason}`)
+        if (reason === 'io server disconnect' && reconnectAfterLogout) {
+          reconnectAfterLogout = false
+          socket.connect()
+        }
       })
 
       // A password change evicts every other device. Reconnect so the socket
@@ -700,6 +716,7 @@ export default {
     }
 
     onMounted(async () => {
+      window.addEventListener('auth:logged-out', handleLoggedOut)
       // Kick off the stream-config fetch now — it doesn't depend on the Safari
       // decoder probe below, so the two (and on Safari a ~80 kB decoder-chunk
       // download) run concurrently instead of serially.
@@ -736,6 +753,7 @@ export default {
     })
 
     onUnmounted(() => {
+      window.removeEventListener('auth:logged-out', handleLoggedOut)
       userWantsPlay = false
       cancelReconnect()
       // Stop the decoded stream (Safari): aborts the fetch, frees the decoder, and

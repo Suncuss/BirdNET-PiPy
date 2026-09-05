@@ -44,81 +44,39 @@
           </div>
         </div>
 
-        <!-- Hour Filter (desktop only — the filter row is too tight on mobile) -->
-        <div
-          ref="hourDropdownRef"
-          class="hidden lg:block lg:flex-none lg:w-32 relative"
-        >
+        <!-- Hour Filter (desktop only — the filter row is too tight on mobile).
+             A fixed 24-entry list with no search, so a native select fits: the
+             leading option is the "no filter" state. -->
+        <div class="hidden lg:block lg:flex-none lg:w-32">
           <label class="block text-xs font-medium text-gray-600 mb-1">Hour</label>
-          <div class="relative">
-            <button
-              type="button"
-              class="flex items-center w-full h-10 pl-3 pr-8 text-sm text-left border border-gray-300 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
-              @click="showHourDropdown = !showHourDropdown"
-            >
-              {{ selectedHour === null ? '' : formatHour(selectedHour) }}
-            </button>
-            <button
-              v-if="selectedHour !== null"
-              class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-              @click.stop="clearHourFilter"
-            >
-              <CloseIcon class="w-4 h-4" />
-            </button>
-          </div>
-          <!-- Dropdown -->
-          <div
-            v-show="showHourDropdown"
-            class="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-y-auto"
-          >
-            <button
-              v-for="h in 24"
-              :key="h - 1"
-              class="w-full px-3 py-2 text-left text-sm hover:bg-gray-50 transition-colors"
-              @mousedown.prevent="selectHour(h - 1)"
-            >
-              {{ formatHour(h - 1) }}
-            </button>
-          </div>
+          <AppListbox
+            v-model="selectedHour"
+            :options="hourOptions"
+            fluid
+            aria-label="Hour"
+            @change="applyFilters"
+          />
         </div>
 
         <!-- Species Filter -->
-        <div
-          ref="speciesDropdownRef"
-          class="w-full sm:flex-1 sm:min-w-[200px] relative"
-        >
+        <div class="w-full sm:flex-1 sm:min-w-[200px]">
           <label class="block text-xs font-medium text-gray-600 mb-1">Species</label>
-          <div class="relative">
-            <input
-              v-model="speciesSearchQuery"
-              type="text"
-              :placeholder="selectedSpeciesLabel || 'All species'"
-              class="w-full h-10 px-3 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent pr-8"
-              @focus="showSpeciesDropdown = true"
-            >
-            <button
-              v-if="selectedSpecies"
-              class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-              @click="clearSpeciesFilter"
-            >
-              <CloseIcon class="w-4 h-4" />
-            </button>
-          </div>
-          <!-- Dropdown -->
-          <div
-            v-show="showSpeciesDropdown && filteredSpeciesList.length > 0"
-            class="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-y-auto"
+          <AppCombobox
+            :model-value="selectedSpeciesOption"
+            :options="speciesList"
+            :get-label="getDisplayCommonName"
+            :filter="matchesBirdQuery"
+            :option-key="speciesKey"
+            placeholder="All species"
+            aria-label="Species"
+            empty-text="No species found"
+            @update:model-value="onSpeciesPicked"
           >
-            <button
-              v-for="species in filteredSpeciesList"
-              :key="species.common_name"
-              class="w-full px-3 py-2 text-left text-sm hover:bg-gray-50 transition-colors"
-              @mousedown.prevent="selectSpecies(species)"
-            >
-              <span class="font-medium text-gray-800">{{ getDisplayCommonName(species) }}</span>
-              <span class="text-xs text-gray-500 italic ml-2">{{ species.scientific_name }}</span>
-            </button>
-          </div>
+            <template #option="{ option }">
+              <span class="font-medium text-gray-800">{{ getDisplayCommonName(option) }}</span>
+              <span class="text-xs text-gray-500 italic ml-2">{{ option.scientific_name }}</span>
+            </template>
+          </AppCombobox>
         </div>
 
         <!-- Clear Filters -->
@@ -402,23 +360,12 @@
 
         <!-- Pagination -->
         <div class="flex items-center justify-between px-4 py-3 bg-gray-50 border-t border-gray-200">
-          <select
+          <AppListbox
             v-model="perPageModel"
-            class="h-9 px-2 py-1 text-sm border border-gray-300 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-green-500"
-          >
-            <option :value="25">
-              25
-            </option>
-            <option :value="50">
-              50
-            </option>
-            <option :value="100">
-              100
-            </option>
-            <option :value="200">
-              200
-            </option>
-          </select>
+            :options="perPageOptions"
+            size="sm"
+            aria-label="Rows per page"
+          />
 
           <div class="flex items-center gap-1">
             <button
@@ -589,6 +536,8 @@ import CloseIcon from '@/components/icons/CloseIcon.vue'
 import WarningIcon from '@/components/icons/WarningIcon.vue'
 import ChevronIcon from '@/components/icons/ChevronIcon.vue'
 import AppDatePicker from '@/components/AppDatePicker.vue'
+import AppListbox from '@/components/AppListbox.vue'
+import AppCombobox from '@/components/AppCombobox.vue'
 import Spinner from '@/components/Spinner.vue'
 import ScrollToTopButton from '@/components/ScrollToTopButton.vue'
 
@@ -668,24 +617,26 @@ const router = useRouter()
 	  set: (value) => setPerPage(value)
 	})
 
-	// Species Filter
-	const speciesSearchQuery = ref('')
-	const showSpeciesDropdown = ref(false)
-	const speciesList = ref([])
-	const speciesDropdownRef = ref(null)
-	const showHourDropdown = ref(false)
-	const hourDropdownRef = ref(null)
-	const filteredSpeciesList = computed(() => {
-	  const query = speciesSearchQuery.value.trim().toLowerCase()
-	  if (!query) return speciesList.value
+	const perPageOptions = [25, 50, 100, 200].map((n) => ({ value: n, label: String(n) }))
 
-	  return speciesList.value.filter(species => matchesBirdQuery(species, query))
-	})
-	const selectedSpeciesLabel = computed(() => {
-	  if (!selectedSpecies.value) return ''
-	  const species = speciesList.value.find(item => item.common_name === selectedSpecies.value)
-	  return getDisplayCommonName(species) || selectedSpecies.value
-	})
+	// null is the "no hour filter" state and leads the list. formatHour follows
+	// the 12/24-hour preference, so the labels are a computed, not a constant.
+	const hourOptions = computed(() => [
+	  { value: null, label: 'Any hour' },
+	  ...Array.from({ length: 24 }, (_, h) => ({ value: h, label: formatHour(h) }))
+	])
+
+	// Species Filter. The composable stores the selection as a common_name
+	// string (it feeds the API param and the route query); AppCombobox works in
+	// whole option objects, so the two are mapped here rather than reshaping the
+	// composable.
+	const speciesList = ref([])
+	const speciesKey = (species) => species.common_name
+	const selectedSpeciesOption = computed(() =>
+	  selectedSpecies.value
+	    ? speciesList.value.find(item => item.common_name === selectedSpecies.value) || null
+	    : null
+	)
 
 // Modals
 const isSpectrogramModalVisible = ref(false)
@@ -737,39 +688,11 @@ const formatDateTime = (timestamp) => {
 	  }
 	}
 
-const selectSpecies = (species) => {
-  selectedSpecies.value = species.common_name
-  speciesSearchQuery.value = ''
-  showSpeciesDropdown.value = false
+// A pick emits the option object (or null on clear); the composable wants the
+// common_name string.
+const onSpeciesPicked = (species) => {
+  selectedSpecies.value = species ? species.common_name : null
   applyFilters()
-}
-
-	const clearSpeciesFilter = () => {
-	  selectedSpecies.value = null
-	  speciesSearchQuery.value = ''
-	  showSpeciesDropdown.value = false
-	  applyFilters()
-	}
-
-const selectHour = (h) => {
-  selectedHour.value = h
-  showHourDropdown.value = false
-  applyFilters()
-}
-
-const clearHourFilter = () => {
-  selectedHour.value = null
-  showHourDropdown.value = false
-  applyFilters()
-}
-
-const handleClickOutside = (event) => {
-  if (speciesDropdownRef.value && !speciesDropdownRef.value.contains(event.target)) {
-    showSpeciesDropdown.value = false
-  }
-  if (hourDropdownRef.value && !hourDropdownRef.value.contains(event.target)) {
-    showHourDropdown.value = false
-  }
 }
 
 // --- Event Handlers ---
@@ -786,7 +709,6 @@ const applyFilters = () => {
 const handleClearFilters = () => {
   localStartDate.value = ''
   localEndDate.value = ''
-  speciesSearchQuery.value = ''
   // Resets the composable filters + page; the query-sync watcher then strips the
   // matching keys from the URL so a later refresh / back-forward doesn't
   // resurrect the just-cleared filters.
@@ -957,11 +879,9 @@ watch(
 	  seedStateFromQuery()
 	  fetchDetections()
 	  fetchSpeciesList()
-	  document.addEventListener('click', handleClickOutside)
 	})
 
 	onUnmounted(() => {
-	  document.removeEventListener('click', handleClickOutside)
 	  // Audio cleanup is handled automatically by useAudioPlayer composable
 	})
 	</script>

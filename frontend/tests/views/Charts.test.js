@@ -157,13 +157,24 @@ describe('Charts', () => {
     const wrapper = mountCharts()
     await flushPromises()
 
-    wrapper.vm.searchQuery = 'Ams'
-    wrapper.vm.filterSpecies()
+    // Typing filters by the localized display name (matchesBirdQuery searches
+    // display_common_name too), so "Ams" reaches "Amsel".
+    const input = wrapper.find('input[role="combobox"]')
+    await input.setValue('Ams')
 
-    expect(wrapper.vm.filteredSpecies).toHaveLength(1)
+    // Scope to the combobox's own list — the trends range picker on the same
+    // page also renders li[role=option].
+    const comboRoot = input.element.parentElement
+    const options = wrapper.findAll('li[role="option"]').filter(o => comboRoot.contains(o.element))
+    expect(options).toHaveLength(1)
+    expect(options[0].text()).toContain('Amsel')
 
-    wrapper.vm.selectSpecies(wrapper.vm.filteredSpecies[0])
-    expect(wrapper.vm.searchQuery).toBe('Amsel')
+    await options[0].trigger('mousedown')
+    await flushPromises()
+
+    // The picked object is the model; the field shows its display label.
+    expect(wrapper.vm.selectedSpecies.common_name).toBe('American Robin')
+    expect(input.element.value).toBe('Amsel')
   })
 
   describe('Detection Trends', () => {

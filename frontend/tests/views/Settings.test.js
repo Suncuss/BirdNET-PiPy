@@ -2,6 +2,8 @@ import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import Settings from '@/views/Settings.vue'
 import { RECORDER_STATES } from '@/utils/recorderStates'
+import { useRecorderHealth } from '@/composables/useRecorderHealth'
+import { useSettings } from '@/composables/useSettings'
 
 const socketHandlers = vi.hoisted(() => ({}))
 const socketOnMock = vi.hoisted(() => vi.fn((event, handler) => {
@@ -86,9 +88,10 @@ vi.mock('@/composables/useAuth', () => ({
     checkAuthStatus: vi.fn().mockResolvedValue(undefined),
     ensureAuthLoaded: vi.fn().mockResolvedValue(undefined),
     login: vi.fn().mockResolvedValue(true),
-    logout: vi.fn().mockResolvedValue(undefined),
+    logout: vi.fn().mockResolvedValue(true),
     setup: vi.fn().mockResolvedValue(true),
     toggleAuth: vi.fn().mockResolvedValue(true),
+    saveAccessSettings: vi.fn().mockResolvedValue(true),
     changePassword: vi.fn().mockResolvedValue(true),
     clearError: vi.fn()
   })
@@ -203,9 +206,26 @@ const mountSettings = () => mount(Settings, {
   }
 })
 
+// Make GET /settings hang until the returned release() is called, so a test
+// can observe the form's pre-load (skeleton) state. Other URLs fall through
+// to the defaults.
+const deferSettingsFetch = (payload = createMockSettings()) => {
+  let release
+  mockApi.get.mockImplementation((url) =>
+    url === '/settings'
+      ? new Promise((resolve) => { release = () => resolve({ data: structuredClone(payload) }) })
+      : defaultGetResponse(url)
+  )
+  return () => release()
+}
+
 describe('Settings', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // Recorder status lives in the useRecorderHealth singleton — clear it so
+    // one test's status can't leak into the next.
+    useRecorderHealth().recorderStatus.value = null
+    useSettings().resetState()
     Object.keys(socketHandlers).forEach((key) => delete socketHandlers[key])
     socketOnMock.mockClear()
     socketDisconnectMock.mockClear()
@@ -236,6 +256,132 @@ describe('Settings', () => {
       expect(mockApi.get).toHaveBeenCalledWith('/settings')
       expect(wrapper.vm.settings.audio.recording_length).toBe(9)
       expect(wrapper.vm.settings.audio.overlap).toBe(0.0)
+    })
+
+    it('shows a skeleton until the first payload lands, not empty-state text', async () => {
+      // Cold store: clear the shared singleton so nothing seeds the form, and
+      // hold the /settings response so the form stays in its pre-load state.
+      useSettings().resetState()
+      const releaseSettings = deferSettingsFetch()
+
+      const wrapper = mountSettings()
+      await wrapper.vm.$nextTick()
+
+      // Before data: skeleton visible, form body gated, no misleading pause hint.
+      expect(wrapper.vm.loaded).toBe(false)
+      expect(wrapper.find('[data-testid="settings-skeleton"]').exists()).toBe(true)
+      expect(wrapper.vm.noActiveSourceHint).toBe('')
+      expect(wrapper.find('[data-testid="no-active-source-hint"]').exists()).toBe(false)
+
+      releaseSettings()
+      await flushPromises()
+
+      // After data: skeleton gone, real form rendered.
+      expect(wrapper.vm.loaded).toBe(true)
+      expect(wrapper.find('[data-testid="settings-skeleton"]').exists()).toBe(false)
+      expect(wrapper.text()).toContain('Microphone')
+    })
+
+    it('seeds the form synchronously from an already-loaded store (no flash)', async () => {
+      // Warm store (the common navigation case): App.vue loaded it earlier.
+      const store = useSettings()
+      store.resetState()
+      store.setSettings(createMockSettings())
+
+      // Hold the background revalidation so the seed is the ONLY thing that
+      // can populate the form.
+      const releaseSettings = deferSettingsFetch()
+
+      const wrapper = mountSettings()
+      // loaded flips true during onMounted, before any network resolves.
+      expect(wrapper.vm.loaded).toBe(true)
+
+      // DOM reflects the seed on the next tick — no await on the fetch.
+      await wrapper.vm.$nextTick()
+      expect(wrapper.find('[data-testid="settings-skeleton"]').exists()).toBe(false)
+      expect(wrapper.text()).toContain('Microphone')
+
+      releaseSettings()
+      await flushPromises()
+    })
+
+    it('does not overwrite warm-form edits when background revalidation finishes', async () => {
+      const store = useSettings()
+      const cached = createMockSettings()
+      cached.display.station_name = 'Cached station'
+      store.setSettings(cached)
+
+      const refreshed = createMockSettings()
+      refreshed.display.station_name = 'Server station'
+      const releaseSettings = deferSettingsFetch(refreshed)
+      const wrapper = mountSettings()
+
+      wrapper.vm.settings.display.station_name = 'Unsaved edit'
+      await wrapper.vm.$nextTick()
+      expect(wrapper.vm.hasUnsavedChanges).toBe(true)
+
+      releaseSettings()
+      await flushPromises()
+
+      expect(wrapper.vm.settings.display.station_name).toBe('Unsaved edit')
+      expect(wrapper.vm.hasUnsavedChanges).toBe(true)
+      expect(store.settings.value.display.station_name).toBe('Server station')
+    })
+
+    it('keeps warm cached settings when background revalidation exhausts its retries', async () => {
+      vi.useFakeTimers()
+      try {
+        const cached = createMockSettings()
+        cached.display.station_name = 'Known-good station'
+        useSettings().setSettings(cached)
+        mockApi.get.mockImplementation((url) =>
+          url === '/settings'
+            ? Promise.reject(new Error('settings unavailable'))
+            : defaultGetResponse(url)
+        )
+
+        const wrapper = mountSettings()
+        await flushPromises()
+        await vi.advanceTimersByTimeAsync(2000)
+        await flushPromises()
+        await vi.advanceTimersByTimeAsync(2000)
+        await flushPromises()
+
+        expect(wrapper.vm.settings.display.station_name).toBe('Known-good station')
+        expect(wrapper.vm.saveStatus).toEqual({
+          type: 'error',
+          message: 'Could not refresh settings. Showing last loaded settings.'
+        })
+        expect(mockApi.get).not.toHaveBeenCalledWith('/settings/defaults')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('still falls back to defaults when a genuine cold load exhausts its retries', async () => {
+      vi.useFakeTimers()
+      try {
+        const defaults = createMockSettings()
+        defaults.display.station_name = 'Default station'
+        mockApi.get.mockImplementation((url) => {
+          if (url === '/settings') return Promise.reject(new Error('settings unavailable'))
+          if (url === '/settings/defaults') return Promise.resolve({ data: defaults })
+          return defaultGetResponse(url)
+        })
+
+        const wrapper = mountSettings()
+        await flushPromises()
+        await vi.advanceTimersByTimeAsync(2000)
+        await flushPromises()
+        await vi.advanceTimersByTimeAsync(2000)
+        await flushPromises()
+
+        expect(mockApi.get).toHaveBeenCalledWith('/settings/defaults')
+        expect(wrapper.vm.loaded).toBe(true)
+        expect(wrapper.vm.settings.display.station_name).toBe('Default station')
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it('loads model and location-filter status on mount', async () => {
@@ -445,29 +591,6 @@ describe('Settings', () => {
       expect(wrapper.vm.recorderStatus.state).toBe(RECORDER_STATES.RUNNING)
     })
 
-    it('initializes socket.io with the base-path-aware socket.io path', async () => {
-      mountSettings()
-      await flushPromises()
-
-      expect(ioMock).toHaveBeenCalledWith({ path: '/socket.io' })
-    })
-
-    it('falls back to recorder status REST call when the socket connection fails', async () => {
-      const wrapper = mountSettings()
-      await flushPromises()
-
-      expect(socketHandlers.connect_error).toBeTypeOf('function')
-
-      socketHandlers.connect_error(new Error('origin mismatch'))
-      await flushPromises()
-
-      const recorderStatusCalls = mockApi.get.mock.calls
-        .filter(([url]) => url === '/recorder/status')
-      expect(recorderStatusCalls).toHaveLength(2)
-
-      wrapper.unmount()
-    })
-
     it('displays recording settings within Detection section', async () => {
       const wrapper = mountSettings()
       await flushPromises()
@@ -479,50 +602,42 @@ describe('Settings', () => {
       const wrapper = mountSettings()
       await flushPromises()
 
-      const select = wrapper.find('#recordingLength')
-      expect(select.exists()).toBe(true)
+      const trigger = wrapper.find('button#recordingLength')
+      expect(trigger.exists()).toBe(true)
 
-      const options = select.findAll('option')
-      expect(options).toHaveLength(3)
-      expect(options[0].attributes('value')).toBe('9')
-      expect(options[1].attributes('value')).toBe('12')
-      expect(options[2].attributes('value')).toBe('15')
-      expect(options[0].text()).toBe('9 seconds')
-      expect(options[1].text()).toBe('12 seconds')
-      expect(options[2].text()).toBe('15 seconds')
+      const options = [...trigger.element.parentElement.querySelectorAll('li[role="option"]')]
+      expect(options.map(o => o.textContent.trim())).toEqual([
+        '9 seconds', '12 seconds', '15 seconds'
+      ])
     })
 
     it('shows overlap dropdown with correct options', async () => {
       const wrapper = mountSettings()
       await flushPromises()
 
-      const select = wrapper.find('#overlap')
-      expect(select.exists()).toBe(true)
+      const trigger = wrapper.find('button#overlap')
+      expect(trigger.exists()).toBe(true)
 
-      const options = select.findAll('option')
-      expect(options).toHaveLength(6)
-      expect(options[0].attributes('value')).toBe('0')
-      expect(options[1].attributes('value')).toBe('0.5')
-      expect(options[2].attributes('value')).toBe('1')
-      expect(options[3].attributes('value')).toBe('1.5')
-      expect(options[4].attributes('value')).toBe('2')
-      expect(options[5].attributes('value')).toBe('2.5')
+      const options = [...trigger.element.parentElement.querySelectorAll('li[role="option"]')]
+      expect(options.map(o => o.textContent.trim())).toEqual([
+        'None', '0.5s', '1.0s', '1.5s', '2.0s', '2.5s'
+      ])
     })
 
     it('displays current recording_length value', async () => {
       const wrapper = mountSettings()
       await flushPromises()
 
-      const select = wrapper.find('#recordingLength')
-      expect(select.element.value).toBe('9')
+      const trigger = wrapper.find('button#recordingLength')
+      expect(trigger.text()).toContain('9 seconds')
     })
 
     it('displays current overlap value', async () => {
       const wrapper = mountSettings()
       await flushPromises()
 
-      const select = wrapper.find('#overlap')
-      expect(select.element.value).toBe('0')
+      const trigger = wrapper.find('button#overlap')
+      expect(trigger.text()).toContain('None')
     })
 
     it('updates recording_length when dropdown changes', async () => {
@@ -818,6 +933,32 @@ describe('Settings', () => {
       expect(wrapper.text()).toContain('Microphone')
     })
 
+    it('hints that recording is paused when every source is disabled', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      wrapper.vm.settings.audio.sources[0].enabled = false
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.vm.noActiveSourceHint).toContain('recording is paused')
+      expect(wrapper.find('[data-testid="no-active-source-hint"]').exists()).toBe(true)
+      // The "highlighted sources are active" legend needs something highlighted.
+      expect(wrapper.vm.hasInactiveSource).toBe(false)
+    })
+
+    it('shows the active-source legend only for a mixed list', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      addSource(wrapper, { type: 'rtsp', url: 'rtsp://192.168.1.100:554/stream', label: '' })
+      wrapper.vm.settings.audio.sources[0].enabled = false
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.vm.hasInactiveSource).toBe(true)
+      expect(wrapper.vm.noActiveSourceHint).toBe('')
+      expect(wrapper.find('[data-testid="no-active-source-hint"]').exists()).toBe(false)
+    })
+
     it('adds RTSP source with enabled flag', async () => {
       const wrapper = mountSettings()
       await flushPromises()
@@ -919,13 +1060,13 @@ describe('Settings', () => {
       const wrapper = mountSettings()
       await flushPromises()
 
-      const select = wrapper.find('#modelType')
-      expect(select.exists()).toBe(true)
+      const trigger = wrapper.find('button#modelType')
+      expect(trigger.exists()).toBe(true)
 
-      const options = select.findAll('option')
+      const options = [...trigger.element.parentElement.querySelectorAll('li[role="option"]')]
       expect(options).toHaveLength(2)
-      expect(options[0].attributes('value')).toBe('birdnet')
-      expect(options[1].attributes('value')).toBe('birdnet_v3')
+      expect(options[0].textContent).toContain('v2.4')
+      expect(options[1].textContent).toContain('v3.1')
     })
 
     it('changing model type marks hasUnsavedChanges', async () => {
@@ -1096,6 +1237,7 @@ describe('Settings', () => {
       // Saved instantly via the dedicated endpoint — no full-settings PUT, no draft change
       expect(mockApi.put).toHaveBeenCalledWith('/settings/playback', { normalize: true })
       expect(wrapper.vm.settings.playback.normalize).toBe(true)
+      expect(useSettings().settings.value.playback.normalize).toBe(true)
       expect(wrapper.vm.hasUnsavedChanges).toBe(false)
     })
 
@@ -1292,13 +1434,15 @@ describe('Settings', () => {
 
   describe('Quiet Hours', () => {
     const summary = (wrapper) => wrapper.find('[data-testid="quiet-hours-summary"]').text()
+    const timeField = (wrapper, index) =>
+      wrapper.findAllComponents({ name: 'AppTimeSelect' })[index].props('modelValue')
 
     it('renders inside the Detection section with the stored window', async () => {
       const wrapper = mountSettings()
       await flushPromises()
 
-      expect(wrapper.find('#quietHoursStart').element.value).toBe('22:00')
-      expect(wrapper.find('#quietHoursEnd').element.value).toBe('06:00')
+      expect(timeField(wrapper, 0)).toBe('22:00')
+      expect(timeField(wrapper, 1)).toBe('06:00')
       expect(wrapper.vm.quietHours.enabled).toBe(false)
       expect(summary(wrapper)).toBe('Recording runs around the clock.')
     })
@@ -1315,6 +1459,7 @@ describe('Settings', () => {
 
       expect(mockApi.put).toHaveBeenCalledWith('/settings/schedule', { quiet_hours: { enabled: true } })
       expect(wrapper.vm.settings.schedule.quiet_hours.enabled).toBe(true)
+      expect(useSettings().settings.value.schedule.quiet_hours.enabled).toBe(true)
       expect(wrapper.vm.hasUnsavedChanges).toBe(false)
       expect(summary(wrapper)).toContain('every day (8 h)')
       expect(summary(wrapper)).toContain('wrap past midnight')
@@ -1333,7 +1478,7 @@ describe('Settings', () => {
 
       expect(mockApi.put).toHaveBeenCalledWith('/settings/schedule', { quiet_hours: { start: '21:30', end: '06:00' } })
       expect(wrapper.vm.settings.schedule.quiet_hours.start).toBe('21:30')
-      expect(wrapper.find('#quietHoursStart').element.value).toBe('21:30')
+      expect(timeField(wrapper, 0)).toBe('21:30')
     })
 
     it('does not save an unchanged pair', async () => {
@@ -1389,7 +1534,7 @@ describe('Settings', () => {
       await wrapper.vm.saveQuietHoursTime()
 
       expect(mockApi.put).not.toHaveBeenCalled()
-      expect(wrapper.find('[data-testid="quiet-hours-error"]').text()).toContain('HH:MM')
+      expect(wrapper.find('[data-testid="quiet-hours-error"]').text()).toContain('must both be set')
     })
 
     it('keeps a half-entered draft when the toggle saves', async () => {
@@ -1606,6 +1751,7 @@ describe('Settings', () => {
       await flushPromises()
 
       expect(mockApi.put).toHaveBeenCalledWith('/settings/notifications', expect.any(Object))
+      expect(useSettings().settings.value.notifications.every_detection).toBe(false)
     })
 
     it('notification save sequence ignores stale success and rolls back to latest confirmed on failure', async () => {
@@ -1643,6 +1789,18 @@ describe('Settings', () => {
   })
 
   describe('Immediate Toggle Guards', () => {
+    it('keeps successful access autosaves in the warm settings cache', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      expect(useSettings().settings.value.access.charts_public).toBe(false)
+
+      await wrapper.vm.toggleFeatureAccess('charts_public')
+
+      expect(wrapper.vm.settings.access.charts_public).toBe(true)
+      expect(useSettings().settings.value.access.charts_public).toBe(true)
+    })
+
     it('toggleUpdateChannel ignores re-entry while request is in flight', async () => {
       const wrapper = mountSettings()
       await flushPromises()
@@ -1664,6 +1822,7 @@ describe('Settings', () => {
       resolveRequest({ data: { success: true } })
       await firstCall
       expect(wrapper.vm.updateChannelSaving).toBe(false)
+      expect(useSettings().settings.value.updates.channel).toBe('latest')
     })
 
     it('toggleMetricUnits ignores re-entry while request is in flight', async () => {
@@ -1687,6 +1846,7 @@ describe('Settings', () => {
       resolveRequest({ data: { success: true } })
       await firstCall
       expect(wrapper.vm.metricUnitsSaving).toBe(false)
+      expect(useSettings().settings.value.display.use_metric_units).toBe(false)
     })
 
     it('toggleTimeFormat syncs settings.value so a later full save preserves it', async () => {
@@ -1706,6 +1866,7 @@ describe('Settings', () => {
       expect(mockApi.put).toHaveBeenCalledWith('/settings/time-format', { time_format: '24h' })
       // settings.value is now in sync — a subsequent full PUT /settings sends '24h', not the stale '12h'
       expect(wrapper.vm.settings.display.time_format).toBe('24h')
+      expect(useSettings().settings.value.display.time_format).toBe('24h')
     })
   })
 
@@ -1837,7 +1998,22 @@ describe('Settings', () => {
       wrapper.vm.recorderStatus = { ...makeStatus(PAUSED, {}), pause: null }
       await wrapper.vm.$nextTick()
 
-      expect(wrapper.vm.recorderStateLabel).toBe('Paused')
+      expect(wrapper.vm.recorderStateLabel).toBe('Audio Paused')
+    })
+
+    it('reports a sourceless pause as paused, not stopped', async () => {
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      wrapper.vm.recorderStatus = {
+        ...makeStatus(PAUSED, {}),
+        pause: { reason: 'no_sources', resumes_at: null }
+      }
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.vm.recorderStateLabel).toBe('Audio Paused')
+      expect(wrapper.vm.recorderDotClass).toBe('bg-blue-400')
+      expect(wrapper.vm.showRecorderError).toBe(false)
     })
 
   })

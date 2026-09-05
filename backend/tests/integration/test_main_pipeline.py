@@ -1658,17 +1658,25 @@ class TestRecordingThread:
     # ---- Quiet hours (core.recording_schedule) ----
 
     @staticmethod
-    def _settings_with_quiet_hours(start='22:00', end='06:00'):
-        return {
+    def _settings_with_sources(enabled=True, quiet_hours=None):
+        settings = {
             'audio': {
                 'sources': [
-                    {'id': 'source_0', 'type': 'pulseaudio', 'device': 'default', 'label': 'Microphone', 'enabled': True}
+                    {'id': 'source_0', 'type': 'pulseaudio', 'device': 'default',
+                     'label': 'Microphone', 'enabled': enabled}
                 ],
                 'next_source_id': 1,
                 'recording_length': 9,
             },
-            'schedule': {'quiet_hours': {'enabled': True, 'start': start, 'end': end}},
         }
+        if quiet_hours:
+            settings['schedule'] = {'quiet_hours': quiet_hours}
+        return settings
+
+    @staticmethod
+    def _settings_with_quiet_hours(start='22:00', end='06:00'):
+        return TestRecordingThread._settings_with_sources(
+            quiet_hours={'enabled': True, 'start': start, 'end': end})
 
     def test_quiet_hours_skip_recorder_start_and_broadcast_paused(
         self, mock_recorder, controllable_stop_flag
@@ -1781,6 +1789,63 @@ class TestRecordingThread:
 
             transitions = [c.args[:2] for c in mock_notify.call_args_list]
             assert transitions == [('stopped', None), ('running', 'stopped')]
+
+    def test_no_enabled_sources_pauses_instead_of_stopping(
+        self, mock_recorder, controllable_stop_flag
+    ):
+        """The only source disabled is a configuration state, not a fault:
+        'paused' with no resume time, not 'stopped'."""
+        with patch('core.main.get_runtime_settings',
+                   return_value=self._settings_with_sources(enabled=False)), \
+             patch('core.main.create_recorder', return_value=mock_recorder) as mock_create, \
+             patch('core.main.local_now', return_value=datetime(2026, 8, 24, 12, 0, 0)), \
+             patch('core.main.FILE_SCAN_INTERVAL', 0.01), \
+             patch('core.main.stop_flag') as mock_stop, \
+             patch('core.main.broadcast_recorder_status') as mock_broadcast, \
+             patch('time.sleep'):
+
+            mock_stop.is_set.side_effect = controllable_stop_flag(iterations=1)
+
+            from core.main import continuous_audio_recording
+            continuous_audio_recording(Mock())
+
+            mock_create.assert_not_called()
+            mock_broadcast.assert_called_once()
+            args, kwargs = mock_broadcast.call_args
+            assert args[0] == 'paused'
+            assert kwargs['pause'] == {'reason': 'no_sources', 'resumes_at': None}
+
+    def test_disabling_and_re_enabling_the_last_source_never_alerts(
+        self, mock_recorder, controllable_stop_flag
+    ):
+        """Toggling the only source off pauses (no 'audio stopped' alert) and
+        toggling it back on resumes recording."""
+        settings = [
+            self._settings_with_sources(enabled=True),   # init
+            self._settings_with_sources(enabled=True),   # iter 1: running
+            self._settings_with_sources(enabled=False),  # iter 2: user disables it
+            self._settings_with_sources(enabled=True),   # iter 3: user re-enables it
+        ]
+        with patch('core.main.get_runtime_settings', side_effect=settings), \
+             patch('core.main.create_recorder', return_value=mock_recorder) as mock_create, \
+             patch('core.main.local_now', return_value=datetime(2026, 8, 24, 12, 0, 0)), \
+             patch('core.main.FILE_SCAN_INTERVAL', 0.01), \
+             patch('core.main.stop_flag') as mock_stop, \
+             patch('core.main.broadcast_recorder_status') as mock_broadcast, \
+             patch('core.main._maybe_notify_audio_status') as mock_notify, \
+             patch('time.sleep'):
+
+            mock_stop.is_set.side_effect = controllable_stop_flag(iterations=3)
+
+            from core.main import continuous_audio_recording
+            continuous_audio_recording(Mock())
+
+            states = [c.args[0] for c in mock_broadcast.call_args_list]
+            assert states == ['running', 'paused', 'running']
+            assert mock_create.call_count == 2  # init + resume
+            # 'stopped' never reaches the notifier, so no false alert goes out.
+            transitions = [c.args[:2] for c in mock_notify.call_args_list]
+            assert transitions == [('running', None), ('running', 'running')]
 
 
 class TestThreadCoordination:

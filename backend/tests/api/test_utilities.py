@@ -103,6 +103,28 @@ class TestSettingsManagement:
 
         mock_write.assert_called_once_with(settings_store.USER_SETTINGS_PATH, test_settings)
 
+    def test_every_settings_writer_uses_one_transaction_lock(self):
+        """Every endpoint that replaces user_settings.json must hold the
+        shared lock across its complete read/modify/write transaction."""
+        from core.routes import auth as auth_routes
+        from core.routes import settings as settings_routes
+
+        writers = (
+            settings_routes.update_channel_setting,
+            settings_routes.update_units_setting,
+            settings_routes.update_time_format_setting,
+            settings_routes.update_playback_setting,
+            settings_routes.update_schedule_setting,
+            settings_routes.update_notification_settings,
+            settings_routes.update_settings,
+            auth_routes.save_access_settings,
+        )
+
+        assert all(
+            getattr(writer, '_serializes_settings_write', False)
+            for writer in writers
+        )
+
 
 class TestFlagFileWriting:
     """Test flag file functionality."""

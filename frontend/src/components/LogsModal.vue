@@ -30,27 +30,12 @@
         <div class="p-4 border-b border-gray-100 flex flex-wrap gap-3 items-end">
           <div>
             <label class="block text-xs font-medium text-gray-600 mb-1">Service</label>
-            <select
+            <AppListbox
               v-model="serviceFilter"
-              class="border border-gray-300 rounded px-2 py-1.5 text-sm h-[34px]"
+              :options="serviceOptions"
+              size="sm"
               @change="applyFilters"
-            >
-              <option value="">
-                All
-              </option>
-              <option value="main">
-                main
-              </option>
-              <option value="api">
-                api
-              </option>
-              <option value="birdnet">
-                model
-              </option>
-              <option value="icecast">
-                icecast
-              </option>
-            </select>
+            />
           </div>
 
           <div class="flex-1 min-w-[200px]">
@@ -166,13 +151,14 @@
 <script>
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useLogs } from '@/composables/useLogs'
+import AppListbox from '@/components/AppListbox.vue'
 import CenteredMessage from '@/components/CenteredMessage.vue'
 import CloseIcon from '@/components/icons/CloseIcon.vue'
 import { useModalDismiss } from '@/composables/useModalDismiss'
 
 export default {
   name: 'LogsModal',
-  components: { CenteredMessage, CloseIcon },
+  components: { AppListbox, CenteredMessage, CloseIcon },
   emits: ['close'],
   setup(_, { emit }) {
     const {
@@ -180,6 +166,15 @@ export default {
       serviceFilter, searchQuery, isPolling,
       startPolling, stopPolling, applyFilters, clearFilters
     } = useLogs()
+
+    // Value is the backend's service key; label is what it is called in the UI.
+    const serviceOptions = [
+      { value: '', label: 'All' },
+      { value: 'main', label: 'main' },
+      { value: 'api', label: 'api' },
+      { value: 'birdnet', label: 'model' },
+      { value: 'icecast', label: 'icecast' }
+    ]
 
     const logContainer = ref(null)
     const isAtBottom = ref(true)
@@ -273,6 +268,7 @@ export default {
 
     return {
       displayEntries, total, isLoading, error,
+      serviceOptions,
       serviceFilter, searchQuery, isPolling,
       applyFilters, clearFilters,
       logContainer, isAtBottom,

@@ -58,7 +58,7 @@ describe('useSettings', () => {
   it('exposes the expected surface', () => {
     const s = useSettings()
     for (const key of ['settings', 'loading', 'error', 'ensureLoaded',
-      'refresh', 'setSettings', 'resetState']) {
+      'refresh', 'setSettings', 'patchSettings', 'resetState']) {
       expect(s).toHaveProperty(key)
     }
   })
@@ -150,6 +150,41 @@ describe('useSettings', () => {
 
       await s.ensureLoaded()
       expect(mockApi.get).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('patchSettings', () => {
+    it('merges a persisted field without importing unrelated draft state', () => {
+      const s = useSettings()
+      s.setSettings(SETTINGS)
+
+      const patch = { display: { station_name: 'Front Porch' } }
+      expect(s.patchSettings(patch)).toBe(true)
+
+      expect(s.settings.value).toEqual({
+        ...SETTINGS,
+        display: { ...SETTINGS.display, station_name: 'Front Porch' }
+      })
+
+      patch.display.station_name = 'mutated by caller'
+      expect(s.settings.value.display.station_name).toBe('Front Porch')
+    })
+
+    it('keeps a local persisted patch when an older refresh resolves later', async () => {
+      const s = useSettings()
+      s.setSettings(SETTINGS)
+
+      let resolveRefresh
+      mockApi.get.mockImplementationOnce(() => new Promise((resolve) => {
+        resolveRefresh = resolve
+      }))
+      const refresh = s.refresh()
+
+      s.patchSettings({ display: { station_name: 'Front Porch' } })
+      resolveRefresh({ data: SETTINGS })
+
+      expect(await refresh).toBe(true)
+      expect(s.settings.value.display.station_name).toBe('Front Porch')
     })
   })
 })

@@ -114,13 +114,21 @@ export function useAuth() {
   /**
    * Logout and clear session
    */
+  /**
+   * End the session.
+   * @returns {Promise<boolean>} true when the session actually ended. A failed
+   * request leaves the user signed in, so callers must not tear down
+   * authenticated state on a false.
+   */
   const logout = async () => {
     try {
       await api.post('/auth/logout')
       authStatus.value.authenticated = false
       logger.info('Logged out')
+      return true
     } catch (err) {
       logger.error('Logout error', err)
+      return false
     }
   }
 

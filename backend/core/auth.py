@@ -428,7 +428,19 @@ def is_authenticated():
     # instead of leaving stateless cookies valid forever. Sessions predating
     # the epoch (and configs predating it) both read as 0, so an upgrade does
     # not sign anyone out.
-    return session.get('epoch', 0) == config.get('session_epoch', 0)
+    if session.get('epoch', 0) != config.get('session_epoch', 0):
+        return False
+
+    # A normal logout revokes only this browser's signed cookie. Keeping the
+    # small denylist in auth.json closes the short reconnect/replay window
+    # without turning every request into a server-side session lookup.
+    session_id = get_session_id()
+    revoked_sessions = config.get('revoked_sessions', {})
+    return not (
+        session_id
+        and isinstance(revoked_sessions, dict)
+        and session_id in revoked_sessions
+    )
 
 
 def set_auth_enabled(enabled):
@@ -602,6 +614,9 @@ def change_password(current_password, new_password):
         # Evict every other signed-in device: sessions minted under an older epoch
         # stop validating in is_authenticated().
         config['session_epoch'] = _next_session_epoch(config)
+        # The epoch makes every older entry redundant. Dropping them keeps the
+        # logout denylist naturally bounded even on long-running stations.
+        config.pop('revoked_sessions', None)
 
         # The cookie is not the only thing a stolen session can leave behind: it
         # can mint signed media URLs (valid 24-48h) and share tokens (30 days),
@@ -653,12 +668,36 @@ def authenticate(password):
         record_failed_attempt()
         return False
 
+    # Keep a still-valid browser identity across an explicit re-login so any
+    # sockets it already opened remain tied to the session that will log out.
+    # A replayed, revoked cookie gets a fresh identity after proving the
+    # password again.
+    existing_session_id = get_session_id()
+    revoked_sessions = config.get('revoked_sessions', {})
+
     # Successful login - clear failed attempts
     clear_failed_attempts()
 
     # Set session
     session['authenticated'] = True
     session['authenticated_at'] = datetime.utcnow().isoformat()
+    # Stable identity for every browser login. Socket.IO connections use this
+    # to join a session-specific room, so logging out one browser does not have
+    # to evict every other signed-in device.
+    session_was_revoked = (
+        isinstance(revoked_sessions, dict)
+        and existing_session_id in revoked_sessions
+    )
+    # Pin the preserved identity rather than leaving it to be re-derived. A
+    # cookie predating session IDs falls back to an identity built from
+    # authenticated_at, which the line above has just replaced — so without
+    # this the identity silently shifts on re-login and logout looks for the
+    # sockets of a session that no longer exists.
+    session['session_id'] = (
+        secrets.token_urlsafe(24)
+        if (not existing_session_id or session_was_revoked)
+        else existing_session_id
+    )
     session['epoch'] = config.get('session_epoch', 0)
     session.permanent = True  # Use permanent session (respects PERMANENT_SESSION_LIFETIME)
 
@@ -666,10 +705,60 @@ def authenticate(password):
     return True
 
 
+def get_session_id():
+    """Return a stable identity for the signed-in browser session, if any.
+
+    ``authenticated_at`` is the upgrade fallback for cookies created before
+    session IDs were added. It is unique per successful login and remains
+    stable when Flask refreshes the signed cookie.
+    """
+    if not session.get('authenticated', False):
+        return None
+
+    session_id = session.get('session_id')
+    if isinstance(session_id, str) and session_id:
+        return session_id
+
+    authenticated_at = session.get('authenticated_at')
+    if isinstance(authenticated_at, str) and authenticated_at:
+        return f"legacy:{session.get('epoch', 0)}:{authenticated_at}"
+    return None
+
+
+def revoke_session_id(session_id):
+    """Persistently revoke one signed session until its cookie would expire."""
+    if not session_id:
+        return
+
+    with _auth_config_write_lock:
+        config, unreadable = _load_auth_config_for_update()
+        if _refuse_write_on_unreadable(unreadable, 'revoke a session'):
+            raise RuntimeError(
+                "Authentication config could not be read; refusing to log out"
+            )
+
+        now = int(time.time())
+        cutoff = now - (SESSION_LIFETIME_DAYS * 24 * 60 * 60)
+        stored = config.get('revoked_sessions', {})
+        revoked_sessions = {
+            key: revoked_at
+            for key, revoked_at in stored.items()
+            if (
+                isinstance(key, str)
+                and isinstance(revoked_at, (int, float))
+                and revoked_at >= cutoff
+            )
+        } if isinstance(stored, dict) else {}
+        revoked_sessions[session_id] = now
+        config['revoked_sessions'] = revoked_sessions
+        _save_auth_config(config)
+
+
 def logout():
     """Clear the authentication session."""
     session.pop('authenticated', None)
     session.pop('authenticated_at', None)
+    session.pop('session_id', None)
     session.pop('epoch', None)
     logger.info("User logged out")
 

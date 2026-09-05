@@ -1,12 +1,24 @@
-"""Recording schedule: should the recorders be capturing right now?
+"""Recording gate: should the recorders be capturing right now?
 
-Currently one rule — *quiet hours*, a daily local-time window during which
-recording (and therefore detection) is paused. The recording loop in
-core.main re-evaluates ``evaluate_schedule`` on every tick against the live
-settings, so this is a pure function of (settings, now): there is no timer
-to arm or miss, a settings change applies within one tick, and daylight-
-saving transitions need no special handling (a wall-clock minute that is
-skipped or repeated simply is or isn't inside the window when it happens).
+Two rules, composed by ``evaluate_recording_gate``:
+
+* *no active source* — every configured source is disabled (or none exist).
+  Nothing to capture, so this is a pause, not a fault: the station is in the
+  state its settings ask for.
+* *quiet hours* — a daily local-time window during which recording (and
+  therefore detection) is paused.
+
+Both produce a paused ``ScheduleDecision``; only quiet hours knows when it
+will end, so ``resumes_at`` is None for the source rule and the UI simply
+says "Paused". "No active source" wins when both apply — a resume time is a
+lie when there is nothing to resume with.
+
+The recording loop in core.main re-evaluates the gate on every tick against
+the live settings, so this is a pure function of (settings, now): there is
+no timer to arm or miss, a settings change applies within one tick, and
+daylight-saving transitions need no special handling (a wall-clock minute
+that is skipped or repeated simply is or isn't inside the window when it
+happens).
 
 Window semantics: half-open ``[start, end)`` at minute resolution. A start
 later than the end (e.g. 22:00 -> 06:00) wraps past midnight. Equal times
@@ -23,6 +35,7 @@ from typing import Any
 _HHMM_RE = re.compile(r"^([01][0-9]|2[0-3]):([0-5][0-9])$")
 
 REASON_QUIET_HOURS = "quiet_hours"
+REASON_NO_SOURCES = "no_sources"
 
 QUIET_HOURS_FIELDS = frozenset({"enabled", "start", "end"})
 SCHEDULE_FIELDS = frozenset({"quiet_hours"})
@@ -34,8 +47,10 @@ class ScheduleDecision:
 
     ``resumes_at`` is a naive station-local datetime (same convention as
     ``timezone_service.local_now``) — only meaningful when ``record`` is
-    False. ``error`` is set when an *enabled* schedule was ignored because
-    its values are unusable (hand-edited file); recording continues.
+    False. ``error`` reports a rule that was ignored because its values are
+    unusable (a hand-edited quiet-hours window); it is independent of
+    ``record``, since another rule can still be pausing — the ignored rule
+    is simply not the one deciding.
     """
 
     record: bool
@@ -149,4 +164,27 @@ def evaluate_schedule(settings: dict[str, Any], now: datetime) -> ScheduleDecisi
         resumes_at += timedelta(days=1)
     return ScheduleDecision(
         record=False, reason=REASON_QUIET_HOURS, resumes_at=resumes_at
+    )
+
+
+def enabled_sources(audio_settings: dict[str, Any]) -> list[dict]:
+    """Configured sources the station wants recorded.
+
+    A source with no ``enabled`` key predates the toggle and counts as on.
+    """
+    return [s for s in audio_settings.get("sources", []) if s.get("enabled", True)]
+
+
+def evaluate_recording_gate(settings: dict[str, Any], now: datetime) -> ScheduleDecision:
+    """Compose both pause rules into one decision (see module docstring).
+
+    The schedule is evaluated even when there is no active source, so its
+    ``error`` (a malformed but enabled quiet-hours window) keeps being
+    reported rather than going quiet until a source comes back.
+    """
+    decision = evaluate_schedule(settings, now)
+    if enabled_sources(settings.get("audio", {})):
+        return decision
+    return ScheduleDecision(
+        record=False, reason=REASON_NO_SOURCES, error=decision.error
     )

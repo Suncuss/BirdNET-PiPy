@@ -541,26 +541,13 @@
               <div class="mb-4">
                 <label class="block text-xs font-medium text-gray-500 mb-1">Source folder:</label>
                 <div class="flex gap-2">
-                  <select
+                  <AppListbox
                     v-model="migration.selectedFolder.value"
-                    class="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-green-500 focus:border-green-500 bg-white"
+                    :options="folderOptions"
                     :disabled="migration.isLoadingFolders.value || migration.isAudioScanning.value"
+                    class="flex-1"
                     @change="handleFolderChange"
-                  >
-                    <option
-                      v-if="migration.availableFolders.value.length === 0"
-                      :value="null"
-                    >
-                      {{ migration.isLoadingFolders.value ? 'Loading...' : 'No folders found' }}
-                    </option>
-                    <option
-                      v-for="folder in migration.availableFolders.value"
-                      :key="folder.path"
-                      :value="folder.path"
-                    >
-                      {{ folder.name }} ({{ folder.audio_count }} files)
-                    </option>
-                  </select>
+                  />
                   <button
                     :disabled="migration.isLoadingFolders.value"
                     class="px-3 py-2 text-gray-600 hover:bg-gray-200 border border-gray-300 rounded-lg transition-colors disabled:opacity-50 bg-white"
@@ -635,26 +622,13 @@
             >
               <label class="block text-sm font-medium text-gray-700 mb-1">Select audio folder:</label>
               <div class="flex gap-2">
-                <select
+                <AppListbox
                   v-model="migration.selectedFolder.value"
-                  class="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                  :options="folderOptions"
                   :disabled="migration.isLoadingFolders.value || migration.isAudioScanning.value"
+                  class="flex-1"
                   @change="handleFolderChange"
-                >
-                  <option
-                    v-if="migration.availableFolders.value.length === 0"
-                    :value="null"
-                  >
-                    {{ migration.isLoadingFolders.value ? 'Loading...' : 'No folders found' }}
-                  </option>
-                  <option
-                    v-for="folder in migration.availableFolders.value"
-                    :key="folder.path"
-                    :value="folder.path"
-                  >
-                    {{ folder.name }} ({{ folder.audio_count }} files)
-                  </option>
-                </select>
+                />
                 <button
                   :disabled="migration.isLoadingFolders.value"
                   class="px-3 py-2 text-gray-600 hover:bg-gray-100 border border-gray-300 rounded-lg transition-colors disabled:opacity-50"
@@ -1171,15 +1145,32 @@ import { ref, computed, onUnmounted } from 'vue'
 import { useMigration } from '@/composables/useMigration'
 import { useModalDismiss } from '@/composables/useModalDismiss'
 import { formatBytes, formatConfidence } from '@/utils/format'
+import AppListbox from '@/components/AppListbox.vue'
 import CloseIcon from '@/components/icons/CloseIcon.vue'
 
 export default {
   name: 'MigrationModal',
-  components: { CloseIcon },
+  components: { AppListbox, CloseIcon },
   emits: ['close'],
   setup(_, { emit }) {
     // Composable
     const migration = useMigration()
+
+    // Both folder pickers show the same list; the placeholder stands in while
+    // it is loading or empty, and keeps the control from rendering blank.
+    const folderOptions = computed(() => {
+      const folders = migration.availableFolders.value
+      if (folders.length === 0) {
+        return [{
+          value: null,
+          label: migration.isLoadingFolders.value ? 'Loading...' : 'No folders found'
+        }]
+      }
+      return folders.map((folder) => ({
+        value: folder.path,
+        label: `${folder.name} (${folder.audio_count} files)`
+      }))
+    })
 
     // Local state
     const isDragging = ref(false)
@@ -1342,6 +1333,7 @@ export default {
     })
 
     return {
+      folderOptions,
       migration,
       isDragging,
       fileInput,

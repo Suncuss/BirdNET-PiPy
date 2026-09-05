@@ -17,6 +17,11 @@ const settings = ref(null)
 const loading = ref(false)
 const error = ref('')
 
+// Incremented only by local, already-persisted mutations. A GET that began
+// before one of these writes must not put its older response back into the
+// shared cache when it eventually resolves.
+let mutationRevision = 0
+
 // Coalesces the one-time /settings load — see ensureLoaded().
 const settingsLoad = createCoalescedLoader()
 
@@ -39,10 +44,13 @@ export function useSettings() {
   }
 
   const fetchSettings = async () => {
+    const revisionAtStart = mutationRevision
     loading.value = true
     try {
       const { data } = await api.get('/settings')
-      adopt(data)
+      if (mutationRevision === revisionAtStart) {
+        adopt(data)
+      }
       return true
     } catch (err) {
       // A failed load keeps the last-good payload — never destroy known state.
@@ -70,8 +78,37 @@ export function useSettings() {
   /** Adopt a payload the caller already holds (e.g. a save response) — no fetch. */
   const setSettings = (data) => {
     // Clone — the store owns its copy and must not share the caller's reference.
+    mutationRevision += 1
     adopt(JSON.parse(JSON.stringify(data)))
     settingsLoad.markLoaded()
+  }
+
+  /**
+   * Merge fields confirmed by a dedicated settings endpoint into the cache.
+   * This deliberately starts from the store's copy rather than the Settings
+   * page draft, which may also contain unrelated, unsaved form edits.
+   */
+  const patchSettings = (patch) => {
+    if (!settings.value) return false
+
+    const next = JSON.parse(JSON.stringify(settings.value))
+    const merge = (target, source) => {
+      for (const [key, value] of Object.entries(source)) {
+        const mergeObjects = value && typeof value === 'object' && !Array.isArray(value) &&
+          target[key] && typeof target[key] === 'object' && !Array.isArray(target[key])
+        if (mergeObjects) {
+          merge(target[key], value)
+        } else {
+          target[key] = JSON.parse(JSON.stringify(value))
+        }
+      }
+    }
+
+    merge(next, patch)
+    mutationRevision += 1
+    adopt(next)
+    settingsLoad.markLoaded()
+    return true
   }
 
   const resetState = () => {
@@ -88,6 +125,7 @@ export function useSettings() {
     ensureLoaded,
     refresh,
     setSettings,
+    patchSettings,
     resetState
   }
 }

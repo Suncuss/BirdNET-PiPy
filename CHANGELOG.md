@@ -2,7 +2,14 @@
 
 ## [Unreleased]
 
-- Added quiet hours: a daily local-time window (e.g. 22:00–06:00, overnight allowed) during which recording and detection pause, applied live without a restart and without raising audio-status alerts. Set it under Settings → Detection → Quiet Hours; the audio status badge reads "Paused until …" while it's active
+- Fixed the Settings page briefly showing empty defaults — most visibly "recording is paused" — before the real values loaded: the form now opens from last-known settings without letting background refreshes overwrite edits, stays current after instant saves, and shows a loading skeleton on a genuine first load
+- Changed every dropdown to one shared, green-accented control so they look and behave identically everywhere — replacing the scattered `<select>` styles (four corner radii, four heights, four focus treatments, two drawing no focus ring at all) and the divergent custom menus. The whole control, open menu included, is now drawn by the app rather than the operating system, so it matches across browsers; keyboard use works throughout (arrow keys, Enter, and type-ahead — where a native select's letter-jump used to be the only option); the Charts time-range and period pickers are no longer hidden on phones, where they couldn't be changed at all; and the Table and Charts species search boxes were unified into one field with a clear button and consistent name matching.
+- Fixed logging out leaving the browser's live status connection authorised: the server now revokes that signed session, closes only its owner connections, and reconnects a public Live Feed only after the logout cookie is cleared, while anonymous logout requests and other signed-in devices leave owner connections alone
+- Fixed audio sources saved before the enable/disable toggle existed being treated as disabled by Settings while the recorder still recorded them, so the page could claim recording was paused on a station that was recording
+- Fixed the recorder status pill briefly showing an older state when overlapping status refreshes, a live update, or logout raced, which could persist until the next broadcast up to a minute later
+- Fixed simultaneous settings saves from separate controls or browser tabs silently overwriting one another, including access, notification, and quiet-hours changes
+- Fixed disabling every audio source being reported as a fault: with no active source the station now shows the blue "Audio Paused" pill and status badge (plus a hint under the source list) instead of a red "Audio Stopped" status, a false "Audio Recording Issues" warning, and an "Audio stopped" notification
+- Added quiet hours: a daily local-time window (e.g. 22:00–06:00, overnight allowed) during which recording and detection pause, applied live without a restart and without raising audio-status alerts. Set it under Settings → Detection → Quiet Hours with half-hour dropdowns that follow your 12/24-hour display setting; while a pause is in effect the audio status badge and a pill on every page read "Paused until …", so a quiet station is never mistaken for a broken one
 
 ## [0.8.8] - 2026-08-21
 

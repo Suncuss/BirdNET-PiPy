@@ -50,15 +50,3 @@ export function describeQuietHours({ enabled, start, end }, formatTime) {
   const window = `${formatClock(start, formatTime)} – ${formatClock(end, formatTime)}`
   return `Pauses ${window} every day (${formatDuration(duration)}).${wraps ? ' Overnight ranges wrap past midnight.' : ''}`
 }
-
-/**
- * Badge text while the recorder is paused by the schedule. `pause.resumes_at`
- * is station-local "YYYY-MM-DDTHH:MM" from the recorder status broadcast; only
- * the clock part is shown so a viewer in another timezone sees station time,
- * matching the Start/End inputs.
- */
-export function pausedLabel(pause, formatTime) {
-  const resumesAt = typeof pause?.resumes_at === 'string' ? pause.resumes_at.slice(11, 16) : ''
-  const clock = formatClock(resumesAt, formatTime)
-  return clock ? `Paused until ${clock}` : 'Paused'
-}

@@ -329,6 +329,24 @@ describe('useAuth', () => {
 
       expect(mockApi.post).toHaveBeenCalledWith('/auth/logout')
     })
+
+    it('reports success so callers know the session actually ended', async () => {
+      mockApi.post.mockResolvedValueOnce({ status: 200, data: {} })
+
+      expect(await useAuth().logout()).toBe(true)
+    })
+
+    it('reports failure and keeps the user signed in when the request fails', async () => {
+      // Callers tear down authenticated state (sockets, navigation) on the
+      // strength of this; a swallowed error must not read as a logout.
+      mockApi.post.mockRejectedValueOnce(new Error('network down'))
+
+      const auth = useAuth()
+      auth.authStatus.value.authenticated = true
+
+      expect(await auth.logout()).toBe(false)
+      expect(auth.authStatus.value.authenticated).toBe(true)
+    })
   })
 
   describe('setup', () => {

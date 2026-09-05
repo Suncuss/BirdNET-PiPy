@@ -5,12 +5,9 @@ import {
   formatClock,
   formatDuration,
   parseHHMM,
-  pausedLabel,
   quietHoursDuration
 } from '@/utils/quietHours'
-
-// Deterministic stand-in for useTimeFormat().formatTime
-const clock24 = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+import { clock24 } from '../helpers/clock'
 
 describe('quietHours utils', () => {
   it('ships the backend defaults', () => {
@@ -71,18 +68,6 @@ describe('quietHours utils', () => {
 
     it('returns nothing for an unusable window', () => {
       expect(describeQuietHours({ enabled: true, start: '', end: '06:00' }, clock24)).toBe('')
-    })
-  })
-
-  describe('pausedLabel', () => {
-    it('shows the station-local resume clock from resumes_at', () => {
-      expect(pausedLabel({ reason: 'quiet_hours', resumes_at: '2026-08-25T06:00' }, clock24))
-        .toBe('Paused until 06:00')
-    })
-
-    it('falls back to a plain label without a resume time', () => {
-      expect(pausedLabel(null, clock24)).toBe('Paused')
-      expect(pausedLabel({ reason: 'quiet_hours', resumes_at: null }, clock24)).toBe('Paused')
     })
   })
 })
