@@ -220,6 +220,18 @@ describe('useSettings', () => {
     expect(s.error.value).toBeTruthy()
   })
 
+  it('keeps the server reason when the saved file is unreadable', async () => {
+    const rejection = { response: { status: 503, data: {
+      code: 'settings_unreadable', error: 'Saved settings could not be read: Expecting , delimiter: line 12' } } }
+    mockApi.get.mockRejectedValueOnce(rejection)
+    const s = useSettings()
+    expect(await s.ensureLoaded()).toBe(false)
+    expect(s.error.value).toContain('line 12')
+    mockApi.get.mockResolvedValueOnce({ data: SETTINGS })
+    await s.refresh()
+    expect(s.error.value).toBe('')
+  })
+
   it('refresh forces a re-fetch', async () => {
     mockApi.get.mockResolvedValue({ data: SETTINGS })
     const s = useSettings()

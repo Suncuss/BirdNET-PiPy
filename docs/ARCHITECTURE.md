@@ -103,10 +103,18 @@ its writes and sends `If-Match` to reject changes based on an obsolete revision.
 Manual Save sends changed fields. Source and species dialogs save only their
 own fields, leaving unrelated form drafts untouched.
 
-Runtime readers validate a stable file snapshot and keep the last valid snapshot
-if the file becomes unreadable. A settings read never persists a migration.
-An unreadable saved file blocks API writes and the Settings form instead of
-silently replacing the station's configuration with defaults.
+Runtime readers load a stable file snapshot. A readable file always loads into
+a document that passes every current rule: each value rule in
+`core/settings_validation.py` carries its repair (ranges clamp, option lists
+and ordering pairs fall back around the value the user set, an invalid
+timezone is derived from the coordinates, unusable sources are dropped and the
+icecast supervisor skips them the same way), repairs are applied in memory and
+logged, and the next save persists them. A test breaks every rule at once and
+requires one repair per rule, so a rule cannot be added without one. Only
+shape errors (unparseable JSON, wrong types) make a file unreadable: runtime
+readers then keep the last good snapshot, API writes and the Settings form are
+blocked with the reason shown, and the configuration is never replaced with
+defaults. A settings read never persists a migration.
 
 | Change | Takes effect |
 |--------|--------------|
@@ -125,9 +133,10 @@ The main loop owns recorders by source ID. The streaming container runs the
 standard-library Python `stream_supervisor.py`, which owns one FFmpeg publisher
 per source. Both compare the connection configuration and retain unchanged
 processes. A replacement starts only after the previous process stops. Failed
-stream connections retry independently with bounded backoff. Access revocation
-reconnects publishers so established HTTP listeners must pass nginx's access
-check again; the API also evicts anonymous WebSocket listeners.
+stream connections retry independently with bounded backoff. The supervisor
+reads only `user_settings.json`; tightened access settings evict anonymous
+WebSocket listeners at the API, while an established Icecast listener keeps its
+current connection and is re-checked by nginx on its next one.
 
 A save acknowledges persistence. `/api/settings/status` separately compares the
 saved model/source configuration with recorder heartbeats, model service status,
@@ -161,11 +170,12 @@ The restart boundary for model changes keeps model allocation, sample-rate
 selection and process recovery simple on memory-constrained devices. A general
 settings event bus or dynamic model replacement is not required for source reload.
 
-Home Assistant deployments need the `ha` snapshot re-synced and their add-on
-packaging updated to include/start `stream_supervisor.py` with Python 3, the shared
-data directory and the existing Icecast credentials/environment. Older wrappers
-that still own static FFmpeg processes cannot provide live source reload; their
-stream status remains unavailable until the packaging is updated.
+The Home Assistant add-on packages `stream_supervisor.py` next to the backend
+and starts `start-icecast.sh` as root: Icecast drops to `icecast2` through
+`<changeowner>` while the supervisor keeps root, because the add-on's API runs
+as root and writes `user_settings.json` with mode 0600 into a root-owned data
+directory. A wrapper that ships the script without the supervisor idles with
+Icecast up and stream status unavailable rather than restart-looping.
 
 Streaming supervisor tests run independently with:
 `python3 -m unittest discover -s deployment/audio/tests -v`.

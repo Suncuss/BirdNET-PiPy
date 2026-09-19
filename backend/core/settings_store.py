@@ -12,12 +12,13 @@ from threading import Lock
 
 from flask import jsonify, make_response, request
 
-from config.settings import USER_SETTINGS_PATH, get_default_settings
+from config.settings import USER_SETTINGS_PATH, SettingsUnreadable, get_default_settings
 from core.logging_config import get_logger
 from core.recording_schedule import validate_quiet_hours
 from core.runtime_config import (
     get_runtime_settings,
     invalidate_runtime_settings_cache,
+    read_saved_settings,
 )
 from core.secure_file import atomic_write_private_json
 from core.settings_validation import validate_settings
@@ -37,9 +38,10 @@ def serialize_settings_write(func):
     def serialized(*args, **kwargs):
         with _settings_write_lock:
             try:
-                current = get_runtime_settings(force_reload=True, strict=True)
-            except (ValueError, OSError):
-                return jsonify({'error': 'Saved settings could not be read. Repair the settings file before saving.'}), 503
+                current = read_saved_settings(force_reload=True)
+            except SettingsUnreadable as exc:
+                return jsonify({'error': f'{exc}. Repair the settings file before saving.',
+                                'code': 'settings_unreadable'}), 503
             # The ETag hashes the saved document. nginx marks it weak (W/) when
             # it compresses the response, which does not change that revision.
             expected = (request.headers.get('If-Match') or '').removeprefix('W/')

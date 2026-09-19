@@ -7,20 +7,10 @@ from unittest.mock import Mock
 import pytest
 
 
-@pytest.fixture
-def settings_file(tmp_path, monkeypatch):
-    import config.settings as config
-    import core.runtime_config as runtime
-    path = tmp_path / 'settings.json'
-    monkeypatch.setattr(config, 'USER_SETTINGS_PATH', str(path))
-    monkeypatch.setattr(runtime, 'USER_SETTINGS_PATH', str(path))
-    return path, runtime
-
-
 def test_fresh_install_can_read_defaults_repeatedly(settings_file):
     path, runtime = settings_file
     for _ in range(3):
-        assert runtime.get_runtime_settings(force_reload=True, strict=True)['audio']['sources'] == []
+        assert runtime.read_saved_settings(force_reload=True)['audio']['sources'] == []
     assert not path.exists()
 
 
@@ -57,7 +47,7 @@ def test_invalid_settings_retain_last_good_and_reject_strict_read(settings_file,
     runtime.invalidate_runtime_settings_cache()
     assert runtime.get_runtime_setting('access.public_access') is False
     with pytest.raises(ValueError):
-        runtime.get_runtime_settings(force_reload=True, strict=True)
+        runtime.read_saved_settings(force_reload=True)
     path.write_text('{"access":{"public_access":true}}')
     assert runtime.get_runtime_setting('access.public_access') is True
 
@@ -69,38 +59,35 @@ def test_removed_settings_do_not_restore_public_defaults(settings_file):
     path.unlink()
     assert runtime.get_runtime_setting('access.public_access') is False
     with pytest.raises(ValueError):
-        runtime.get_runtime_settings(force_reload=True, strict=True)
+        runtime.read_saved_settings(force_reload=True)
 
 
 def test_runtime_migration_is_read_only(settings_file):
     path, runtime = settings_file
     original = '{"audio":{"recording_mode":"pulseaudio"},"spectrogram":{"min_dbfs":-120}}'
     path.write_text(original)
-    saved = runtime.get_runtime_settings(strict=True)
+    saved = runtime.read_saved_settings()
     assert saved['audio']['sources'][0]['id'] == 'source_0'
     assert saved['audio']['next_source_id'] == 1
     assert path.read_text() == original
 
 
-def test_values_outside_current_rules_still_load_but_wrong_shapes_do_not(settings_file, capsys):
+def test_values_outside_current_rules_are_repaired_but_wrong_shapes_are_unreadable(settings_file, caplog):
+    from config.settings import SettingsUnreadable
     path, runtime = settings_file
     # Equal percentages were accepted before the ordering rule existed; a
     # station must not stop over them (see the 2026-09-12 staging outage).
     path.write_text('{"storage":{"trigger_percent":70,"target_percent":70}}')
-    saved = runtime.get_runtime_settings(force_reload=True, strict=True)
-    assert (saved['storage']['trigger_percent'], saved['storage']['target_percent']) == (70, 70)
-    assert 'storage.target_percent must be less than trigger_percent' in capsys.readouterr().out
+    with caplog.at_level('WARNING'):
+        saved = runtime.read_saved_settings(force_reload=True)
+    assert (saved['storage']['trigger_percent'], saved['storage']['target_percent']) == (70, 65)
+    assert 'storage.target_percent must be less than trigger_percent' in caplog.text
     path.write_text('{"storage":{"trigger_percent":"70"}}')
-    with pytest.raises(ValueError):
-        runtime.get_runtime_settings(force_reload=True, strict=True)
-
-
-def test_legacy_display_and_channel_values_are_migrated_before_validation(settings_file):
-    path, runtime = settings_file
-    path.write_text('{"updates":{"channel":"stable"},"display":{"time_format":"auto"}}')
-    saved = runtime.get_runtime_settings(strict=True)
-    assert saved['updates']['channel'] == 'release'
-    assert saved['display']['time_format'] is None
+    with pytest.raises(SettingsUnreadable, match='storage.trigger_percent must be a finite number'):
+        runtime.read_saved_settings(force_reload=True)
+    path.write_text('{"storage": {')
+    with pytest.raises(SettingsUnreadable, match='Saved settings could not be read: Expecting'):
+        runtime.read_saved_settings(force_reload=True)
 
 
 def source(sid='source_0', **changes):

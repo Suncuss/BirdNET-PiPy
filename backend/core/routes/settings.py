@@ -11,7 +11,7 @@ from flask import jsonify, request
 from config.constants import (
     UPDATE_CHANNELS,
 )
-from config.settings import get_default_settings
+from config.settings import SettingsUnreadable, get_default_settings
 from core.api_infra import api
 from core.auth import require_auth
 from core.bird_name_utils import (
@@ -22,9 +22,9 @@ from core.logging_config import get_logger, log_api_request
 from core.runtime_config import (
     classify_setting_changes,
     deep_merge_settings,
-    get_runtime_settings,
     get_setting_differences,
     invalidate_runtime_settings_cache,
+    read_saved_settings,
 )
 from core.settings_store import (
     _persist_no_restart_setting,
@@ -35,32 +35,11 @@ from core.settings_store import (
     settings_etag,
     update_quiet_hours,
 )
-from core.settings_validation import validate_settings
+from core.settings_validation import validate_settings, validate_settings_shape
+from core.timezone_lookup import get_timezone_for_location
 from core.utils import normalize_site_url
 
 logger = get_logger(__name__)
-
-
-def get_timezone_for_location(lat: float, lon: float) -> str | None:
-    """Offline timezone lookup. Returns IANA timezone or None on failure.
-
-    tzfpy's simplified polygons leave rare hairline gaps at zone borders
-    (and at exactly ±180° longitude) where lookup returns nothing; retrying
-    a few km to each side recovers a point sitting in such a gap. The import
-    stays deferred so only the location-save path ever pays for it.
-    """
-    try:
-        from tzfpy import get_tz
-        for dlat, dlon in ((0, 0), (0.1, 0), (-0.1, 0), (0, 0.1), (0, -0.1)):
-            timezone = get_tz(lon + dlon, lat + dlat)  # tzfpy takes lng first
-            if timezone:
-                logger.info(f"Resolved timezone: {timezone}")
-                return timezone
-        logger.warning(f"No timezone found for ({lat}, {lon})")
-        return None
-    except Exception as e:
-        logger.error(f"Timezone lookup failed: {e}")
-        return None
 
 
 @api.route('/api/settings', methods=['GET'])
@@ -69,10 +48,13 @@ def get_timezone_for_location(lat: float, lon: float) -> str | None:
 def get_settings():
     """Get all user settings"""
     try:
-        settings = get_runtime_settings(force_reload=True, strict=True)
+        settings = read_saved_settings(force_reload=True)
         response = jsonify(settings)
         response.headers['ETag'] = settings_etag(settings)
         return response, 200
+    except SettingsUnreadable as e:
+        logger.error("Saved settings unreadable", extra={'error': str(e)})
+        return jsonify({'error': str(e), 'code': 'settings_unreadable'}), 503
     except Exception as e:
         logger.error("Failed to get settings", extra={
             'error': str(e)
@@ -353,7 +335,9 @@ def update_settings():
         current_settings = load_user_settings()
         new_settings = deep_merge_settings(current_settings, incoming_settings)
 
-        error = validate_settings(incoming_settings, partial=True)
+        # Types first, before any normalizer below touches a value; the value
+        # rules run on the finished document.
+        error = validate_settings_shape(new_settings)
         if error:
             return jsonify({'error': error}), 400
         if any(key in incoming_settings.get('location', {}) for key in ('latitude', 'longitude')):

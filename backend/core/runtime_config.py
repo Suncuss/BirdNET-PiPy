@@ -7,7 +7,7 @@ import logging
 import os
 from typing import Any
 
-from config.settings import USER_SETTINGS_PATH, load_user_settings
+from config.settings import USER_SETTINGS_PATH, SettingsUnreadable, load_user_settings
 from core.native_lock import native_lock
 
 logger = logging.getLogger(__name__)
@@ -40,11 +40,9 @@ def _safe_mtime(path: str):
         return None
 
 
-def _load_cached_settings(force_reload: bool = False, *, strict=False) -> dict[str, Any]:
-    """Publish only stable reads; runtime failures retain the last valid snapshot.
-
-    Parsing and logging must remain outside the native lock. API writes use
-    strict=True so a broken on-disk document cannot be overwritten from a cache.
+def _load_cached_settings(force_reload: bool = False, *, fallback=True) -> dict[str, Any]:
+    """Publish only stable reads; fallback serves the last good snapshot when
+    the file is unreadable. Parsing and logging stay outside the native lock.
     """
     global _cached_settings, _cached_mtime, _cached_path, _file_seen
     with _settings_lock:
@@ -63,11 +61,11 @@ def _load_cached_settings(force_reload: bool = False, *, strict=False) -> dict[s
                 if not force_reload and previous is not None and _cached_mtime == before:
                     return previous
             if before is None and _file_seen:
-                raise ValueError("Saved settings file is missing")
+                raise SettingsUnreadable("Saved settings file is missing")
             fresh = load_user_settings(strict=True, persist_migrations=False)
             after = _safe_mtime(USER_SETTINGS_PATH)
         except (OSError, ValueError, TypeError):
-            if previous is not None and not strict:
+            if previous is not None and fallback:
                 return previous
             raise
         if before != after:
@@ -78,14 +76,28 @@ def _load_cached_settings(force_reload: bool = False, *, strict=False) -> dict[s
                 _cached_mtime = after
                 _file_seen = _file_seen or after is not None
             return fresh
-    if previous is not None and not strict:
+    if previous is not None and fallback:
         return previous
-    raise ValueError("Settings changed during reading; please retry")
+    raise SettingsUnreadable("Settings changed during reading; please retry")
 
 
-def get_runtime_settings(force_reload: bool = False, *, strict=False) -> dict[str, Any]:
-    """Get an independent snapshot of validated settings."""
-    return copy.deepcopy(_load_cached_settings(force_reload, strict=strict))
+def get_runtime_settings(force_reload: bool = False) -> dict[str, Any]:
+    """An independent snapshot of the settings in force.
+
+    Never raises once a document has loaded: an unreadable file keeps the
+    last good snapshot. Raises SettingsUnreadable only when nothing has ever
+    loaded, which stops a starting process loudly rather than on defaults.
+    """
+    return copy.deepcopy(_load_cached_settings(force_reload))
+
+
+def read_saved_settings(force_reload: bool = False) -> dict[str, Any]:
+    """An independent snapshot of what is on disk right now.
+
+    For writes and status: raises SettingsUnreadable instead of serving a
+    remembered document, so a broken file is reported and never overwritten.
+    """
+    return copy.deepcopy(_load_cached_settings(force_reload, fallback=False))
 
 
 def get_runtime_setting(path: str, default: Any = None) -> Any:

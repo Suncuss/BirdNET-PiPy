@@ -261,8 +261,20 @@ def _migrate_audio_sources(settings, *, persist=True):
         _write_user_settings_file(settings)
 
 
+class SettingsUnreadable(ValueError):
+    """The saved settings file cannot be used at all; the message says why."""
+
+
 def load_user_settings(*, strict=False, persist_migrations=True):
-    """Load user settings from JSON file, merged with defaults."""
+    """Load user settings from JSON file, merged with defaults.
+
+    A readable document always loads into one that passes every current
+    rule: values a rule no longer allows are repaired in place (and logged),
+    so a file an older version wrote never stops the station. Only shape
+    errors and unreadable files fail; with strict=False (the import-time
+    constants) those fall back to defaults, with strict=True they raise
+    SettingsUnreadable for the runtime readers to handle.
+    """
     defaults = get_default_settings()
 
     if os.path.exists(USER_SETTINGS_PATH):
@@ -306,32 +318,23 @@ def load_user_settings(*, strict=False, persist_migrations=True):
                 for section, values in DEFAULT_SETTINGS.items():
                     if isinstance(values, dict):
                         defaults[section] = {k: v for k, v in defaults[section].items() if k in values}
-                if defaults['updates']['channel'] == 'stable':
-                    defaults['updates']['channel'] = 'release'
-                if defaults['display']['time_format'] == 'auto':
-                    defaults['display']['time_format'] = None
                 schedule = defaults.get('schedule', {})
                 quiet = schedule.get('quiet_hours')
                 if isinstance(quiet, dict):
                     schedule['quiet_hours'] = {**DEFAULT_SETTINGS['schedule']['quiet_hours'], **quiet}
-                if strict:
-                    from core.settings_validation import (
-                        validate_settings,
-                        validate_settings_shape,
-                    )
-                    error = validate_settings_shape(defaults)
-                    if error:
-                        raise ValueError(error)
-                    # A file an older version wrote may break a rule added
-                    # since. Refusing it would stop the station; it is for
-                    # the user to fix under Settings, and saves still validate.
-                    error = validate_settings(defaults)
-                    if error:
-                        print(f"Settings: saved value outside current rules ({error}); adjust it under Settings")
+                from core.settings_validation import (
+                    repair_settings,
+                    validate_settings_shape,
+                )
+                error = validate_settings_shape(defaults)
+                if error:
+                    raise ValueError(error)
+                for repair in repair_settings(defaults):
+                    logger.warning(f"Settings: {repair}; using a valid value until the next save")
                 return defaults
         except Exception as e:
             if strict:
-                raise ValueError("Unable to read saved settings") from e
+                raise SettingsUnreadable(f"Saved settings could not be read: {e}") from e
             print(f"Error loading user settings: {e}, using defaults")
 
     return defaults

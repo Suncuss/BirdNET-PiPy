@@ -114,3 +114,14 @@ TEST_DETECTION_PARAMS = {
     'sensitivity': 0.75,
     'overlap': 0.25
 }
+
+
+@pytest.fixture
+def settings_file(tmp_path, monkeypatch):
+    """A private user_settings.json path plus the runtime reader bound to it."""
+    import config.settings as config_settings
+    import core.runtime_config as runtime
+    path = tmp_path / 'settings.json'
+    monkeypatch.setattr(config_settings, 'USER_SETTINGS_PATH', str(path))
+    monkeypatch.setattr(runtime, 'USER_SETTINGS_PATH', str(path))
+    return path, runtime

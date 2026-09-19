@@ -67,3 +67,20 @@ def test_corrupt_saved_settings_cannot_be_overwritten_from_defaults(api_client):
     assert response.status_code == 503
     with open(USER_SETTINGS_PATH) as stream:
         assert stream.read() == '{broken'
+
+
+def test_unreadable_settings_file_is_reported_with_its_cause(api_client):
+    import config.settings as config
+    from core.runtime_config import invalidate_runtime_settings_cache
+    with open(config.USER_SETTINGS_PATH, 'w') as f:
+        f.write('{"storage": {"trigger_percent": "high"}}')
+    invalidate_runtime_settings_cache()
+    response = api_client.get('/api/settings')
+    assert response.status_code == 503
+    body = response.get_json()
+    assert body['code'] == 'settings_unreadable'
+    assert 'storage.trigger_percent must be a finite number' in body['error']
+    saved = api_client.put('/api/settings', json={'display': {'station_name': 'x'}})
+    assert saved.status_code == 503
+    assert saved.get_json()['code'] == 'settings_unreadable'
+    assert 'Repair the settings file' in saved.get_json()['error']

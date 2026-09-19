@@ -547,7 +547,25 @@ describe('Settings', () => {
 
         expect(mockApi.get).not.toHaveBeenCalledWith('/settings/defaults')
         expect(wrapper.vm.loaded).toBe(false)
-        expect(wrapper.vm.loadError).toContain('could not be loaded')
+        expect(wrapper.vm.loadError).toBe('Hmm, cannot reach the server. Editing is unavailable until loading succeeds.')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('names the problem when the saved settings file is unreadable', async () => {
+      vi.useFakeTimers()
+      try {
+        mockApi.get.mockImplementation((url) => url === '/settings'
+          ? Promise.reject({ response: { status: 503, data: {
+            code: 'settings_unreadable', error: 'Saved settings could not be read: storage.trigger_percent must be a finite number' } } })
+          : defaultGetResponse(url))
+        const wrapper = mountSettings()
+        await flushPromises()
+        await vi.advanceTimersByTimeAsync(4000)
+        await flushPromises()
+        expect(wrapper.vm.loadError).toBe(
+          'Saved settings could not be read: storage.trigger_percent must be a finite number. Editing is unavailable until loading succeeds.')
       } finally {
         vi.useRealTimers()
       }

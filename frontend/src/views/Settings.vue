@@ -2241,7 +2241,7 @@ export default {
           // payload. Never replace that real configuration with defaults.
           showStatus('error', 'Could not refresh settings. Showing last loaded settings.')
         } else {
-          loadError.value = 'Saved settings could not be loaded. Editing is unavailable until loading succeeds.'
+          loadError.value = `${settingsStore.error.value || 'Saved settings could not be loaded'}. Editing is unavailable until loading succeeds.`
         }
       } finally {
         loading.value = false

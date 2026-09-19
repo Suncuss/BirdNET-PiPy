@@ -33,6 +33,20 @@ if [ -z "$ICECAST_PASSWORD" ] || [ "$ICECAST_PASSWORD" = "hackme" ]; then
     log_msg "         Set ICECAST_PASSWORD in your environment for a persistent password."
 fi
 
+# Icecast refuses to run as root. When this script is started as root (the
+# Home Assistant add-on, whose data directory and 0600 settings files are
+# root-owned, so the supervisor must keep root to read and write them), let
+# Icecast itself drop to the packaged icecast2 account via <changeowner>.
+CHANGEOWNER=""
+if [ "$(id -u)" = "0" ]; then
+    ICECAST_USER="${ICECAST_USER:-icecast2}"
+    ICECAST_GROUP="$(id -gn "$ICECAST_USER")"
+    CHANGEOWNER="<changeowner><user>${ICECAST_USER}</user><group>${ICECAST_GROUP}</group></changeowner>"
+    # Icecast opens its own logs only after dropping privileges.
+    chown -R "${ICECAST_USER}:${ICECAST_GROUP}" /var/log/icecast2 2>/dev/null || true
+    log_msg "Running as root: Icecast will drop to ${ICECAST_USER}:${ICECAST_GROUP}"
+fi
+
 # Generate icecast config with enough source slots for multi-source
 ICECAST_CONFIG="/tmp/icecast.xml"
 cat > "$ICECAST_CONFIG" << EOF
@@ -78,6 +92,7 @@ cat > "$ICECAST_CONFIG" << EOF
 
     <security>
         <chroot>0</chroot>
+        ${CHANGEOWNER}
     </security>
 </icecast>
 EOF
@@ -100,5 +115,12 @@ log_msg "Icecast server started on port 8888"
 
 # Python owns publisher lifetimes and polls configuration, including the empty
 # initial source list. Icecast stays up while individual sources reconnect.
+# A deployment that ships this script without the supervisor (an out-of-date
+# add-on wrapper) idles with Icecast up instead of restart-looping.
+SUPERVISOR="${STREAM_SUPERVISOR:-/app/stream_supervisor.py}"
+if [ ! -f "$SUPERVISOR" ]; then
+    log_msg "ERROR: $SUPERVISOR is missing; live streaming stays unavailable until the deployment ships it"
+    exec sleep infinity
+fi
 export ICECAST_PASSWORD STREAM_BITRATE
-exec python3 /app/stream_supervisor.py
+exec python3 "$SUPERVISOR"

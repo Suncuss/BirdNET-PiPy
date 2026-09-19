@@ -45,8 +45,10 @@ def read_json(path, *, missing=None):
 def enabled_sources(settings):
     audio = settings.get('audio', {})
     sources = audio.get('sources', [])
-    # Read-only compatibility with the backend's legacy source migration.
-    # Readers never rewrite configuration shared with the API writer.
+    # Read-only mirror of the API's legacy audio migration
+    # (config/settings.py, tested for parity). Runtime readers never persist
+    # that migration, so a station whose file predates multi-source keeps the
+    # old keys on disk until its next explicit save.
     if any(key in audio for key in ('recording_mode', 'rtsp_url', 'rtsp_urls',
                                     'rtsp_labels', 'pulseaudio_source', 'stream_url')):
         sources = []
@@ -64,36 +66,30 @@ def enabled_sources(settings):
         raise ValueError('Invalid audio sources')
     desired, seen = {}, set()
     for source in sources:
-        if not isinstance(source, dict) or not re.fullmatch(r'source_[0-9]+', str(source.get('id', ''))):
-            raise ValueError('Invalid audio source')
-        if source['id'] in seen:
-            raise ValueError('Duplicate audio source')
+        # Same policy as the API's settings loader: an entry the recorder
+        # could not use is skipped, not a reason to stream nothing.
+        error = _source_error(source)
+        if error or source['id'] in seen:
+            logger.warning('Skipping audio source: %s', error or 'duplicate id')
+            continue
         seen.add(source['id'])
-        if source.get('type') not in ('rtsp', 'pulseaudio'):
-            raise ValueError('Invalid audio source type')
-        if 'enabled' in source and type(source['enabled']) is not bool:
-            raise ValueError('Invalid audio source enabled flag')
-        for key in ('url', 'device'):
-            if key in source and (not isinstance(source[key], str) or '\x00' in source[key]):
-                raise ValueError('Invalid source connection')
-        if source['type'] == 'rtsp' and not source.get('url', '').startswith(('rtsp://', 'rtsps://')):
-            raise ValueError('Invalid RTSP URL')
         if source.get('enabled', True):
             desired[source['id']] = source
     return desired
 
 
-def access_revision(settings, auth):
-    # Revocation must also close established HTTP streams so nginx can check
-    # their next connection. Ordinary logins/config rewrites do not reconnect.
-    access = settings.get('access', {})
-    if not isinstance(access, dict) or type(auth.get('auth_enabled', False)) is not bool:
-        raise ValueError('Invalid access settings')
-    if any(type(value) is not bool for value in access.values()):
-        raise ValueError('Invalid access flag')
-    value = [access.get('public_access', True), access.get('live_feed_public', False), auth.get('auth_enabled', False),
-             auth.get('session_epoch', 0), auth.get('revoked_sessions', {})]
-    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+def _source_error(source):
+    if not isinstance(source, dict) or not re.fullmatch(r'source_[0-9]+', str(source.get('id', ''))):
+        return 'invalid source'
+    if source.get('type') not in ('rtsp', 'pulseaudio'):
+        return 'invalid source type'
+    if 'enabled' in source and type(source['enabled']) is not bool:
+        return 'invalid enabled flag'
+    for key in ('url', 'device'):
+        if key in source and (not isinstance(source[key], str) or '\x00' in source[key]):
+            return 'invalid connection'
+    if source['type'] == 'rtsp' and not source.get('url', '').startswith(('rtsp://', 'rtsps://')):
+        return 'invalid RTSP URL'
 
 
 def write_status(path, payload):
@@ -170,10 +166,10 @@ class Supervisor:
         self.publishers = {}
         self.retry_at = {}
 
-    def reconcile(self, desired, policy, now):
+    def reconcile(self, desired, now):
         failures = set()
         for sid, publisher in list(self.publishers.items()):
-            if publisher.policy != policy or sid not in desired or publisher.revision != source_revision(desired[sid]):
+            if sid not in desired or publisher.revision != source_revision(desired[sid]):
                 try:
                     publisher.stop()
                 except (OSError, subprocess.TimeoutExpired):
@@ -188,7 +184,6 @@ class Supervisor:
             if publisher is None and now >= self.retry_at.get(sid, 0):
                 try:
                     publisher = self.factory(source)
-                    publisher.policy = policy
                     self.publishers[sid] = publisher
                     logger.info('Connecting %s', sid)
                 except (OSError, ValueError, KeyError):
@@ -232,30 +227,19 @@ def main():
     signal.signal(signal.SIGINT, stop)
     supervisor = Supervisor(lambda source: Publisher(source, os.environ['ICECAST_PASSWORD'],
                                                      os.environ.get('STREAM_BITRATE', '320k')))
-    desired, policy = {}, None
+    desired = {}
     settings_seen = False
-    auth_seen = False
-    settings = {}
+    settings_path = DATA_DIR / 'config/user_settings.json'
     try:
         while running:
             error = None
             try:
-                candidate_settings = read_json(DATA_DIR / 'config/user_settings.json', missing={} if not settings_seen else None)
-                enabled_sources(candidate_settings)
-                access_revision(candidate_settings, {})
-                settings = candidate_settings
-                settings_seen |= (DATA_DIR / 'config/user_settings.json').exists()
+                # An unreadable or invalid file keeps the last valid configuration.
+                desired = enabled_sources(read_json(settings_path, missing={} if not settings_seen else None))
+                settings_seen |= settings_path.exists()
             except (OSError, ValueError, TypeError, AttributeError):
                 error = 'Unable to load streaming settings; using the last valid configuration'
-            try:
-                auth = read_json(DATA_DIR / 'config/auth.json', missing={} if not auth_seen else None)
-                policy = access_revision(settings, auth)
-                desired = enabled_sources(settings)
-                auth_seen |= (DATA_DIR / 'config/auth.json').exists()
-            except (OSError, ValueError, TypeError, AttributeError):
-                desired = {}
-                error = 'Streaming paused because access settings could not be read'
-            sources = supervisor.reconcile(desired, policy, time.monotonic())
+            sources = supervisor.reconcile(desired, time.monotonic())
             write_status(DATA_DIR / 'streaming_status.json', {
                 'updated_at': time.time(), 'sources': sources, 'error': error})
             time.sleep(1)

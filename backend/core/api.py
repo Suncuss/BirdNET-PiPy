@@ -210,11 +210,11 @@ def get_settings_status():
 
 
 def read_settings_status(model_service):
-    from core.runtime_config import get_runtime_settings
+    from core.runtime_config import read_saved_settings
     from core.settings_status import build_settings_status, read_streaming_status
     # The cache keys on file identity, so a save from any process is seen
     # without re-parsing the file on every one-second monitor sample.
-    saved = get_runtime_settings(strict=True)
+    saved = read_saved_settings()
     return build_settings_status(saved, _recorder_status, read_streaming_status(), model_service)
 
 @api.route('/api/health', methods=['GET'])
