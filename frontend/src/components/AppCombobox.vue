@@ -16,6 +16,7 @@
       :aria-activedescendant="activeDescendant"
       :class="inputClasses"
       @focus="onFocus"
+      @click="onClick"
       @input="onInput"
       @keydown.down.prevent="onArrow(1)"
       @keydown.up.prevent="onArrow(-1)"
@@ -211,12 +212,25 @@ const onInput = (event) => {
   highlighted.value = filtered.value.length ? 0 : -1
 }
 
+// Focus alone cannot reopen: after a pick or Escape the input is still
+// focused (option and chevron mousedowns are prevented), so focus() fires no
+// event. Open explicitly; the focus handler's openList is idempotent.
+const reopen = () => {
+  openList()
+  inputRef.value?.focus()
+  nextTick(() => inputRef.value?.select())
+}
+
+const onClick = () => {
+  if (!open.value) reopen()
+}
+
 const toggle = () => {
   if (open.value) {
     close()
     return
   }
-  inputRef.value?.focus()  // @focus opens and selects
+  reopen()
 }
 
 const select = (option) => {

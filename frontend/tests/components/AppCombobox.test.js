@@ -12,6 +12,7 @@
  */
 import { mount } from '@vue/test-utils'
 import { describe, it, expect } from 'vitest'
+import { nextTick } from 'vue'
 import AppCombobox from '@/components/AppCombobox.vue'
 
 const OPTIONS = [
@@ -47,6 +48,48 @@ describe('AppCombobox', () => {
     it('shows the selected option as normal text', () => {
       const w = mountBox({ modelValue: OPTIONS[0] })
       expect(input(w).element.value).toBe('American Robin')
+    })
+  })
+
+  describe('reopening while still focused', () => {
+    // Option rows and the chevron prevent mousedown, so after a pick or
+    // Escape the input keeps focus and focus() alone fires no event.
+    const focusForReal = async (w) => {
+      input(w).element.focus()
+      await nextTick()
+      expect(document.activeElement).toBe(input(w).element)
+    }
+    const list = (w) => w.find('ul[role="listbox"]')
+
+    it('the chevron reopens after selecting an option', async () => {
+      const w = mountBox()
+      await focusForReal(w)
+      await options(w)[1].trigger('mousedown')
+      expect(list(w).isVisible()).toBe(false)
+      expect(document.activeElement).toBe(input(w).element)
+      await w.find('button[aria-hidden="true"]').trigger('mousedown')
+      expect(list(w).isVisible()).toBe(true)
+      expect(optionTexts(w)).toHaveLength(3)
+    })
+
+    it('the chevron reopens after Escape, and closes an open list', async () => {
+      const w = mountBox()
+      await focusForReal(w)
+      await input(w).trigger('keydown.esc')
+      expect(list(w).isVisible()).toBe(false)
+      await w.find('button[aria-hidden="true"]').trigger('mousedown')
+      expect(list(w).isVisible()).toBe(true)
+      await w.find('button[aria-hidden="true"]').trigger('mousedown')
+      expect(list(w).isVisible()).toBe(false)
+    })
+
+    it('clicking the focused input reopens the closed list', async () => {
+      const w = mountBox()
+      await focusForReal(w)
+      await options(w)[0].trigger('mousedown')
+      expect(list(w).isVisible()).toBe(false)
+      await input(w).trigger('click')
+      expect(list(w).isVisible()).toBe(true)
     })
   })
 

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fixed stations whose settings file still uses the pre-multi-source audio format losing the live stream after updating: the stream supervisor now reads that format the same way the recorder does, so live streaming no longer waits for the next settings save.
+- Fixed the Table and Charts species dropdown not reopening from the arrow or a click after picking an option or pressing Escape.
 - Fixed live streaming in the Home Assistant add-on with the new per-source stream supervisor: the Icecast start script now drops Icecast to its own account when started as root so the supervisor can read the add-on's root-owned settings, and idles instead of restart-looping when a wrapper ships without the supervisor. Stream listeners are no longer force-reconnected on access changes; nginx re-checks them on their next connection.
 - Fixed stations refusing to start after an update when a saved setting breaks a rule added since it was written, such as equal storage trigger and target percentages. Every rule now repairs such a value around what was set (the storage target moves below the trigger), and the Settings page names the problem when a hand-edited file cannot be read at all.
 - Improved station load by sampling settings status and probing the model service only while the Settings page is open, instead of for every connected browser on every page.

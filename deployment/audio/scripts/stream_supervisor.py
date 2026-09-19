@@ -43,9 +43,25 @@ def read_json(path, *, missing=None):
 
 
 def enabled_sources(settings):
-    # A pre-sources legacy file has no `sources` key and streams nothing until
-    # the API rewrites it in the new format on its first load, moments later.
-    sources = settings.get('audio', {}).get('sources', [])
+    audio = settings.get('audio', {})
+    sources = audio.get('sources', [])
+    # Read-only mirror of the API's legacy audio migration
+    # (config/settings.py, tested for parity). Runtime readers never persist
+    # that migration, so a station whose file predates multi-source keeps the
+    # old keys on disk until its next explicit save.
+    if any(key in audio for key in ('recording_mode', 'rtsp_url', 'rtsp_urls',
+                                    'rtsp_labels', 'pulseaudio_source', 'stream_url')):
+        sources = []
+        mode = audio.get('recording_mode', 'pulseaudio')
+        if mode == 'pulseaudio':
+            sources.append({'id': 'source_0', 'type': 'pulseaudio', 'device': 'default'})
+        urls = [url for url in audio.get('rtsp_urls', []) if url]
+        active = audio.get('rtsp_url')
+        if mode == 'rtsp' and active and active not in urls:
+            urls.append(active)
+        for url in urls:
+            sources.append({'id': f'source_{len(sources)}', 'type': 'rtsp', 'url': url,
+                            'enabled': mode == 'rtsp' and url == active})
     if not isinstance(sources, list):
         raise ValueError('Invalid audio sources')
     desired, seen = {}, set()

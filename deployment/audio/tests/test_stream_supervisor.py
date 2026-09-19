@@ -1,7 +1,9 @@
 """Run with: python3 -m unittest discover -s deployment/audio/tests -v"""
+import copy
 import importlib.util
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -19,6 +21,8 @@ def load_module(name, path):
 
 stream = load_module('stream_supervisor', ROOT / 'deployment/audio/scripts/stream_supervisor.py')
 sources = load_module('source_config', ROOT / 'backend/core/source_config.py')
+sys.path.insert(0, str(ROOT / 'backend'))
+from config.settings import _migrate_audio_sources  # noqa: E402  (the API's legacy migration)
 
 
 def camera(sid, url=None):
@@ -82,12 +86,21 @@ class SupervisorTests(unittest.TestCase):
         old.stop.side_effect = None
         self.assertEqual(supervisor.reconcile({}, 2), {})
 
-    def test_legacy_settings_stream_nothing_until_the_api_migrates_them(self):
-        # The API rewrites a pre-sources file on its first load; until then the
-        # supervisor must neither guess sources nor fail the settings read.
-        legacy = {'audio': {'recording_mode': 'rtsp', 'rtsp_url': 'rtsp://second',
-                            'rtsp_urls': ['rtsp://first', 'rtsp://second']}}
-        self.assertEqual(stream.enabled_sources(legacy), {})
+    def test_legacy_settings_stream_exactly_what_the_api_records(self):
+        # Runtime readers never persist the API's legacy migration, so the
+        # supervisor must derive the same enabled sources from the raw file.
+        for legacy in ({'recording_mode': 'rtsp', 'rtsp_url': 'rtsp://second', 'rtsp_urls': ['rtsp://first', 'rtsp://second']},
+                       {'recording_mode': 'rtsp', 'rtsp_url': 'rtsp://only', 'rtsp_urls': []},
+                       {'recording_mode': 'pulseaudio', 'rtsp_urls': ['rtsp://unused']},
+                       {'recording_mode': 'pulseaudio'}):
+            expected = copy.deepcopy({'audio': legacy})
+            _migrate_audio_sources(expected, persist=False)
+            recorded = {s['id']: (s['type'], s.get('url'), s.get('device', 'default'))
+                        for s in expected['audio']['sources'] if s['enabled']}
+            streamed = {sid: (s['type'], s.get('url'), s.get('device', 'default'))
+                        for sid, s in stream.enabled_sources({'audio': legacy}).items()}
+            self.assertEqual(streamed, recorded, legacy)
+            self.assertTrue(recorded, legacy)
 
     def test_unusable_sources_are_skipped_but_invalid_lists_are_rejected(self):
         sources = [{**camera('source_0'), 'enabled': 'false'}, {**camera('source_1'), 'url': 'http://x'},
