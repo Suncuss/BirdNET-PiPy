@@ -2,12 +2,13 @@
 
 ## [Unreleased]
 
-- Improved the Dashboard's Activity Overview to ease to its new height when it gains or loses rows, as the Charts page already did, instead of jumping.
-- Changed the Charts page's Activity Overview to follow the Dashboard on tall desktop screens: where the Dashboard shows 15 species, Charts now opens on 15 too and offers 15 / 30 / All instead of 10 / 20 / 30 / All.
-- Fixed the Charts and species pages never releasing their charts when you navigate away, so a tab left open and browsed for a long time slowly used more memory.
-- Changed the Charts page's Activity Overview to use the same row density as the Dashboard's (it was noticeably looser, most of all on phones). Both pages now share one chart component and one sizing rule, so they stay in step.
-- Improved the Activity Overview chart's balance, most visible on phones: species names now start in line with the card heading instead of after a strip of blank space, so the chart no longer looks pushed to the right. Overlong names also end in "…" instead of losing their first letters.
+## [0.8.10] - 2026-09-20
+
 - Changed the navigation bar on phones to a single swipeable row that highlights the current page, instead of wrapping one or two links onto an extra line. A clipped label and a small arrow show when more pages are off-screen. Wider screens keep the navigation bar as it was.
+- Changed the Charts page's Activity Overview to match the Dashboard's: the same row density (it was noticeably looser, most of all on phones), and on tall desktop screens, where the Dashboard shows 15 species, it now opens on 15 too and offers 15 / 30 / All instead of 10 / 20 / 30 / All.
+- Improved the Dashboard's Activity Overview to ease to its new height when it gains or loses rows, as the Charts page already did, instead of jumping.
+- Improved the Activity Overview chart's balance, most visible on phones: species names now start in line with the card heading instead of after a strip of blank space, so the chart no longer looks pushed to the right. Overlong names also end in "…" instead of losing their first letters.
+- Fixed the Charts and species pages never releasing their charts when you navigate away, so a tab left open and browsed for a long time slowly used more memory.
 
 ## [0.8.9] - 2026-09-19
 
