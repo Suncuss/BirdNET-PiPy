@@ -293,8 +293,9 @@ describe('App', () => {
   })
 
   describe('settings bootstrap failure', () => {
-    const settingsCalls = () =>
-      mockApi.get.mock.calls.filter(([url]) => url === '/settings').length
+    const callsTo = (path) => mockApi.get.mock.calls.filter(([url]) => url === path).length
+    const settingsCalls = () => callsTo('/settings')
+    const updateChecks = () => callsTo('/system/update-check')
 
     let wrapper
 
@@ -368,6 +369,16 @@ describe('App', () => {
 
       await vi.advanceTimersByTimeAsync(120000)
       expect(settingsCalls()).toBe(1)
+    })
+
+    it('re-checks for updates after login', async () => {
+      // The mount-time check ran logged out and got the public-tier result
+      // (no commits_behind); login must replace it with the owner view.
+      expect(updateChecks()).toBe(1)
+
+      await wrapper.vm.onLoginSuccess()
+
+      expect(updateChecks()).toBe(2)
     })
 
     it('stops retrying on unmount', async () => {

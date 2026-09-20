@@ -335,6 +335,9 @@ export default {
       await checkLocationSetup()
       recorderHealth.checkStatus()
       recorderHealth.connect()
+      // The mount-time check ran logged out, so it holds the public-tier
+      // result (no commits_behind); re-fetch the owner view
+      systemUpdate.checkForUpdates({ silent: true }).catch(() => {})
 
       // Redirect to stored destination if any
       const redirect = sessionStorage.getItem('authRedirect')

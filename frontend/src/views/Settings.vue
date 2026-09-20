@@ -17,7 +17,7 @@
         class="shrink-0 ml-4"
         :loading="loading"
         loading-text="Saving..."
-        :disabled="!loaded || serviceRestart.isRestarting.value || systemUpdate.isRestarting.value || systemUpdate.updating.value || quietHoursSaving || sourceSaving"
+        :disabled="!loaded || restartInProgress || quietHoursSaving || sourceSaving"
         @click="saveSettings"
       >
         {{ modelChanged ? 'Save and restart' : 'Save' }}
@@ -51,7 +51,7 @@
       Active: {{ modelName(currentApplicationStatus.model.active) }}.
       <button
         class="underline ml-2"
-        :disabled="settingsStore.pendingWrites.value > 0 || serviceRestart.isRestarting.value || systemUpdate.updating.value"
+        :disabled="settingsStore.pendingWrites.value > 0"
         @click="manualRestart"
       >
         Restart to apply
@@ -1140,10 +1140,10 @@
           <!-- Restart Services Button -->
           <button
             class="py-2 text-sm text-gray-600 hover:text-gray-800 border border-gray-200 rounded-lg transition-colors"
-            :class="serviceRestart.isRestarting.value || systemUpdate.updating.value || systemUpdate.isRestarting.value
+            :class="restartInProgress
               ? 'opacity-50 cursor-not-allowed'
               : 'hover:text-red-600 hover:border-red-200 hover:bg-red-50'"
-            :disabled="serviceRestart.isRestarting.value || systemUpdate.updating.value || systemUpdate.isRestarting.value"
+            :disabled="restartInProgress"
             @click="manualRestart"
           >
             {{ serviceRestart.isRestarting.value ? 'Restarting...' : 'Restart Services' }}
@@ -1746,14 +1746,20 @@ export default {
     const showStreamModal = ref(false)
     const editingSource = ref(null)
     const sourceSaving = ref(false)
+    // Services going down and coming back is the expected shape of a restart
+    // or update, and the progress banner already says so. Nothing else may
+    // report that outage as its own problem. `updating` covers the update's
+    // dispatch, before its wait flips isRestarting (up to 30s on the HA path).
+    const restartInProgress = computed(() =>
+      serviceRestart.isRestarting.value || systemUpdate.isRestarting.value || systemUpdate.updating.value)
     const currentApplicationStatus = computed(() => {
-      if (serviceRestart.isRestarting.value || systemUpdate.isRestarting.value) return null
+      if (restartInProgress.value) return null
       const status = applicationStatus.value
       return settingsStore.revision.value && status?.revision !== settingsStore.revision.value ? null : status
     })
     const modelStatus = computed(() => currentApplicationStatus.value?.model_service || null)
-    const modelUnreported = computed(() => !settingsStatusLoading.value && modelStatus.value?.status !== 'loading' &&
-      currentApplicationStatus.value?.model?.state !== 'active')
+    const modelUnreported = computed(() => !restartInProgress.value && !settingsStatusLoading.value &&
+      modelStatus.value?.status !== 'loading' && currentApplicationStatus.value?.model?.state !== 'active')
     const savedSources = computed(() => settingsStore.settings.value?.audio?.sources || [])
     const sourceStatuses = computed(() => Object.fromEntries(savedSources.value.map(source =>
       [source.id, sourceAudioStatus(currentApplicationStatus.value, source.id)])))
@@ -2067,11 +2073,14 @@ export default {
     const updateSubLabel = computed(() => {
       const info = systemUpdate.updateInfo.value
       if (!info) return ''
+      // Public-tier results carry neither versions nor a commit count (see
+      // _public_update_check_view)
       if (isHomeAssistantMode.value) {
-        return `v${info.current_version} → v${info.latest_version}`
+        return info.latest_version == null ? '' : `v${info.current_version} → v${info.latest_version}`
       }
       if (info.fresh_sync) return 'Major version'
       if (info.commits_behind === 0) return `Switch to ${info.channel} channel`
+      if (info.commits_behind == null) return ''
       return `${info.commits_behind} new commits`
     })
 
@@ -2210,6 +2219,10 @@ export default {
     // Never substitute defaults for an unreadable saved configuration.
     const loadSettings = async (retryCount = 0, initialDraft = JSON.stringify(settings.value)) => {
       if (viewStopped) return
+      // A warm form has nothing to gain from revalidating against a stack
+      // that is going down: the fetch would fail and blame the outage on the
+      // settings, and the wait reloads the page once services are back.
+      if (loaded.value && restartInProgress.value) return
       try {
         loading.value = true
         // useSettings owns the /settings fetch and syncs display prefs.
@@ -2233,6 +2246,8 @@ export default {
         }
       } catch (error) {
         console.error('Error loading settings:', error)
+        // Started just before the restart did; the failure is the restart.
+        if (loaded.value && restartInProgress.value) return
         if (retryCount < 2) {
           clearTimeout(settingsRetryTimer)
           settingsRetryTimer = setTimeout(() => loadSettings(retryCount + 1, initialDraft), 2000)
@@ -2347,12 +2362,7 @@ export default {
 
     // Manual restart triggered from Management section
     const manualRestart = async () => {
-      if (
-        settingsStore.pendingWrites.value > 0 ||
-        serviceRestart.isRestarting.value ||
-        systemUpdate.updating.value ||
-        systemUpdate.isRestarting.value
-      ) return
+      if (settingsStore.pendingWrites.value > 0 || restartInProgress.value) return
       // Close the double-click window: the guard above only becomes
       // effective once waitForRestart runs, but the trigger round-trips
       // below take time first.
@@ -2925,7 +2935,7 @@ export default {
     })
 
     const refreshOnFocus = () => {
-      if (settingsStore.pendingWrites.value > 0) return
+      if (settingsStore.pendingWrites.value > 0 || restartInProgress.value) return
       if (hasUnsavedChanges.value || hasOpenSettingsDialog.value) settingsStore.refresh()
       else loadSettings()
     }
@@ -2937,7 +2947,6 @@ export default {
     watch(() => applicationStatus.value?.revision, (revision) => {
       if (!revision || !settingsStore.revision.value || revision === settingsStore.revision.value) return
       if (revision === supersededSettingsRevision()) return
-      if (serviceRestart.isRestarting.value || systemUpdate.isRestarting.value) return
       refreshOnFocus()
     })
 
@@ -2976,6 +2985,7 @@ export default {
       modelName,
       settingsStore,
       currentApplicationStatus,
+      restartInProgress,
       modelUnreported,
       sourceStatuses,
       isSourceChanging,
