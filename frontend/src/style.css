@@ -17,3 +17,31 @@ html {
 * {
   scrollbar-width: none;
 }
+
+/* Activity Overview chart region (Dashboard and Charts): one row density and
+   one height easing for both pages. Each page sets --rows, the species rows
+   it shows, on the element; it wraps the charts and their loading / empty /
+   error placeholders alike, so the height also eases between those states.
+   The fixed part is the charts' own overhead (top padding + x-axis band,
+   about 60px — see useBirdCharts); it is 57px so that ten rows come to
+   exactly the 232px / 307px the Dashboard's cards always gave them, the rows
+   absorbing the difference. The charts are responsive, so they follow the
+   region frame by frame, and overflow keeps a shrinking chart inside it. */
+.activity-chart-region {
+  --row-height: 17.5px;
+  height: calc(var(--rows) * var(--row-height) + 57px);
+  overflow: hidden;
+  transition: height 500ms ease-in-out;
+}
+
+@media screen(lg) {
+  .activity-chart-region {
+    --row-height: 25px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-chart-region {
+    transition: none;
+  }
+}

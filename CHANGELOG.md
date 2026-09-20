@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- Improved the Dashboard's Activity Overview to ease to its new height when it gains or loses rows, as the Charts page already did, instead of jumping.
+- Changed the Charts page's Activity Overview to follow the Dashboard on tall desktop screens: where the Dashboard shows 15 species, Charts now opens on 15 too and offers 15 / 30 / All instead of 10 / 20 / 30 / All.
+- Fixed the Charts and species pages never releasing their charts when you navigate away, so a tab left open and browsed for a long time slowly used more memory.
+- Changed the Charts page's Activity Overview to use the same row density as the Dashboard's (it was noticeably looser, most of all on phones). Both pages now share one chart component and one sizing rule, so they stay in step.
+- Improved the Activity Overview chart's balance, most visible on phones: species names now start in line with the card heading instead of after a strip of blank space, so the chart no longer looks pushed to the right. Overlong names also end in "…" instead of losing their first letters.
+- Changed the navigation bar on phones to a single swipeable row that highlights the current page, instead of wrapping one or two links onto an extra line. A clipped label and a small arrow show when more pages are off-screen. Wider screens keep the navigation bar as it was.
+
 ## [0.8.9] - 2026-09-19
 
 - Fixed Settings showing "undefined new commits" (or "vundefined → vundefined" in the Home Assistant add-on) for an available update when the page was opened with an expired login. The update check made before signing in carries no commit count or versions, so it is now repeated after login.

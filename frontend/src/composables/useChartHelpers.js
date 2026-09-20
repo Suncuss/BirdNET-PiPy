@@ -18,6 +18,9 @@ export function useChartHelpers() {
   /**
    * Safely destroy a chart if it exists on the given canvas.
    * Uses Chart.js best practice of Chart.getChart() to find existing instances.
+   * When tearing a component down, call this from onBeforeUnmount: by
+   * onUnmounted Vue has already cleared template refs, so there is no canvas
+   * to look up and the chart would stay registered with Chart.js.
    * @param {Ref|HTMLCanvasElement} canvasRef - Vue ref to canvas element or canvas element directly
    */
   const destroyChart = (canvasRef) => {

@@ -59,44 +59,7 @@
             Login
           </button>
         </div>
-        <div class="flex flex-wrap gap-4">
-          <router-link
-            to="/"
-            class="hover:text-green-200"
-          >
-            Dashboard
-          </router-link>
-          <router-link
-            to="/gallery"
-            class="hover:text-green-200"
-          >
-            Gallery
-          </router-link>
-          <router-link
-            to="/live"
-            class="hover:text-green-200"
-          >
-            Live Feed
-          </router-link>
-          <router-link
-            to="/charts"
-            class="hover:text-green-200"
-          >
-            Charts
-          </router-link>
-          <router-link
-            to="/table"
-            class="hover:text-green-200"
-          >
-            Table
-          </router-link>
-          <router-link
-            to="/settings"
-            class="hover:text-green-200"
-          >
-            Settings
-          </router-link>
-        </div>
+        <NavLinks />
       </div>
     </nav>
 
@@ -205,6 +168,7 @@ import SetupWizard from '@/components/SetupWizard.vue'
 import LoginModal from '@/components/LoginModal.vue'
 import WelcomeOverlay from '@/components/WelcomeOverlay.vue'
 import UpdateOverlay from '@/components/UpdateOverlay.vue'
+import NavLinks from '@/components/NavLinks.vue'
 import WarningIcon from '@/components/icons/WarningIcon.vue'
 import MoonIcon from '@/components/icons/MoonIcon.vue'
 import PauseIcon from '@/components/icons/PauseIcon.vue'
@@ -223,6 +187,7 @@ export default {
     LoginModal,
     WelcomeOverlay,
     UpdateOverlay,
+    NavLinks,
     WarningIcon,
     MoonIcon,
     PauseIcon

@@ -138,6 +138,25 @@ describe('useBirdCharts', () => {
       expect(chartCall.data.datasets[0].data).toEqual([6, 15]) // Robin: 1+2+3=6, Sparrow: 5+5+5=15
     })
 
+    it('starts the species names at the canvas edge without moving the rows', async () => {
+      const canvasRef = ref(mockCanvas)
+      await charts.createTotalObservationsChart(canvasRef, mockData)
+
+      const { layout, scales } = Chart.mock.calls[0][1].options
+      // No left padding or tick stubs: the longest name sits flush with the
+      // card heading. top must keep matching the heatmap's, and tick padding
+      // must stay default — both move the rows out of line with the heatmap.
+      expect(layout.padding).toEqual({ left: 0, right: 10, top: 10, bottom: 0 })
+      expect(scales.y.grid.drawTicks).toBe(false)
+      expect(scales.y.ticks.padding).toBeUndefined()
+
+      // Chart.js reserved label + 2×3 padding; the overlay needs label + its
+      // 8px gap, +1 against sub-pixel truncation
+      const scale = { width: 120, options: { ticks: { padding: 3 } } }
+      scales.y.afterFit(scale)
+      expect(scale.width).toBe(123)
+    })
+
     it('accepts animate option', async () => {
       const canvasRef = ref(mockCanvas)
       await charts.createTotalObservationsChart(canvasRef, mockData, { animate: false })

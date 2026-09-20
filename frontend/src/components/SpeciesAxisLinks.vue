@@ -7,11 +7,15 @@
       v-for="tick in renderableTicks"
       :key="tick.commonName"
       :to="{ name: 'BirdDetails', params: { name: tick.commonName } }"
-      class="absolute right-0 pl-1 pr-2 flex items-center justify-end text-xs text-gray-700 hover:text-blue-600 hover:underline pointer-events-auto overflow-hidden whitespace-nowrap text-ellipsis transition-colors duration-200"
+      class="absolute right-0 pr-2 flex items-center justify-end text-xs text-gray-700 hover:text-blue-600 hover:underline pointer-events-auto overflow-hidden whitespace-nowrap transition-colors duration-200"
       :style="tickStyle(tick)"
       :title="tick.label"
     >
-      {{ tick.label }}
+      <!-- pr-2 is the gap to the bars that useBirdCharts sizes the axis for
+           (SPECIES_LABEL_GAP_PX). The label is its own element so an overlong
+           name ends in an ellipsis: text-overflow has no effect on a flex
+           container's bare text, which was clipped at its start instead. -->
+      <span class="truncate">{{ tick.label }}</span>
     </router-link>
   </div>
 </template>

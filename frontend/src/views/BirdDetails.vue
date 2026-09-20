@@ -325,7 +325,7 @@
 
 
 <script>
-import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import Chart from 'chart.js/auto'
 import SpectrogramModal from '@/components/SpectrogramModal.vue'
@@ -832,7 +832,8 @@ export default {
       window.addEventListener('resize', handleResize)
     })
 
-    onUnmounted(() => {
+    // onBeforeUnmount, while the canvas ref is still set (see destroyChart).
+    onBeforeUnmount(() => {
       window.removeEventListener('resize', handleResize)
       clearTimeout(resizeTimeout)
       destroyChart(detectionChart)

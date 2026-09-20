@@ -10,6 +10,7 @@ import { useSystemUpdate } from '@/composables/useSystemUpdate'
 import { useTimeFormat } from '@/composables/useTimeFormat'
 import { recordingPath } from '@/utils/detectionLinks'
 import { useAuth } from '@/composables/useAuth'
+import { stubViewportTier } from '../helpers/viewportTier'
 
 vi.mock('@/composables/useFetchBirdData')
 vi.mock('@/composables/useAppStatus')
@@ -106,24 +107,6 @@ const mountDashboard = () => mount(Dashboard, {
     }
   }
 })
-
-// Controllable matchMedia stub: Dashboard reads .matches at setup and
-// listens for 'change' — dispatch() drives a tier flip.
-const stubViewportTier = (matches) => {
-  const listeners = new Set()
-  const mql = {
-    matches,
-    addEventListener: (_, fn) => listeners.add(fn),
-    removeEventListener: (_, fn) => listeners.delete(fn),
-    dispatch (next) {
-      this.matches = next
-      listeners.forEach(fn => fn({ matches: next }))
-    },
-    get listenerCount () { return listeners.size }
-  }
-  vi.stubGlobal('matchMedia', vi.fn(() => mql))
-  return mql
-}
 
 describe('Dashboard', () => {
   let getContextSpy
@@ -651,16 +634,16 @@ describe('Dashboard', () => {
       useSpeciesCount(20)
     })
 
-    it('renders 10 rows in the compact card on laptop-sized viewports', async () => {
+    it('sizes the chart region for 10 rows on laptop-sized viewports', async () => {
       stubViewportTier(false)
       const wrapper = mountDashboard()
       await flushPromises()
 
       expect(useBirdCharts().createTotalObservationsChart.mock.lastCall[1]).toHaveLength(10)
-      expect(wrapper.html()).toContain('lg:h-[375px]')
+      expect(wrapper.html()).toContain('--rows: 10;')
     })
 
-    it('renders 15 rows in a taller card on tall desktop viewports', async () => {
+    it('sizes the chart region for 15 rows on tall desktop viewports', async () => {
       stubViewportTier(true)
       const wrapper = mountDashboard()
       await flushPromises()
@@ -668,7 +651,7 @@ describe('Dashboard', () => {
       // Both canvases get the same sliced list (lockstep)
       expect(useBirdCharts().createTotalObservationsChart.mock.lastCall[1]).toHaveLength(15)
       expect(useBirdCharts().createHourlyActivityHeatmap.mock.lastCall[1]).toHaveLength(15)
-      expect(wrapper.html()).toContain('lg:h-[500px]')
+      expect(wrapper.html()).toContain('--rows: 15;')
     })
 
     it('keeps the 10-row height on tall viewports with 10 or fewer species', async () => {
@@ -678,31 +661,21 @@ describe('Dashboard', () => {
       await flushPromises()
 
       expect(useBirdCharts().createTotalObservationsChart.mock.lastCall[1]).toHaveLength(7)
-      expect(wrapper.html()).toContain('lg:h-[375px]')
+      expect(wrapper.html()).toContain('--rows: 10;')
     })
 
-    it('grows the tall card row by row between 11 and 14 species', async () => {
+    it('grows the tall region row by row between 11 and 14 species', async () => {
       const state = useSpeciesCount(12)
       stubViewportTier(true)
       const wrapper = mountDashboard()
       await flushPromises()
 
-      expect(wrapper.html()).toContain('lg:h-[425px]')
+      expect(wrapper.html()).toContain('--rows: 12;')
 
       // Height tracks the live species count as new species arrive
       state.detailedBirdActivityData.value = speciesRows(14)
       await nextTick()
-      expect(wrapper.html()).toContain('lg:h-[475px]')
-    })
-
-    it('gates the tall tier on lg width and the tall-viewport height', async () => {
-      stubViewportTier(false)
-      mountDashboard()
-      await flushPromises()
-
-      expect(window.matchMedia).toHaveBeenCalledWith(
-        '(min-width: 1024px) and (min-height: 1150px)'
-      )
+      expect(wrapper.html()).toContain('--rows: 14;')
     })
 
     it('redraws with the new tier when the media query flips', async () => {
@@ -713,23 +686,14 @@ describe('Dashboard', () => {
       mql.dispatch(true)
       await flushPromises()
       expect(useBirdCharts().createTotalObservationsChart.mock.lastCall[1]).toHaveLength(15)
-      expect(wrapper.html()).toContain('lg:h-[500px]')
+      expect(wrapper.html()).toContain('--rows: 15;')
 
       mql.dispatch(false)
       await flushPromises()
       expect(useBirdCharts().createTotalObservationsChart.mock.lastCall[1]).toHaveLength(10)
-      expect(wrapper.html()).toContain('lg:h-[375px]')
+      expect(wrapper.html()).toContain('--rows: 10;')
     })
 
-    it('removes its media-query listener on unmount', async () => {
-      const mql = stubViewportTier(false)
-      const wrapper = mountDashboard()
-      await flushPromises()
-      expect(mql.listenerCount).toBe(1)
-
-      wrapper.unmount()
-      expect(mql.listenerCount).toBe(0)
-    })
   })
 
   describe('recent observations and hourly activity sizing', () => {
