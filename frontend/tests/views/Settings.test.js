@@ -246,6 +246,9 @@ describe('Settings', () => {
     mockSystemUpdate.statusMessage.value = null
     mockSystemUpdate.statusType.value = null
     mockSystemUpdate.showUpdateIndicator.value = false
+    mockSystemUpdate.isRestarting.value = false
+    mockSystemUpdate.restartMessage.value = ''
+    mockSystemUpdate.restartError.value = ''
     mockApi.post.mockResolvedValue({ data: { status: 'restart_requested' } })
     mockApi.get.mockImplementation(defaultGetResponse)
   })
@@ -1004,6 +1007,31 @@ describe('Settings', () => {
       await flushPromises()
       releaseSave({ data: { status: 'updated' } })
       await flushPromises()
+    })
+
+    it('does not report the update outage as a missing model or a settings failure', async () => {
+      vi.useFakeTimers()
+      try {
+        useSettings().setSettings(createMockSettings())
+        mockSystemUpdate.isRestarting.value = true
+        mockSystemUpdate.restartMessage.value = 'System updating...'
+        const wrapper = mountSettings()
+        await flushPromises()
+        mockApi.get.mockClear()
+        mockApi.get.mockRejectedValue(new Error('Network Error'))
+
+        // Coming back to the tab mid-update must not start a doomed refresh.
+        window.dispatchEvent(new Event('focus'))
+        await vi.advanceTimersByTimeAsync(6000)
+        await flushPromises()
+
+        expect(mockApi.get).not.toHaveBeenCalledWith('/settings')
+        expect(wrapper.vm.saveStatus).toBeNull()
+        expect(wrapper.text()).toContain('System updating...')
+        expect(wrapper.text()).not.toContain('Waiting for services to report the active model.')
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it('disables Save while a system update is in flight', async () => {
@@ -2474,6 +2502,38 @@ describe('Settings', () => {
 
       expect(wrapper.text()).toContain('v0.6.3')
       expect(wrapper.text()).toContain('v0.6.4')
+    })
+
+    it('omits the version transition when a public-tier check carried none', async () => {
+      mockSystemUpdate.versionInfo.value = haVersionInfo
+      mockSystemUpdate.updateInfo.value = { update_available: true, runtime_mode: 'ha' }
+      mockSystemUpdate.updateAvailable.value = true
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      expect(wrapper.text()).not.toContain('undefined')
+    })
+  })
+
+  describe('Update sub-label', () => {
+    it('shows the commit count from an owner-tier check', async () => {
+      mockSystemUpdate.updateInfo.value = { update_available: true, fresh_sync: false, commits_behind: 3 }
+      mockSystemUpdate.updateAvailable.value = true
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('3 new commits')
+    })
+
+    it('omits the count when a public-tier check carried none', async () => {
+      // A check made before login is clamped to the public fields
+      mockSystemUpdate.updateInfo.value = { update_available: true, fresh_sync: false, update_note: null }
+      mockSystemUpdate.updateAvailable.value = true
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      expect(wrapper.text()).not.toContain('undefined')
+      expect(wrapper.text()).not.toContain('new commits')
     })
   })
 
