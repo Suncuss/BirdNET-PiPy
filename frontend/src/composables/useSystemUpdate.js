@@ -21,6 +21,12 @@ const checking = ref(false)
 const updating = ref(false)
 const statusMessage = ref(null)
 const statusType = ref(null) // 'success', 'error', 'info'
+// Orders update checks: the reply's shape depends on the auth tier it was
+// requested under, so a slow pre-login reply must not replace a newer one.
+// Only an adopted reply supersedes — a newer check that fails leaves the
+// older reply free to land.
+let checkRevision = 0
+let adoptedCheckRevision = 0
 
 // Update banner is snoozable for 7 days.
 const dismissal = useDismissible(UPDATE_DISMISSED_UNTIL_KEY, 7 * 24 * 60 * 60 * 1000)
@@ -99,6 +105,7 @@ export function useSystemUpdate() {
   const checkForUpdates = async (options = {}) => {
     const { silent = false, force = false } = options
 
+    const requestId = ++checkRevision
     checking.value = true
     if (!silent) {
       statusMessage.value = null
@@ -108,6 +115,8 @@ export function useSystemUpdate() {
       logger.info('Checking for updates...', { silent, force })
       const url = force ? '/system/update-check?force=true' : '/system/update-check'
       const { data } = await api.get(url)
+      if (requestId < adoptedCheckRevision) return data
+      adoptedCheckRevision = requestId
       updateInfo.value = data
       updateAvailable.value = data.update_available
 
@@ -133,7 +142,7 @@ export function useSystemUpdate() {
       }
       throw error
     } finally {
-      checking.value = false
+      if (requestId === checkRevision) checking.value = false
     }
   }
 

@@ -135,6 +135,40 @@ describe('useSystemUpdate', () => {
     expect(statusMessage.value).toBeNull()
   })
 
+  it('keeps the newer reply when an older check lands after it', async () => {
+    // Pre-login (public tier, no count) started first but answers last
+    let releasePublic
+    mockApi.get
+      .mockReturnValueOnce(new Promise(resolve => { releasePublic = resolve }))
+      .mockResolvedValueOnce({ data: { update_available: true, commits_behind: 5 } })
+
+    const { checkForUpdates, updateInfo, checking } = useSystemUpdate()
+    const publicCheck = checkForUpdates({ silent: true })
+    await checkForUpdates({ silent: true })
+    expect(checking.value).toBe(false)
+
+    releasePublic({ data: { update_available: true } })
+    await publicCheck
+
+    expect(updateInfo.value.commits_behind).toBe(5)
+  })
+
+  it('lets an older reply land when the newer check fails', async () => {
+    let releaseFirst
+    mockApi.get
+      .mockReturnValueOnce(new Promise(resolve => { releaseFirst = resolve }))
+      .mockRejectedValueOnce(new Error('Network error'))
+
+    const { checkForUpdates, updateInfo } = useSystemUpdate()
+    const first = checkForUpdates({ silent: true })
+    await expect(checkForUpdates({ silent: true })).rejects.toThrow()
+
+    releaseFirst({ data: { update_available: true } })
+    await first
+
+    expect(updateInfo.value).toEqual({ update_available: true })
+  })
+
   it('checks for updates and shows up to date when no updates', async () => {
     mockApi.get.mockResolvedValueOnce({
       data: {
