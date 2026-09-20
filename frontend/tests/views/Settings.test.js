@@ -1,3 +1,4 @@
+import { ref } from 'vue'
 import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import Settings from '@/views/Settings.vue'
@@ -73,6 +74,10 @@ const mockSystemUpdate = vi.hoisted(() => ({
   triggerUpdate: vi.fn().mockResolvedValue({})
 }))
 
+// Real refs for the flags the view watches, so a change mid-test is seen
+// (vi.hoisted runs before imports, so they cannot be created up there).
+mockSystemUpdate.isRestarting = ref(false)
+mockSystemUpdate.updating = ref(false)
 vi.mock('@/composables/useSystemUpdate', () => ({
   useSystemUpdate: () => mockSystemUpdate
 }))
@@ -1032,6 +1037,33 @@ describe('Settings', () => {
       } finally {
         vi.useRealTimers()
       }
+    })
+
+    it('replays the skipped refresh when a wait ends without a reload', async () => {
+      useSettings().setSettings(createMockSettings())
+      mockSystemUpdate.isRestarting.value = true
+      mountSettings()
+      await flushPromises()
+      // Mounted mid-restart: nothing may be fetched from a stack that is down.
+      expect(mockApi.get).not.toHaveBeenCalledWith('/settings')
+      expect(mockSystemUpdate.loadVersionInfo).not.toHaveBeenCalled()
+
+      // Timed out, failed, or dismissed — the page stays, so it must catch up.
+      mockSystemUpdate.isRestarting.value = false
+      await flushPromises()
+
+      expect(mockApi.get).toHaveBeenCalledWith('/settings')
+      expect(mockSystemUpdate.loadVersionInfo).toHaveBeenCalledTimes(1)
+    })
+
+    it('keeps live status while an update is only being dispatched', async () => {
+      mockSystemUpdate.updating.value = true
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      // The stack is still up and no banner explains a blank status yet.
+      expect(wrapper.find('[data-testid="audio-status-summary"]').text()).not.toContain('Unavailable')
+      expect(wrapper.text()).not.toContain('Waiting for services to report the active model.')
     })
 
     it('disables Save while a system update is in flight', async () => {

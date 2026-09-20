@@ -51,7 +51,7 @@
       Active: {{ modelName(currentApplicationStatus.model.active) }}.
       <button
         class="underline ml-2"
-        :disabled="settingsStore.pendingWrites.value > 0"
+        :disabled="settingsStore.pendingWrites.value > 0 || restartInProgress"
         @click="manualRestart"
       >
         Restart to apply
@@ -1753,7 +1753,9 @@ export default {
     const restartInProgress = computed(() =>
       serviceRestart.isRestarting.value || systemUpdate.isRestarting.value || systemUpdate.updating.value)
     const currentApplicationStatus = computed(() => {
-      if (restartInProgress.value) return null
+      // Not `updating`: the stack is still up while an update is dispatched,
+      // and no banner yet explains a blank status.
+      if (serviceRestart.isRestarting.value || systemUpdate.isRestarting.value) return null
       const status = applicationStatus.value
       return settingsStore.revision.value && status?.revision !== settingsStore.revision.value ? null : status
     })
@@ -2950,6 +2952,14 @@ export default {
       refreshOnFocus()
     })
 
+    // A wait that ends without reloading the page (timeout, failed update,
+    // nothing to update, dismissed banner) owes the refreshes skipped above.
+    watch(restartInProgress, (inProgress) => {
+      if (inProgress) return
+      refreshOnFocus()
+      if (!systemUpdate.versionInfo.value) systemUpdate.loadVersionInfo().catch(() => {})
+    })
+
     // Load settings on component mount
     onMounted(() => {
       // Warm path: App.vue usually loaded /settings into the store at startup.
@@ -2964,7 +2974,9 @@ export default {
       loadSettings()
       loadStorageInfo()
       loadSpeciesList()
-      systemUpdate.loadVersionInfo()
+      // Its failure message never auto-clears, so it must not blame a restart
+      // already under way; the watcher above loads it once services are back.
+      if (!restartInProgress.value) systemUpdate.loadVersionInfo()
       auth.ensureAuthLoaded()
       window.addEventListener('beforeunload', handleBeforeUnload)
       window.addEventListener('focus', refreshOnFocus)
