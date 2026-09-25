@@ -21,7 +21,7 @@ import os
 import time
 
 from core import maintenance_lease
-from core.db_schema import LIVE_MEDIA_INDEXES
+from core.db_schema import LIVE_MEDIA_INDEXES, keyset_after
 from core.logging_config import get_logger
 from core.media_ownership import KIND_AUDIO, KIND_DIRS, KIND_SPECTROGRAM
 from core.storage_manager import _detection_filename_candidates
@@ -166,8 +166,8 @@ def advance_frontier(db_manager, batch_rows=BATCH_ROWS):
         where = ""
         params = []
         if position is not None:
-            where = "WHERE (timestamp > ? OR (timestamp = ? AND id > ?))"
-            params = [position[0], position[0], position[1]]
+            clause, params = keyset_after(*position)
+            where = f"WHERE {clause}"
         cur.execute(
             f"SELECT id, common_name, confidence, timestamp, extra, "
             f"audio_source, media_bytes FROM detections {where} "

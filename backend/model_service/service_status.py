@@ -36,7 +36,7 @@ def write_startup_failure(
 
 
 def clear_startup_failure(path: str | Path) -> None:
-    """Remove a stale startup failure after the model loads successfully."""
+    """Remove a previous attempt's startup failure before a new load begins."""
     status_path = Path(path)
     for candidate in (status_path, Path(f"{status_path}.tmp")):
         try:

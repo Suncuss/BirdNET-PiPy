@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import api from '@/services/api'
 import { fetchUpdateStage } from '@/utils/updateStage'
+import { waitForServicesReady } from '@/utils/serviceReadiness'
 import { useLogger } from './useLogger'
 
 const STAGE_POLL_INTERVAL_MS = 5000
@@ -181,7 +182,6 @@ export function useServiceRestart() {
    * @param {number} options.maxWaitSeconds - Max time to wait (default: 150s / 2.5 min)
    * @param {number} options.pollInterval - Polling interval in ms (default: 5000)
    * @param {number} options.initialDelay - Delay before first check in ms (default: 10000)
-   * @param {number} options.postConnectDelay - Extra delay after connection before reload (default: 15000)
    * @param {boolean} options.autoReload - Whether to reload page on success (default: true)
    * @param {string} options.message - Progress banner subject, no trailing
    *   punctuation: this appends '...'. Unlike timeoutMessage/failureMessage,
@@ -213,7 +213,6 @@ export function useServiceRestart() {
       maxWaitSeconds = 150,
       pollInterval = 5000,
       initialDelay = 10000,
-      postConnectDelay = 15000, // Wait for all services (BirdNet, etc.) to fully initialize
       autoReload = true,
       message = 'Services restarting',
       timeoutMessage = 'Restart is taking longer than expected. Try refreshing the page in a minute.',
@@ -241,7 +240,8 @@ export function useServiceRestart() {
     return new Promise((resolve, reject) => {
       let stagePollTimer = null
       let pendingTimer = null
-      let cancelled = false
+      // Aborted by reset(); also cancels the readiness phase
+      const cancel = new AbortController()
 
       // Nulling the handle is what makes it the liveness flag read below.
       const stopStagePolling = () => {
@@ -250,10 +250,10 @@ export function useServiceRestart() {
       }
 
       cancelActiveWait = () => {
-        cancelled = true
         cancelActiveWait = null
         stopStagePolling()
         clearTimeout(pendingTimer)
+        cancel.abort()
         managedWaitActive.value = false
         // Resolve, don't reject: every caller's catch turns unexpected
         // errors into user-facing failure banners, and a reset() usually
@@ -303,7 +303,7 @@ export function useServiceRestart() {
           // can mask the reconnect, and against /system/version because its
           // boot_id/commit prove WHICH server instance answered.
           const response = await api.get('/system/version')
-          if (cancelled) return // reset() fired while the probe was in flight
+          if (cancel.signal.aborted) return // reset() fired while the probe was in flight
 
           const payload = response?.data || {}
           // Mirror the baseline-init rule: only a literal non-failed status
@@ -344,31 +344,36 @@ export function useServiceRestart() {
           }
 
           stopStagePolling()
-          logger.info('API reconnected, waiting for all services to initialize...')
+          logger.info('API reconnected, waiting for services to report ready')
           restartMessage.value = 'Waiting for services to initialize...'
 
-          // Wait extra time for all services (BirdNet inference, etc.) to fully start
-          pendingTimer = setTimeout(() => {
-            cancelActiveWait = null
-            managedWaitActive.value = false
-            logger.info('Service restart complete')
-            restartMessage.value = 'Services ready!'
+          // The API answers before the model server has loaded its model and
+          // before the recorder is up; poll their readiness rather than guess.
+          const proceed = await waitForServicesReady({
+            signal: cancel.signal,
+            onProgress: (text) => { restartMessage.value = `${text}...` }
+          })
+          if (!proceed) return // reset() fired during the readiness wait
 
-            if (autoReload) {
-              // Keep isRestarting true: the page is about to be replaced,
-              // and clearing it early lets the banner chain fall through to
-              // "update available" for the last second before the reload.
-              restartMessage.value = 'Reloading...'
-              setTimeout(() => {
-                window.location.reload()
-              }, 1000)
-            } else {
-              isRestarting.value = false
-            }
-            resolve(true)
-          }, postConnectDelay)
+          cancelActiveWait = null
+          managedWaitActive.value = false
+          logger.info('Service restart complete')
+          restartMessage.value = 'Services ready!'
+
+          if (autoReload) {
+            // Keep isRestarting true: the page is about to be replaced,
+            // and clearing it early lets the banner chain fall through to
+            // "update available" for the last second before the reload.
+            restartMessage.value = 'Reloading...'
+            setTimeout(() => {
+              window.location.reload()
+            }, 1000)
+          } else {
+            isRestarting.value = false
+          }
+          resolve(true)
         } catch (_error) {
-          if (cancelled) return
+          if (cancel.signal.aborted) return
           sawOutage = true
           pendingTimer = setTimeout(checkConnection, pollInterval)
         }

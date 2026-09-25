@@ -53,6 +53,14 @@ app = Flask(__name__)
 setup_logging('birdnet')
 logger = get_logger(__name__)
 
+# A failure file describes the CURRENT load attempt only: clear any left by an
+# earlier attempt first, so a restart that fixes the model is not reported as
+# failed while it loads (the API's readiness probe and Settings read it).
+try:
+    clear_startup_failure(settings.MODEL_STARTUP_STATUS_PATH)
+except OSError:
+    logger.warning("Unable to clear stale model startup failure", exc_info=True)
+
 # Load the model using factory pattern
 model_type = get_model_type_from_settings()
 logger.info("Loading bird detection model", extra={
@@ -78,11 +86,6 @@ except Exception as exc:
         logger.warning("Unable to persist model startup failure", exc_info=True)
     logger.error("Failed to load model", exc_info=True)
     raise
-
-try:
-    clear_startup_failure(settings.MODEL_STARTUP_STATUS_PATH)
-except OSError:
-    logger.warning("Unable to clear stale model startup failure", exc_info=True)
 
 # The V3.0 downloader wrote into the source tree. Cleanup is independent of
 # the selected model so stations that switched back to V2.4 also reclaim it.

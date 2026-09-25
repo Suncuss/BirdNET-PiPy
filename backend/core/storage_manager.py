@@ -101,6 +101,20 @@ def get_disk_usage(path=None):
     }
 
 
+def cleanup_headroom_bytes(path=None):
+    """Bytes the data disk can still take before usage reaches the cleanup
+    trigger (0 once past it). Writers of large temporary files check this so
+    their file never makes the storage manager purge recordings for room.
+    With auto-cleanup off nothing is ever purged, so it is plain free space.
+    ``path`` is any directory on that disk (defaults to /app/data)."""
+    usage = get_disk_usage(path)
+    config = _get_storage_config()
+    if not config['auto_cleanup_enabled']:
+        return usage['free_bytes']
+    trigger_bytes = usage['total_bytes'] * config['trigger_percent'] / 100
+    return max(0, int(trigger_bytes - usage['used_bytes']))
+
+
 def _detection_filename_candidates(detection):
     """Build ordered dash-pattern filename candidates for a detection.
 

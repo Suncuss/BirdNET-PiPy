@@ -14,8 +14,9 @@ export const UPDATE_PROGRESS_URL = BASE + 'update-progress'
 /**
  * Fetch and validate the stage file.
  *
- * Resolves to {message, timestamp} (timestamp may be null) or null on ANY
- * failure — endpoint absent (HA, older stack), server down, malformed body.
+ * Resolves to {stage, message, timestamp} (stage and timestamp may be null)
+ * or null on ANY failure — endpoint absent (HA, older stack), server down,
+ * malformed body.
  * Never rejects. Raw fetch on purpose: the axios client is rooted at /api,
  * which is down for the whole window this file exists to cover.
  */
@@ -26,6 +27,7 @@ export async function fetchUpdateStage(url = UPDATE_PROGRESS_URL) {
     const data = await response.json()
     if (typeof data?.message !== 'string' || !data.message) return null
     return {
+      stage: typeof data.stage === 'string' ? data.stage : null,
       message: data.message,
       timestamp: typeof data.timestamp === 'string' ? data.timestamp : null
     }

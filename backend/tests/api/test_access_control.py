@@ -379,6 +379,8 @@ class TestDefaultDenyBackstop:
             'auth_change_password', 'trigger_system_update', 'trigger_service_restart',
             'get_system_logs', 'get_recorder_status', 'migration_import', 'migration_validate',
             'upload_bird_image', 'delete_bird_image',
+            'export_count', 'start_export_job', 'current_export_job', 'get_export_job',
+            'discard_export_job', 'download_export_file',
         }
         leaked = sensitive & api_module._ANON_REACHABLE_ENDPOINTS
         assert not leaked, f'sensitive endpoints in anonymous allowlist: {leaked}'

@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ref, defineComponent, nextTick } from 'vue'
 import BirdGallery from '@/views/BirdGallery.vue'
 import { getDefaultBirdImageUrl } from '@/services/media'
+import { deferred } from '../helpers/deferred'
 
 // happy-dom ships a no-op IntersectionObserver (observe() never fires). Replace
 // it with one that reports every observed element as immediately intersecting,
@@ -37,10 +38,16 @@ vi.mock('@/composables/useSmartCrop', () => ({
   })
 }))
 
+// The card's visible image: the photo layer once revealed, else the
+// illustration underneath it.
+const shownImage = (wrapper) => {
+  const photo = wrapper.find('.bird-card img.gallery-reveal')
+  return photo.exists() ? photo : wrapper.find('.bird-card img')
+}
+
 const mountGallery = () => mount(BirdGallery, {
   global: {
     stubs: {
-      'font-awesome-icon': true,
       'router-link': RouterLinkStub
     }
   }
@@ -417,7 +424,7 @@ describe('BirdGallery', () => {
     const wrapper = mountGallery()
     await flushPromises()
 
-    const img = wrapper.find('.bird-card img')
+    const img = shownImage(wrapper)
     expect(img.attributes('src')).toBe('https://upload.wikimedia.org/thumb/sparrow_400.jpg')
   })
 
@@ -439,7 +446,7 @@ describe('BirdGallery', () => {
     const wrapper = mountGallery()
     await flushPromises()
 
-    const img = wrapper.find('.bird-card img')
+    const img = shownImage(wrapper)
     expect(img.attributes('src')).toBe('https://upload.wikimedia.org/full/sparrow.jpg')
   })
 
@@ -469,7 +476,7 @@ describe('BirdGallery', () => {
     expect(wikiCalls).toHaveLength(0)
     // The card still renders — just on the placeholder until it scrolls in.
     expect(wrapper.text()).toContain('Sparrow')
-    const img = wrapper.find('.bird-card img')
+    const img = shownImage(wrapper)
     expect(img.attributes('src')).toBe(getDefaultBirdImageUrl())
   })
 
@@ -491,13 +498,13 @@ describe('BirdGallery', () => {
     const wrapper = mountGallery()
     await flushPromises()
 
-    const img = wrapper.find('.bird-card img')
+    const img = shownImage(wrapper)
     expect(img.attributes('src')).toBe('/broken_thumb.jpg')
 
     await img.trigger('error')
     await flushPromises()
 
-    expect(wrapper.find('.bird-card img').attributes('src')).toBe(getDefaultBirdImageUrl())
+    expect(shownImage(wrapper).attributes('src')).toBe(getDefaultBirdImageUrl())
   })
 
   it('does not re-fetch outgoing-tab cards when switching away mid-load', async () => {
@@ -574,7 +581,7 @@ describe('BirdGallery', () => {
     }))
     await flushPromises()
 
-    const img = wrapper.find('.bird-card img')
+    const img = shownImage(wrapper)
     expect(img.attributes('src')).toBe('https://upload.wikimedia.org/thumb/new_400.jpg')
   })
 
@@ -593,7 +600,7 @@ describe('BirdGallery', () => {
 
     const wrapper = mountGallery()
     await flushPromises()
-    const img = () => wrapper.find('.bird-card img')
+    const img = () => shownImage(wrapper)
 
     // First image fails → falls back to the placeholder (imageError set).
     await img().trigger('error')
@@ -619,6 +626,84 @@ describe('BirdGallery', () => {
     expect(img().attributes('src')).toBe(getDefaultBirdImageUrl())
   })
 
+  describe('parallel loading and ordered reveal', () => {
+    const species = ['A', 'B', 'C', 'D', 'E', 'F']
+    let pending
+
+    beforeEach(() => {
+      pending = {}
+      mockApi.get.mockImplementation((url, config) => {
+        if (url === '/sightings/unique') {
+          return Promise.resolve({
+            data: species.map((name, i) => ({ id: i, common_name: name, scientific_name: name, timestamp: '2024-08-01T12:00:00Z' }))
+          })
+        }
+        if (url === '/wikimedia_image') {
+          // Hold every lookup open so the test controls completion order.
+          pending[config.params.species] = deferred()
+          return pending[config.params.species].promise
+        }
+        return Promise.resolve({ data: [] })
+      })
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    const photo = (name) => ({ data: { imageUrl: `/${name}.jpg`, thumbUrl: `/${name}_t.jpg`, authorName: name, authorUrl: '#', licenseType: 'CC' } })
+    const cardPhoto = (wrapper, i) => wrapper.findAll('.bird-card')[i].find('img.gallery-reveal')
+
+    it('loads up to four cards at once', async () => {
+      mountGallery()
+      await flushPromises()
+      expect(Object.keys(pending)).toEqual(['A', 'B', 'C', 'D'])
+
+      pending.A.resolve(photo('A'))
+      await flushPromises()
+      expect(Object.keys(pending)).toEqual(['A', 'B', 'C', 'D', 'E'])
+    })
+
+    it('reveals cards in reading order even when a later one loads first', async () => {
+      vi.useFakeTimers()
+      const wrapper = mountGallery()
+      await flushPromises()
+
+      pending.B.resolve(photo('B'))
+      await flushPromises()
+      expect(cardPhoto(wrapper, 1).exists()).toBe(false)  // waits for A
+
+      pending.A.resolve(photo('A'))
+      await flushPromises()
+      expect(cardPhoto(wrapper, 0).attributes('src')).toBe('/A_t.jpg')
+
+      vi.advanceTimersByTime(100)  // one reveal gap
+      await flushPromises()
+      expect(cardPhoto(wrapper, 1).attributes('src')).toBe('/B_t.jpg')
+    })
+
+    it('shows the loading sheen until a card settles, and stops it when there is no photo', async () => {
+      const wrapper = mountGallery()
+      await flushPromises()
+      const sheen = (i) => wrapper.findAll('.bird-card')[i].find('.gallery-sheen')
+      expect(sheen(0).exists()).toBe(true)
+
+      pending.A.resolve({ data: null })
+      await flushPromises()
+      expect(sheen(0).exists()).toBe(false)
+      expect(cardPhoto(wrapper, 0).exists()).toBe(false)  // stays on the illustration
+
+      // Later reveals re-render every card; the settled no-photo card must
+      // not be re-observed and looked up again.
+      pending.B.resolve(photo('B'))
+      await flushPromises()
+      const lookupsFor = (name) => mockApi.get.mock.calls.filter(
+        c => c[0] === '/wikimedia_image' && c[1]?.params?.species === name
+      ).length
+      expect(lookupsFor('A')).toBe(1)
+    })
+  })
+
   describe('keep-alive behavior', () => {
     const Placeholder = defineComponent({
       name: 'Placeholder',
@@ -638,7 +723,7 @@ describe('BirdGallery', () => {
         `
       }), {
         global: {
-          stubs: { 'font-awesome-icon': true, 'router-link': RouterLinkStub }
+          stubs: { 'router-link': RouterLinkStub }
         }
       })
       return { wrapper, showGallery }

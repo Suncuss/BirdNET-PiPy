@@ -45,6 +45,15 @@ vi.mock('@/services/api', () => ({
   createLongRequest: () => mockApi
 }))
 
+// App reads the update stage file on mount (raw fetch, not the api service).
+// Default: no stage file — the station is not updating.
+const fetchUpdateStageMock = vi.hoisted(() => vi.fn())
+
+vi.mock('@/utils/updateStage', () => ({
+  fetchUpdateStage: fetchUpdateStageMock,
+  isStageFresh: () => true
+}))
+
 // Mock socket.io — App opens the app-wide recorder-status socket on mount
 const socketHandlers = vi.hoisted(() => ({}))
 const socketMock = vi.hoisted(() => ({
@@ -119,10 +128,20 @@ describe('App', () => {
         display: { use_metric_units: true, time_format: null }
       }
     })
+
+    fetchUpdateStageMock.mockReset()
+    fetchUpdateStageMock.mockResolvedValue(null)
   })
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('checks for a running update on mount, without waiting for an API call to fail', async () => {
+    mountApp()
+    await flushPromises()
+
+    expect(fetchUpdateStageMock).toHaveBeenCalledTimes(1)
   })
 
   it('renders navigation links', () => {

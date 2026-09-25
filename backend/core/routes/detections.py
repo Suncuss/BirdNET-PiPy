@@ -1,16 +1,18 @@
-"""Detection endpoints: table/trends reads, CSV export, deletes.
+"""Detection endpoints: table/trends reads, CSV exports, deletes.
 
-The streaming CSV export batches DB reads so a million-row export stays a
-sequence of quick executor jobs; deletes invalidate the dashboard/gallery
-caches they falsify. Registered on the shared ``api`` blueprint at import.
+Both exports — the streaming CSV and the prepared-zip jobs (core.export_jobs)
+— batch DB reads so a million-row export stays a sequence of quick executor
+jobs; deletes invalidate the dashboard/gallery caches they falsify.
+Registered on the shared ``api`` blueprint at import.
 """
 import csv
 import io
 import time
 from datetime import datetime
 
-from flask import Response, jsonify, request
+from flask import Response, jsonify, request, send_file
 
+import core.export_jobs as export_jobs
 from core import api_infra as infra
 from core.api_infra import _run_db, api
 from core.api_utils import (
@@ -42,11 +44,6 @@ def _cooperative_yield():
     from core.api import _cooperative_yield as cooperative_yield
     cooperative_yield()
 
-
-# Rows per DB batch for the streaming CSV export: small enough that a batch
-# is a quick lane job holding ~1MB, large enough that a million-row export
-# stays a few thousand round trips rather than a million.
-_EXPORT_BATCH_ROWS = 1000
 
 # One bounded retry before surfacing a retryable maintenance response —
 # the one-time index build usually finishes in seconds.
@@ -262,57 +259,15 @@ def export_detections_csv():
     def generate():
         buffer = io.StringIO()
         writer = csv.writer(buffer)
-        writer.writerow([
-            'id', 'timestamp', 'group_timestamp', 'scientific_name', 'common_name',
-            'confidence', 'latitude', 'longitude', 'cutoff', 'sensitivity', 'overlap',
-            'week', 'extra', 'audio_source'
-        ])
-
-        before_timestamp = before_id = None
+        writer.writerow(export_jobs.CSV_HEADER)
         try:
-            while True:
-                # Each batch is its own short executor-lane job, so a long
-                # export shares the single DB lane with live requests instead
-                # of holding it (and every row in memory) for the download.
-                batch = _run_db(
-                    infra.db_manager.get_detections_for_export_batch,
-                    start_date=start_date,
-                    end_date=end_date,
-                    species=common,
-                    scientific_name=sci,
-                    before_timestamp=before_timestamp,
-                    before_id=before_id,
-                    limit=_EXPORT_BATCH_ROWS,
-                )
-                for detection in batch:
-                    # Handle extra field - ensure NULL/None becomes '{}'
-                    extra_value = detection.get('extra')
-                    if extra_value is None:
-                        extra_value = '{}'
-
-                    writer.writerow([
-                        detection.get('id', ''),
-                        detection.get('timestamp', ''),
-                        detection.get('group_timestamp', ''),
-                        detection.get('scientific_name', ''),
-                        detection.get('common_name', ''),
-                        detection.get('confidence', ''),
-                        detection.get('latitude', ''),
-                        detection.get('longitude', ''),
-                        detection.get('cutoff', ''),
-                        detection.get('sensitivity', ''),
-                        detection.get('overlap', ''),
-                        detection.get('week', ''),
-                        extra_value,
-                        detection.get('audio_source', '')
-                    ])
+            for batch in export_jobs.iter_export_batches(
+                    infra.db_manager, start_date=start_date, end_date=end_date,
+                    species=common, scientific_name=sci):
+                writer.writerows(batch)
                 yield buffer.getvalue()
                 buffer.seek(0)
                 buffer.truncate(0)
-                if len(batch) < _EXPORT_BATCH_ROWS:
-                    return
-                before_timestamp = batch[-1]['timestamp']
-                before_id = batch[-1]['id']
         except Exception:
             # Response headers are already sent; log why the download broke
             # off and let the stream abort so the client sees a failed
@@ -329,6 +284,108 @@ def export_detections_csv():
         mimetype='text/csv',
         headers={'Content-Disposition': f'attachment; filename={filename}'}
     )
+
+
+# Prepared exports (Settings → Export modal): the backend writes a zipped CSV
+# as a background job with real progress; the download is a separate step.
+# All owner-only — the CSV carries the station's coordinates.
+
+def _resolve_export_range(args):
+    """(start_date, end_date) from range/start_date/end_date args, or raise ValueError."""
+    return export_jobs.resolve_range(
+        args.get('range'), args.get('start_date'), args.get('end_date'))
+
+
+@api.route('/api/detections/export/count', methods=['GET'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def export_count():
+    """Rows an export over the chosen range would contain (the modal's preview).
+
+    Query params: range = all | 7d | 30d | year | custom (+ start_date and
+    end_date as YYYY-MM-DD for custom).
+    """
+    try:
+        start_date, end_date = _resolve_export_range(request.args)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    count = _run_db(infra.db_manager.count_detections_for_export, start_date, end_date)
+    return jsonify({'count': count, 'start_date': start_date, 'end_date': end_date})
+
+
+@api.route('/api/detections/export/jobs', methods=['POST'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def start_export_job():
+    """Start preparing an export. JSON body takes the same fields as
+    /export/count. 409 with the running job if one is still preparing."""
+    body = request.get_json(silent=True)
+    if body is None:
+        body = {}
+    if not isinstance(body, dict):
+        return jsonify({'error': 'Request body must be a JSON object'}), 400
+    try:
+        start_date, end_date = _resolve_export_range(body)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    try:
+        job = export_jobs.start_export(infra.db_manager, start_date, end_date)
+    except export_jobs.ExportBusyError as e:
+        return jsonify({'error': str(e), 'job': e.job}), 409
+    except export_jobs.ExportSpaceError as e:
+        return jsonify({'error': str(e)}), 507
+    return jsonify({'job': job}), 202
+
+
+@api.route('/api/detections/export/jobs/current', methods=['GET'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def current_export_job():
+    """The current export job in any state, or null — lets the modal resume.
+    ``today`` is the station's local date, which bounds the custom range
+    (presets resolve against it too, not against the browser's date)."""
+    return jsonify({'job': export_jobs.current_job(),
+                    'today': local_now().date().isoformat()})
+
+
+@api.route('/api/detections/export/jobs/<job_id>', methods=['GET'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def get_export_job(job_id):
+    job = export_jobs.get_job(job_id)
+    if job is None:
+        return jsonify({'error': 'Export not found or expired'}), 404
+    return jsonify({'job': job})
+
+
+@api.route('/api/detections/export/jobs/<job_id>', methods=['DELETE'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def discard_export_job(job_id):
+    """Cancel a preparing export, or delete a finished one's file."""
+    if not export_jobs.discard_job(job_id):
+        return jsonify({'error': 'Export not found or expired'}), 404
+    return jsonify({'status': 'discarded'})
+
+
+@api.route('/api/detections/export/jobs/<job_id>/file', methods=['GET'])
+@log_api_request
+@require_auth
+@handle_api_errors
+def download_export_file(job_id):
+    """The prepared zip, as an attachment. A plain link, so the browser's
+    download manager streams it to disk instead of holding it in memory."""
+    ready = export_jobs.ready_file(job_id)
+    if ready is None:
+        return jsonify({'error': 'Export not found or expired'}), 404
+    path, filename = ready
+    return send_file(path, mimetype='application/zip',
+                     as_attachment=True, download_name=filename)
 
 
 @api.route('/api/detections/<int:detection_id>', methods=['DELETE'])

@@ -1,5 +1,6 @@
 import Chart from 'chart.js/auto'
 import { getDisplaySpeciesName } from '@/utils/birdNames'
+import { getLocalDateString } from '@/utils/format'
 
 /**
  * Utility functions for Chart.js chart management and data transformation.
@@ -96,19 +97,6 @@ export function useChartHelpers() {
         rowStats: rowStats[index]
       }))
     )
-  }
-
-  /**
-   * Format date as YYYY-MM-DD string in local timezone.
-   * Avoids timezone issues that occur with toISOString().
-   * @param {Date} date - Date to format (defaults to now)
-   * @returns {string} Date string in YYYY-MM-DD format
-   */
-  const getLocalDateString = (date = new Date()) => {
-    const year = date.getFullYear()
-    const month = String(date.getMonth() + 1).padStart(2, '0')
-    const day = String(date.getDate()).padStart(2, '0')
-    return `${year}-${month}-${day}`
   }
 
   return {

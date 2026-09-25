@@ -18,14 +18,13 @@ from core import maintenance_lease, media_ownership
 from core.bird_name_utils import get_spectrogram_common_name_from_english
 from core.logging_config import get_logger
 from core.spectrogram import generate_spectrogram
-from core.storage_manager import get_disk_usage
+from core.storage_manager import cleanup_headroom_bytes, get_disk_usage
 from core.utils import build_detection_filenames
 
 logger = get_logger(__name__)
 
 # Constants
 DATA_DIR = os.path.join(BASE_DIR, 'data')
-STORAGE_TRIGGER_PERCENT = 85
 ESTIMATED_SPECTROGRAM_SIZE_BYTES = 50 * 1024  # ~50KB per spectrogram (conservative estimate)
 
 # Audio file extensions to look for (MP3 only - matches BirdNET-PiPy's default format)
@@ -383,7 +382,7 @@ def scan_audio_files(db_manager, source_folder=None):
 
 
 def check_disk_space(required_bytes):
-    """Check if import would exceed 85% disk usage threshold.
+    """Check if import would push disk usage past the storage cleanup trigger.
 
     Args:
         required_bytes: Number of bytes that will be written
@@ -397,8 +396,7 @@ def check_disk_space(required_bytes):
         }
     """
     usage = get_disk_usage()
-    max_allowed = usage['total_bytes'] * (STORAGE_TRIGGER_PERCENT / 100)
-    available_before_threshold = max_allowed - usage['used_bytes']
+    available_before_threshold = cleanup_headroom_bytes()
     after_import_bytes = usage['used_bytes'] + required_bytes
     after_import_percent = round((after_import_bytes / usage['total_bytes']) * 100, 1)
 
@@ -406,7 +404,7 @@ def check_disk_space(required_bytes):
         'current_percent': usage['percent_used'],
         'after_import_percent': after_import_percent,
         'has_enough_space': required_bytes <= available_before_threshold,
-        'available_bytes': max(0, int(available_before_threshold))
+        'available_bytes': available_before_threshold
     }
 
 

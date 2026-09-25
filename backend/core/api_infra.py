@@ -125,7 +125,8 @@ _ANON_REACHABLE_ENDPOINTS = frozenset({
     'get_recording_og_card',
     # Always-public bootstrap / auth / non-detection info
     'get_auth_status', 'auth_login', 'auth_logout', 'auth_setup', 'auth_verify',
-    'health_check', 'get_system_storage', 'get_system_version', 'check_for_updates',
+    'health_check', 'get_service_readiness',
+    'get_system_storage', 'get_system_version', 'check_for_updates',
     # Internal-only (require_internal validates the shared secret; the caller has
     # no session, so it must be allowed past this anonymous gate to be checked)
     'broadcast_detection_endpoint', 'broadcast_recorder_status_endpoint',

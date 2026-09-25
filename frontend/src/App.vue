@@ -359,6 +359,10 @@ export default {
       // Backend-unreachable events: the overlay checks whether a native
       // update is actually running before showing anything
       window.addEventListener('api:unreachable', updateOverlay.checkForActiveUpdate)
+      // ...and a visitor arriving mid-update gets it now, not after the first
+      // API call has taken seconds to fail. Not awaited: nothing below
+      // depends on it.
+      updateOverlay.checkForUpdateAtBoot()
 
       // Ensure auth status is loaded (shares the one-time load with the
       // router guard — see useAuth.ensureAuthLoaded)
