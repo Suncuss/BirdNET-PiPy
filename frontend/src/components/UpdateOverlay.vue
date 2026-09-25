@@ -29,7 +29,7 @@
         System is updating
       </h1>
       <p class="text-sm text-gray-500">
-        {{ reloading ? 'Back online — reloading…' : stageMessage }}
+        {{ statusText }}
       </p>
       <p class="text-xs text-gray-400 mt-3">
         This page will reload automatically when the update finishes.
@@ -39,13 +39,18 @@
 </template>
 
 <script>
+import { computed } from 'vue'
 import { useUpdateOverlay } from '@/composables/useUpdateOverlay'
 
 export default {
   name: 'UpdateOverlay',
   setup() {
-    const { visible, stageMessage, reloading } = useUpdateOverlay()
-    return { visible, stageMessage, reloading }
+    const { visible, stageMessage, reloading, readinessMessage } = useUpdateOverlay()
+    // Once the API is back, say what is still starting before the reload
+    const statusText = computed(() => reloading.value
+      ? `Back online — ${readinessMessage.value.toLowerCase() || 'reloading'}…`
+      : stageMessage.value)
+    return { visible, statusText }
   }
 }
 </script>

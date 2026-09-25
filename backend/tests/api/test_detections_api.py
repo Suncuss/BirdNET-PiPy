@@ -1,7 +1,10 @@
 """Tests for the /api/detections paginated endpoint and DELETE endpoint."""
 
 import os
+from datetime import datetime, timedelta
 from unittest.mock import patch
+
+import pytest
 
 from tests.api.conftest import insert_detection, make_rows_legacy
 
@@ -767,6 +770,9 @@ class TestExportDetectionsAPI:
         response = api_client.get('/api/detections/export')
         assert response.status_code == 200
         assert response.content_type == 'text/csv; charset=utf-8'
+        # Nothing matched: the header alone still comes through.
+        from core.export_jobs import CSV_HEADER
+        assert response.data.decode('utf-8').strip() == ','.join(CSV_HEADER)
 
     def test_export_csv_format(self, api_client, real_db_manager):
         """Test that export returns valid CSV format."""
@@ -882,7 +888,7 @@ class TestExportDetectionsAPI:
                 'overlap': 0.25
             })
 
-        with patch('core.routes.detections._EXPORT_BATCH_ROWS', 2):
+        with patch('core.export_jobs.EXPORT_BATCH_ROWS', 2):
             response = api_client.get('/api/detections/export')
             # Drain the stream inside the patch — the generator reads the
             # batch size lazily, chunk by chunk.
@@ -900,7 +906,7 @@ class TestExportDetectionsDatabaseMethods:
     """Tests for the get_detections_for_export_batch database method."""
 
     def test_export_batch_basic(self, real_db_manager):
-        """A single batch returns all rows, newest first, with all fields."""
+        """A single batch returns all rows, newest first, in CSV column order."""
         for i in range(5):
             real_db_manager.insert_detection({
                 'timestamp': f'2024-01-15T10:{i:02d}:00',
@@ -921,12 +927,10 @@ class TestExportDetectionsDatabaseMethods:
         timestamps = [d['timestamp'] for d in detections]
         assert timestamps == sorted(timestamps, reverse=True)
 
-        # Check all expected fields are present
-        for detection in detections:
-            assert 'id' in detection
-            assert 'timestamp' in detection
-            assert 'group_timestamp' in detection
-            assert 'common_name' in detection
+        # Rows are written to the CSV as-is, so their columns must be the
+        # header's, in order.
+        from core.export_jobs import CSV_HEADER
+        assert all(list(d.keys()) == CSV_HEADER for d in detections)
 
     def test_export_batch_keyset_walk(self, real_db_manager):
         """Walking with before_timestamp/before_id covers every row exactly
@@ -995,6 +999,120 @@ class TestExportDetectionsDatabaseMethods:
         """Test fetch on empty database."""
         detections = real_db_manager.get_detections_for_export_batch(limit=100)
         assert len(detections) == 0
+
+    def test_export_batch_date_bounded_walk(self, real_db_manager):
+        """A multi-batch walk under a date range returns exactly the in-range
+        rows once each — batches after the first keep the end bound as a
+        filter even though it no longer drives the index seek, so a cursor
+        from outside the range still can't leak rows past end_date."""
+        for day in range(10, 20):
+            for hour in range(3):
+                insert_detection(real_db_manager,
+                                 timestamp=f'2024-01-{day}T{hour:02d}:00:00')
+        date_range = {'start_date': '2024-01-12', 'end_date': '2024-01-16'}
+
+        seen = []
+        before_timestamp = before_id = None
+        while True:
+            batch = real_db_manager.get_detections_for_export_batch(
+                before_timestamp=before_timestamp, before_id=before_id,
+                limit=4, **date_range)
+            seen.extend(batch)
+            if len(batch) < 4:
+                break
+            before_timestamp = batch[-1]['timestamp']
+            before_id = batch[-1]['id']
+
+        assert len(seen) == 15  # 5 days x 3 rows
+        assert len({d['id'] for d in seen}) == 15
+        assert all('2024-01-12' <= d['timestamp'][:10] <= '2024-01-16'
+                   for d in seen)
+
+        # A cursor past the range: no rows from after end_date.
+        leaked = real_db_manager.get_detections_for_export_batch(
+            before_timestamp='2024-01-19T23:00:00', before_id=10**9,
+            limit=100, **date_range)
+        assert len(leaked) == 15
+        assert max(d['timestamp'] for d in leaked) <= '2024-01-16T23:59:59'
+
+    def test_export_batch_rejects_half_cursor(self, real_db_manager):
+        """before_id without before_timestamp would compare against NULL and
+        return nothing — an early, complete-looking end. It must raise."""
+        with pytest.raises(ValueError):
+            real_db_manager.get_detections_for_export_batch(
+                before_id=5, limit=10)
+
+    @pytest.mark.parametrize('fresh_stats', [False, True],
+                             ids=['stale-stats', 'fresh-stats'])
+    def test_export_batch_cost_independent_of_cursor_depth(
+            self, real_db_manager, fresh_stats):
+        """A batch deep into the walk costs about the same as one near the
+        top, for every filter shape: the cursor must be an index seek, not a
+        scan from the newest row down to it (which makes the whole export
+        quadratic). Measured in SQLite VM steps, so it's timing-free; a
+        plan-text check can't tell a seek on the cursor from one on
+        end_date — both print as `timestamp>? AND timestamp<?`.
+
+        Planner stats change which plan wins, so both states a station can be
+        in are checked: stale (startup ANALYZE ran before the table grew —
+        the fixture analyzed it empty) and fresh. Each alone misses a known
+        regression: the old OR-form cursor only scans with stale stats here,
+        yet it scanned on a fully analyzed 1.16M-row station DB."""
+        species = [('Turdus migratorius', 'Robin'), ('Cyanocitta cristata', 'Jay')]
+        start = datetime(2024, 1, 1)
+        values = []
+        for i in range(2000):  # one row per second, species alternating
+            ts = (start + timedelta(seconds=i)).strftime('%Y-%m-%dT%H:%M:%S')
+            values.append((ts, ts) + species[i % 2])
+        # Bulk SQL insert: the species rollup isn't read by the export.
+        with real_db_manager.get_db_connection() as conn:
+            conn.executemany(
+                "INSERT INTO detections (timestamp, group_timestamp, "
+                "scientific_name, common_name, confidence) VALUES (?, ?, ?, ?, 0.9)",
+                values)
+            conn.commit()
+            if fresh_stats:
+                conn.execute("ANALYZE")
+            keys = conn.execute(
+                "SELECT timestamp, id FROM detections "
+                "ORDER BY timestamp DESC, id DESC").fetchall()
+        shallow, deep = keys[20], keys[-40]
+
+        filters = {
+            'none': {},
+            'date': {'start_date': '2024-01-01', 'end_date': '2024-01-01'},
+            'species': {'scientific_name': 'Turdus migratorius'},
+            'species+date': {'scientific_name': 'Turdus migratorius',
+                             'start_date': '2024-01-01', 'end_date': '2024-01-01'},
+        }
+
+        def vm_steps(cursor, **kwargs):
+            steps = 0
+
+            def count():
+                nonlocal steps
+                steps += 1
+                return 0
+
+            # Same thread → the method reuses this thread-local connection.
+            with real_db_manager.get_db_connection() as conn:
+                conn.set_progress_handler(count, 1)
+            try:
+                batch = real_db_manager.get_detections_for_export_batch(
+                    before_timestamp=cursor[0], before_id=cursor[1],
+                    limit=10, **kwargs)
+            finally:
+                with real_db_manager.get_db_connection() as conn:
+                    conn.set_progress_handler(None, 1)
+            assert len(batch) == 10
+            return steps
+
+        for name, kwargs in filters.items():
+            shallow_steps = vm_steps(shallow, **kwargs)
+            deep_steps = vm_steps(deep, **kwargs)
+            assert deep_steps < shallow_steps * 2, (
+                f"{name}: deep batch cost {deep_steps} VM steps vs "
+                f"{shallow_steps} near the top — cursor is scanned, not sought")
 
 
 class TestDeleteMaintenanceContract:

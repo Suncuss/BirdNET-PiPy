@@ -37,6 +37,13 @@ _wikimedia_inflight = {}
 _wikimedia_inflight_lock = threading.Lock()  # hub-only: see above
 _WIKIMEDIA_FETCH_TIMEOUT = 30  # waiter cap; the leader does up to 10s+15s of HTTP
 
+# Global cap on concurrent upstream lookups across all species and viewers.
+# Wikimedia's API etiquette asks for at most 3 in flight; the gallery loads
+# several cards at once per tab, so the cap belongs here, not in the client.
+_WIKIMEDIA_MAX_CONCURRENT = 3
+_wikimedia_slots = threading.BoundedSemaphore(_WIKIMEDIA_MAX_CONCURRENT)  # hub-only: see _wikimedia_inflight_lock
+_WIKIMEDIA_SLOT_WAIT = 20  # give up queueing (503) well before followers' 30s cap
+
 
 def _cleanup_expired_cache():
     """Remove expired entries from image cache. Caller must hold _image_cache_lock."""
@@ -199,7 +206,9 @@ WIKIMEDIA_TITLE_BLOCKLIST = re.compile(
 )
 
 
-WIKIMEDIA_THUMB_WIDTH = 400  # Wikimedia returns a CDN-cached thumbnail at this width.
+# Wikimedia serves thumbnails only at standard widths (…, 330, 500, 960, …) and
+# rounds other requests up, so ask for a standard one directly.
+WIKIMEDIA_THUMB_WIDTH = 500
 
 
 def _parse_wikimedia_imageinfo(file_title, image_info):
@@ -340,6 +349,16 @@ def _do_fetch_wikimedia_candidates(species_name, limit):
         return [], _wikimedia_error(f'Error fetching Wikimedia image: {e}', 502)
 
 
+def _fetch_in_slot(species_name, limit):
+    """Run the upstream lookup inside a global concurrency slot."""
+    if not _wikimedia_slots.acquire(timeout=_WIKIMEDIA_SLOT_WAIT):
+        return [], _wikimedia_error('Wikimedia lookups busy, try again shortly', 503)
+    try:
+        return _do_fetch_wikimedia_candidates(species_name, limit)
+    finally:
+        _wikimedia_slots.release()
+
+
 def fetch_wikimedia_candidates(species_name, limit=8):
     """Fetch up to `limit` Wikimedia image candidates for a species.
 
@@ -374,7 +393,7 @@ def fetch_wikimedia_candidates(species_name, limit=8):
     # Leader: do the fetch, cache on success, then wake followers — always, so a
     # crash can't strand them waiting until the timeout.
     try:
-        result = _do_fetch_wikimedia_candidates(species_name, limit)
+        result = _fetch_in_slot(species_name, limit)
     except Exception as e:  # defensive: _do_fetch shouldn't raise, but never hang followers
         result = ([], _wikimedia_error(f'Wikimedia lookup failed: {e}', 502))
     candidates, _ = result

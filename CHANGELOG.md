@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+- Improved the Gallery's photo loading. Photos now load four at a time instead of one by one and fade in top to bottom, in reading order, instead of popping in at random. Cards still waiting on a photo show a soft shimmer, and their photo credit stays hidden until the photo arrives. The station still sends at most three Wikimedia lookups at a time, however many people are browsing.
+- Improved the "System is updating" screen to appear as soon as a page is opened during an update, instead of after several seconds of "Fetching data…" (up to 15 in the first minute of an update). The app now checks for a running update straight away rather than waiting for a request to fail, and the web server gives up on a stopped service after 3 seconds instead of 60.
+- Improved the reload after an update or restart. Instead of always waiting a fixed 15 seconds after the station comes back, the page now reloads as soon as the detection model and audio recorder are running, and shows which one it is still waiting for. That is often within a second or two on fast hardware, and slower stations no longer reload before the model has loaded.
+- Improved the CSV export: it now opens a window to pick a time range (all time, last 7 or 30 days, this year, or custom dates), prepares the file with a live progress bar, then offers it as a download (a .zip, about 12 times smaller). Large exports no longer time out or load the whole file into the browser, and closing the window doesn't stop an export in progress.
+- Fixed the CSV export slowing down sharply on large databases: a 1.2-million-detection export now takes about 25 seconds instead of 4 minutes, and slows the rest of the app far less while it runs.
+- Fixed storage cleanup and the background media indexing after an import slowing down sharply on stations with long histories: each step re-read everything before it, so indexing a 1.2-million-detection station took about 7 minutes instead of seconds.
+- Fixed the "System is updating" screen never going away for signed-out visitors on a station with public access turned off. It covered the sign-in dialog, because the station's "sign in required" reply was mistaken for the update still running.
+
+## [0.8.10] - 2026-09-20
+
+- Changed the navigation bar on phones to a single swipeable row that highlights the current page, instead of wrapping one or two links onto an extra line. A clipped label and a small arrow show when more pages are off-screen. Wider screens keep the navigation bar as it was.
+- Changed the Charts page's Activity Overview to match the Dashboard's: the same row density (it was noticeably looser, most of all on phones), and on tall desktop screens, where the Dashboard shows 15 species, it now opens on 15 too and offers 15 / 30 / All instead of 10 / 20 / 30 / All.
+- Improved the Dashboard's Activity Overview to ease to its new height when it gains or loses rows, as the Charts page already did, instead of jumping.
+- Improved the Activity Overview chart's balance, most visible on phones: species names now start in line with the card heading instead of after a strip of blank space, so the chart no longer looks pushed to the right. Overlong names also end in "…" instead of losing their first letters.
+- Fixed the Charts and species pages never releasing their charts when you navigate away, so a tab left open and browsed for a long time slowly used more memory.
+
 ## [0.8.9] - 2026-09-19
 
 - Fixed Settings showing "undefined new commits" (or "vundefined → vundefined" in the Home Assistant add-on) for an available update when the page was opened with an expired login. The update check made before signing in carries no commit count or versions, so it is now repeated after login.

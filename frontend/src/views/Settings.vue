@@ -1167,11 +1167,10 @@
             Import from BirdNET-Pi
           </button>
           <button
-            :disabled="exporting"
-            class="py-2 text-sm text-center text-gray-600 hover:text-gray-800 hover:bg-gray-50 border border-gray-200 rounded-lg transition-colors disabled:text-gray-400 disabled:hover:bg-transparent"
-            @click="exportCSV"
+            class="py-2 text-sm text-center text-gray-600 hover:text-gray-800 hover:bg-gray-50 border border-gray-200 rounded-lg transition-colors"
+            @click="showExportModal = true"
           >
-            {{ exporting ? 'Exporting...' : 'Export as CSV' }}
+            Export as CSV
           </button>
         </div>
       </div>
@@ -1578,6 +1577,11 @@
       @close="showMigrationModal = false"
     />
 
+    <ExportModal
+      v-if="showExportModal"
+      @close="showExportModal = false"
+    />
+
     <!-- Add/Edit Notification Modal -->
     <AddNotificationModal
       v-if="showAddNotificationModal"
@@ -1624,7 +1628,7 @@ import { recordingSegment } from '@/utils/detectionLinks'
 import { FILTER_DEFAULTS, modelTypeOptions } from '@/utils/modelDefaults'
 import { isSourceEnabled, sourceAudioStatus, sourceIsChanging, streamingError, summarizeAudioStatus } from '@/utils/audioStatus'
 import { QUIET_HOURS_DEFAULTS, describeQuietHours, parseHHMM } from '@/utils/quietHours'
-import api, { createLongRequest } from '@/services/api'
+import api from '@/services/api'
 import { supersededSettingsRevision } from '@/services/settingsWrites'
 import SpeciesFilterModal from '@/components/SpeciesFilterModal.vue'
 import AlertBanner from '@/components/AlertBanner.vue'
@@ -1633,6 +1637,7 @@ import AppListbox from '@/components/AppListbox.vue'
 import AppTimeSelect from '@/components/AppTimeSelect.vue'
 import UnsavedChangesModal from '@/components/UnsavedChangesModal.vue'
 import MigrationModal from '@/components/MigrationModal.vue'
+import ExportModal from '@/components/ExportModal.vue'
 import AddNotificationModal from '@/components/AddNotificationModal.vue'
 import ConfirmModal from '@/components/ConfirmModal.vue'
 import StreamSourceModal from '@/components/StreamSourceModal.vue'
@@ -1664,6 +1669,7 @@ export default {
     AppTimeSelect,
     UnsavedChangesModal,
     MigrationModal,
+    ExportModal,
     AddNotificationModal,
     ConfirmModal,
     StreamSourceModal,
@@ -1804,8 +1810,7 @@ export default {
         'Location filtering is unavailable. Acoustic detections are continuing without location filtering; check System Logs for details.'
     })
 
-    // Export state
-    const exporting = ref(false)
+    const showExportModal = ref(false)
 
     // Species list (shared with SpeciesFilterModal)
     const speciesList = ref([])
@@ -2739,45 +2744,6 @@ export default {
       showStatus('success', 'Species filter saved. Applies to the next analysis.')
     }
 
-    // Export detections as CSV
-    const exportCSV = async () => {
-      try {
-        exporting.value = true
-        // Use long timeout (5 min) for large exports
-        const longApi = createLongRequest()
-        const response = await longApi.get('/detections/export', {
-          responseType: 'blob'
-        })
-
-        // Create download link
-        const blob = new Blob([response.data], { type: 'text/csv' })
-        const url = window.URL.createObjectURL(blob)
-        const link = document.createElement('a')
-        link.href = url
-
-        // Extract filename from Content-Disposition header or use default
-        const contentDisposition = response.headers['content-disposition']
-        let filename = 'birdnet_detections.csv'
-        if (contentDisposition) {
-          const match = contentDisposition.match(/filename=(.+)/)
-          if (match) {
-            filename = match[1]
-          }
-        }
-
-        link.setAttribute('download', filename)
-        document.body.appendChild(link)
-        link.click()
-        document.body.removeChild(link)
-        window.URL.revokeObjectURL(url)
-      } catch (error) {
-        console.error('Error exporting CSV:', error)
-        showStatus('error', 'Failed to export data')
-      } finally {
-        exporting.value = false
-      }
-    }
-
     // Handle auth toggle
     const accessFeatures = [
       { key: 'charts_public', label: 'Charts' },
@@ -3017,8 +2983,7 @@ export default {
       showLogsModal,
       manualRestart,
       storage,
-      exporting,
-      exportCSV,
+      showExportModal,
       saveSettings,
       toggleUpdateChannel,
       isHomeAssistantMode,

@@ -84,6 +84,17 @@ class TestExtraFieldInQueries:
         # Export keeps raw JSON string
         assert results[0]['extra'] == '{"export_test": true}'
 
+    def test_get_detections_for_export_batch_reads_null_extra_as_empty_json(
+            self, test_db_manager, sample_detection):
+        """Legacy rows with NULL extra export as '{}', not an empty cell."""
+        test_db_manager.insert_detection(sample_detection)
+        with test_db_manager.get_db_connection() as conn:
+            conn.execute("UPDATE detections SET extra = NULL")
+            conn.commit()
+
+        results = test_db_manager.get_detections_for_export_batch(limit=100)
+        assert results[0]['extra'] == '{}'
+
     def test_get_detections_by_date_range_includes_extra(self, test_db_manager, sample_detection):
         """Test get_detections_by_date_range includes parsed extra field."""
         sample_detection['extra'] = {'date_range_test': 'value'}

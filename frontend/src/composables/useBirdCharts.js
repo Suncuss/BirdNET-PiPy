@@ -52,6 +52,17 @@ export function useBirdCharts() {
   // does not disturb the vertical alignment.
   const X_AXIS_TICK_FONT_SIZE = 11
 
+  // Layout padding shared by the Total Observations bar chart and the heatmap
+  // beside it: top/bottom must match so both plots start at the same y and
+  // the species rows line up. left is 0 so the bar chart's species names start
+  // at the card's content edge; right keeps room for the last x tick label,
+  // which overhangs the plot and so ends at the opposite content edge.
+  const ACTIVITY_CHART_PADDING = { left: 0, right: 10, top: 10, bottom: 0 }
+
+  // Gap the SpeciesAxisLinks overlay leaves between a species name and the
+  // bars (its pr-2).
+  const SPECIES_LABEL_GAP_PX = 8
+
   /**
    * Create custom grid plugin for matrix/heatmap charts.
    * Draws grid lines around each cell.
@@ -226,13 +237,22 @@ export function useBirdCharts() {
             // per species, so every bar stays bounded by gridlines even when
             // the plot is short (e.g. mobile). Without this, Chart.js drops
             // half the category ticks and gridlines cross the bars.
-            ticks: { color: 'transparent', autoSkip: false }
+            ticks: { color: 'transparent', autoSkip: false },
+            // No tick stubs, and the axis sized to exactly the longest label
+            // plus the overlay's gap — with layout.padding.left at 0 the
+            // longest name then starts flush with the canvas edge, in line
+            // with the card heading. Chart.js reserves the label plus twice
+            // the tick padding; top that up to the gap, +1 against sub-pixel
+            // truncation. Tick padding itself stays default: changing it
+            // moves the rows vertically, out of line with the heatmap.
+            grid: { drawTicks: false },
+            afterFit: (scale) => {
+              scale.width += SPECIES_LABEL_GAP_PX - 2 * scale.options.ticks.padding + 1
+            }
           }
         },
         layout: {
-          // top matches the heatmap's layout.padding.top so both plots
-          // start at the same y and the species rows line up.
-          padding: { left: 10, right: 10, top: 10, bottom: 0 }
+          padding: { ...ACTIVITY_CHART_PADDING }
         }
       },
       plugins: [speciesLayoutPlugin]
@@ -354,7 +374,7 @@ export function useBirdCharts() {
           if (target.style.cursor !== cursor) target.style.cursor = cursor
         },
         layout: {
-          padding: { left: 0, right: 10, top: 10, bottom: 0 }
+          padding: { ...ACTIVITY_CHART_PADDING }
         },
         plugins: {
           legend: { display: false },

@@ -47,6 +47,7 @@ from core.routes.observations import (
     invalidate_dashboard_cache,
     invalidate_gallery_cache,
 )
+from core.service_readiness import build_service_readiness, model_readiness
 from core.settings_monitor import SettingsStatusMonitor
 from core.settings_store import (
     load_user_settings,
@@ -183,9 +184,14 @@ def get_model_service_status():
     return jsonify(read_model_service_status()), 200
 
 
-def read_model_service_status():
+def read_model_service_status(timeout=3, quiet=False):
+    """Fetch the model server's /api/status, or an 'unavailable' stand-in.
+
+    ``quiet`` demotes the unreachable warning to debug for pollers that
+    expect the server to be down while it starts.
+    """
     try:
-        response = requests.get(BIRDNET_STATUS_ENDPOINT, timeout=3)
+        response = requests.get(BIRDNET_STATUS_ENDPOINT, timeout=timeout)
         response.raise_for_status()
         payload = response.json()
         filter_status = payload.get('location_filter') if isinstance(payload, dict) else None
@@ -195,9 +201,8 @@ def read_model_service_status():
             raise ValueError('Invalid model service status payload')
         return payload
     except (requests.exceptions.RequestException, ValueError) as exc:
-        logger.warning("Unable to read model service status", extra={
-            'error': str(exc),
-        })
+        log = logger.debug if quiet else logger.warning
+        log("Unable to read model service status", extra={'error': str(exc)})
         return _unavailable_model_status()
 
 
@@ -223,6 +228,23 @@ def health_check():
     couple liveness to transient SQLite locks. Must stay unauthenticated.
     """
     return jsonify({'status': 'ok'}), 200
+
+
+@api.route('/api/system/readiness', methods=['GET'])
+def get_service_readiness():
+    """Unauthenticated readiness probe polled by the frontend before it reloads
+    after a restart or update. Public like /api/health: a visitor on the update
+    overlay may be signed out, and the payload is coarse per-service states
+    only (see core.service_readiness).
+    """
+    # Short timeout: this is polled exactly while the model server may be
+    # down, and a removed container can black-hole the connect.
+    model_service = read_model_service_status(timeout=1, quiet=True)
+    reachable = model_service.get('status') != 'unavailable'
+    startup_failed = (not reachable
+                      and read_startup_failure(MODEL_STARTUP_STATUS_PATH) is not None)
+    return jsonify(build_service_readiness(
+        model_readiness(reachable, startup_failed), _recorder_status)), 200
 
 
 # Global SocketIO instance to be used by other modules
@@ -283,6 +305,13 @@ def create_app(async_mode='threading'):
         cleanup_migration_temp_dir()
     except Exception as e:
         logger.warning("Startup migration temp cleanup failed", extra={'error': str(e)})
+
+    from core.export_jobs import cleanup_export_dir
+
+    try:
+        cleanup_export_dir()
+    except Exception as e:
+        logger.warning("Startup export cleanup failed", extra={'error': str(e)})
 
     import core.routes  # noqa: F401
 

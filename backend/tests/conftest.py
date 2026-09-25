@@ -53,6 +53,15 @@ def reset_imports():
     the code under test actually holds.
     """
     yield
+    # The next test re-imports core.*, which builds fresh executors; shut
+    # down this generation's native workers first, or every test leaks an
+    # idle thread — hundreds per run, enough to exhaust docker-test.sh's
+    # address-space cap ("can't start new thread", failed mmaps).
+    for module_name, attr in (('core.api_infra', 'db_executor'),
+                              ('core.export_jobs', '_writer_lane')):
+        executor = getattr(sys.modules.get(module_name), attr, None)
+        if hasattr(executor, 'shutdown'):
+            executor.shutdown(wait=False)
     # Clean up any cached imports
     modules_to_remove = [m for m in sys.modules if m.startswith('core.') or m.startswith('config.') or m.startswith('model_service.')]
     for module in modules_to_remove:

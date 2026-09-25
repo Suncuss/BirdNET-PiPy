@@ -4,6 +4,7 @@ import { ref } from 'vue'
 import Charts from '@/views/Charts.vue'
 import { useFetchBirdData } from '@/composables/useFetchBirdData'
 import { deferred } from '../helpers/deferred'
+import { stubViewportTier } from '../helpers/viewportTier'
 
 vi.mock('@/composables/useFetchBirdData')
 
@@ -80,6 +81,7 @@ describe('Charts', () => {
     vi.clearAllTimers()
     vi.useRealTimers()
     vi.restoreAllMocks()
+    vi.unstubAllGlobals()
   })
 
   it('initializes with today as selected date', async () => {
@@ -317,6 +319,29 @@ describe('Charts', () => {
       expect(wrapper.text()).not.toContain('No detection data available')
     })
 
+    it('destroys its charts when the page is left', async () => {
+      const state = mockChartsState()
+      state.detailedBirdActivityData.value = [
+        { species: 'Blue Jay', hourlyActivity: [3, ...Array(23).fill(0)] }
+      ]
+      state.fetchTrendsData.mockResolvedValue({ labels: ['2026-01-01', '2026-01-02'], data: [3, 5] })
+      useFetchBirdData.mockReturnValue(state)
+
+      const wrapper = mountCharts()
+      await flushPromises()
+      expect(wrapper.findAll('canvas')).toHaveLength(3) // bars, heatmap, trends
+
+      // Must happen while the canvas refs are still set (onBeforeUnmount): by
+      // onUnmounted Vue has cleared them and the instances would be left
+      // registered with Chart.js.
+      const live = { destroy: vi.fn() }
+      ChartCtor.getChart.mockImplementation((canvas) => (canvas ? live : undefined))
+      wrapper.unmount()
+      ChartCtor.getChart.mockReset()
+
+      expect(live.destroy).toHaveBeenCalledTimes(3)
+    })
+
     it('draws the trends chart on initial load (canvas must be in DOM before createTrendsChart runs)', async () => {
       const state = mockChartsState()
       state.fetchTrendsData = vi.fn().mockResolvedValue({
@@ -355,6 +380,95 @@ describe('Charts', () => {
 
       expect(wrapper.text()).not.toContain('Failed to load detection trends')
       expect(wrapper.text()).not.toContain('No detection data available')
+    })
+  })
+
+  describe('species limit follows the viewport tier', () => {
+    const speciesRows = (n) => Array.from({ length: n }, (_, i) => ({
+      species: `Species ${i}`,
+      hourlyActivity: [n - i, ...Array(23).fill(0)]
+    }))
+
+    const mountWithSpecies = async (n) => {
+      const state = mockChartsState()
+      state.detailedBirdActivityData.value = speciesRows(n)
+      useFetchBirdData.mockReturnValue(state)
+      const wrapper = mountCharts()
+      await flushPromises()
+      return wrapper
+    }
+
+    const limitLabels = (wrapper) =>
+      wrapper.findAll('button').map(b => b.text()).filter(t => /^(\d+|All)$/.test(t))
+    const regionRows = (wrapper) =>
+      wrapper.find('.activity-chart-region').attributes('style')
+
+    it('offers 10/20/30/All and opens on 10 on laptop-sized viewports', async () => {
+      stubViewportTier(false)
+      const wrapper = await mountWithSpecies(40)
+
+      expect(limitLabels(wrapper)).toEqual(['10', '20', '30', 'All'])
+      expect(regionRows(wrapper)).toContain('--rows: 10')
+    })
+
+    it('offers 15/30/All and opens on 15 on tall desktop viewports, like the Dashboard', async () => {
+      stubViewportTier(true)
+      const wrapper = await mountWithSpecies(40)
+
+      expect(limitLabels(wrapper)).toEqual(['15', '30', 'All'])
+      expect(regionRows(wrapper)).toContain('--rows: 15')
+    })
+
+    it('moves to the new default when the tier flips away from the chosen limit', async () => {
+      const mql = stubViewportTier(false)
+      const wrapper = await mountWithSpecies(40)
+
+      mql.dispatch(true)
+      await flushPromises()
+      expect(limitLabels(wrapper)).toEqual(['15', '30', 'All'])
+      expect(regionRows(wrapper)).toContain('--rows: 15')
+
+      mql.dispatch(false)
+      await flushPromises()
+      expect(regionRows(wrapper)).toContain('--rows: 10')
+    })
+
+    it('keeps one chart region across the data and empty states, releasing the charts', async () => {
+      stubViewportTier(false)
+      const state = mockChartsState()
+      state.detailedBirdActivityData.value = speciesRows(20)
+      useFetchBirdData.mockReturnValue(state)
+      const wrapper = mountCharts()
+      await flushPromises()
+
+      const region = wrapper.find('.activity-chart-region').element
+      expect(wrapper.findAll('.activity-chart-region canvas')).toHaveLength(2)
+
+      // A day with no detections: the same region element stays (so its
+      // height eases rather than snapping) and shows the placeholder, while
+      // the chart pair it replaced releases its Chart.js instances.
+      const live = { destroy: vi.fn() }
+      ChartCtor.getChart.mockImplementation((canvas) => (canvas ? live : undefined))
+      state.detailedBirdActivityData.value = []
+      await flushPromises()
+      ChartCtor.getChart.mockReset()
+
+      expect(wrapper.find('.activity-chart-region').element).toBe(region)
+      expect(wrapper.find('.activity-chart-region').text()).toContain('No bird activity recorded')
+      expect(live.destroy).toHaveBeenCalledTimes(2)
+    })
+
+    it('keeps a limit both tiers offer when the tier flips', async () => {
+      const mql = stubViewportTier(false)
+      const wrapper = await mountWithSpecies(40)
+
+      await wrapper.findAll('button').find(b => b.text() === '30').trigger('click')
+      await flushPromises()
+      expect(regionRows(wrapper)).toContain('--rows: 30')
+
+      mql.dispatch(true)
+      await flushPromises()
+      expect(regionRows(wrapper)).toContain('--rows: 30')
     })
   })
 })

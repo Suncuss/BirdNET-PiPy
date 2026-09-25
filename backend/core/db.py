@@ -20,7 +20,12 @@ import core.db_species as db_species
 import core.maintenance_lease as maintenance_lease
 import core.media_ownership as media_ownership
 from config.settings import DATABASE_PATH
-from core.db_schema import TIMESTAMP_FORMAT, ensure_schema
+from core.db_schema import (
+    TIMESTAMP_FORMAT,
+    ensure_schema,
+    keyset_after,
+    keyset_before,
+)
 from core.logging_config import get_logger
 from core.storage_manager import delete_detection_files
 from core.timezone_service import local_now
@@ -1562,8 +1567,8 @@ class DatabaseManager:
         keyset = ""
         params = []
         if after_id is not None:
-            keyset = "AND (timestamp > ? OR (timestamp = ? AND id > ?))"
-            params = [after_timestamp, after_timestamp, after_id]
+            clause, params = keyset_after(after_timestamp, after_id)
+            keyset = f"AND {clause}"
 
         query = f"""
         SELECT id, timestamp, media_bytes
@@ -1860,14 +1865,25 @@ class DatabaseManager:
         detections = self._normalize_detections(rows, include_filenames=True)
         return detections, total_count
 
+    def count_detections_for_export(self, start_date=None, end_date=None):
+        """Rows an export over this date range will contain — the progress
+        denominator. Close, not exact: rows inserted before the export's
+        first batch are included (later ones sort ahead of the keyset cursor
+        and are never walked), and rows deleted mid-export are not."""
+        where_clause, params = self._build_detection_filters(start_date, end_date)
+        with self.get_db_connection() as conn:
+            return conn.execute(_count_query(where_clause), params).fetchone()[0]
+
     def get_detections_for_export_batch(self, start_date=None, end_date=None,
                                          species=None, *, scientific_name=None,
                                          before_timestamp=None, before_id=None,
                                          limit):
-        """One batch of raw detection rows for the streaming CSV export.
+        """One batch of export rows, newest-first (timestamp DESC, id DESC).
 
-        Rows come back newest-first (timestamp DESC, id DESC) with ``extra``
-        kept as its raw JSON string. Pass the last row's timestamp and id as
+        Rows are sqlite3.Row in export CSV column order (core.export_jobs
+        CSV_HEADER), ``extra`` as its raw JSON string with NULL read as '{}',
+        so a batch goes straight into csv.writer.writerows — no per-row dict
+        on a million-row export. Pass the last row's timestamp and id as
         ``before_timestamp``/``before_id`` to fetch the next batch: unlike
         LIMIT/OFFSET batching, the keyset walk never skips or duplicates
         pre-existing rows when detections are inserted mid-export — new rows
@@ -1884,14 +1900,31 @@ class DatabaseManager:
             limit: Maximum rows per batch
 
         Returns:
-            list: Up to ``limit`` detection dicts; fewer signals the last batch
+            list: Up to ``limit`` rows; fewer signals the last batch
         """
+        # Every batch must be an index seek to the cursor, not a walk down to
+        # it (see keyset_before; guarded by
+        # test_export_batch_cost_independent_of_cursor_depth). One more
+        # planner trap here, verified on SQLite 3.46: with two upper bounds on
+        # timestamp the planner seeks on end_date, so once a cursor exists the
+        # end bound is written `+timestamp` — unary plus keeps it as a filter
+        # but hides it from index selection.
+        if (before_id is None) != (before_timestamp is None):
+            # (timestamp, id) < (NULL, ?) is NULL: a half cursor would
+            # return no rows and end the export early, looking complete.
+            raise ValueError("before_timestamp and before_id go together")
+        cursor_set = before_id is not None
         where_clause, params = self._build_detection_filters(
-            start_date, end_date, species, scientific_name=scientific_name,
+            start_date, None if cursor_set else end_date, species,
+            scientific_name=scientific_name,
         )
-        if before_id is not None:
-            where_clause += " AND (timestamp < ? OR (timestamp = ? AND id < ?))"
-            params += [before_timestamp, before_timestamp, before_id]
+        if cursor_set:
+            if end_date:
+                where_clause += " AND +timestamp <= ?"
+                params.append(f"{end_date}T23:59:59")
+            clause, cursor_params = keyset_before(before_timestamp, before_id)
+            where_clause += f" AND {clause}"
+            params += cursor_params
 
         query = f"""
         SELECT
@@ -1907,9 +1940,8 @@ class DatabaseManager:
             sensitivity,
             overlap,
             week,
-            extra,
-            audio_source,
-            media_bytes
+            COALESCE(extra, '{{}}') AS extra,
+            audio_source
         FROM detections
         WHERE {where_clause}
         ORDER BY timestamp DESC, id DESC
@@ -1919,7 +1951,7 @@ class DatabaseManager:
         with self.get_db_connection() as conn:
             cur = conn.cursor()
             cur.execute(query, params + [limit])
-            return [dict(row) for row in cur.fetchall()]
+            return cur.fetchall()
 
     def get_detection_by_id(self, detection_id):
         """Get a single detection by ID.

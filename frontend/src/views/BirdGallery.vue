@@ -1,5 +1,5 @@
 <template>
-  <div class="bird-gallery px-4 sm:px-6 lg:px-8">
+  <div class="px-4 sm:px-6 lg:px-8">
     <div class="mb-4 sm:mb-6 overflow-x-auto">
       <nav class="flex space-x-2 sm:space-x-4 border-b whitespace-nowrap">
         <button
@@ -35,9 +35,8 @@
         <span class="ml-3 text-gray-600">Loading...</span>
       </div>
 
-      <!-- Conditional check for displayedBirds -->
       <div
-        v-else-if="displayedBirds.length === 0"
+        v-else-if="birds.length === 0"
         class="text-center text-gray-500 p-4"
       >
         No birds to display yet.
@@ -49,8 +48,8 @@
         class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6"
       >
         <div
-          v-for="bird in displayedBirds"
-          :key="bird.id"
+          v-for="bird in birds"
+          :key="bird.commonName"
           :ref="el => registerCard(el, bird)"
           class="bird-card bg-white rounded-lg shadow-md overflow-hidden transition-all duration-300 hover:shadow-lg"
         >
@@ -60,27 +59,34 @@
             class="group"
           >
             <div class="relative aspect-square overflow-hidden bg-gray-200">
+              <!-- The illustration holds the card (with a sheen while its
+                   photo loads); the photo mounts over it on reveal and
+                   fades in. -->
               <img
-                :src="bird.imageUrl"
-                :alt="bird.name"
-                class="absolute inset-0 w-full h-full object-cover transition-[opacity,transform] duration-200 group-hover:scale-110"
-                :class="{ 'opacity-0': !bird.focalPointReady, 'opacity-100': bird.focalPointReady }"
-                :style="{ objectPosition: bird.focalPoint || '50% 50%' }"
-                loading="lazy"
-                @error="onImageError(bird)"
+                :src="defaultImageUrl"
+                :alt="bird.imageState === 'shown' ? '' : bird.name"
+                class="absolute inset-0 w-full h-full object-cover transition-transform duration-200 group-hover:scale-110"
               >
               <div
-                class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300"
+                v-if="bird.imageState === 'loading'"
+                class="gallery-sheen absolute inset-0"
+              />
+              <img
+                v-if="bird.imageState === 'shown'"
+                :key="bird.imageUrl"
+                :src="bird.imageUrl"
+                :alt="bird.name"
+                class="gallery-reveal absolute inset-0 w-full h-full object-cover transition-transform duration-200 group-hover:scale-110"
+                :style="{ objectPosition: bird.focalPoint || '50% 50%' }"
+                @error="onImageError(bird)"
               >
-                <font-awesome-icon
-                  icon="fas fa-info-circle"
-                  class="text-white text-2xl"
-                />
-              </div>
             </div>
           </router-link>
 
-          <div class="p-3 sm:p-4 bg-gray-100 text-xs text-gray-600">
+          <div
+            class="p-3 sm:p-4 bg-gray-100 text-xs text-gray-600 transition-opacity duration-500"
+            :class="bird.imageState === 'shown' ? 'opacity-100' : 'opacity-0'"
+          >
             <template v-if="bird.hasCustomImage">
               <p>Custom image</p>
               <p>Uploaded by you</p>
@@ -127,11 +133,11 @@
 </template>
 
 <script>
-import { ref, computed, onMounted, onActivated, onDeactivated, onUnmounted } from 'vue'
+import { ref, onMounted, onActivated, onDeactivated, onUnmounted } from 'vue'
 import api from '@/services/api'
 import { getBirdImageUrl, getDefaultBirdImageUrl } from '@/services/media'
 import { useSmartCrop } from '@/composables/useSmartCrop'
-import { swapImageWithFade } from '@/utils/imageFade'
+import { createRevealScheduler } from '@/utils/revealScheduler'
 import AppButton from '@/components/AppButton.vue'
 import ScrollToTopButton from '@/components/ScrollToTopButton.vue'
 import Spinner from '@/components/Spinner.vue'
@@ -144,6 +150,7 @@ export default {
     Spinner
   },
   setup() {
+    const defaultImageUrl = getDefaultBirdImageUrl()
     const selectedTab = ref('recent')
     const birds = ref([])
     // True only while an uncached tab's query is in flight — see selectTab.
@@ -170,32 +177,41 @@ export default {
     // Card images load lazily, gated by an IntersectionObserver so only cards
     // in (or near) the viewport cost a Wikimedia lookup — Species Catalog can
     // hold 200+ cards but only ~12 are ever on screen. Intersecting cards are
-    // pushed onto a serial queue rather than loaded in parallel: Wikimedia
-    // rate-limits aggressively on burst, and the initial viewport alone can
-    // intersect a dozen cards at once.
+    // queued and loaded IMAGE_CONCURRENCY at a time. This is also the only
+    // throttle on thumbnail downloads, which the browser fetches straight from
+    // Wikimedia's image CDN; the metadata lookups behind them are additionally
+    // capped by the backend across every viewer.
+    const IMAGE_CONCURRENCY = 4
     const cardBirds = new WeakMap()  // card element -> bird (no ad-hoc DOM props)
     const loadQueue = []
-    let queueRunning = false
+    let activeLoads = 0
+
+    // Each card's image lifecycle, in bird.imageState:
+    //   'idle'    on the illustration, not yet queued
+    //   'loading' queued, loading, or waiting for its turn to reveal
+    //             (bird.loadVersion records which tab visit queued it)
+    //   'shown'   photo revealed
+    //   'none'    nothing to show (no photo, failed lookup, or broken image)
+    // registerCard re-fires on every render, so only this decides whether a
+    // card still needs loading. A 'loading' card from an abandoned visit
+    // (stale loadVersion) is picked up again when its tab is revisited.
+    const needsLoad = (bird) => bird.imageState === 'idle' ||
+      (bird.imageState === 'loading' && bird.loadVersion !== imageLoadVersion)
     let imageObserver = null
     const ioSupported = typeof IntersectionObserver !== 'undefined'
 
-    // TODO, fix bird id for non-unique birds
-
     const fetchUniqueBirds = async () => {
       const today = new Date().toLocaleDateString('en-CA');
-      console.log(today);
       try {
         const { data } = await api.get('/sightings/unique', {
           params: { date: today }
         })
         return data.map(bird => ({
-          id: bird.id,
           commonName: bird.common_name,
           name: bird.display_common_name || bird.common_name,
           scientificName: bird.scientific_name,
           lastDetected: new Date(bird.timestamp),
-          imageUrl: getDefaultBirdImageUrl(),
-          focalPointReady: true,  // Show placeholder immediately
+          imageState: 'idle',
         }))
       } catch (error) {
         console.error('Error fetching unique birds:', error)
@@ -209,13 +225,11 @@ export default {
           params: { type }
         })
         return data.map(bird => ({
-          id: bird.common_name,
           commonName: bird.common_name,
           name: bird.display_common_name || bird.common_name,
           scientificName: bird.scientific_name,
           lastDetected: new Date(bird.timestamp),
-          imageUrl: getDefaultBirdImageUrl(),
-          focalPointReady: true,  // Show placeholder immediately
+          imageState: 'idle',
         }))
       } catch (error) {
         console.error(`Error fetching ${type} birds:`, error)
@@ -228,13 +242,11 @@ export default {
         const { data: speciesList } = await api.get('/species/all')
         // /species/all returns last_detected per species — no per-species fetch.
         return speciesList.map(species => ({
-          id: species.common_name,
           commonName: species.common_name,
           name: species.display_common_name || species.common_name,
           scientificName: species.scientific_name,
           lastDetected: species.last_detected ? new Date(species.last_detected) : null,
-          imageUrl: getDefaultBirdImageUrl(),
-          focalPointReady: true,  // Show placeholder immediately
+          imageState: 'idle',
         }))
       } catch (error) {
         console.error('Error fetching all species:', error)
@@ -242,37 +254,29 @@ export default {
       }
     }
 
-    // Apply resolved image fields to a card with a brief fade transition.
+    // Show resolved image fields on a card. The photo <img> mounts (keyed by
+    // URL) over the illustration and its CSS animation fades it in.
     const applyResolvedImage = (bird, fields) => {
-      return swapImageWithFade(
-        (visible) => { bird.focalPointReady = visible },
-        () => {
-          bird.imageUrl = fields.imageUrl
-          // Clear any prior error here — atomically with the new imageUrl — so
-          // the card never sits in (imageError=false, imageUrl=placeholder),
-          // which would let registerCard re-observe and reload it out from
-          // under this apply.
-          bird.imageError = false
-          bird.hasCustomImage = Boolean(fields.hasCustomImage)
-          bird.focalPoint = fields.focalPoint
-          if (!bird.hasCustomImage) {
-            bird.authorName = fields.authorName
-            bird.authorUrl = fields.authorUrl
-            bird.licenseType = fields.licenseType
-          }
-        }
-      )
+      bird.imageUrl = fields.imageUrl
+      bird.imageState = 'shown'
+      bird.hasCustomImage = Boolean(fields.hasCustomImage)
+      bird.focalPoint = fields.focalPoint
+      if (!bird.hasCustomImage) {
+        bird.authorName = fields.authorName
+        bird.authorUrl = fields.authorUrl
+        bird.licenseType = fields.licenseType
+      }
     }
 
-    // Load one card's image. Skips cards already resolved on an earlier visit,
-    // so re-running this for a cached tab is cheap; bails if `version` goes
-    // stale across an await so a slow lookup never mutates a tab the user left.
-    const loadBirdImage = async (bird, version) => {
-      if (bird.imageError) return  // errored card is terminal — don't refetch
-      if (bird.imageUrl !== getDefaultBirdImageUrl()) return
+    // Resolve one card's image fields (lookup + focal point, which also
+    // preloads the thumbnail) without showing it — the reveal scheduler
+    // decides when. Returns null for nothing to show.
+    const resolveBirdImage = async (bird, version) => {
       try {
         const imageData = await fetchWikimediaImage(bird.commonName)
-        if (version !== imageLoadVersion || !imageData) return
+        // Skip smart-crop for a tab the user already left; its result would
+        // be dropped anyway.
+        if (!imageData || version !== imageLoadVersion) return null
 
         let fields
         if (imageData.hasCustomImage) {
@@ -282,39 +286,53 @@ export default {
             focalPoint: '50% 50%',
           }
         } else {
-          // Display the 400px CDN thumbnail, not the multi-MB original: the
+          // Display the CDN thumbnail (500px), not the multi-MB original: the
           // backend already returns thumbUrl, and full-size upload.wikimedia.org
           // URLs are the ones most prone to 429s (see investigation doc).
           const displayUrl = imageData.thumbUrl || imageData.imageUrl
           // Calculate the focal point first — this also preloads the image
           const focalPoint = await calculateFocalPoint(displayUrl)
-          if (version !== imageLoadVersion) return
           fields = { ...imageData, imageUrl: displayUrl, focalPoint }
         }
-        await applyResolvedImage(bird, fields)
+        return fields
       } catch (error) {
         console.error(`Error loading image for ${bird.commonName}:`, error)
+        return null
       }
     }
 
-    // Drain the load queue one card at a time. Serial by design (see cardBirds
-    // comment); the version guard drops cards queued for a tab the user left.
-    const drainQueue = async () => {
-      queueRunning = true
-      try {
-        while (loadQueue.length) {
-          const { bird, version } = loadQueue.shift()
-          if (version !== imageLoadVersion) continue
-          await loadBirdImage(bird, version)
-        }
-      } finally {
-        queueRunning = false
+    // Loads finish in any order; the scheduler reveals them in reading order
+    // so the grid fills in as one wave instead of flickering at random.
+    const revealScheduler = createRevealScheduler({
+      reveal: (bird, fields) => applyResolvedImage(bird, fields)
+    })
+
+    // Start queued loads up to IMAGE_CONCURRENCY. The queue and scheduler are
+    // reset on every version bump, so only a load's result can go stale.
+    const pumpLoads = () => {
+      while (activeLoads < IMAGE_CONCURRENCY && loadQueue.length) {
+        const { bird, version } = loadQueue.shift()
+        const ticket = revealScheduler.add(bird)
+        activeLoads++
+        resolveBirdImage(bird, version)
+          .then(fields => {
+            if (version !== imageLoadVersion) return
+            if (!fields) bird.imageState = 'none'
+            revealScheduler.settle(ticket, fields)
+          })
+          .finally(() => {
+            activeLoads--
+            pumpLoads()
+          })
       }
     }
 
     const enqueueLoad = (bird, version) => {
+      if (version !== imageLoadVersion || !needsLoad(bird)) return
+      bird.imageState = 'loading'
+      bird.loadVersion = version
       loadQueue.push({ bird, version })
-      if (!queueRunning) drainQueue()
+      pumpLoads()
     }
 
     const teardownImageObserver = () => {
@@ -324,16 +342,23 @@ export default {
       }
     }
 
-    // Drop pending image work. Bumping the version makes any in-flight
-    // loadBirdImage bail at its next version check; clearing the queue drops
-    // anything not yet started. Used when the view goes off-screen/unmounts.
+    // Drop pending image work. Bumping the version makes in-flight loads
+    // discard their results; clearing the queue drops anything not yet
+    // started. Used when the view goes off-screen/unmounts.
     const cancelPendingImageLoads = () => {
       imageLoadVersion++
+      resetLoadQueue()
+    }
+
+    // Drop queued cards and unrevealed results. In-flight loads keep their
+    // slot until they finish, then see the stale version and reveal nothing.
+    const resetLoadQueue = () => {
       loadQueue.length = 0
+      revealScheduler.reset()
     }
 
     // (Re)create the observer for the current tab. `version` is captured so a
-    // late intersection from a previous tab is dropped by drainQueue's guard.
+    // late intersection from a previous tab is dropped by enqueueLoad's guard.
     // Use the callback's own `observer` arg (not the outer `imageObserver`,
     // which may already be null or a newer observer when a late callback fires).
     const setupImageObserver = (version) => {
@@ -349,15 +374,12 @@ export default {
       }, { rootMargin: '300px 0px' })  // start loading ~one card-row ahead
     }
 
-    // Function ref on each card. Observes cards still on the placeholder;
-    // resolved cards (cached from an earlier visit) are skipped. With no
-    // observer (fallback env) the card loads immediately, ungated by viewport.
+    // Function ref on each card. Observes cards that still need an image;
+    // settled cards (including ones cached from an earlier visit) are skipped.
+    // With no observer (fallback env) the card loads immediately, ungated by
+    // viewport.
     const registerCard = (el, bird) => {
-      if (!el || !bird) return
-      // An errored card resets imageUrl to the placeholder; without this guard
-      // the function-ref re-fire would re-observe it and reload the bad image.
-      if (bird.imageError) return
-      if (bird.imageUrl !== getDefaultBirdImageUrl()) return
+      if (!el || !bird || !needsLoad(bird)) return
       cardBirds.set(el, bird)
       if (imageObserver) {
         imageObserver.observe(el)
@@ -374,13 +396,9 @@ export default {
 
     // <img @error>: a thumbnail/original that fails to load (404, network,
     // upstream 429 on the image CDN) must not strand the card on a broken
-    // image. Fall back to the placeholder once; never retry the failed URL.
+    // image. Unmount it back to the illustration; never retry the failed URL.
     const onImageError = (bird) => {
-      if (bird.imageError) return  // also guards the default image itself failing
-      bird.imageError = true
-      bird.imageUrl = getDefaultBirdImageUrl()
-      bird.focalPoint = '50% 50%'
-      bird.focalPointReady = true
+      bird.imageState = 'none'
     }
 
     const loadTab = (tab) => {
@@ -394,6 +412,8 @@ export default {
       // New version stamp: in-flight work from the previous tab compares
       // against it, detects it is stale, and stops overwriting this tab.
       const version = ++imageLoadVersion
+      // Stale results would hold the head of the new tab's reveal order.
+      resetLoadQueue()
       // Stop the previous tab's observer NOW, and leave it null across the
       // await below. The selectedTab change above triggers a re-render of the
       // *outgoing* list; with no observer in place, registerCard ignores those
@@ -449,7 +469,7 @@ export default {
       const focalPoint = detail.hasCustomImage
         ? '50% 50%'
         : await calculateFocalPoint(displayUrl)
-      await applyResolvedImage(bird, { ...detail, imageUrl: displayUrl, focalPoint })
+      applyResolvedImage(bird, { ...detail, imageUrl: displayUrl, focalPoint })
     }
 
     const onBirdImageChanged = (event) => {
@@ -481,10 +501,6 @@ export default {
       if (hasBeenDeactivated) selectTab(selectedTab.value)
     })
 
-    const displayedBirds = computed(() => {
-      return birds.value
-    })
-
     const formatDate = (date) => {
       return date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
     }
@@ -507,12 +523,54 @@ export default {
       selectedTab,
       isLoading,
       tabs,
-      displayedBirds,
+      birds,
       formatDate,
       selectTab,
       registerCard,
       onImageError,
+      defaultImageUrl,
     }
   }
 }
 </script>
+
+<style scoped>
+/* The photo mounts over the illustration and fades in. `backwards` holds it
+   transparent until the animation starts, then releases the element so the
+   hover scale transform still applies. */
+.gallery-reveal {
+  animation: gallery-reveal 500ms cubic-bezier(0.2, 0, 0, 1) backwards;
+}
+
+@keyframes gallery-reveal {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Loading sheen over the illustration while the card's photo is on its way,
+   so unloaded cards read as "loading", not as finished cards. */
+.gallery-sheen {
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.gallery-sheen::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 30%, rgb(255 255 255 / 0.35) 50%, transparent 70%);
+  transform: translateX(-100%);
+  animation: gallery-sheen 1.8s ease-in-out infinite;
+}
+
+@keyframes gallery-sheen {
+  to { transform: translateX(100%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gallery-reveal,
+  .gallery-sheen::after {
+    animation: none;
+  }
+}
+</style>

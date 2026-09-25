@@ -19,7 +19,7 @@ describe('updateStage', () => {
       json: () => Promise.resolve(body)
     })
 
-    it('returns message and timestamp from a valid stage file', async () => {
+    it('returns stage, message and timestamp from a valid stage file', async () => {
       fetchMock.mockResolvedValue(response({
         stage: 'pull',
         message: 'Downloading updated images (1 of 3)',
@@ -30,14 +30,16 @@ describe('updateStage', () => {
 
       expect(fetchMock).toHaveBeenCalledWith(UPDATE_PROGRESS_URL, { cache: 'no-store' })
       expect(stage).toEqual({
+        stage: 'pull',
         message: 'Downloading updated images (1 of 3)',
         timestamp: '2026-07-31T12:00:00Z'
       })
     })
 
-    it('returns a null timestamp when the file has none', async () => {
+    it('returns a null stage and timestamp when the file has none', async () => {
       fetchMock.mockResolvedValue(response({ message: 'Building images locally' }))
       expect(await fetchUpdateStage()).toEqual({
+        stage: null,
         message: 'Building images locally',
         timestamp: null
       })

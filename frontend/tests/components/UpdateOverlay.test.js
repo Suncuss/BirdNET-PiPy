@@ -51,4 +51,14 @@ describe('UpdateOverlay', () => {
     expect(wrapper.text()).toContain('Back online — reloading…')
     expect(wrapper.text()).not.toContain('Restarting services with the new version')
   })
+
+  it('says what is still starting while it waits to reload', async () => {
+    overlay.visible.value = true
+    overlay.reloading.value = true
+    overlay.readinessMessage.value = 'Loading the detection model'
+
+    const wrapper = mount(UpdateOverlay)
+
+    expect(wrapper.text()).toContain('Back online — loading the detection model…')
+  })
 })

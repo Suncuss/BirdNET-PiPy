@@ -23,6 +23,23 @@ logger = get_logger(__name__)
 TIMESTAMP_FORMAT = '%Y-%m-%dT%H:%M:%S'
 
 
+# Keyset cursors for batched walks over detections in (timestamp, id) order.
+# Always spell the cursor as a row value: the expanded form
+# `timestamp > ? OR (timestamp = ? AND id > ?)` doesn't seek with bound
+# params (verified on SQLite 3.46), so every batch scans the index from the
+# start of the walk to the cursor and the whole walk goes O(n²) — 7 minutes
+# vs 6s for the media frontier on a 1.16M-row station.
+
+def keyset_after(timestamp, row_id):
+    """(sql, params) for rows after the cursor in ascending order."""
+    return "(timestamp, id) > (?, ?)", [timestamp, row_id]
+
+
+def keyset_before(timestamp, row_id):
+    """(sql, params) for rows before the cursor in descending order."""
+    return "(timestamp, id) < (?, ?)", [timestamp, row_id]
+
+
 DATABASE_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS detections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
