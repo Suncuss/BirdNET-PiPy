@@ -20,14 +20,24 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install numpy==1.26.4 && \
     pip install -r requirements.txt
 
-# Prune bundled models out of the per-release source layer. They ship in the
-# dedicated COPY layers below instead, so a routine source change pushes a few
-# megabytes, not the ~55MB of model blobs. The prune must be explicit: BuildKit
-# only dedupes files identical to lower layers on some builders (CI yes,
-# local dockerd no), so leaving them in COPY . . re-ships them from local builds.
-FROM python:3.11-slim@sha256:94c50be2dc994b873b55bc123e95e6dbade08095b3dfd790f51c34de3f08cbb7 AS source
-COPY . /src
-RUN rm -rf /src/model_service/models
+# Release gate: validate the bundled V3.1 model and geomodel against their
+# pinned manifests (sha256, shapes) on every build. This stage is not shipped;
+# the runtime stage copies its marker file, which is what makes BuildKit run
+# it. It only re-runs when a validator or a bundled asset changes.
+FROM python:3.11-slim@sha256:94c50be2dc994b873b55bc123e95e6dbade08095b3dfd790f51c34de3f08cbb7 AS asset-check
+COPY --from=python-deps /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+WORKDIR /check
+COPY model_service/label_utils.py \
+     model_service/model_assets.py \
+     model_service/geomodel_assets.py \
+     model_service/birdnet_v3_assets.py \
+     ./model_service/
+COPY model_service/models/geomodel ./model_service/models/geomodel
+COPY model_service/models/v3.1 ./model_service/models/v3.1
+RUN python -m model_service.geomodel_assets && \
+    python -m model_service.birdnet_v3_assets && \
+    touch /assets-validated
 
 # Use the same pinned multi-platform base for the shipped runtime image.
 FROM python:3.11-slim@sha256:94c50be2dc994b873b55bc123e95e6dbade08095b3dfd790f51c34de3f08cbb7
@@ -53,37 +63,16 @@ WORKDIR /app
 COPY --from=python-deps /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Create the runtime user before the source copies: COPY --chown bakes
-# ownership into each layer, where a trailing chown -R would duplicate all of
-# /app into an extra layer shipped with every update. Non-recursive chown:
-# WORKDIR created /app root-owned; the copies below own their contents.
+# Runtime user. /app is the bind-mount point; WORKDIR created it root-owned.
 RUN groupadd -g ${GID} birdnet && \
     useradd -u ${UID} -g birdnet -m birdnet && \
     chown ${UID}:${GID} /app
 
-# Keep release validation cached across unrelated source edits. Only validator,
-# parser, or bundled-asset changes invalidate these memory-intensive gates.
-COPY --chown=${UID}:${GID} model_service/label_utils.py \
-     model_service/model_assets.py \
-     model_service/geomodel_assets.py \
-     model_service/birdnet_v3_assets.py \
-     ./model_service/
-COPY --chown=${UID}:${GID} model_service/models/geomodel ./model_service/models/geomodel
-COPY --chown=${UID}:${GID} model_service/models/v3.1 ./model_service/models/v3.1
-RUN python -m model_service.geomodel_assets
-RUN python -m model_service.birdnet_v3_assets
-# Compose bind-mounts the checkout over /app, so runtime loaders repeat the
-# authoritative checks against the bytes each service actually reads.
-
-# Remaining bundled model data in its own rarely-invalidated layers, after the
-# gates so a species-table refresh does not re-run the memory-intensive checks.
-COPY --chown=${UID}:${GID} model_service/models/v2.4 ./model_service/models/v2.4
-COPY --chown=${UID}:${GID} model_service/models/species_table.csv \
-     model_service/models/ebird_codes.json \
-     ./model_service/models/
-
-# Source code last: the only layer that changes on a routine release.
-COPY --from=source --chown=${UID}:${GID} /src ./
+# The image carries no application code or models: compose bind-mounts the
+# backend checkout over /app for every service, and the runtime loaders
+# re-validate the bundled models they actually read. So the image changes only
+# when dependencies do, and a fresh install doesn't download the models twice.
+COPY --from=asset-check /assets-validated /opt/assets-validated
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh /usr/local/bin/
@@ -91,10 +80,5 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # Switch to non-root user
 USER birdnet
-
-# Set environment variables
-ENV BASE_DIR=/app
-ENV BIRDNET_SERVICE_PORT=5001
-ENV API_PORT=5002
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

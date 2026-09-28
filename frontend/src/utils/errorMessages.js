@@ -15,3 +15,28 @@ export function fetchErrorMessage(error) {
   const body = error?.response?.data
   return body?.code && body.error ? body.error : ERR_UNREACHABLE
 }
+
+// User-facing message for a recording that won't play: pass the element's
+// MediaError (from its 'error' event, or audio.error), and the reason play()
+// rejected when that is how it failed.
+export function playbackErrorMessage(mediaError, playRejection) {
+  if (playRejection?.name === 'NotAllowedError') {
+    return 'Your browser blocked playback. Try again.'
+  }
+  // MediaError codes (1=ABORTED, 2=NETWORK, 3=DECODE, 4=SRC_NOT_SUPPORTED),
+  // numeric so this does not depend on the MediaError global
+  switch (mediaError?.code) {
+    case 1:
+      return 'Playback of this recording was interrupted.'
+    case 2:
+      return 'This recording could not be loaded. Check your connection.'
+    case 3:
+      return 'This recording could not be decoded.'
+    case 4:
+      // Browsers also report a missing file this way (404, e.g. removed by
+      // storage cleanup) or an expired media link
+      return 'This recording is missing or can no longer be opened.'
+    default:
+      return 'This recording could not be played.'
+  }
+}

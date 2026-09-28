@@ -128,17 +128,6 @@ def get_wikimedia_image_candidates():
     return jsonify(payload)
 
 
-@api.route('/api/bird/<species_name>/wikimedia_choice', methods=['GET'])
-@require_scope('public:read')
-@log_api_request
-@handle_api_errors
-def get_wikimedia_choice(species_name):
-    sidecar = _load_choice_sidecar(species_name)
-    if sidecar is None:
-        return jsonify({'error': 'No saved choice', 'hasChoice': False}), 404
-    return jsonify(sidecar)
-
-
 @api.route('/api/bird/<species_name>/wikimedia_choice', methods=['PUT'])
 @log_api_request
 @require_auth

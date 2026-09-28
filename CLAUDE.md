@@ -71,7 +71,7 @@ docs/            # ARCHITECTURE, INSTALLATION, PRIVACY
 internal_docs/   # Planning notes (workflow, reviews, design docs) — gitignored, do not commit
 ```
 
-`AGENTS.md` is a symlink to this file.
+`AGENTS.md` is a local symlink to this file; it is gitignored, so a fresh clone won't have it.
 
 ## Development Notes
 

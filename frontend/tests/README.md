@@ -11,7 +11,6 @@ tests/
 │   ├── AddNotificationModal.test.js      # Notification modal (36 tests)
 │   ├── AlertBanner.test.js               # Alert banner component (11 tests)
 │   ├── AppDatePicker.test.js             # Date picker format/width/fluid (8 tests)
-│   ├── DetectionInfoModal.test.js        # Detection info modal (25 tests)
 │   ├── LoginModal.test.js                # Authentication modal (22 tests)
 │   ├── SetupWizard.test.js               # Setup wizard flow (17 tests)
 │   └── SpeciesFilterModal.test.js        # Species filter modal (3 tests)
@@ -36,10 +35,8 @@ tests/
     ├── BirdGallery.test.js               # Bird gallery page (8 tests)
     ├── Charts.test.js                    # Charts page (14 tests)
     ├── Dashboard.test.js                 # Dashboard page (21 tests)
-    ├── Detections.test.js                # Detections page (1 test)
     ├── LiveFeed.test.js                  # Live audio stream page (15 tests)
     ├── Settings.test.js                  # Settings page (58 tests)
-    ├── Spectrogram.test.js               # Spectrogram component (2 tests)
     └── Table.test.js                     # Detection table (17 tests)
 ```
 
@@ -128,7 +125,6 @@ Tests for reusable Vue components.
 | `AddNotificationModal.test.js` | 36 | Notification service picker, URL building, test and save |
 | `AlertBanner.test.js` | 11 | Alert display, dismiss, auto-hide |
 | `AppDatePicker.test.js` | 8 | Date format follows 12h/24h preference; width adapts; fluid mode |
-| `DetectionInfoModal.test.js` | 25 | Detection details display, audio playback, actions |
 | `LoginModal.test.js` | 22 | Login forms, setup flows, password validation, error handling |
 | `SetupWizard.test.js` | 17 | Location and audio source setup flow |
 | `SpeciesFilterModal.test.js` | 3 | Species filter selection |
@@ -168,10 +164,8 @@ Tests for page-level Vue components.
 | `BirdGallery.test.js` | 8 | Tab switching, image loading, empty states |
 | `Charts.test.js` | 14 | Date selection, data fetching, navigation |
 | `Dashboard.test.js` | 21 | Empty states, data formatting, error display |
-| `Detections.test.js` | 1 | Placeholder content |
 | `LiveFeed.test.js` | 15 | Stream config, audio controls, WebSocket listeners |
 | `Settings.test.js` | 58 | Settings loading, input validation, saving |
-| `Spectrogram.test.js` | 2 | Audio fetching, spectrogram generation |
 | `Table.test.js` | 17 | Detection table rendering, sorting, actions |
 
 ## Testing Patterns

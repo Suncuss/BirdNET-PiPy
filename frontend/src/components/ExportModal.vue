@@ -92,9 +92,9 @@
           <div class="flex gap-3">
             <button
               class="flex-1 py-2 text-sm text-gray-600 hover:bg-gray-100 border border-gray-200 rounded-lg transition-colors"
-              @click="requestDismiss"
+              @click="leaveOptions"
             >
-              Cancel
+              {{ exportJob.setAside.value ? 'Back' : 'Cancel' }}
             </button>
             <button
               :disabled="!canStart"
@@ -157,7 +157,7 @@
           <div class="flex gap-3">
             <button
               class="flex-1 py-2 text-sm text-gray-600 hover:bg-gray-100 border border-gray-200 rounded-lg transition-colors"
-              @click="exportJob.discard"
+              @click="exportJob.newExport"
             >
               New export
             </button>
@@ -284,6 +284,10 @@ const { requestDismiss } = useModalDismiss(
   () => true,
   () => emit('close')
 )
+
+// From "New export", Back returns to the ready export it kept.
+const leaveOptions = () =>
+  exportJob.setAside.value ? exportJob.backToSetAside() : requestDismiss()
 
 onMounted(async () => {
   await exportJob.load()

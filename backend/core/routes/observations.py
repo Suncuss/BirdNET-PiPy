@@ -24,7 +24,6 @@ from core.auth import get_request_tier, require_feature, require_scope
 from core.detection_presenter import (
     _localize_activity_items,
     _localize_activity_overview,
-    _localize_detection,
     _localize_detection_list,
     _localize_species_list,
     _localize_summary,
@@ -35,60 +34,6 @@ from core.settings_store import load_user_settings
 from core.timezone_service import local_now
 
 logger = get_logger(__name__)
-
-@api.route('/api/observations/latest', methods=['GET'])
-@require_scope('public:read')
-@log_api_request
-@handle_api_errors
-def get_latest_observation():
-    observation = _run_db(infra.db_manager.get_latest_detections, 1)
-    if observation:
-        settings = load_user_settings()
-        localized = _localize_detection(observation[0], settings=settings)
-        log_data_metrics('get_latest_observation', localized, {
-            'species': localized.get('common_name'),
-            'timestamp': localized.get('timestamp')
-        })
-        return jsonify(localized)
-    # Return 200 with null for empty database - frontend shows "No observations available yet."
-    return jsonify(None)
-
-@api.route('/api/observations/recent', methods=['GET'])
-@require_scope('public:read')
-@log_api_request
-@handle_api_errors
-def get_recent_observations():
-    unique = request.args.get('unique', 'false').lower() == 'true'
-    settings = load_user_settings()
-    observations = _localize_detection_list(
-        _run_db(infra.db_manager.get_latest_detections, 7, unique=unique),
-        settings=settings,
-    )
-    log_data_metrics('get_recent_observations', observations)
-    return jsonify(observations)
-
-@api.route('/api/observations/summary', methods=['GET'])
-@require_scope('public:read')
-@log_api_request
-@handle_api_errors
-def get_observation_summary():
-    now = local_now()
-    settings = load_user_settings()
-    stats = _run_db(
-        infra.db_manager.get_summary_stats_all_periods,
-        now.replace(hour=0, minute=0, second=0, microsecond=0),
-        now - timedelta(weeks=1),
-        now - timedelta(days=30),
-    )
-    summary = {
-        period: _localize_summary(stats[period], settings=settings)
-        for period in ('today', 'week', 'month', 'allTime')
-    }
-    log_data_metrics('get_observation_summary', summary, {
-        'today_count': summary.get('today', {}).get('totalObservations', 0),
-        'all_time_species': summary.get('allTime', {}).get('uniqueSpecies', 0)
-    })
-    return jsonify(summary)
 
 @api.route('/api/activity/hourly', methods=['GET'])
 @log_api_request

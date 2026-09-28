@@ -2,19 +2,12 @@
 /data/
 backend/data/
 
-
-# Ignore setup directory (contains requirement.txt)
-/setup/
-
 # Test artifacts
 .pytest_cache/
 htmlcov/
 .coverage
 *.cover
 .hypothesis/
-backend/.pytest_cache/
-backend/htmlcov/
-backend/.coverage
 frontend/coverage/
 
 # Ignore Node.js dependencies (and any stray cache dir, e.g. a test runner

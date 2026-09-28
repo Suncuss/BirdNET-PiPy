@@ -382,7 +382,8 @@ def scan_audio_files(db_manager, source_folder=None):
 
 
 def check_disk_space(required_bytes):
-    """Check if import would push disk usage past the storage cleanup trigger.
+    """Check if import would push disk usage past the storage cleanup trigger
+    (with auto-cleanup off, into the disk's free-space reserve).
 
     Args:
         required_bytes: Number of bytes that will be written

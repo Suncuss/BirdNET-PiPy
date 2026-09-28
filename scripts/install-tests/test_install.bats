@@ -44,11 +44,6 @@ setup() {
     [[ "$output" == *"--no-reboot"* ]]
 }
 
-@test "unit: --help exits with code 0" {
-    run bash "$PROJECT_DIR/install.sh" --help
-    [ "$status" -eq 0 ]
-}
-
 @test "unit: unknown option exits with error" {
     run bash "$PROJECT_DIR/install.sh" --unknown-option
     [ "$status" -eq 1 ]
@@ -532,6 +527,79 @@ print('override: frontend publishes 8080')
     rm -rf "$temp_dir"
 }
 
+@test "unit: uninstall --remove-project keeps data/ without --remove-data" {
+    local temp_dir project
+    temp_dir=$(mktemp -d)
+    project="$temp_dir/BirdNET-PiPy"
+    create_fake_project "$project"
+
+    run run_uninstall_function uninstall_removal_steps "$project" false <<< "DELETE"
+    [ "$status" -eq 0 ]
+    assert_file_exists "$project/data/db/birds.db"
+    [ ! -e "$project/install.sh" ]
+    [ ! -e "$project/backend" ]
+    [ ! -e "$project/.git" ]
+    [[ "$output" == *"User data preserved at: $project/data"* ]]
+
+    rm -rf "$temp_dir"
+}
+
+@test "unit: uninstall --full keeps data/ when its DELETE prompt is declined" {
+    local temp_dir project
+    temp_dir=$(mktemp -d)
+    project="$temp_dir/BirdNET-PiPy"
+    create_fake_project "$project"
+
+    # Decline the data prompt, confirm the project prompt
+    run run_uninstall_function uninstall_removal_steps "$project" true <<< $'no\nDELETE'
+    [ "$status" -eq 0 ]
+    assert_file_exists "$project/data/db/birds.db"
+    [ ! -e "$project/install.sh" ]
+    [[ "$output" == *"User data preserved at: $project/data"* ]]
+
+    rm -rf "$temp_dir"
+}
+
+@test "unit: uninstall --remove-project follows a symlinked project directory" {
+    local temp_dir project link
+    temp_dir=$(mktemp -d)
+    project="$temp_dir/ssd/BirdNET-PiPy"
+    link="$temp_dir/BirdNET-PiPy"
+    create_fake_project "$project"
+    ln -s "$project" "$link"
+
+    run run_uninstall_function uninstall_removal_steps "$link" false <<< "DELETE"
+    [ "$status" -eq 0 ]
+    assert_file_exists "$project/data/db/birds.db"
+    [ ! -e "$project/install.sh" ]
+    [ ! -e "$project/backend" ]
+    [ ! -e "$project/.git" ]
+
+    # Without data/ to keep, both the directory and the link go
+    rm -rf "$project/data"
+    touch "$project/install.sh"
+    run run_uninstall_function uninstall_removal_steps "$link" false <<< "DELETE"
+    [ "$status" -eq 0 ]
+    [ ! -e "$project" ]
+    [ ! -L "$link" ]
+
+    rm -rf "$temp_dir"
+}
+
+@test "unit: uninstall --full removes the whole project directory" {
+    local temp_dir project
+    temp_dir=$(mktemp -d)
+    project="$temp_dir/BirdNET-PiPy"
+    create_fake_project "$project"
+
+    run run_uninstall_function uninstall_removal_steps "$project" true <<< $'DELETE\nDELETE'
+    [ "$status" -eq 0 ]
+    [ ! -e "$project" ]
+    [[ "$output" != *"preserved"* ]]
+
+    rm -rf "$temp_dir"
+}
+
 # ============================================================================
 # Integration Tests (full installation flow)
 # ============================================================================
@@ -607,12 +675,6 @@ print('override: frontend publishes 8080')
 @test "integration: web port choice is recorded in .env" {
     # From the --port 8080 passed to the full installation test
     assert_file_contains "$PROJECT_DIR/.env" "BIRDNET_WEB_PORT=8080"
-}
-
-@test "integration: Docker images are built" {
-    # Skip this test when using --skip-build (Docker image builds don't work in DinD)
-    # The actual Docker builds are tested by backend/docker-test.sh on real hardware
-    skip "Docker image builds are tested separately (skipped in DinD environment)"
 }
 
 @test "integration: runtime script is executable" {

@@ -383,11 +383,9 @@ class TestOwnerSocketRevocation:
             assert second_socket.is_connected()
             second_socket.disconnect()
 
-    def test_legacy_cookie_session_is_revoked_after_a_re_login(self):
-        """A cookie predating session IDs identifies itself from
-        authenticated_at, which re-login replaces. If that identity is not
-        pinned at login, logout hunts for a session that no longer exists and
-        the browser keeps a live owner socket."""
+    def test_cookie_without_a_session_id_must_sign_in_again(self):
+        """Cookies minted before session IDs can't be revoked one browser at a
+        time, so they no longer count as signed in; signing in mints an ID."""
         with _auth_live_feed_ws_app() as (app, socketio, _):
             flask_client = app.test_client()
             flask_client.post('/api/auth/setup',
@@ -398,16 +396,20 @@ class TestOwnerSocketRevocation:
             with flask_client.session_transaction() as stored:
                 stored.pop('session_id', None)
 
-            owner = socketio.test_client(app, flask_test_client=flask_client)
-            assert owner.is_connected()
+            def signed_in():
+                return flask_client.get('/api/auth/status').get_json()['authenticated']
 
-            # Sign in again without logging out first.
+            assert signed_in() is False
+            owner = socketio.test_client(app, flask_test_client=flask_client)
+            assert 'recorder_status' not in {e['name'] for e in owner.get_received()}
+            owner.disconnect()
+
             flask_client.post('/api/auth/login',
                               data=json.dumps({'password': AUTH_TEST_PASSWORD}),
                               content_type='application/json')
-
-            assert flask_client.post('/api/auth/logout').status_code == 200
-            assert not owner.is_connected()
+            assert signed_in() is True
+            with flask_client.session_transaction() as stored:
+                assert stored.get('session_id')
 
     def test_logged_out_cookie_cannot_rejoin_as_owner(self):
         """A reconnect carrying the pre-logout signed cookie may still join a

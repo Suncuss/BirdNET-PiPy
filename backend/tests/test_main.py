@@ -271,3 +271,21 @@ class TestNotificationConsumesRecordedNames:
         suffix = f"7-{'ab' * 16}"
         assert notified['bird_song_file_name'] == f'American_Robin_95_x_{suffix}.mp3'
         assert notified['spectrogram_file_name'] == f'American_Robin_95_x_{suffix}.webp'
+
+
+class TestImportFootprint:
+    """The recording process must not load the web stack."""
+
+    def test_importing_main_does_not_import_flask(self):
+        """Flask, Werkzeug, Jinja2 and Click cost the main container ~7MB
+        of RSS it never uses; they arrive through any import of an API-side
+        module such as core.settings_store."""
+        import subprocess
+        import sys
+
+        code = "import sys; import core.main; sys.exit(1 if 'flask' in sys.modules else 0)"
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True, text=True, timeout=120,
+        )
+        assert result.returncode == 0, result.stderr

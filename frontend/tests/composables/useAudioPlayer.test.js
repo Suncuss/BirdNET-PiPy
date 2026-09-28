@@ -16,7 +16,7 @@ vi.mock('@/composables/useLogger', () => ({
 
 // Track all created audio instances for testing
 let audioInstances = []
-let nextPlayBehavior = 'resolve' // 'resolve', 'reject', or 'pending'
+let nextPlayBehavior = 'resolve' // 'resolve', 'reject', 'blocked', or 'pending'
 let pendingPlayResolve = null
 
 // Mock Audio element
@@ -32,6 +32,10 @@ class MockAudio {
   play() {
     if (nextPlayBehavior === 'reject') {
       return Promise.reject(new Error('Playback failed'))
+    }
+    if (nextPlayBehavior === 'blocked') {
+      // What browsers reject play() with when autoplay policy blocks it
+      return Promise.reject(Object.assign(new Error('play() failed'), { name: 'NotAllowedError' }))
     }
     if (nextPlayBehavior === 'pending') {
       return new Promise(resolve => {
@@ -183,7 +187,16 @@ describe('useAudioPlayer', () => {
 
       expect(result).toBe(false)
       expect(player.currentPlayingId.value).toBe(null)
-      expect(player.error.value).toBe('Playback failed')
+      expect(player.error.value).toBe('This recording could not be played.')
+    })
+
+    it('explains a play() blocked by the browser', async () => {
+      const player = useAudioPlayer()
+      nextPlayBehavior = 'blocked'
+
+      await player.togglePlay('test-id', 'http://example.com/audio.mp3')
+
+      expect(player.error.value).toBe('Your browser blocked playback. Try again.')
     })
 
     it('sets isLoading during playback initialization', async () => {
@@ -260,7 +273,7 @@ describe('useAudioPlayer', () => {
       nextPlayBehavior = 'reject'
 
       await player.togglePlay('test-id', 'http://example.com/audio.mp3')
-      expect(player.error.value).toBe('Playback failed')
+      expect(player.error.value).toBe('This recording could not be played.')
 
       player.clearError()
 
@@ -297,7 +310,7 @@ describe('useAudioPlayer', () => {
       audioInstance._simulateError(2)
 
       expect(player.currentPlayingId.value).toBe(null)
-      expect(player.error.value).toBe('Network error loading audio')
+      expect(player.error.value).toBe('This recording could not be loaded. Check your connection.')
     })
 
     it('ignores events from stale audio instances', async () => {

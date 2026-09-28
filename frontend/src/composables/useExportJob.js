@@ -16,7 +16,9 @@ const POLL_INTERVAL_MS = 1000
  * `job` is the server snapshot ({ id, state, rows_done, rows_total, bytes,
  * filename, ... }) or null when there is none. `loading` covers the initial
  * lookup, `starting` a start request. `today` is the station's local date
- * (YYYY-MM-DD) once `load()` has run. `options` everywhere is
+ * (YYYY-MM-DD) once `load()` has run. `setAside` is a ready export that
+ * `newExport()` stepped away from: still on the server until a new start
+ * replaces it, so `backToSetAside()` can return to it. `options` everywhere is
  * { range, start_date?, end_date? } with range = all | 7d | 30d | year | custom.
  */
 export function useExportJob() {
@@ -25,6 +27,7 @@ export function useExportJob() {
   const loading = ref(false)
   const starting = ref(false)
   const today = ref(null)
+  const setAside = ref(null)
   let pollTimer = null
   // Requests still in flight at unmount must not start polling again.
   let mounted = true
@@ -90,10 +93,12 @@ export function useExportJob() {
         timeout: SLOW_QUERY_TIMEOUT
       })
       job.value = data.job
+      setAside.value = null // the server replaced it
     } catch (err) {
       const running = err.response?.status === 409 && err.response.data?.job
       if (running) {
         job.value = running
+        setAside.value = null
       } else {
         error.value = err.response?.data?.error || 'Could not start the export.'
       }
@@ -101,6 +106,20 @@ export function useExportJob() {
       starting.value = false
       schedulePoll()
     }
+  }
+
+  // Back to the options from a ready export without deleting it: the server
+  // replaces it only once a new start succeeds, so a refused start keeps it.
+  const newExport = () => {
+    setAside.value = job.value
+    job.value = null
+    error.value = ''
+  }
+
+  const backToSetAside = () => {
+    job.value = setAside.value
+    setAside.value = null
+    error.value = ''
   }
 
   // Cancel a preparing export, or delete a finished one's file.
@@ -133,5 +152,8 @@ export function useExportJob() {
     stopPolling()
   })
 
-  return { job, error, loading, starting, today, percent, downloadUrl, load, fetchCount, start, discard }
+  return {
+    job, error, loading, starting, today, setAside, percent, downloadUrl,
+    load, fetchCount, start, newExport, backToSetAside, discard
+  }
 }

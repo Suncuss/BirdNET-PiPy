@@ -66,64 +66,37 @@ tests/
 
 ## Running Tests
 
-### Using Docker (Recommended)
+### Using Docker (Required)
 
-Tests are designed to run inside a Docker container to ensure a consistent environment matching production:
+Tests run in a Docker container matching production, with the backend source
+mounted at `/app` and a fresh in-memory folder (tmpfs) at `/app/data`. Every
+data path is hard-wired under `/app/data`, and modules open the database, logs
+and flags there at import time, so `tests/conftest.py` refuses to run unless
+`/app/data` is a throwaway tmpfs. The suite never touches a real data folder,
+and every run starts from the empty state a fresh checkout (or CI) has.
 
 ```bash
-# Navigate to backend directory
 cd backend/
 
-# Run all tests in Docker
-./docker-test.sh
-
-# Run specific test category in Docker
-./docker-test.sh database
-./docker-test.sh api
-./docker-test.sh integration
-
-# Run with coverage report
-./docker-test.sh coverage
+./docker-test.sh                               # all tests
+./docker-test.sh database                      # a category: database, api, integration
+./docker-test.sh tests/test_utils.py           # a file or directory
+./docker-test.sh tests/api/ -k "test_auth"     # extra pytest arguments after the path
+./docker-test.sh coverage                      # coverage report in htmlcov/
 ```
 
-### Using the Test Script (inside Docker or with local Python)
+`docker-test.sh` builds the test image and passes its arguments to
+`run-tests.sh` inside the container.
+
+### Direct pytest Commands
+
+In a container you start yourself, mount the tmpfs as well (and run as your
+own user so files written to the bind mount stay yours):
 
 ```bash
-# Run all tests
-./run-tests.sh
-
-# Run specific test categories
-./run-tests.sh database      # Database tests only
-./run-tests.sh api           # API tests only
-./run-tests.sh integration   # Integration tests only
-
-# Run all tests with coverage report
-./run-tests.sh coverage
-
-# Pass additional pytest arguments
-./run-tests.sh database -k "test_insert"  # Run specific test
-./run-tests.sh -x                         # Stop on first failure
-```
-
-### Direct pytest Commands (inside Docker)
-
-```bash
-# Run all tests
-python -m pytest tests/ -v
-
-# Run specific directory
-python -m pytest tests/database/ -v
-python -m pytest tests/api/ -v
-python -m pytest tests/model_service/ -v
-
-# Run specific test file
-python -m pytest tests/test_utils.py -v
-
-# Run with coverage
-python -m pytest tests/ --cov=core --cov=model_service --cov-report=term-missing
-
-# Run specific test by name
-python -m pytest -k "test_auth" -v
+docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+    -v "$(pwd):/app" --tmpfs /app/data:rw,mode=1777 -w /app birdnet-test:<branch> \
+    python -m pytest tests/api/ -v
 ```
 
 ## Test Categories
@@ -150,7 +123,6 @@ Tests for Flask API endpoints with real database integration.
 **Key Fixtures:**
 - `api_client` - Flask test client with real temporary database
 - `real_db_manager` - Real DatabaseManager with temp database
-- `sample_api_detection` - Sample detection data for API tests
 
 ### Audio Tests (`tests/audio/`)
 Tests for audio recording modules without actual subprocess execution.
@@ -161,7 +133,6 @@ Tests for audio recording modules without actual subprocess execution.
 
 **Key Fixtures:**
 - `temp_output_dir` - Temporary directory for recordings
-- `mock_subprocess_success/failure` - Mocked subprocess execution
 - `pulse_recorder_params`, `rtsp_recorder_params` - Standard recorder configs
 
 ### Config Tests (`tests/config/`)
@@ -185,7 +156,6 @@ Tests for DatabaseManager CRUD operations and queries.
 **Key Fixtures:**
 - `test_db_manager` - DatabaseManager with temporary test database
 - `sample_detection` - Standard bird detection data
-- `populated_db` - Database pre-populated with test data
 
 ### Integration Tests (`tests/integration/`)
 End-to-end tests for the main processing pipeline.
@@ -247,35 +217,25 @@ Standalone test files for specific modules.
 
 ### Main Fixtures (`conftest.py`)
 ```python
-reset_imports       # Clears cached imports between tests (autouse)
-test_env            # Sets up test environment variables
-TEST_BIRD_SPECIES   # Standard test bird species list
-TEST_COORDINATES    # Standard test coordinates
-TEST_DETECTION_PARAMS  # Standard detection parameters
+reset_imports         # Clears cached imports between tests (autouse)
+fast_password_hashing # bcrypt at its minimum cost (autouse)
+test_db_manager       # Temporary DatabaseManager instance
 ```
 
 ### Database Fixtures (`database/conftest.py`)
 ```python
-test_db_manager     # Temporary DatabaseManager instance
 sample_detection    # Standard detection dict
-multiple_species_data  # List of (common_name, scientific_name, count)
-populated_db        # Pre-populated database with test data
 ```
 
 ### API Fixtures (`api/conftest.py`)
 ```python
 api_client          # Flask test client with real database
 real_db_manager     # Real DatabaseManager for integration tests
-mock_db_manager     # Mocked DatabaseManager (legacy)
-sample_wikimedia_response  # Sample Wikimedia API response
-sample_api_detection      # Sample detection with API-specific fields
 ```
 
 ### Audio Fixtures (`audio/conftest.py`)
 ```python
 temp_output_dir         # Temporary output directory
-mock_subprocess_success # Mocked successful subprocess
-mock_subprocess_failure # Mocked failed subprocess
 pulse_recorder_params   # PulseAudio recorder config
 rtsp_recorder_params    # RTSP recorder config
 ```
@@ -283,12 +243,10 @@ rtsp_recorder_params    # RTSP recorder config
 ### Integration Fixtures (`integration/conftest.py`)
 ```python
 temp_recording_dir       # Temporary recording directory
-mock_config_settings     # Mocked configuration settings
 mock_birdnet_success_response  # BirdNet API success response
 mock_birdnet_empty_response    # BirdNet API empty response
 create_test_wav_file     # Factory for test WAV files
 pipeline_db_manager      # Real temp database for pipeline tests
-mock_utils_functions     # Pre-configured utility mocks
 ```
 
 ## Writing Tests

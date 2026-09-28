@@ -1,5 +1,6 @@
 """Abstract base class for bird detection models."""
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -8,6 +9,9 @@ import numpy as np
 from config.constants import DEFAULT_SPECIES_FILTER_THRESHOLD
 
 from .ebird_codes_lookup import get_ebird_code as _lookup_ebird_code
+from .label_utils import is_human_label
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +102,9 @@ class BirdDetectionModel(ABC):
         """Build raw top-3 and filtered candidates for one chunk.
 
         Shared post-processing used by all model implementations after
-        model-specific inference and score transformation.
+        model-specific inference and score transformation. It also applies
+        the privacy filter, so every model discards chunks with a person in
+        them without having to remember to.
         """
         # Verify labels and scores have matching lengths
         if len(labels) != len(scores):
@@ -123,6 +129,13 @@ class BirdDetectionModel(ABC):
         candidates = tuple(
             (labels[passing_idx[i]], float(passing_scores[i])) for i in order
         )
+
+        # Privacy filter: a person above the cutoff discards the whole chunk,
+        # since saving any detection from it would keep a clip of them.
+        if any(is_human_label(label) for label, _ in candidates):
+            logger.warning("Human detected in audio - chunk discarded for privacy")
+            return ChunkPrediction(raw_top3=raw_top3, candidates=(), human_detected=True)
+
         return ChunkPrediction(raw_top3=raw_top3, candidates=candidates)
 
     def filter_by_location(self, lat: float, lon: float, week: int, threshold: float = DEFAULT_SPECIES_FILTER_THRESHOLD) -> list[str] | None:

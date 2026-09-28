@@ -11,7 +11,7 @@ from flask import jsonify, request
 from config.constants import (
     UPDATE_CHANNELS,
 )
-from config.settings import SettingsUnreadable, get_default_settings
+from config.settings import SettingsUnreadable
 from core.api_infra import api
 from core.auth import require_auth
 from core.bird_name_utils import (
@@ -23,7 +23,6 @@ from core.runtime_config import (
     classify_setting_changes,
     deep_merge_settings,
     get_setting_differences,
-    invalidate_runtime_settings_cache,
     read_saved_settings,
 )
 from core.settings_store import (
@@ -62,29 +61,6 @@ def get_settings():
         return jsonify({'error': str(e)}), 500
 
 
-@api.route('/api/settings/defaults', methods=['GET'])
-@log_api_request
-@require_auth
-def get_default_settings_endpoint():
-    """Get default settings (single source of truth for frontend reset).
-
-    Auth-gated: the only caller is the Settings page's fallback when the
-    authenticated GET /api/settings load fails, so an unauthenticated client
-    has no reason to read this — and the payload carries the default station
-    coordinates, which should not be exposed pre-auth.
-    """
-    try:
-        defaults = get_default_settings()
-        # Set configured to true for reset (user is explicitly resetting)
-        defaults['location']['configured'] = True
-        return jsonify(defaults), 200
-    except Exception as e:
-        logger.error("Failed to get default settings", extra={
-            'error': str(e)
-        }, exc_info=True)
-        return jsonify({'error': str(e)}), 500
-
-
 @api.route('/api/settings/channel', methods=['PUT'])
 @log_api_request
 @require_auth
@@ -115,7 +91,6 @@ def update_channel_setting():
             current_settings['updates'] = {}
         current_settings['updates']['channel'] = channel
         save_user_settings(current_settings)
-        invalidate_runtime_settings_cache()
 
         logger.info("Update channel changed", extra={'channel': channel})
 
@@ -303,7 +278,6 @@ def update_notification_settings():
         if urls:
             current_settings['notifications']['apprise_urls'] = list(dict.fromkeys(urls))
         save_user_settings(current_settings)
-        invalidate_runtime_settings_cache()
 
         logger.info("Notification settings updated", extra={
             'changed_fields': list(data.keys())
@@ -392,7 +366,6 @@ def update_settings():
 
         # Save settings to JSON file and clear caches
         save_user_settings(new_settings)
-        invalidate_runtime_settings_cache()
         # display.* preferences feed _localize_* in the cached payload;
         # location.* (lat/lon/timezone) feeds local_now() which sets the
         # today/week/month boundaries and the hourly-activity date. Any

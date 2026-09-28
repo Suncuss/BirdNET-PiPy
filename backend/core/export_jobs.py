@@ -6,9 +6,11 @@ gunicorn worker) and the file in data/exports/; both are gone after a
 restart, so startup wipes the directory. The job greenlet only fetches
 batches (DB lane) and hands them to a writer lane — a native thread — for
 CSV formatting, deflate and file writes, which on the gevent hub stalled
-every other request for tens of ms per batch. The CSV row shape and the
-keyset batch walk are shared with the streaming GET /api/detections/export.
+every other request for tens of ms per batch. The CSV row shape, the keyset
+batch walk and the writer lane are shared with the streaming
+GET /api/detections/export.
 """
+import contextlib
 import csv
 import io
 import os
@@ -56,7 +58,8 @@ RANGE_PRESET_DAYS = {'7d': 7, '30d': 30}
 
 
 class ExportBusyError(Exception):
-    """Another export is still preparing; carries its snapshot."""
+    """Another export is still preparing, or took the slot while this start
+    counted; carries its snapshot."""
 
     def __init__(self, job):
         super().__init__('An export is already being prepared')
@@ -65,6 +68,10 @@ class ExportBusyError(Exception):
 
 class ExportSpaceError(Exception):
     """The file could push the data disk past the storage cleanup trigger."""
+
+
+class ExportEmptyError(Exception):
+    """The range has no detections, so there is nothing to export."""
 
 
 def iter_export_batches(db_manager, *, start_date=None, end_date=None,
@@ -90,6 +97,21 @@ def iter_export_batches(db_manager, *, start_date=None, end_date=None,
             return
         before_timestamp = batch[-1]['timestamp']
         before_id = batch[-1]['id']
+
+
+def _csv_text(rows):
+    buffer = io.StringIO()
+    csv.writer(buffer).writerows(rows)
+    return buffer.getvalue()
+
+
+def iter_csv_chunks(db_manager, **filters):
+    """The streaming export's body: the header, then each batch as CSV text,
+    formatted on the writer lane so it stays off the gevent hub like the
+    job's writes. ``filters`` are iter_export_batches' keyword arguments."""
+    yield _csv_text([CSV_HEADER])
+    for batch in iter_export_batches(db_manager, **filters):
+        yield _writer_lane.run(_csv_text, batch)
 
 
 def resolve_range(range_key, start_date=None, end_date=None, today=None):
@@ -163,7 +185,7 @@ class ExportJob:
 
 _lock = threading.Lock()  # hub-only: taken by request handlers and the export worker greenlet, never the DB lane
 _job = None  # the single current job; a job dropped from this slot is cancelled
-_writer_lane = None  # native worker for the export's CPU and file work; see _run_job
+_writer_lane = None  # native worker for CSV formatting, deflate and file writes; see reset_writer_lane
 
 
 def _remove(path):
@@ -222,46 +244,64 @@ def discard_job(job_id):
         return True
 
 
-def _get_writer_lane():
-    """The writer lane, in the API's async mode: under gevent its waits are
-    cooperative, so the job greenlet parks while the native thread works.
-    Created on the hub (the gevent executor binds to the calling hub)."""
+def reset_writer_lane(async_mode):
+    """Boot: start the writer lane in the app's async mode, next to
+    api_infra.reset_db_executor and like it on the hub (the gevent executor
+    binds to the calling hub). Under gevent its waits are cooperative, so a
+    waiting greenlet parks while the native thread works."""
     global _writer_lane
-    mode = infra.db_executor.mode
-    if _writer_lane is None or _writer_lane.mode != mode:
-        _writer_lane = create_db_executor(mode)
-    return _writer_lane
+    if _writer_lane is not None:
+        _writer_lane.shutdown(wait=False)
+    _writer_lane = create_db_executor(async_mode)
 
 
 def start_export(db_manager, start_date=None, end_date=None):
     """Start preparing an export and return its snapshot. A finished
-    previous job is replaced once the new one starts (a refused start leaves
-    it downloadable); a still-preparing one raises ExportBusyError."""
+    previous job is replaced once the new one starts (a refused or failed
+    start leaves it downloadable); a still-preparing one, or one another
+    start put in the slot meanwhile, raises ExportBusyError."""
     global _job
+    if _writer_lane is None:
+        raise RuntimeError('Export writer lane not started (reset_writer_lane runs at boot)')
     with _lock:
         _expire_stale_locked()
         if _job is not None and _job.state == 'preparing':
             raise ExportBusyError(_job.snapshot())
+        seen = _job
 
     rows_total = infra._run_db(
         db_manager.count_detections_for_export, start_date, end_date)
+    if not rows_total:
+        raise ExportEmptyError('No detections in this range.')
     os.makedirs(EXPORT_DIR, exist_ok=True)
     # The file lands on the disk the storage manager watches: crossing its
     # trigger would purge recordings to make room for a temporary export.
-    if rows_total * _EST_ZIP_BYTES_PER_ROW > cleanup_headroom_bytes(EXPORT_DIR):
+    # The export this start replaces is deleted once it starts, so its bytes
+    # count as free.
+    headroom = cleanup_headroom_bytes(EXPORT_DIR) + (seen.bytes if seen else 0)
+    if rows_total * _EST_ZIP_BYTES_PER_ROW > headroom:
         raise ExportSpaceError(
             'Not enough free space to prepare this export without triggering '
             'storage cleanup. Choose a shorter time range or free up space.')
 
     job = ExportJob(start_date=start_date, end_date=end_date, rows_total=rows_total)
     with _lock:
-        if _job is not None and _job.state == 'preparing':
-            raise ExportBusyError(_job.snapshot())  # another start won the race
-        if _job is not None:
-            _remove(_job.path)
-        _job = job
-        lane = _get_writer_lane()
-    threading.Thread(target=_run_job, args=(job, db_manager, lane), daemon=True).start()
+        if _job is not None and _job is not seen:
+            # Another start won the race while we counted; its export,
+            # even if already finished, is not ours to replace.
+            raise ExportBusyError(_job.snapshot())
+        worker = threading.Thread(target=_run_job, name='export-job', daemon=True,
+                                  args=(job, db_manager, _writer_lane))
+        previous, _job = _job, job
+    try:
+        worker.start()
+    except BaseException:
+        with _lock:
+            if _job is job:
+                _job = previous  # no worker will ever finish this job
+        raise
+    if previous is not None:
+        _remove(previous.path)
     logger.info("Export started", extra={
         'job_id': job.id, 'rows_total': rows_total,
         'start_date': start_date, 'end_date': end_date,
@@ -279,18 +319,46 @@ class _ZippedCsv:
     def __init__(self, path, csv_name):
         self._archive = zipfile.ZipFile(path, 'w', compression=zipfile.ZIP_DEFLATED,
                                         compresslevel=_ZIP_LEVEL)
-        self._text = io.TextIOWrapper(
-            self._archive.open(csv_name, 'w', force_zip64=True),
-            encoding='utf-8', newline='')
-        self._csv = csv.writer(self._text)
-        self._csv.writerow(CSV_HEADER)
+        try:
+            self._text = io.TextIOWrapper(
+                self._archive.open(csv_name, 'w', force_zip64=True),
+                encoding='utf-8', newline='')
+            self._csv = csv.writer(self._text)
+            self._csv.writerow(CSV_HEADER)
+        except BaseException:
+            self._archive.close()
+            raise
 
     def write(self, rows):
         self._csv.writerows(rows)
 
     def close(self):
-        self._text.close()
-        self._archive.close()
+        # The archive (and its file descriptor) is closed even when flushing
+        # the CSV's last deflate block fails, e.g. on a full disk.
+        try:
+            self._text.close()
+        finally:
+            self._archive.close()
+
+
+def _write_batches(job, db_manager, lane, out):
+    """Fetch each batch (DB lane) and write it (writer lane), in turn.
+
+    Taking turns is deliberate: overlapping them (submit the write, fetch
+    the next batch, then wait on the write) was no faster under gevent
+    (300k rows, interleaved runs: 6.75s vs 6.71s mean) and stalled the hub
+    a little more (p99 4.5ms vs 3.6ms). Both lanes do GIL-bound Python
+    work, so they barely run at once."""
+    for batch in iter_export_batches(
+            db_manager, start_date=job.start_date, end_date=job.end_date):
+        if _job is not job:
+            raise _Cancelled
+        lane.run(out.write, batch)
+        with _lock:
+            job.rows_done += len(batch)
+            # Rows inserted between the count and the first batch are
+            # exported too; never report more done than total.
+            job.rows_total = max(job.rows_total, job.rows_done)
 
 
 def _run_job(job, db_manager, lane):
@@ -298,18 +366,14 @@ def _run_job(job, db_manager, lane):
     try:
         out = lane.run(_ZippedCsv, part_path, f'{job.basename}.csv')
         try:
-            for batch in iter_export_batches(
-                    db_manager, start_date=job.start_date, end_date=job.end_date):
-                if _job is not job:
-                    raise _Cancelled
-                lane.run(out.write, batch)
-                with _lock:
-                    job.rows_done += len(batch)
-                    # Rows inserted between the count and the first batch
-                    # are exported too; never report more done than total.
-                    job.rows_total = max(job.rows_total, job.rows_done)
-        finally:
-            lane.run(out.close)
+            _write_batches(job, db_manager, lane, out)
+        except BaseException:
+            # Abandoned (cancelled or failed): close only to release the
+            # file, and never let a close error replace the reason.
+            with contextlib.suppress(Exception):
+                lane.run(out.close)
+            raise
+        lane.run(out.close)
         with _lock:
             if _job is not job:
                 raise _Cancelled

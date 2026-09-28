@@ -101,6 +101,8 @@ class BirdWeatherService:
                 item = self._queue.get(timeout=1)
             except queue.Empty:
                 continue
+            if item is None:  # stop()'s wake-up; the loop condition exits
+                continue
             try:
                 if (self._stop_event.is_set() or
                         get_runtime_settings().get('birdweather', {}).get('id') != self._station_id):
@@ -284,12 +286,21 @@ class BirdWeatherService:
                     item = self._queue.get_nowait()
                 except queue.Empty:
                     return
-                self._remove_flac(item[1])
+                if item is not None:
+                    self._remove_flac(item[1])
 
     def stop(self) -> None:
         """Stop background worker thread."""
         self._stop_event.set()
         self._discard_pending()
+        # Wake a worker blocked in its 1s queue poll, so the join below (and
+        # a station change, which restarts the service on the main thread)
+        # doesn't wait it out. publish() adds nothing once stopped, so the
+        # queue just drained has room.
+        try:
+            self._queue.put_nowait(None)
+        except queue.Full:
+            pass
         if self._worker.is_alive():
             self._worker.join(timeout=2)
 

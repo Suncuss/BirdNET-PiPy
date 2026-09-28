@@ -8,13 +8,10 @@ Tests cover:
 - File deletion and filename-variant resolution
 """
 import os
-import sys
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
 import pytest
-
-sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 
 def make_detection(timestamp, **overrides):
@@ -722,7 +719,6 @@ class TestScheduledPolicies:
 
         with patch('core.storage_manager._get_storage_config',
                    return_value=self._config(retention_days=7)), \
-             patch('core.storage_manager.local_now', create=True), \
              patch('core.timezone_service.local_now', return_value=now):
             from core.storage_manager import run_scheduled_policies
             results = run_scheduled_policies(test_db_manager)

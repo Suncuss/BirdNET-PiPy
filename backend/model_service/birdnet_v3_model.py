@@ -19,8 +19,10 @@ class BirdNetV3Model(BirdDetectionModel):
     - 32kHz sample rate (vs 48kHz)
     - ONNX Runtime inference (vs TFLite)
     - No meta-model for location filtering
-    - No privacy filter (no Human class)
     - Output is already probabilities (no sigmoid needed)
+
+    Its human labels ("Homo sapiens" human, "Homo Sapiens" Human vocal) are
+    privacy-filtered like V2.4's, by the shared _post_process.
     """
 
     MODEL_NAME = "birdnet"
@@ -126,7 +128,7 @@ class BirdNetV3Model(BirdDetectionModel):
             raise ValueError(f"Sensitivity must be positive, got {sensitivity}")
         probs = np.power(np.clip(probs, 1e-7, 1.0), 1.0 / sensitivity)
 
-        # Shared post-processing: collect raw top-3 and filtered candidates
+        # Shared post-processing: raw top-3, cutoff and the privacy filter
         return self._post_process(self._labels, probs, cutoff, chunk_index)
 
     def get_labels(self) -> list[str]:

@@ -107,7 +107,6 @@ def _persist_no_restart_setting(section, key, value):
         current_settings[section] = {}
     current_settings[section][key] = value
     save_user_settings(current_settings)
-    invalidate_runtime_settings_cache()
 
 
 def update_quiet_hours(incoming):
@@ -135,5 +134,4 @@ def update_quiet_hours(incoming):
     schedule['quiet_hours'] = merged
     current_settings['schedule'] = schedule
     save_user_settings(current_settings)
-    invalidate_runtime_settings_cache()
     return merged, None

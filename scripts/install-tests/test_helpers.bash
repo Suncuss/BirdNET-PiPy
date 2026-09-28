@@ -6,21 +6,6 @@
 # Requires:
 #   - PROJECT_DIR environment variable pointing to the test project directory
 
-# Setup test repository in a writable location
-# Usage: setup_test_repo
-setup_test_repo() {
-    if [ -z "$PROJECT_DIR" ]; then
-        echo "ERROR: PROJECT_DIR not set" >&2
-        return 1
-    fi
-
-    # Ensure project directory exists and is owned by testuser
-    if [ ! -d "$PROJECT_DIR" ]; then
-        sudo mkdir -p "$PROJECT_DIR"
-        sudo chown testuser:testuser "$PROJECT_DIR"
-    fi
-}
-
 # Assert that a file contains a specific string
 # Usage: assert_file_contains <file_path> <expected_string>
 assert_file_contains() {
@@ -156,30 +141,6 @@ assert_sudoers_valid() {
     fi
 }
 
-# Wait for a condition with timeout
-# Usage: wait_for <command> <timeout_seconds> [message]
-wait_for() {
-    local cmd="$1"
-    local timeout="$2"
-    local message="${3:-Waiting for condition}"
-
-    local count=0
-    while ! eval "$cmd" 2>/dev/null; do
-        if [ $count -ge $timeout ]; then
-            echo "Timeout ($timeout s) waiting for: $message" >&2
-            return 1
-        fi
-        sleep 1
-        ((count++))
-    done
-}
-
-# Run install.sh with common test options
-# Usage: run_install [additional_args...]
-run_install() {
-    sudo -E "$PROJECT_DIR/install.sh" --no-reboot "$@"
-}
-
 # Source install.sh as a library in a subshell and invoke one of its functions.
 # Strips the top-level setup_logging call and final main invocation so tests can
 # exercise helpers like set_env_var without running the full installer.
@@ -214,18 +175,25 @@ run_uninstall_function() {
     )
 }
 
-# Check if Docker images with a specific prefix exist
-# Usage: assert_docker_images_exist <prefix>
-assert_docker_images_exist() {
-    local prefix="$1"
+# Run uninstall.sh's removal steps in main's order against a fake project
+# directory. Invoke through run_uninstall_function so uninstall.sh is loaded;
+# stdin answers the DELETE prompts, one line each.
+# Usage: run_uninstall_function uninstall_removal_steps <project_dir> <remove_data>
+# shellcheck disable=SC2034  # globals read by the sourced uninstall.sh functions
+uninstall_removal_steps() {
+    SCRIPT_DIR="$1"
+    REMOVE_DATA="$2"
+    REMOVE_PROJECT=true
+    remove_data
+    remove_project
+    show_completion
+}
 
-    local count=$(docker images 2>/dev/null | grep -c "$prefix" || true)
-    if [ "$count" -eq 0 ]; then
-        echo "No Docker images found with prefix: $prefix" >&2
-        echo "Available images:" >&2
-        docker images 2>&1 || true
-        return 1
-    fi
+# Create a minimal fake install: project files, .git and a data/ database
+# Usage: create_fake_project <dir>
+create_fake_project() {
+    mkdir -p "$1/.git" "$1/backend" "$1/data/db"
+    touch "$1/install.sh" "$1/.git/HEAD" "$1/backend/api.py" "$1/data/db/birds.db"
 }
 
 # ============================================================================

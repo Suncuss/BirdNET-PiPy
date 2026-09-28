@@ -5,8 +5,6 @@ Provides fixtures for testing RtspRecorder and PulseAudioRecorder
 without actual subprocess execution or audio hardware.
 """
 import tempfile
-from datetime import datetime
-from unittest.mock import Mock, patch
 
 import pytest
 
@@ -16,38 +14,6 @@ def temp_output_dir():
     """Create a temporary directory for test recordings."""
     with tempfile.TemporaryDirectory() as tmpdir:
         yield tmpdir
-
-
-@pytest.fixture
-def mock_subprocess_success():
-    """Mock subprocess.run for successful recording."""
-    with patch('subprocess.run') as mock_run:
-        mock_result = Mock()
-        mock_result.returncode = 0
-        mock_result.stdout = ""
-        mock_result.stderr = ""
-        mock_run.return_value = mock_result
-        yield mock_run
-
-
-@pytest.fixture
-def mock_subprocess_failure():
-    """Mock subprocess.run for failed recording."""
-    with patch('subprocess.run') as mock_run:
-        mock_result = Mock()
-        mock_result.returncode = 1
-        mock_result.stdout = ""
-        mock_result.stderr = "Error: connection failed"
-        mock_run.return_value = mock_result
-        yield mock_run
-
-
-@pytest.fixture
-def mock_datetime_now():
-    """Mock local_now for consistent timestamps."""
-    fixed_time = datetime(2025, 11, 26, 10, 30, 0)
-    with patch('core.audio_manager.local_now', return_value=fixed_time) as mock_now:
-        yield mock_now, fixed_time
 
 
 @pytest.fixture
@@ -70,18 +36,3 @@ def rtsp_recorder_params():
         'output_dir': '/tmp/test',
         'target_sample_rate': 48000
     }
-
-
-@pytest.fixture
-def mock_file_operations():
-    """Mock file system operations for testing."""
-    with patch('os.path.exists') as mock_exists, \
-         patch('os.path.getsize') as mock_getsize, \
-         patch('os.rename') as mock_rename, \
-         patch('os.unlink') as mock_unlink:
-        yield {
-            'exists': mock_exists,
-            'getsize': mock_getsize,
-            'rename': mock_rename,
-            'unlink': mock_unlink
-        }

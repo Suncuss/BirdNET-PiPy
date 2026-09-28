@@ -348,12 +348,6 @@ class DatabaseManager:
         return sqlite3.connect(f"file:{self.db_path}?mode=ro",
                                uri=True, timeout=30)
 
-    def database_exists(self):
-        with self.get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='detections'")
-            return cursor.fetchone() is not None
-
     def insert_detection(self, detection):
         # Handle extra field - default to empty JSON object
         extra = detection.get('extra', {})
@@ -716,189 +710,6 @@ class DatabaseManager:
         })
         return {'most': most, 'least': least}
 
-    def get_summary_stats_all_periods(self, today_start, week_start, month_start):
-        """Compute today/week/month/allTime summary stats in one query.
-
-        Replaces what used to be 4 sequential per-period calls. Each per-period
-        bucket has the same 7-key shape: totalObservations, uniqueSpecies,
-        mostActiveHour, mostCommonSpecies, mostCommonSpeciesScientificName,
-        rarestSpecies, rarestSpeciesScientificName.
-
-        Species are grouped by the species key (scientific_name with a
-        common_name fallback for legacy rows) so V2/V3 English drift
-        collapses but unrelated blank-sci rows do not.
-
-        The `WHERE c_<period> > 0` filters in the species and hour selects
-        are load-bearing — without them a period with no detections would
-        return the all-time top species/hour (since the per-period count
-        would be 0 but the row still exists in species_counts/hourly_per_period).
-
-        Served from the time rollups when ready (single-snapshot contract:
-        readiness and data in one read transaction); raw CTE fallback below.
-        """
-        with self.get_db_connection() as conn:
-            cur = conn.cursor()
-            cur.execute("BEGIN")
-            try:
-                if db_rollups.rollups_ready(cur):
-                    now_dt = local_now()
-                    now_iso = now_dt.isoformat()
-                    buckets = {}
-                    names = {}
-                    for label, start in (
-                            ('today', today_start), ('week', week_start),
-                            ('month', month_start), ('allTime', datetime.min)):
-                        if self._rollups_can_serve_period(start):
-                            total, unique, hour, most_key, rare_key = \
-                                self._summary_bucket_from_rollups(
-                                    cur, start.strftime('%Y-%m-%d'), now_dt)
-                        else:
-                            # Rolling windows keep exact time-of-day bounds
-                            # via a cheap bounded raw range scan.
-                            total, unique, hour, most_key, rare_key = \
-                                self._raw_summary_bucket(
-                                    cur, start.isoformat(), now_iso)
-                        for key in (most_key, rare_key):
-                            if key and key not in names:
-                                names[key] = self._get_species_display_name(cur, key)
-                        buckets[label] = _summary_stats_bucket(
-                            total, unique, hour, most_key, rare_key, names)
-                    return buckets
-            finally:
-                conn.commit()
-
-        now = local_now().isoformat()
-        params = {
-            'all_time_start': datetime.min.isoformat(),
-            'now': now,
-            'today_start': today_start.isoformat(),
-            'week_start': week_start.isoformat(),
-            'month_start': month_start.isoformat(),
-        }
-
-        with self.get_db_connection() as conn:
-            cur = conn.cursor()
-
-            logger.debug("Calculating summary stats for all periods", extra={
-                'today_start': params['today_start'][:10],
-                'week_start': params['week_start'][:10],
-                'month_start': params['month_start'][:10],
-                'now': now[:10],
-            })
-
-            query = f"""
-            WITH filtered_detections AS (
-                SELECT id, scientific_name, common_name, timestamp
-                FROM detections
-                WHERE timestamp BETWEEN :all_time_start AND :now
-            ),
-            counts AS (
-                SELECT
-                    COUNT(*) AS total_all,
-                    SUM(CASE WHEN timestamp >= :today_start THEN 1 ELSE 0 END) AS total_today,
-                    SUM(CASE WHEN timestamp >= :week_start  THEN 1 ELSE 0 END) AS total_week,
-                    SUM(CASE WHEN timestamp >= :month_start THEN 1 ELSE 0 END) AS total_month,
-                    COUNT(DISTINCT {_SPECIES_KEY}) AS unique_all,
-                    COUNT(DISTINCT CASE WHEN timestamp >= :today_start THEN {_SPECIES_KEY} END) AS unique_today,
-                    COUNT(DISTINCT CASE WHEN timestamp >= :week_start  THEN {_SPECIES_KEY} END) AS unique_week,
-                    COUNT(DISTINCT CASE WHEN timestamp >= :month_start THEN {_SPECIES_KEY} END) AS unique_month
-                FROM filtered_detections
-            ),
-            hourly_per_period AS (
-                SELECT strftime('%H', timestamp) AS hour,
-                       SUM(CASE WHEN timestamp >= :today_start THEN 1 ELSE 0 END) AS c_today,
-                       SUM(CASE WHEN timestamp >= :week_start  THEN 1 ELSE 0 END) AS c_week,
-                       SUM(CASE WHEN timestamp >= :month_start THEN 1 ELSE 0 END) AS c_month,
-                       COUNT(*) AS c_all
-                FROM filtered_detections
-                GROUP BY hour
-            ),
-            -- Secondary ORDER BY key makes ties deterministic. Without it,
-            -- two hours/species at the same count would flap call-to-call
-            -- depending on plan choices.
-            hour_today AS (SELECT hour FROM hourly_per_period WHERE c_today > 0 ORDER BY c_today DESC, hour ASC LIMIT 1),
-            hour_week  AS (SELECT hour FROM hourly_per_period WHERE c_week  > 0 ORDER BY c_week  DESC, hour ASC LIMIT 1),
-            hour_month AS (SELECT hour FROM hourly_per_period WHERE c_month > 0 ORDER BY c_month DESC, hour ASC LIMIT 1),
-            hour_all   AS (SELECT hour FROM hourly_per_period WHERE c_all   > 0 ORDER BY c_all   DESC, hour ASC LIMIT 1),
-            species_counts AS (
-                SELECT {_SPECIES_KEY} AS species_key,
-                       SUM(CASE WHEN timestamp >= :today_start THEN 1 ELSE 0 END) AS c_today,
-                       SUM(CASE WHEN timestamp >= :week_start  THEN 1 ELSE 0 END) AS c_week,
-                       SUM(CASE WHEN timestamp >= :month_start THEN 1 ELSE 0 END) AS c_month,
-                       COUNT(*) AS c_all
-                FROM filtered_detections
-                GROUP BY species_key
-            ),
-            most_today AS (SELECT species_key FROM species_counts WHERE c_today > 0 ORDER BY c_today DESC, species_key ASC LIMIT 1),
-            rare_today AS (SELECT species_key FROM species_counts WHERE c_today > 0 ORDER BY c_today ASC,  species_key ASC LIMIT 1),
-            most_week  AS (SELECT species_key FROM species_counts WHERE c_week  > 0 ORDER BY c_week  DESC, species_key ASC LIMIT 1),
-            rare_week  AS (SELECT species_key FROM species_counts WHERE c_week  > 0 ORDER BY c_week  ASC,  species_key ASC LIMIT 1),
-            most_month AS (SELECT species_key FROM species_counts WHERE c_month > 0 ORDER BY c_month DESC, species_key ASC LIMIT 1),
-            rare_month AS (SELECT species_key FROM species_counts WHERE c_month > 0 ORDER BY c_month ASC,  species_key ASC LIMIT 1),
-            most_all   AS (SELECT species_key FROM species_counts WHERE c_all   > 0 ORDER BY c_all   DESC, species_key ASC LIMIT 1),
-            rare_all   AS (SELECT species_key FROM species_counts WHERE c_all   > 0 ORDER BY c_all   ASC,  species_key ASC LIMIT 1)
-            SELECT
-                (SELECT total_today  FROM counts) AS total_today,
-                (SELECT total_week   FROM counts) AS total_week,
-                (SELECT total_month  FROM counts) AS total_month,
-                (SELECT total_all    FROM counts) AS total_all,
-                (SELECT unique_today FROM counts) AS unique_today,
-                (SELECT unique_week  FROM counts) AS unique_week,
-                (SELECT unique_month FROM counts) AS unique_month,
-                (SELECT unique_all   FROM counts) AS unique_all,
-                (SELECT hour FROM hour_today) AS hour_today,
-                (SELECT hour FROM hour_week)  AS hour_week,
-                (SELECT hour FROM hour_month) AS hour_month,
-                (SELECT hour FROM hour_all)   AS hour_all,
-                (SELECT species_key FROM most_today) AS most_today_key,
-                (SELECT species_key FROM rare_today) AS rare_today_key,
-                (SELECT species_key FROM most_week)  AS most_week_key,
-                (SELECT species_key FROM rare_week)  AS rare_week_key,
-                (SELECT species_key FROM most_month) AS most_month_key,
-                (SELECT species_key FROM rare_month) AS rare_month_key,
-                (SELECT species_key FROM most_all)   AS most_all_key,
-                (SELECT species_key FROM rare_all)   AS rare_all_key
-            """
-
-            cur.execute(query, params)
-            row = cur.fetchone()
-            selected_species_names = {}
-            if row is not None:
-                selected_keys = {
-                    row[f'{kind}_{period}_key']
-                    for period in ('today', 'week', 'month', 'all')
-                    for kind in ('most', 'rare')
-                    if row[f'{kind}_{period}_key']
-                }
-                selected_species_names = {
-                    species_key: self._get_species_display_name(
-                        cur, species_key)
-                    for species_key in selected_keys
-                }
-
-        if row is None:
-            empty = _summary_stats_bucket(0, 0, None, None, None, {})
-            return {key: dict(empty) for key in ('today', 'week', 'month', 'allTime')}
-
-        return {
-            'today': _summary_stats_bucket(
-                row['total_today'], row['unique_today'], row['hour_today'],
-                row['most_today_key'], row['rare_today_key'], selected_species_names,
-            ),
-            'week': _summary_stats_bucket(
-                row['total_week'], row['unique_week'], row['hour_week'],
-                row['most_week_key'], row['rare_week_key'], selected_species_names,
-            ),
-            'month': _summary_stats_bucket(
-                row['total_month'], row['unique_month'], row['hour_month'],
-                row['most_month_key'], row['rare_month_key'], selected_species_names,
-            ),
-            'allTime': _summary_stats_bucket(
-                row['total_all'], row['unique_all'], row['hour_all'],
-                row['most_all_key'], row['rare_all_key'], selected_species_names,
-            ),
-        }
-
     @staticmethod
     def _rollups_can_serve_period(period_start):
         """Rollups aggregate whole days, so they can only stand in for a
@@ -1112,18 +923,12 @@ class DatabaseManager:
             COUNT(*) as total_visits,
             MIN(timestamp) as first_detected,
             MAX(timestamp) as last_detected,
-            AVG(confidence) as average_confidence,
             (SELECT strftime('%H:00', timestamp)
             FROM detections d2
             WHERE d2.common_name = d1.common_name
             GROUP BY strftime('%H', timestamp)
             ORDER BY COUNT(*) DESC
             LIMIT 1) as peak_activity_time,
-            CASE
-                WHEN COUNT(DISTINCT strftime('%m', timestamp)) = 12 THEN 'Year-round'
-                WHEN COUNT(DISTINCT strftime('%m', timestamp)) >= 6 THEN 'Multi-season'
-                ELSE 'Seasonal'
-            END as seasonality,
             (SELECT {ebird}
             FROM detections d3
             WHERE d3.common_name = d1.common_name
@@ -1143,10 +948,9 @@ class DatabaseManager:
             return dict(result)
 
     def _get_bird_details_from_rollup(self, scientific_names):
-        """Species detail card off the rollup: count, first/last, average
-        confidence and ebird_code are a primary-key read; peak hour and
-        seasonality are two bounded passes over the species' rows via the
-        covering (scientific_name, timestamp) index. Replaces correlated
+        """Species detail card off the rollup: count, first/last and
+        ebird_code are a primary-key read; peak hour is one bounded pass over
+        the species' rows via the covering (scientific_name, timestamp) index. Replaces correlated
         subqueries that re-grouped — and json-parsed — the species' full
         history per call (429-558ms on the top species, now ~tens of ms).
 
@@ -1166,43 +970,29 @@ class DatabaseManager:
             cur = conn.cursor()
             cur.execute(
                 "SELECT species_key, common_name, scientific_name, ebird_code, "
-                "detection_count, sum_confidence, first_detected, "
+                "detection_count, first_detected, "
                 f"last_detected FROM species WHERE {key_clause}",
                 key_params)
             rows = cur.fetchall()
             if not rows:
                 return None
 
-            # One covering-index pass; at most 12x24 groups come back and
-            # Python folds them into peak hour + distinct months. substr at
-            # fixed offsets into db_schema.TIMESTAMP_FORMAT beats strftime
+            # One covering-index pass; at most 24 groups come back. substr at
+            # a fixed offset into db_schema.TIMESTAMP_FORMAT beats strftime
             # by ~30% here — no per-row datetime parsing.
             cur.execute(f"""
-                SELECT substr(timestamp, 6, 2) AS month,
-                       substr(timestamp, 12, 2) AS hour,
+                SELECT substr(timestamp, 12, 2) AS hour,
                        COUNT(*) AS count
                 FROM detections
                 WHERE {sci_clause}
-                GROUP BY month, hour
+                GROUP BY hour
                 """, sci_params)
-            buckets = cur.fetchall()
-
-        months_seen = len({b['month'] for b in buckets})
-        hour_counts = {}
-        for b in buckets:
-            hour_counts[b['hour']] = hour_counts.get(b['hour'], 0) + b['count']
+            hour_counts = {b['hour']: b['count'] for b in cur.fetchall()}
         # Rollup row without detection rows = drift mid-heal; degrade quietly
         peak_time = None
         if hour_counts:
             peak_hour = min(hour_counts, key=lambda h: (-hour_counts[h], h))
             peak_time = f'{peak_hour}:00'
-
-        if months_seen == 12:
-            seasonality = 'Year-round'
-        elif months_seen >= 6:
-            seasonality = 'Multi-season'
-        else:
-            seasonality = 'Seasonal'
 
         # Aggregate across the (usually one) matched rollup rows. Rank by
         # detection count so a placeholder duplicate can't outvote the key the
@@ -1217,7 +1007,6 @@ class DatabaseManager:
         )
         rep = ordered[0]
         total_visits = sum(r['detection_count'] for r in rows)
-        sum_confidence = sum(r['sum_confidence'] for r in rows)
         ebird_code = next((r['ebird_code'] for r in ordered if r['ebird_code']), None)
         return {
             'common_name': rep['common_name'],
@@ -1225,9 +1014,7 @@ class DatabaseManager:
             'total_visits': total_visits,
             'first_detected': min(r['first_detected'] for r in rows),
             'last_detected': max(r['last_detected'] for r in rows),
-            'average_confidence': sum_confidence / total_visits,
             'peak_activity_time': peak_time,
-            'seasonality': seasonality,
             'ebird_code': ebird_code,
         }
 
@@ -2344,7 +2131,7 @@ class DatabaseManager:
         detection = dict(row)
         # Strip private coordinates here so detection dicts are private-by-default
         # — an endpoint returning rows without the api-layer _localize_detection
-        # guard (e.g. /api/observations/latest) still can't leak the location.
+        # guard still can't leak the location.
         for field in PRIVATE_DETECTION_FIELDS:
             detection.pop(field, None)
         # The nonce is the row's media identity, not payload data; media_bytes

@@ -500,16 +500,6 @@ class TestMigrationAudioStatusEndpoint:
         assert response.get_json()['status'] == 'not_found'
 
 
-class TestMigrationAudioSkipEndpoint:
-    """Tests for /api/migration/audio/skip endpoint."""
-
-    def test_skip_success(self, api_client):
-        """Test skip returns success."""
-        response = api_client.post('/api/migration/audio/skip')
-        assert response.status_code == 200
-        assert response.get_json()['status'] == 'skipped'
-
-
 class TestMigrationSpectrogramScanEndpoint:
     """Tests for /api/migration/spectrogram/scan endpoint."""
 
@@ -710,16 +700,6 @@ class TestMigrationSpectrogramStatusEndpoint:
         )
         assert response.status_code == 404
         assert response.get_json()['status'] == 'not_found'
-
-
-class TestMigrationSpectrogramSkipEndpoint:
-    """Tests for /api/migration/spectrogram/skip endpoint."""
-
-    def test_skip_success(self, api_client):
-        """Test skip returns success."""
-        response = api_client.post('/api/migration/spectrogram/skip')
-        assert response.status_code == 200
-        assert response.get_json()['status'] == 'skipped'
 
 
 class TestMigrationAudioIntegration:

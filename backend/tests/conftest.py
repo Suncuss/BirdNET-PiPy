@@ -10,15 +10,39 @@ import sys
 
 import pytest
 
-# Add parent directory to path so we can import our modules
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 # Pre-import config.settings so patch('config.settings.X') works in individual tests
-# This must happen after sys.path is set up, before tests run
+# (pytest.ini's pythonpath puts the backend on sys.path before this runs)
 import config.settings  # noqa: F401
 
 # Configure logging for tests
 logging.basicConfig(level=logging.INFO)
+
+
+def _is_tmpfs_mount(path):
+    try:
+        with open('/proc/mounts') as f:
+            return any(fields[1] == path and fields[2] == 'tmpfs'
+                       for fields in (line.split() for line in f))
+    except OSError:
+        return False
+
+
+def pytest_sessionstart(session):
+    """Refuse to run unless BASE_DIR/data is a throwaway tmpfs.
+
+    Every data path is hard-wired under it and modules open the DB, logs and
+    flags there at import time, so on a bind-mounted real folder the suite
+    would write into it and read whatever settings it holds. docker-test.sh
+    mounts a fresh tmpfs there. Runs before collection imports anything.
+    """
+    data_dir = os.path.join(config.settings.BASE_DIR, 'data')
+    if not _is_tmpfs_mount(data_dir):
+        pytest.exit(
+            f"{data_dir} is not a throwaway tmpfs, so the tests would read and "
+            f"write whatever data folder is mounted there. Run them through "
+            f"./docker-test.sh (e.g. ./docker-test.sh tests/api/), or add "
+            f"--tmpfs {data_dir}:rw,mode=1777 to your own docker run.",
+            returncode=pytest.ExitCode.USAGE_ERROR)
 
 
 @pytest.fixture
@@ -36,6 +60,27 @@ def test_db_manager():
 
     if os.path.exists(db_path):
         os.unlink(db_path)
+
+
+@pytest.fixture(autouse=True)
+def fast_password_hashing(monkeypatch):
+    """Hash passwords at bcrypt's minimum cost in tests.
+
+    The production cost (12) takes ~0.3s per hash or check on a Pi 5, and
+    the auth tests do hundreds of them: a quarter of the suite's runtime.
+    Hashes made at cost 4 are also checked at cost 4, in about 1ms.
+    """
+    import bcrypt
+    real_gensalt = bcrypt.gensalt
+    monkeypatch.setattr(bcrypt, 'gensalt',
+                        lambda rounds=12, prefix=b'2b': real_gensalt(4, prefix))
+
+
+# Survive reset_imports: label_utils caches the parsed species table, static
+# data that takes ~0.4s to rebuild, and rebuilding it for every test that
+# touched a species name was a quarter of the suite's runtime. Tests that need
+# a cold cache call clear_species_cache().
+_PERSISTENT_MODULES = {'model_service.label_utils'}
 
 
 @pytest.fixture(autouse=True)
@@ -63,7 +108,9 @@ def reset_imports():
         if hasattr(executor, 'shutdown'):
             executor.shutdown(wait=False)
     # Clean up any cached imports
-    modules_to_remove = [m for m in sys.modules if m.startswith('core.') or m.startswith('config.') or m.startswith('model_service.')]
+    modules_to_remove = [m for m in sys.modules
+                         if m.startswith(('core.', 'config.', 'model_service.'))
+                         and m not in _PERSISTENT_MODULES]
     for module in modules_to_remove:
         sys.modules.pop(module, None)
 
@@ -95,34 +142,6 @@ def isolate_model_startup_status(tmp_path, monkeypatch):
         "MODEL_STARTUP_STATUS_PATH",
         str(tmp_path / "model_service_startup.json"),
     )
-
-
-@pytest.fixture
-def test_env(monkeypatch):
-    """Set up test environment variables."""
-    monkeypatch.setenv('TESTING', 'true')
-    monkeypatch.setenv('LOG_LEVEL', 'DEBUG')
-    yield
-
-
-# Shared test data that multiple test suites might use
-TEST_BIRD_SPECIES = [
-    ('American Robin', 'Turdus migratorius'),
-    ('Blue Jay', 'Cyanocitta cristata'),
-    ('Northern Cardinal', 'Cardinalis cardinalis'),
-    ('Hooded Warbler', 'Setophaga citrina'),
-]
-
-TEST_COORDINATES = {
-    'latitude': 40.7128,
-    'longitude': -74.0060
-}
-
-TEST_DETECTION_PARAMS = {
-    'cutoff': 0.5,
-    'sensitivity': 0.75,
-    'overlap': 0.25
-}
 
 
 @pytest.fixture

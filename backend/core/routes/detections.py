@@ -5,8 +5,6 @@ Both exports — the streaming CSV and the prepared-zip jobs (core.export_jobs)
 jobs; deletes invalidate the dashboard/gallery caches they falsify.
 Registered on the shared ``api`` blueprint at import.
 """
-import csv
-import io
 import time
 from datetime import datetime
 
@@ -65,6 +63,10 @@ def _delete_with_maintenance_retry(detection_id):
 _MAINTENANCE_RESPONSE = (
     {'error': 'Maintenance in progress, please retry shortly',
      'retryable': True}, 503)
+
+# Ids per batch-delete request; bounds one request's file cleanup. The Table
+# page sends larger selections in chunks of this size (useTableData.js).
+_BATCH_DELETE_MAX = 100
 
 
 
@@ -257,17 +259,10 @@ def export_detections_csv():
     sci, common = _resolve_species_filter(species)
 
     def generate():
-        buffer = io.StringIO()
-        writer = csv.writer(buffer)
-        writer.writerow(export_jobs.CSV_HEADER)
         try:
-            for batch in export_jobs.iter_export_batches(
-                    infra.db_manager, start_date=start_date, end_date=end_date,
-                    species=common, scientific_name=sci):
-                writer.writerows(batch)
-                yield buffer.getvalue()
-                buffer.seek(0)
-                buffer.truncate(0)
+            yield from export_jobs.iter_csv_chunks(
+                infra.db_manager, start_date=start_date, end_date=end_date,
+                species=common, scientific_name=sci)
         except Exception:
             # Response headers are already sent; log why the download broke
             # off and let the stream abort so the client sees a failed
@@ -320,7 +315,8 @@ def export_count():
 @handle_api_errors
 def start_export_job():
     """Start preparing an export. JSON body takes the same fields as
-    /export/count. 409 with the running job if one is still preparing."""
+    /export/count. 409 with the current job if one is still preparing
+    or another start just replaced the one there."""
     body = request.get_json(silent=True)
     if body is None:
         body = {}
@@ -336,6 +332,8 @@ def start_export_job():
         return jsonify({'error': str(e), 'job': e.job}), 409
     except export_jobs.ExportSpaceError as e:
         return jsonify({'error': str(e)}), 507
+    except export_jobs.ExportEmptyError as e:
+        return jsonify({'error': str(e)}), 400
     return jsonify({'job': job}), 202
 
 
@@ -438,7 +436,7 @@ def delete_detections_batch():
 
     Requires authentication.
     Request body: { "ids": [1, 2, 3, ...] }
-    Max 100 items per request.
+    Max _BATCH_DELETE_MAX items per request.
     """
     data = request.json
     if not data or 'ids' not in data:
@@ -451,14 +449,16 @@ def delete_detections_batch():
     if len(ids) == 0:
         return jsonify({'error': 'ids array is empty'}), 400
 
-    if len(ids) > 100:
-        return jsonify({'error': 'Maximum 100 items per batch'}), 400
+    if len(ids) > _BATCH_DELETE_MAX:
+        return jsonify({'error': f'Maximum {_BATCH_DELETE_MAX} items per batch'}), 400
 
     deleted = []
     failed = []
+    interrupted = False
 
     for detection_id in ids:
-        if not isinstance(detection_id, int):
+        # bool is an int subclass: JSON true would otherwise delete row 1
+        if isinstance(detection_id, bool) or not isinstance(detection_id, int):
             failed.append({'id': detection_id, 'error': 'Invalid ID type'})
             continue
 
@@ -466,18 +466,24 @@ def delete_detections_batch():
         try:
             detection = _delete_with_maintenance_retry(detection_id)
         except MaintenanceInProgressError:
-            body, status = _MAINTENANCE_RESPONSE
-            return jsonify({**body, 'deleted': len(deleted),
-                            'deleted_ids': deleted}), status
+            interrupted = True
+            break
         if not detection:
             failed.append({'id': detection_id, 'error': 'Not found'})
             continue
 
         deleted.append(detection_id)
 
+    # Also when maintenance cut the batch short: the rows deleted before it
+    # are gone, and cached pages must stop listing them.
     if deleted:
         invalidate_dashboard_cache()
         invalidate_gallery_cache()
+
+    if interrupted:
+        body, status = _MAINTENANCE_RESPONSE
+        return jsonify({**body, 'deleted': len(deleted),
+                        'deleted_ids': deleted}), status
 
     logger.info("Batch deletion completed", extra={
         'deleted_count': len(deleted),

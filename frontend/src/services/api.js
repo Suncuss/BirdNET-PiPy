@@ -65,4 +65,3 @@ export function createLongRequest(timeout = LONG_TIMEOUT) {
 }
 
 export default api
-export { api }

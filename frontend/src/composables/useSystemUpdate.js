@@ -147,25 +147,9 @@ export function useSystemUpdate() {
   }
 
   /**
-   * Trigger system update
-   * @param {boolean} skipConfirm - Skip the browser confirmation dialog (when using custom modal)
+   * Trigger system update. The caller confirms first (Settings' update modal).
    */
-  const triggerUpdate = async (skipConfirm = false) => {
-    // Confirmation dialog (skip if already confirmed via custom modal)
-    if (!skipConfirm) {
-      const confirmed = window.confirm(
-        `This will update the system and restart all services.\n\n` +
-        `Expected downtime: 2-5 minutes\n` +
-        `Audio detection will be interrupted during this time.\n\n` +
-        `Continue with update?`
-      )
-
-      if (!confirmed) {
-        logger.info('Update cancelled by user')
-        return
-      }
-    }
-
+  const triggerUpdate = async () => {
     updating.value = true
     statusMessage.value = null
 
@@ -184,12 +168,6 @@ export function useSystemUpdate() {
       logger.info('Triggering system update...')
       const longApi = createLongRequest()
       const { data } = await longApi.post('/system/update')
-
-      if (data.status === 'no_update_needed') {
-        setStatus('info', 'System is already up to date')
-        updating.value = false
-        return
-      }
 
       setStatus('info', 'Update started. Services restarting...')
       logger.info('Update triggered successfully', data)

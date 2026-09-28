@@ -433,31 +433,25 @@ def get_common_name(label: str) -> str:
     return parts[1] if len(parts) == 2 else label
 
 
+# First words of a scientific name that mean a person, not a species. V2.4
+# labels human sounds "Human vocal", "Human non-vocal" and "Human whistle";
+# V3.1 has "Homo sapiens" (human) and "Homo Sapiens" (Human vocal).
+_HUMAN_GENERA = frozenset({'homo', 'human'})
+
+
+def is_human_label(label: str) -> bool:
+    """Whether a model label is a person (voice, whistle, footsteps).
+
+    Compares only the first word of the scientific name, so a bird whose
+    epithet merely contains "homo" (Catamenia homochroa) stays a bird.
+    """
+    words = get_scientific_name(label).split(maxsplit=1)
+    return bool(words) and words[0].lower() in _HUMAN_GENERA
+
+
 # ---------------------------------------------------------------------------
 # Model-specific label parsers (used by model classes for inference only)
 # ---------------------------------------------------------------------------
-
-def parse_v2_labels(path: str) -> list[tuple[str, str]]:
-    """Parse V2.4 text labels file.
-
-    Text format: SciName_CommonName
-
-    Returns:
-        List of (scientific_name, common_name) tuples.
-    """
-    labels = []
-    with open(path, encoding='utf-8-sig') as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-
-            scientific_name, separator, common_name = line.partition('_')
-            if scientific_name and separator and common_name:
-                labels.append((scientific_name.strip(), common_name.strip()))
-
-    return labels
-
 
 def parse_geomodel_labels(path: str) -> list[tuple[str, str, str]]:
     """Parse geomodel tab-delimited labels file.

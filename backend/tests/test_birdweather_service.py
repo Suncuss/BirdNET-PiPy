@@ -421,6 +421,31 @@ class TestBirdWeatherServiceWorker:
         import core.birdweather_service as bws
         bws._birdweather_service = None
 
+    def test_stop_wakes_the_idle_worker_instead_of_waiting_out_its_poll(self):
+        """A station change restarts the service on the main thread, so stop()
+        must not sit out the worker's 1s queue poll."""
+        from core.birdweather_service import BirdWeatherService
+        with patch('core.birdweather_service.BIRDWEATHER_ID', 'test-station-123'):
+            service = BirdWeatherService('test-station-123')
+            time.sleep(0.05)  # let the worker enter its queue poll
+
+            started = time.monotonic()
+            service.stop()
+
+            assert not service._worker.is_alive()
+            assert time.monotonic() - started < 0.5
+
+    def test_stop_after_the_worker_exited_skips_the_unconsumed_wake_up(self):
+        from core.birdweather_service import BirdWeatherService
+        # The worker exits on its own when the configured station differs
+        service = BirdWeatherService('another-station')
+        service._worker.join(timeout=2)
+
+        service.stop()  # queues a wake-up nothing will consume
+        service.stop()  # drains it along with any real items
+
+        assert not service._worker.is_alive()
+
     def test_worker_processes_queue_items(self):
         """Test that worker thread processes queued items."""
         with patch('core.birdweather_service.BIRDWEATHER_ID', 'test-station-123'), \

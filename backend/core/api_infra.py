@@ -110,8 +110,7 @@ def require_internal(f):
 # endpoint being added here (see test_access_control.TestDefaultDenyBackstop).
 _ANON_REACHABLE_ENDPOINTS = frozenset({
     # Bounded public reads (require_scope('public:read') decides on public_access)
-    'get_wikimedia_image', 'get_wikimedia_image_candidates', 'get_wikimedia_choice',
-    'get_latest_observation', 'get_recent_observations', 'get_observation_summary',
+    'get_wikimedia_image', 'get_wikimedia_image_candidates',
     'get_dashboard', 'get_dashboard_summary', 'get_unique_detections', 'get_sightings',
     'get_bird_details', 'serve_bird_image', 'get_bird_recordings',
     'get_detection_distribution', 'get_all_species', 'get_available_species',

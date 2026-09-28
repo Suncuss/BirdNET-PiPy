@@ -1,5 +1,4 @@
 import { ref, computed } from 'vue'
-import { writeSettings } from '@/services/settingsWrites'
 
 /**
  * Shared state (singleton pattern) - all components share the same refs.
@@ -7,8 +6,6 @@ import { writeSettings } from '@/services/settingsWrites'
  */
 // Default to metric - birds don't care about freedom units
 const useMetricUnits = ref(true)
-const loading = ref(false)
-const error = ref('')
 
 /**
  * Composable for unit settings and conversions.
@@ -61,48 +58,6 @@ export function useUnitSettings() {
     return `${value.toFixed(1)}${temperatureUnit.value}`
   }
 
-  const formatWindSpeed = (kmh) => {
-    const value = convertWindSpeed(kmh)
-    if (value == null) return '-'
-    return `${value.toFixed(1)} ${windSpeedUnit.value}`
-  }
-
-  const formatPrecipitation = (mm) => {
-    const value = convertPrecipitation(mm)
-    if (value == null) return '-'
-    const precision = useMetricUnits.value ? 1 : 2
-    return `${value.toFixed(precision)} ${precipitationUnit.value}`
-  }
-
-  const formatPressure = (hPa) => {
-    const value = convertPressure(hPa)
-    if (value == null) return '-'
-    const precision = useMetricUnits.value ? 1 : 2
-    return `${value.toFixed(precision)} ${pressureUnit.value}`
-  }
-
-  /**
-   * Toggle and save unit preference (no restart needed)
-   * @returns {Promise<boolean>} - True if save was successful
-   */
-  const toggleUnits = async () => {
-    const newValue = !useMetricUnits.value
-    loading.value = true
-    error.value = ''
-
-    try {
-      await writeSettings('/settings/units', { use_metric_units: newValue })
-      useMetricUnits.value = newValue
-      return true
-    } catch (err) {
-      error.value = 'Failed to save unit preference'
-      console.error('Failed to save unit setting:', err)
-      return false
-    } finally {
-      loading.value = false
-    }
-  }
-
   /**
    * Set unit preference directly (used when syncing from settings)
    * @param {boolean} value - True for metric, false for imperial
@@ -111,42 +66,24 @@ export function useUnitSettings() {
     useMetricUnits.value = value
   }
 
-  /**
-   * Reset state (for testing)
-   */
-  const resetState = () => {
-    useMetricUnits.value = true
-    loading.value = false
-    error.value = ''
-  }
-
   return {
     // State
     useMetricUnits,
-    loading,
-    error,
 
     // Conversion functions (raw values)
-    convertTemperature,
     convertWindSpeed,
     convertPrecipitation,
     convertPressure,
 
     // Format functions (value + unit string)
     formatTemperature,
-    formatWindSpeed,
-    formatPrecipitation,
-    formatPressure,
 
     // Unit labels
-    temperatureUnit,
     windSpeedUnit,
     precipitationUnit,
     pressureUnit,
 
     // Methods
-    toggleUnits,
-    setUseMetricUnits,
-    resetState
+    setUseMetricUnits
   }
 }

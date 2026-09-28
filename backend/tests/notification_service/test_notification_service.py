@@ -17,7 +17,7 @@ def make_detection(common_name='American Robin', scientific_name='Turdus migrato
 
 
 def _create_service(notif_overrides=None, db_manager=None):
-    """Create a NotificationService with mocked load_user_settings.
+    """Create a NotificationService with mocked get_runtime_settings.
 
     Returns (service, patcher) — caller must use as context manager or call patcher.stop().
     """
@@ -28,7 +28,7 @@ def _create_service(notif_overrides=None, db_manager=None):
         db_manager.get_recent_detection_count.return_value = 0
 
     mock_settings = make_mock_settings(notif_overrides)
-    patcher = patch('core.notification_service.load_user_settings',
+    patcher = patch('core.notification_service.get_runtime_settings',
                     return_value=mock_settings)
     patcher.start()
 
@@ -381,7 +381,7 @@ class TestNotificationService:
         db.get_recent_detection_count.return_value = 100
 
         settings_holder = [make_mock_settings({'every_detection': False})]
-        patcher = patch('core.notification_service.load_user_settings',
+        patcher = patch('core.notification_service.get_runtime_settings',
                         side_effect=lambda: settings_holder[0])
         patcher.start()
 
@@ -414,7 +414,7 @@ class TestNotificationServiceFactory:
         import core.notification_service as ns
         ns._notification_service = None
 
-        with patch('core.notification_service.load_user_settings',
+        with patch('core.notification_service.get_runtime_settings',
                    return_value=make_mock_settings()):
             result = ns.get_notification_service(Mock())
             assert result is not None
@@ -435,7 +435,7 @@ class TestNotificationServiceFactory:
         import core.notification_service as ns
         ns._notification_service = None
 
-        with patch('core.notification_service.load_user_settings',
+        with patch('core.notification_service.get_runtime_settings',
                    return_value=make_mock_settings()):
             first = ns.get_notification_service(Mock())
             second = ns.get_notification_service(Mock())
@@ -449,7 +449,7 @@ class TestNotificationServiceFactory:
         import core.notification_service as ns
         ns._notification_service = None
 
-        with patch('core.notification_service.load_user_settings',
+        with patch('core.notification_service.get_runtime_settings',
                    return_value=make_mock_settings({'apprise_urls': []})):
             result = ns.get_notification_service(Mock())
             assert result is None

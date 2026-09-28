@@ -1,13 +1,8 @@
 """Shared fixtures for notification service tests."""
 
-import os
-import sys
 from unittest.mock import Mock, patch
 
 import pytest
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
-
 
 DEFAULT_NOTIF_CONFIG = {
     'apprise_urls': ['tgram://bot/chat'],
@@ -56,7 +51,7 @@ def notification_service():
 
     settings_holder = [make_mock_settings()]
 
-    with patch('core.notification_service.load_user_settings',
+    with patch('core.notification_service.get_runtime_settings',
                side_effect=lambda: settings_holder[0]):
         from core.notification_service import NotificationService
         service = NotificationService(db)

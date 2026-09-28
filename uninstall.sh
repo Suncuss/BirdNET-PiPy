@@ -59,7 +59,7 @@ show_usage() {
     echo "Options:"
     echo "  --keep-images        Keep Docker images (don't remove)"
     echo "  --remove-data        Remove user data directory (WARNING: deletes all recordings and database)"
-    echo "  --remove-project     Remove entire project directory"
+    echo "  --remove-project     Remove project files (data/ is kept unless --remove-data)"
     echo "  --full               Complete removal (service + images + data + project)"
     echo "  --help               Show this help message"
     echo ""
@@ -84,6 +84,9 @@ show_usage() {
 KEEP_IMAGES=false
 REMOVE_DATA=false
 REMOVE_PROJECT=false
+
+# Set by remove_project once the project files are actually gone
+PROJECT_REMOVED=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -143,8 +146,10 @@ confirm_uninstall() {
         echo "  ✗ User data (keeping)"
     fi
 
-    if [ "$REMOVE_PROJECT" = true ]; then
+    if [ "$REMOVE_PROJECT" = true ] && [ "$REMOVE_DATA" = true ]; then
         echo "  ✓ Project directory ($SCRIPT_DIR)"
+    elif [ "$REMOVE_PROJECT" = true ]; then
+        echo "  ✓ Project files ($SCRIPT_DIR), keeping data/"
     else
         echo "  ✗ Project directory (keeping)"
     fi
@@ -388,7 +393,10 @@ remove_data() {
     fi
 }
 
-# Remove project directory
+# Remove project directory. data/ lives inside it, so it is spared whenever it
+# still exists here: remove_data runs first and deletes it only on a confirmed
+# --remove-data, so its presence means the user is keeping it (no
+# --remove-data, or the DELETE prompt was declined).
 remove_project() {
     if [ "$REMOVE_PROJECT" = false ]; then
         print_info "Keeping project directory"
@@ -397,14 +405,30 @@ remove_project() {
 
     print_warning "Removing project directory..."
 
+    # Act on the real directory when SCRIPT_DIR is a symlink to it: find
+    # lists nothing under a symlinked start point, and rm -rf removes only
+    # the link, so either way the files would stay while we report success.
+    local project_dir
+    project_dir="$(cd "$SCRIPT_DIR" && pwd -P)"
+
     # Safety check - don't remove if we're in a critical directory
-    if [[ "$SCRIPT_DIR" == "/" ]] || [[ "$SCRIPT_DIR" == "/home" ]] || [[ "$SCRIPT_DIR" == "/root" ]]; then
-        print_error "Safety check failed: refusing to remove $SCRIPT_DIR"
+    if [[ "$project_dir" == "/" ]] || [[ "$project_dir" == "/home" ]] || [[ "$project_dir" == "/root" ]]; then
+        print_error "Safety check failed: refusing to remove $project_dir"
         exit 1
     fi
 
+    local keep_data=false
+    if [ -e "$SCRIPT_DIR/data" ]; then
+        keep_data=true
+    fi
+
     # Final confirmation
-    print_error "This will permanently delete the entire project at: $SCRIPT_DIR"
+    if [ "$keep_data" = true ]; then
+        print_error "This will permanently delete the project files at: $project_dir"
+        print_info "The data/ directory (recordings and database) will be kept"
+    else
+        print_error "This will permanently delete the entire project at: $project_dir"
+    fi
     read -p "Are you absolutely sure? Type 'DELETE' to confirm: " -r
     if [ "$REPLY" != "DELETE" ]; then
         print_info "Project removal cancelled"
@@ -413,8 +437,17 @@ remove_project() {
 
     # Move up one directory before removing
     cd /
-    rm -rf "$SCRIPT_DIR"
-    print_status "Project directory removed"
+    if [ "$keep_data" = true ]; then
+        find "$project_dir" -mindepth 1 -maxdepth 1 ! -name data -exec rm -rf {} +
+        print_status "Project files removed (data/ kept)"
+    else
+        rm -rf "$project_dir"
+        if [ -L "$SCRIPT_DIR" ]; then
+            rm -f "$SCRIPT_DIR"
+        fi
+        print_status "Project directory removed"
+    fi
+    PROJECT_REMOVED=true
 }
 
 # Show completion message
@@ -425,10 +458,10 @@ show_completion() {
     print_status "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
 
-    if [ "$REMOVE_PROJECT" = false ]; then
+    if [ "$PROJECT_REMOVED" = false ]; then
         print_info "Project directory preserved at: $SCRIPT_DIR"
 
-        if [ "$REMOVE_DATA" = false ]; then
+        if [ -e "$SCRIPT_DIR/data" ]; then
             print_info "User data preserved at: $SCRIPT_DIR/data"
         fi
 
@@ -436,6 +469,9 @@ show_completion() {
         print_info "To reinstall later:"
         echo "  cd $SCRIPT_DIR"
         echo "  sudo ./install.sh"
+    elif [ -e "$SCRIPT_DIR/data" ]; then
+        print_info "User data preserved at: $SCRIPT_DIR/data"
+        print_info "Move it out of $SCRIPT_DIR before reinstalling (the installer needs that path free)"
     fi
 
     echo ""

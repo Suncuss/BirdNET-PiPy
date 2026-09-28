@@ -1779,10 +1779,6 @@ export default {
       currentApplicationStatus.value?.sources?.[editingSource.value?.id]?.error || '')
     const editingStreamingError = computed(() => streamingError(currentApplicationStatus.value))
 
-    const hasMicSource = computed(() =>
-      (settings.value.audio.sources || []).some(s => s.type === 'pulseaudio')
-    )
-
     // Legend for the source pills: only meaningful while some are highlighted
     // and some are not.
     const hasInactiveSource = computed(() => {
@@ -2670,7 +2666,7 @@ export default {
       showUpdateConfirm.value = false
       window.scrollTo({ top: 0, behavior: 'smooth' })
       try {
-        await systemUpdate.triggerUpdate(true)
+        await systemUpdate.triggerUpdate()
       } catch (error) {
         // Already surfaced via systemUpdate.statusMessage; swallow the
         // rethrow so it does not become an unhandled promise rejection.
@@ -3050,7 +3046,6 @@ export default {
       hasInactiveSource,
       noActiveSourceHint,
       // Audio source management
-      hasMicSource,
       showStreamModal,
       editingSource,
       openAddSource,

@@ -25,7 +25,6 @@ services:
       - ./data/flags:/app/data/flags
     environment:
       - PYTHONPATH=/app
-      - BIRDNET_SERVICE_PORT=5001
       - LOG_FORMAT=human
       - LOG_LEVEL=INFO
       - CONSOLE_LOG_LEVEL=${CONSOLE_LOG_LEVEL:-WARNING}
@@ -61,7 +60,6 @@ services:
       - ./data/flags:/app/data/flags
     environment:
       - PYTHONPATH=/app
-      - API_PORT=5002
       - LOG_FORMAT=human
       - LOG_LEVEL=INFO
       - CONSOLE_LOG_LEVEL=${CONSOLE_LOG_LEVEL:-WARNING}

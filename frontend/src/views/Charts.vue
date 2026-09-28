@@ -432,7 +432,6 @@ export default {
         // Main date selection (for bird activity overview)
         const selectedDate = ref(getLocalDateString())
         const maxDate = ref(getLocalDateString())
-        const isLoading = ref(false)
         const isUpdating = ref(false)
         const chartsLoadedOnce = ref(false)
 
@@ -496,16 +495,6 @@ export default {
             detailedBirdActivityData.value.every(bird => bird.hourlyActivity.every(count => count === 0))
         )
 
-        const formattedDate = computed(() => {
-            const date = new Date(selectedDate.value + 'T00:00:00')
-            return date.toLocaleDateString('en-US', {
-                weekday: 'long',
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric'
-            })
-        })
-
         const canGoForward = computed(() => {
             return selectedDate.value < maxDate.value
         })
@@ -553,7 +542,6 @@ export default {
             if (isUpdating.value) return
 
             isUpdating.value = true
-            isLoading.value = true
 
             try {
                 await fetchChartsData(selectedDate.value)
@@ -566,7 +554,6 @@ export default {
                     await createCharts()
                 }
             } finally {
-                isLoading.value = false
                 isUpdating.value = false
             }
         }
@@ -962,10 +949,8 @@ export default {
             timeAxisLayout,
             isDataEmpty,
             detailedBirdActivityError,
-            formattedDate,
             onDateChange,
             canGoForward,
-            isLoading,
             isUpdating,
             chartsLoadedOnce,
             speciesLimit,

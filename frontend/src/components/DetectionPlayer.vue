@@ -465,7 +465,7 @@ const weatherStats = computed(() => {
   if (w.wind != null) stats.push({ label: 'Wind', value: convertWindSpeed(w.wind).toFixed(1), unit: windSpeedUnit.value })
   if (w.cloud_cover != null) stats.push({ label: 'Clouds', value: `${w.cloud_cover}%`, unit: '' })
   if (w.precip != null) stats.push({ label: 'Precip', value: convertPrecipitation(w.precip).toFixed(prec), unit: precipitationUnit.value })
-  // Whole hPa (vs formatPressure's one decimal) keeps the fifth tile narrow
+  // Whole hPa keeps the fifth tile narrow
   // enough for the five-across row. hideOnMobile drops it below sm, where a
   // fifth tile would break the 2×2 grid and it's the least essential stat.
   if (w.pressure != null) stats.push({ label: 'Pressure', value: convertPressure(w.pressure).toFixed(useMetricUnits.value ? 0 : 2), unit: pressureUnit.value, hideOnMobile: true })

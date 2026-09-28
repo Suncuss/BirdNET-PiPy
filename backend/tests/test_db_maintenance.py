@@ -1,13 +1,10 @@
 """Tests for core.db_maintenance — integrity checks and rotating backups."""
 import os
 import sqlite3
-import sys
 import time
 from unittest.mock import patch
 
 import pytest
-
-sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 from core.db import DatabaseManager
 from core.db_maintenance import (

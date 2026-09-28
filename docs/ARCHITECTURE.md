@@ -138,7 +138,7 @@ reads only `user_settings.json`; tightened access settings evict anonymous
 WebSocket listeners at the API, while an established Icecast listener keeps its
 current connection and is re-checked by nginx on its next one.
 
-A save acknowledges persistence. `/api/settings/status` separately compares the
+A save acknowledges persistence. The settings status snapshot separately compares the
 saved model/source configuration with recorder heartbeats, model service status,
 and the streaming supervisor's private `data/streaming_status.json` heartbeat.
 The API shares the same snapshot through the `settings_status` socket event
@@ -177,5 +177,6 @@ as root and writes `user_settings.json` with mode 0600 into a root-owned data
 directory. A wrapper that ships the script without the supervisor idles with
 Icecast up and stream status unavailable rather than restart-looping.
 
-Streaming supervisor tests run independently with:
+Streaming supervisor tests run with the full backend suite (`cd backend &&
+./docker-test.sh`), or on their own with
 `python3 -m unittest discover -s deployment/audio/tests -v`.

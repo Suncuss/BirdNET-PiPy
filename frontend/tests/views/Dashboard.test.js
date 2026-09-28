@@ -123,10 +123,7 @@ describe('Dashboard', () => {
     useFetchBirdData.mockReturnValue(baseState())
     useAppStatus.mockReturnValue({
       locationConfigured: ref(true),
-      isRestarting: ref(false),
-      setLocationConfigured: vi.fn(),
-      setRestarting: vi.fn(),
-      isReady: vi.fn(() => true)
+      setLocationConfigured: vi.fn()
     })
     useAudioPlayer.mockReturnValue({
       currentPlayingId: ref(null),
@@ -765,6 +762,108 @@ describe('Dashboard', () => {
       const box = hourlyChartBox(wrapper)
       expect(box.className).toContain('flex-1')
       expect(box.className).toContain('min-h-[220px]')
+    })
+  })
+
+  describe('playback errors', () => {
+    it('shows a failed recent-observation playback and dismisses it', async () => {
+      const error = ref(null)
+      const clearError = vi.fn(() => { error.value = null })
+      useAudioPlayer.mockReturnValue({
+        currentPlayingId: ref(null),
+        togglePlay: vi.fn(),
+        stopAudio: vi.fn(),
+        error,
+        clearError
+      })
+      const wrapper = mountDashboard()
+      await flushPromises()
+      expect(wrapper.text()).not.toContain('missing or can no longer be opened')
+
+      error.value = 'This recording is missing or can no longer be opened.'
+      await flushPromises()
+      expect(wrapper.text()).toContain('This recording is missing or can no longer be opened.')
+
+      await wrapper.findAll('button').find(b => b.text() === 'Dismiss').trigger('click')
+      expect(clearError).toHaveBeenCalled()
+      expect(wrapper.text()).not.toContain('missing or can no longer be opened')
+    })
+
+    // Audio elements whose play() does what `play` says and whose 'error'
+    // listener the test fires, as a browser does for a missing file.
+    const stubLatestPlayer = (play) => {
+      const elements = []
+      vi.stubGlobal('Audio', vi.fn().mockImplementation(function MockAudio(src) {
+        this.src = src
+        this.error = null
+        this.currentTime = 0
+        this.pause = vi.fn()
+        this.listeners = {}
+        this.addEventListener = vi.fn((type, cb) => { this.listeners[type] = cb })
+        this.play = vi.fn(play)
+        elements.push(this)
+      }))
+      vi.stubGlobal('AudioContext', vi.fn().mockImplementation(function MockAudioContext() {
+        this.state = 'running'
+        this.destination = {}
+        this.createAnalyser = vi.fn(() => ({ fftSize: 1024, frequencyBinCount: 512, connect: vi.fn() }))
+        this.createMediaElementSource = vi.fn(() => ({ connect: vi.fn() }))
+      }))
+      vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
+      vi.stubGlobal('cancelAnimationFrame', vi.fn())
+      return elements
+    }
+
+    const mountWithLatest = async () => {
+      const state = baseState()
+      state.latestObservationData.value = {
+        id: 1,
+        common_name: 'Robin',
+        scientific_name: 'Turdus migratorius',
+        timestamp: '2024-01-01T12:00:00Z',
+        bird_song_file_name: 'gone.mp3'
+      }
+      useFetchBirdData.mockReturnValue(state)
+      const wrapper = mountDashboard()
+      await flushPromises()
+      return { wrapper, state }
+    }
+
+    it('says why the latest recording will not play', async () => {
+      const elements = stubLatestPlayer(() => new Promise(() => {}))
+      const { wrapper, state } = await mountWithLatest()
+
+      wrapper.vm.playLatestObservation()
+      const [audio] = elements
+      audio.error = { code: 4 } // how browsers report a 404
+      audio.listeners.error()
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('This recording is missing or can no longer be opened.')
+      expect(wrapper.vm.latestObservationIsPlaying).toBe(false)
+      expect(cancelAnimationFrame).toHaveBeenCalled()
+
+      // The message is about that recording; a new detection clears it.
+      state.latestObservationData.value = { ...state.latestObservationData.value, id: 2 }
+      await flushPromises()
+      expect(wrapper.text()).not.toContain('missing or can no longer be opened')
+    })
+
+    it('explains a blocked play but not one cut short by a pause', async () => {
+      let rejection
+      stubLatestPlayer(() => Promise.reject(rejection))
+      const { wrapper } = await mountWithLatest()
+
+      rejection = Object.assign(new Error('interrupted'), { name: 'AbortError' })
+      wrapper.vm.playLatestObservation()
+      await flushPromises()
+      expect(wrapper.vm.latestPlaybackError).toBe(null)
+
+      rejection = Object.assign(new Error('blocked'), { name: 'NotAllowedError' })
+      wrapper.vm.playLatestObservation()
+      await flushPromises()
+      expect(wrapper.text()).toContain('Your browser blocked playback. Try again.')
+      expect(wrapper.vm.latestObservationIsPlaying).toBe(false)
     })
   })
 

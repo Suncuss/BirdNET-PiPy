@@ -4,7 +4,7 @@ Tests for fundamental CRUD operations and simple queries.
 """
 from datetime import datetime, timedelta
 
-from tests.database.conftest import insert_legacy
+from tests.database.conftest import insert_legacy, summary_all_periods
 
 
 class TestDatabaseBasicOperations:
@@ -162,7 +162,7 @@ class TestDatabaseBasicOperations:
         # The fixture data is anchored in 2024, well outside today/week/month
         # relative to the test clock — so it lands in the allTime bucket.
         now = datetime.now()
-        all_stats = test_db_manager.get_summary_stats_all_periods(
+        all_stats = summary_all_periods(test_db_manager,
             now.replace(hour=0, minute=0, second=0, microsecond=0),
             now - timedelta(weeks=1),
             now - timedelta(days=30),
@@ -215,8 +215,6 @@ class TestDatabaseBasicOperations:
         assert details['common_name'] == species
         assert details['scientific_name'] == scientific
         assert details['total_visits'] == 6
-        # Check seasonality - 6 months should be Multi-season
-        assert details['seasonality'] in ['Multi-season', 'Year-round']
 
     def test_get_bird_recordings_sort_best(self, test_db_manager):
         """Test get_bird_recordings sorted by confidence (best)."""
