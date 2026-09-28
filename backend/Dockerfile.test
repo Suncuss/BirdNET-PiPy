@@ -12,12 +12,6 @@ COPY requirements.txt requirements-test.txt ./
 RUN pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir -r requirements-test.txt
 
-# Copy the application code
-COPY . .
-
-# Set environment variables
-ENV BASE_DIR=/app
+# No source copy: docker-test.sh bind-mounts the backend over /app (and a
+# fresh tmpfs over /app/data), so the image only carries the dependencies.
 ENV PYTHONPATH=/app
-
-# Default command runs tests
-CMD ["pytest"]

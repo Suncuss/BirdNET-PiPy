@@ -1,9 +1,5 @@
 """Tests for notification-related database query methods."""
 
-import os
-import sys
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 
 def insert(db, sci_name, common_name, timestamp, confidence=0.9):

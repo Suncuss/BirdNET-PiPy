@@ -17,8 +17,10 @@ from tests.api.conftest import auth_enabled_app, insert_detection
 @pytest.fixture(autouse=True)
 def export_env(tmp_path):
     """Exports land in a tempdir with ample disk headroom, and every test
-    starts and ends with no current job (the job slot is module state)."""
-    from core import export_jobs
+    starts and ends with no current job (the job slot is module state).
+    Teardown also waits out the job's worker, so none outlives the patches
+    or the executors conftest shuts down between tests."""
+    import core.export_jobs as export_jobs  # not `from core import`: see reset_imports
     export_dir = tmp_path / 'exports'
     with patch('core.export_jobs.EXPORT_DIR', str(export_dir)), \
          patch('core.export_jobs.cleanup_headroom_bytes', return_value=10**12):
@@ -26,6 +28,16 @@ def export_env(tmp_path):
         yield export_dir
         if export_jobs._job is not None:
             export_jobs.discard_job(export_jobs._job.id)
+        for worker in threading.enumerate():
+            if worker.name == 'export-job':
+                worker.join(10)
+
+
+@pytest.fixture
+def a_detection(real_db_manager):
+    """One detection, so an export has something to write (an empty range is
+    refused)."""
+    return insert_detection(real_db_manager)
 
 
 def _wait_finished(client, job_id, timeout=10):
@@ -55,6 +67,18 @@ def _zip_rows(data):
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         (name,) = archive.namelist()
         return name, list(csv.reader(io.StringIO(archive.read(name).decode('utf-8'))))
+
+
+def _refuse_thread(name):
+    """Fail starting threads with this name, as the OS does when it can't
+    give out another one; every other thread starts as usual."""
+    real_start = threading.Thread.start
+
+    def start(self):
+        if self.name == name:
+            raise RuntimeError("can't start new thread")
+        return real_start(self)
+    return patch.object(threading.Thread, 'start', start)
 
 
 @pytest.fixture
@@ -98,6 +122,24 @@ class TestPreparedExport:
         assert rows == streamed
         assert len(rows) == 6  # header + 5
 
+    def test_streaming_export_formats_batches_on_the_writer_lane(self, api_client, a_detection):
+        """Like the job's writes, the streaming export's CSV formatting runs
+        on the writer lane, not in the request (on the gevent hub)."""
+        import core.export_jobs as export_jobs
+        real_csv_text = export_jobs._csv_text
+        threads = []
+
+        def recording_csv_text(rows):
+            threads.append(threading.current_thread())
+            return real_csv_text(rows)
+
+        with patch.object(export_jobs, '_csv_text', recording_csv_text):
+            body = api_client.get('/api/detections/export').get_data(as_text=True)
+        assert len(body.splitlines()) == 2  # header + the detection
+        request_thread, *batch_threads = threads
+        assert request_thread is threading.current_thread()
+        assert batch_threads and threading.current_thread() not in batch_threads
+
     def test_custom_range_exports_only_that_range(self, api_client, real_db_manager):
         for day in range(10, 20):
             insert_detection(real_db_manager, timestamp=f'2024-01-{day}T10:00:00')
@@ -111,19 +153,24 @@ class TestPreparedExport:
         assert sorted(r[1][:10] for r in rows[1:]) == [
             '2024-01-12', '2024-01-13', '2024-01-14']
 
-    def test_empty_export_is_header_only(self, api_client):
-        job = _prepare(api_client)
-        assert job['state'] == 'ready' and job['rows_total'] == 0
-        _, rows = _zip_rows(_download(api_client, job['id']).data)
-        assert len(rows) == 1
+    def test_empty_range_is_refused(self, api_client, real_db_manager):
+        """The modal disables Prepare on a count of 0, but it also allows a
+        start when its count failed; the server must not then build a
+        header-only file."""
+        insert_detection(real_db_manager, timestamp='2024-01-15T10:00:00')
+        response = _start(api_client, range='custom',
+                          start_date='2024-02-01', end_date='2024-02-07')
+        assert response.status_code == 400
+        assert response.get_json()['error'] == 'No detections in this range.'
+        assert api_client.get('/api/detections/export/jobs/current').get_json()['job'] is None
 
-    def test_current_job_resumes(self, api_client, real_db_manager):
+    def test_current_job_resumes(self, api_client, a_detection):
         assert api_client.get('/api/detections/export/jobs/current').get_json()['job'] is None
         job_id = _prepare(api_client)['id']
         current = api_client.get('/api/detections/export/jobs/current').get_json()['job']
         assert current['id'] == job_id and current['state'] == 'ready'
 
-    def test_start_replaces_finished_job(self, api_client, real_db_manager, export_env):
+    def test_start_replaces_finished_job(self, api_client, a_detection, export_env):
         first = _prepare(api_client)
         second = _prepare(api_client)
         assert first['id'] != second['id']
@@ -136,10 +183,73 @@ class TestPreparedExport:
         export they already have."""
         insert_detection(real_db_manager)
         ready = _prepare(api_client)
-        with patch('core.export_jobs.cleanup_headroom_bytes', return_value=0):
+        # Too big even counting the space the replaced export would free
+        with patch('core.export_jobs.cleanup_headroom_bytes', return_value=0), \
+             patch('core.export_jobs._EST_ZIP_BYTES_PER_ROW', 10**9):
             assert _start(api_client).status_code == 507
         assert api_client.get('/api/detections/export/jobs/current').get_json()['job']['id'] == ready['id']
         assert _download(api_client, ready['id']).status_code == 200
+
+    def test_replaced_export_counts_as_free_space(self, api_client, a_detection):
+        """The ready export a start replaces is deleted once it starts, so a
+        re-export that fits in the space it frees is allowed."""
+        ready = _prepare(api_client)
+        headroom = 10  # below the estimate for one row, but not with the old file's bytes
+        with patch('core.export_jobs.cleanup_headroom_bytes', return_value=headroom):
+            assert _start(api_client).status_code == 202
+        assert ready['bytes'] + headroom >= 50
+
+    def test_export_discarded_meanwhile_is_not_counted_twice(self, api_client, a_detection):
+        """Another tab discards the ready export while this start runs: the
+        disk reading already includes the space its file freed, so it must
+        not be credited again on top."""
+        import core.export_jobs as export_jobs
+        ready = _prepare(api_client)
+        freed = ready['bytes']
+        assert freed > 0
+
+        def disk_after_discard(*_):
+            export_jobs.discard_job(ready['id'])
+            return freed  # the disk's headroom is just the discarded file's space
+
+        # Fits only if the discarded file were counted twice
+        with patch('core.export_jobs.cleanup_headroom_bytes', side_effect=disk_after_discard), \
+             patch('core.export_jobs._EST_ZIP_BYTES_PER_ROW', 2 * freed):
+            assert _start(api_client).status_code == 507
+
+    def test_failed_start_keeps_the_ready_export(self, api_client, real_db_manager):
+        """A start whose worker never runs (no thread to be had on a
+        low-memory Pi) must neither strand a 'preparing' job that nothing
+        will finish nor cost the user the export they already have."""
+        insert_detection(real_db_manager)
+        ready = _prepare(api_client)
+        with _refuse_thread('export-job'):
+            assert _start(api_client).status_code == 500
+        assert api_client.get('/api/detections/export/jobs/current').get_json()['job']['id'] == ready['id']
+        assert _download(api_client, ready['id']).status_code == 200
+        assert _prepare(api_client)['state'] == 'ready'  # the slot is not stuck
+
+    def test_start_that_lost_the_race_leaves_the_winner(
+            self, api_client, real_db_manager, export_env):
+        """Another start took the slot, and already finished, while this one
+        counted: this start gets 409 with that export, not its file deleted."""
+        import core.export_jobs as export_jobs
+        winner = export_jobs.ExportJob(start_date=None, end_date=None, rows_total=0,
+                                       state='ready', finished_at=time.time())
+        export_env.mkdir()
+        open(winner.path, 'w').close()
+
+        def count_while_another_start_wins(*args):
+            export_jobs._job = winner
+            return 1
+
+        with patch.object(real_db_manager, 'count_detections_for_export',
+                          side_effect=count_while_another_start_wins):
+            response = _start(api_client)
+        assert response.status_code == 409
+        assert response.get_json()['job']['id'] == winner.id
+        assert export_jobs._job is winner
+        assert os.path.exists(winner.path)
 
     def test_rows_total_matches_the_file(self, api_client, real_db_manager):
         """Rows landing between the count and the first batch are exported,
@@ -152,15 +262,15 @@ class TestPreparedExport:
         _, rows = _zip_rows(_download(api_client, job['id']).data)
         assert len(rows) == 4
 
-    def test_second_start_while_preparing_conflicts(self, api_client, gated_batches):
+    def test_second_start_while_preparing_conflicts(self, api_client, a_detection, gated_batches):
         running = _start(api_client).get_json()['job']
         response = _start(api_client)
         assert response.status_code == 409
         assert response.get_json()['job']['id'] == running['id']
 
     def test_cancel_stops_job_and_removes_partial_file(
-            self, api_client, gated_batches, export_env):
-        from core import export_jobs
+            self, api_client, a_detection, gated_batches, export_env):
+        import core.export_jobs as export_jobs
         job_id = _start(api_client).get_json()['job']['id']
         assert api_client.delete(f'/api/detections/export/jobs/{job_id}').status_code == 200
         assert api_client.get('/api/detections/export/jobs/current').get_json()['job'] is None
@@ -174,18 +284,41 @@ class TestPreparedExport:
         # The slot is free again.
         assert _start(api_client).status_code == 202
 
-    def test_discard_ready_job_deletes_file(self, api_client, export_env):
+    def test_discard_ready_job_deletes_file(self, api_client, a_detection, export_env):
         job = _prepare(api_client)
         assert api_client.delete(f"/api/detections/export/jobs/{job['id']}").status_code == 200
         assert os.listdir(export_env) == []
         assert api_client.delete(f"/api/detections/export/jobs/{job['id']}").status_code == 404
 
-    def test_finished_job_expires_after_ttl(self, api_client, export_env):
+    def test_finished_job_expires_after_ttl(self, api_client, a_detection, export_env):
         job = _prepare(api_client)
         with patch('core.export_jobs.EXPORT_TTL_SECONDS', 0):
             assert api_client.get('/api/detections/export/jobs/current').get_json()['job'] is None
         assert os.listdir(export_env) == []
         assert _download(api_client, job['id']).status_code == 404
+
+    def test_cancel_with_a_failing_close_stays_a_cancel(
+            self, api_client, a_detection, gated_batches, export_env, caplog):
+        """Closing an abandoned export only releases its file: a close error
+        (e.g. a full disk) must not turn a cancel into a logged failure."""
+        import core.export_jobs as export_jobs
+        real_close = export_jobs._ZippedCsv.close
+
+        def close_on_a_full_disk(self):
+            real_close(self)
+            raise OSError('No space left on device')
+
+        with patch.object(export_jobs._ZippedCsv, 'close', close_on_a_full_disk):
+            job_id = _start(api_client).get_json()['job']['id']
+            api_client.delete(f'/api/detections/export/jobs/{job_id}')
+            gated_batches.set()
+            for worker in threading.enumerate():
+                if worker.name == 'export-job':
+                    worker.join(10)
+        messages = [r.getMessage() for r in caplog.records]
+        assert 'Export cancelled' in messages
+        assert 'Export failed' not in messages
+        assert os.listdir(export_env) == []
 
     def test_failed_job_reports_error_and_leaves_no_file(
             self, api_client, real_db_manager, export_env):
@@ -275,6 +408,20 @@ class TestResolveRange:
             resolve_range(*args, today=self.TODAY)
 
 
+def test_zipped_csv_close_releases_the_archive_when_flushing_fails(tmp_path):
+    from unittest.mock import Mock
+
+    from core.export_jobs import _ZippedCsv
+    out = _ZippedCsv(str(tmp_path / 'x.zip.part'), 'x.csv')
+    # The disk fills while the last deflate block is flushed
+    entry = out._text.buffer
+    entry._compressor = Mock(compress=entry._compressor.compress,
+                             flush=Mock(side_effect=OSError('No space left on device')))
+    with pytest.raises(OSError):
+        out.close()
+    assert out._archive.fp is None  # closed, file descriptor released
+
+
 def test_startup_cleanup_removes_only_export_files(export_env):
     from core.export_jobs import cleanup_export_dir
     export_env.mkdir()
@@ -284,15 +431,29 @@ def test_startup_cleanup_removes_only_export_files(export_env):
     assert os.listdir(export_env) == ['keep.txt']
 
 
-@pytest.mark.parametrize('auto_cleanup, used_bytes, expected', [
-    (True, 700, 150),   # bytes left before the 85% trigger
-    (True, 900, 0),     # past the trigger: never negative
-    (False, 900, 100),  # nothing is ever purged: plain free space
+@pytest.mark.parametrize('auto_cleanup, used_bytes, free_bytes, expected', [
+    (True, 700, 300, 150),  # bytes left before the 85% trigger
+    (True, 900, 100, 0),    # past the trigger: never negative
+    (False, 900, 100, 50),  # nothing is ever purged: free space short of the 5% reserve
+    (False, 850, 100, 50),  # ext4 root-reserved blocks aren't free space
+    (False, 970, 30, 0),    # already inside the reserve
 ])
-def test_cleanup_headroom_bytes(auto_cleanup, used_bytes, expected):
+def test_cleanup_headroom_bytes(auto_cleanup, used_bytes, free_bytes, expected):
     from core.storage_manager import cleanup_headroom_bytes
-    usage = {'total_bytes': 1000, 'used_bytes': used_bytes, 'free_bytes': 1000 - used_bytes}
+    usage = {'total_bytes': 1000, 'used_bytes': used_bytes, 'free_bytes': free_bytes}
     config = {'trigger_percent': 85, 'auto_cleanup_enabled': auto_cleanup}
     with patch('core.storage_manager.get_disk_usage', return_value=usage), \
          patch('core.storage_manager._get_storage_config', return_value=config):
         assert cleanup_headroom_bytes() == expected
+
+
+def test_cleanup_headroom_never_promises_the_reserve():
+    """A trigger near 100% would count blocks the (non-root) app can't write:
+    ext4 keeps 50 of this disk for root, so 980 - 850 = 130 before the
+    trigger is really 100 free, and the 5% reserve leaves 50."""
+    from core.storage_manager import cleanup_headroom_bytes
+    usage = {'total_bytes': 1000, 'used_bytes': 850, 'free_bytes': 100}
+    config = {'trigger_percent': 98, 'auto_cleanup_enabled': True}
+    with patch('core.storage_manager.get_disk_usage', return_value=usage), \
+         patch('core.storage_manager._get_storage_config', return_value=config):
+        assert cleanup_headroom_bytes() == 50

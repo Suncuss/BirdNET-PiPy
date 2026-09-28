@@ -144,4 +144,4 @@ export ICECAST_PASSWORD=your_secure_password
 docker compose up -d
 ```
 
-**Note:** The static `deployment/audio/icecast.xml` file is **not used** at runtime. The startup script generates a secure config dynamically.
+**Note:** There is no static Icecast config: the startup script generates a secure one at runtime.

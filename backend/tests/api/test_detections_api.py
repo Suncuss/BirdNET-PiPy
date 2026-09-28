@@ -626,6 +626,75 @@ class TestDeleteDetectionAPI:
         assert not os.path.exists(spectrogram_file)
 
 
+class TestBatchDeleteAPI:
+    """DELETE /api/detections/batch: request validation, per-id outcomes and
+    the 100-id cap the Table page chunks its selection to."""
+
+    def _delete(self, api_client, body):
+        with patch('core.auth.is_authenticated', return_value=True):
+            return api_client.delete('/api/detections/batch', json=body)
+
+    @pytest.mark.parametrize('body, error', [
+        ({}, 'Missing ids array'),
+        ({'ids': 'abc'}, 'ids must be an array'),
+        ({'ids': []}, 'ids array is empty'),
+        ({'ids': list(range(1, 102))}, 'Maximum 100 items per batch'),
+    ])
+    def test_rejects_invalid_requests_without_deleting(
+            self, api_client, real_db_manager, body, error):
+        detection_id = insert_detection(real_db_manager)
+
+        response = self._delete(api_client, body)
+
+        assert response.status_code == 400
+        assert response.get_json()['error'] == error
+        assert real_db_manager.get_detection_by_id(detection_id) is not None
+
+    def test_accepts_exactly_100_ids(self, api_client, real_db_manager):
+        detection_id = insert_detection(real_db_manager)
+
+        response = self._delete(
+            api_client, {'ids': [detection_id] + list(range(90001, 90100))})
+
+        assert response.status_code == 200
+        body = response.get_json()
+        assert body['deleted'] == 1
+        assert body['failed'] == 99
+        assert real_db_manager.get_detection_by_id(detection_id) is None
+
+    def test_reports_each_id_and_never_treats_true_as_row_1(
+            self, api_client, real_db_manager):
+        first = insert_detection(real_db_manager)
+        target = insert_detection(real_db_manager, common_name='Blue Jay',
+                                  scientific_name='Cyanocitta cristata')
+        assert first == 1  # JSON true == 1 in Python: the row it would hit
+
+        response = self._delete(api_client, {'ids': [True, 'abc', 99999, target]})
+
+        assert response.status_code == 200
+        body = response.get_json()
+        assert body['deleted'] == 1
+        assert body['deleted_ids'] == [target]
+        assert body['failed'] == 3
+        assert body['errors'] == [
+            {'id': True, 'error': 'Invalid ID type'},
+            {'id': 'abc', 'error': 'Invalid ID type'},
+            {'id': 99999, 'error': 'Not found'},
+        ]
+        assert real_db_manager.get_detection_by_id(first) is not None
+        assert real_db_manager.get_detection_by_id(target) is None
+
+    def test_requires_auth(self, api_client, real_db_manager):
+        detection_id = insert_detection(real_db_manager)
+
+        with patch('core.auth.is_authenticated', return_value=False):
+            response = api_client.delete('/api/detections/batch',
+                                         json={'ids': [detection_id]})
+
+        assert response.status_code == 401
+        assert real_db_manager.get_detection_by_id(detection_id) is not None
+
+
 class TestDetectionsDatabaseMethods:
     """Tests for the underlying database methods."""
 
@@ -1141,3 +1210,39 @@ class TestDeleteMaintenanceContract:
         with patch('core.auth.is_authenticated', return_value=True):
             response = api_client.delete(f'/api/detections/{detection_id}')
         assert response.status_code == 200
+
+    def test_batch_reports_what_it_deleted_before_maintenance_began(
+            self, api_client, real_db_manager, monkeypatch):
+        """The Table page relies on deleted_ids in this 503 to drop the
+        already-deleted rows from its selection before a retry."""
+        from core import maintenance_lease
+        from core.routes import detections as detections_routes
+        ids = [insert_detection(real_db_manager, common_name=f'Robin {i}')
+               for i in range(3)]
+        monkeypatch.setattr(detections_routes, '_MAINTENANCE_RETRY_SECONDS', 0)
+        real_delete = detections_routes._delete_with_maintenance_retry
+
+        def delete_then_start_build(detection_id):
+            result = real_delete(detection_id)
+            maintenance_lease.acquire(real_db_manager, 'index_build', 'builder', 120)
+            return result
+
+        monkeypatch.setattr(detections_routes, '_delete_with_maintenance_retry',
+                            delete_then_start_build)
+
+        with patch('core.auth.is_authenticated', return_value=True), \
+             patch.object(detections_routes, 'invalidate_dashboard_cache') as dashboard, \
+             patch.object(detections_routes, 'invalidate_gallery_cache') as gallery:
+            response = api_client.delete('/api/detections/batch', json={'ids': ids})
+
+        assert response.status_code == 503
+        body = response.get_json()
+        assert body['retryable'] is True
+        assert body['deleted'] == 1
+        assert body['deleted_ids'] == [ids[0]]
+        # The row that did go must drop out of the cached pages.
+        dashboard.assert_called_once()
+        gallery.assert_called_once()
+        assert real_db_manager.get_detection_by_id(ids[0]) is None
+        assert real_db_manager.get_detection_by_id(ids[1]) is not None
+        assert real_db_manager.get_detection_by_id(ids[2]) is not None

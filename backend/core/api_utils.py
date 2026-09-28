@@ -59,29 +59,24 @@ def handle_api_errors(f):
     return decorated_function
 
 
-def validate_date_param(param_name='date', required=False, default_today=True):
+def validate_date_param(required=False):
     """
-    Decorator to validate date parameters in YYYY-MM-DD format
+    Decorator to validate the `date` query parameter in YYYY-MM-DD format
 
     Args:
-        param_name: Name of the date parameter to validate
-        required: Whether the parameter is required
-        default_today: If True and parameter missing, use today's date
+        required: Whether the parameter is required; when it is optional and
+            missing, the endpoint applies its own default
     """
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
-            date_str = request.args.get(param_name)
+            date_str = request.args.get('date')
 
             # Handle missing parameter
             if not date_str:
                 if required:
                     return jsonify({"error": "Date parameter is required"}), 400
-                elif default_today:
-                    # No need to validate, will use default in endpoint
-                    return f(*args, **kwargs)
-                else:
-                    return f(*args, **kwargs)
+                return f(*args, **kwargs)
 
             # Validate format
             try:

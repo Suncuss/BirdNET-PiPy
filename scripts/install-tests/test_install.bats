@@ -44,11 +44,6 @@ setup() {
     [[ "$output" == *"--no-reboot"* ]]
 }
 
-@test "unit: --help exits with code 0" {
-    run bash "$PROJECT_DIR/install.sh" --help
-    [ "$status" -eq 0 ]
-}
-
 @test "unit: unknown option exits with error" {
     run bash "$PROJECT_DIR/install.sh" --unknown-option
     [ "$status" -eq 1 ]
@@ -152,6 +147,42 @@ print(f'all backend services use: {unique.pop()}')
     [ "$status" -eq 0 ]
     assert_file_exists "$PROJECT_DIR/data/version.json"
     assert_file_contains "$PROJECT_DIR/data/version.json" "\"commit\""
+}
+
+@test "unit: build.sh stamps one build ID in .env, keeping its other keys and mode" {
+    # The backend image no longer changes with the code, so this stamp (a
+    # label in docker-compose.yml) is what makes `compose up -d` recreate the
+    # backend after a build.
+    local saved=""
+    if [ -f "$PROJECT_DIR/.env" ]; then
+        saved=$(mktemp)
+        cp -p "$PROJECT_DIR/.env" "$saved"
+    fi
+    printf 'BIRDNET_CHANNEL=staging\nICECAST_PASSWORD=secret\nBIRDNET_BUILD_ID=old\n' > "$PROJECT_DIR/.env"
+    chmod 640 "$PROJECT_DIR/.env"
+
+    run bash -c "cd \"$PROJECT_DIR\" && ./build.sh --version-only && ./build.sh --version-only"
+    local env_mode env_count env_body build_id
+    env_mode=$(stat -c '%a' "$PROJECT_DIR/.env")
+    env_count=$(grep -c '^BIRDNET_BUILD_ID=' "$PROJECT_DIR/.env")
+    env_body=$(cat "$PROJECT_DIR/.env")
+    build_id=$(grep '^BIRDNET_BUILD_ID=' "$PROJECT_DIR/.env" | cut -d= -f2)
+
+    if [ -n "$saved" ]; then
+        mv "$saved" "$PROJECT_DIR/.env"
+    else
+        rm -f "$PROJECT_DIR/.env"
+    fi
+
+    [ "$status" -eq 0 ]
+    [ "$env_mode" = "640" ]
+    [ "$env_count" -eq 1 ]
+    [[ "$env_body" == *"BIRDNET_CHANNEL=staging"* ]]
+    [[ "$env_body" == *"ICECAST_PASSWORD=secret"* ]]
+    [[ "$env_body" != *"BIRDNET_BUILD_ID=old"* ]]
+    # Same value as version.json's build_time, so the two can be matched up
+    assert_file_contains "$PROJECT_DIR/data/version.json" "\"build_time\": \"$build_id\""
+    [ -z "$(find "$PROJECT_DIR" -maxdepth 1 -name '.env.*')" ]
 }
 
 @test "unit: build.sh works from any cwd without leaving stray files" {
@@ -532,6 +563,79 @@ print('override: frontend publishes 8080')
     rm -rf "$temp_dir"
 }
 
+@test "unit: uninstall --remove-project keeps data/ without --remove-data" {
+    local temp_dir project
+    temp_dir=$(mktemp -d)
+    project="$temp_dir/BirdNET-PiPy"
+    create_fake_project "$project"
+
+    run run_uninstall_function uninstall_removal_steps "$project" false <<< "DELETE"
+    [ "$status" -eq 0 ]
+    assert_file_exists "$project/data/db/birds.db"
+    [ ! -e "$project/install.sh" ]
+    [ ! -e "$project/backend" ]
+    [ ! -e "$project/.git" ]
+    [[ "$output" == *"User data preserved at: $project/data"* ]]
+
+    rm -rf "$temp_dir"
+}
+
+@test "unit: uninstall --full keeps data/ when its DELETE prompt is declined" {
+    local temp_dir project
+    temp_dir=$(mktemp -d)
+    project="$temp_dir/BirdNET-PiPy"
+    create_fake_project "$project"
+
+    # Decline the data prompt, confirm the project prompt
+    run run_uninstall_function uninstall_removal_steps "$project" true <<< $'no\nDELETE'
+    [ "$status" -eq 0 ]
+    assert_file_exists "$project/data/db/birds.db"
+    [ ! -e "$project/install.sh" ]
+    [[ "$output" == *"User data preserved at: $project/data"* ]]
+
+    rm -rf "$temp_dir"
+}
+
+@test "unit: uninstall --remove-project follows a symlinked project directory" {
+    local temp_dir project link
+    temp_dir=$(mktemp -d)
+    project="$temp_dir/ssd/BirdNET-PiPy"
+    link="$temp_dir/BirdNET-PiPy"
+    create_fake_project "$project"
+    ln -s "$project" "$link"
+
+    run run_uninstall_function uninstall_removal_steps "$link" false <<< "DELETE"
+    [ "$status" -eq 0 ]
+    assert_file_exists "$project/data/db/birds.db"
+    [ ! -e "$project/install.sh" ]
+    [ ! -e "$project/backend" ]
+    [ ! -e "$project/.git" ]
+
+    # Without data/ to keep, both the directory and the link go
+    rm -rf "$project/data"
+    touch "$project/install.sh"
+    run run_uninstall_function uninstall_removal_steps "$link" false <<< "DELETE"
+    [ "$status" -eq 0 ]
+    [ ! -e "$project" ]
+    [ ! -L "$link" ]
+
+    rm -rf "$temp_dir"
+}
+
+@test "unit: uninstall --full removes the whole project directory" {
+    local temp_dir project
+    temp_dir=$(mktemp -d)
+    project="$temp_dir/BirdNET-PiPy"
+    create_fake_project "$project"
+
+    run run_uninstall_function uninstall_removal_steps "$project" true <<< $'DELETE\nDELETE'
+    [ "$status" -eq 0 ]
+    [ ! -e "$project" ]
+    [[ "$output" != *"preserved"* ]]
+
+    rm -rf "$temp_dir"
+}
+
 # ============================================================================
 # Integration Tests (full installation flow)
 # ============================================================================
@@ -607,12 +711,6 @@ print('override: frontend publishes 8080')
 @test "integration: web port choice is recorded in .env" {
     # From the --port 8080 passed to the full installation test
     assert_file_contains "$PROJECT_DIR/.env" "BIRDNET_WEB_PORT=8080"
-}
-
-@test "integration: Docker images are built" {
-    # Skip this test when using --skip-build (Docker image builds don't work in DinD)
-    # The actual Docker builds are tested by backend/docker-test.sh on real hardware
-    skip "Docker image builds are tested separately (skipped in DinD environment)"
 }
 
 @test "integration: runtime script is executable" {

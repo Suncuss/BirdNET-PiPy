@@ -14,9 +14,12 @@ const POLL_INTERVAL_MS = 1000
  * to disk instead of holding it in memory.
  *
  * `job` is the server snapshot ({ id, state, rows_done, rows_total, bytes,
- * filename, ... }) or null when there is none. `loading` covers the initial
- * lookup, `starting` a start request. `today` is the station's local date
- * (YYYY-MM-DD) once `load()` has run. `options` everywhere is
+ * filename, ... }) or null when there is none. `loading` covers a lookup of
+ * the current job (the initial one, or Back's), `starting` a start request.
+ * `today` is the station's local date (YYYY-MM-DD) once `load()` has run.
+ * `setAside` is a ready export that `newExport()` stepped away from: still
+ * on the server until a new start replaces it, so `backToSetAside()` can
+ * return to it. `options` everywhere is
  * { range, start_date?, end_date? } with range = all | 7d | 30d | year | custom.
  */
 export function useExportJob() {
@@ -25,6 +28,7 @@ export function useExportJob() {
   const loading = ref(false)
   const starting = ref(false)
   const today = ref(null)
+  const setAside = ref(null)
   let pollTimer = null
   // Requests still in flight at unmount must not start polling again.
   let mounted = true
@@ -90,16 +94,48 @@ export function useExportJob() {
         timeout: SLOW_QUERY_TIMEOUT
       })
       job.value = data.job
+      setAside.value = null // the server replaced it
     } catch (err) {
       const running = err.response?.status === 409 && err.response.data?.job
       if (running) {
         job.value = running
+        setAside.value = null
       } else {
         error.value = err.response?.data?.error || 'Could not start the export.'
       }
     } finally {
       starting.value = false
       schedulePoll()
+    }
+  }
+
+  // Back to the options from a ready export without deleting it: the server
+  // replaces it only once a new start succeeds, so a refused start keeps it.
+  const newExport = () => {
+    setAside.value = job.value
+    job.value = null
+    error.value = ''
+  }
+
+  // Back to that export, as the server has it now rather than as it was
+  // set aside: it may have expired, or another tab may have replaced it,
+  // and a stale copy would offer a Download that 404s.
+  const backToSetAside = async () => {
+    const kept = setAside.value
+    if (!kept) return
+    error.value = ''
+    loading.value = true
+    try {
+      const { data } = await api.get('/detections/export/jobs/current')
+      job.value = data.job
+      if (!data.job) error.value = 'That export has expired. Start a new one.'
+      schedulePoll()
+    } catch {
+      // Can't tell: show the kept copy; its Download fails if it is gone.
+      job.value = kept
+    } finally {
+      setAside.value = null
+      loading.value = false
     }
   }
 
@@ -133,5 +169,8 @@ export function useExportJob() {
     stopPolling()
   })
 
-  return { job, error, loading, starting, today, percent, downloadUrl, load, fetchCount, start, discard }
+  return {
+    job, error, loading, starting, today, setAside, percent, downloadUrl,
+    load, fetchCount, start, newExport, backToSetAside, discard
+  }
 }

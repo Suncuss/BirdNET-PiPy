@@ -32,8 +32,7 @@ class TestSimpleAPI:
         assert True  # Simple sanity check
 
     def test_api_with_real_db(self, api_client, real_db_manager):
-        """Test API endpoints with REAL database integration."""
-        # Test 1: Latest observation with data
+        """Dashboard observations and summaries off a REAL database."""
         real_db_manager.insert_detection({
             'timestamp': '2024-01-15T10:30:45',
             'group_timestamp': '2024-01-15T10:30:45',
@@ -46,15 +45,6 @@ class TestSimpleAPI:
             'sensitivity': 0.75,
             'overlap': 0.25
         })
-
-        response = api_client.get('/api/observations/latest')
-        assert response.status_code == 200
-        data = response.get_json()
-        assert data['common_name'] == 'American Robin'
-        assert data['confidence'] == pytest.approx(0.95, abs=0.01)
-
-        # Test 2: Recent observations
-        # Insert 2 more detections
         for i in range(2):
             real_db_manager.insert_detection({
                 'timestamp': f'2024-01-15T10:3{i+1}:00',
@@ -69,26 +59,25 @@ class TestSimpleAPI:
                 'overlap': 0.25
             })
 
-        response = api_client.get('/api/observations/recent')
+        response = api_client.get('/api/dashboard')
         assert response.status_code == 200
         data = response.get_json()
-        assert len(data) >= 3
+        latest = data['latestObservation']
+        assert latest['common_name'] == 'Blue Jay'
+        assert latest['confidence'] == pytest.approx(0.85, abs=0.01)
+        assert len(data['recentObservations']['all']) == 3
+        assert 'today' in data['summary']
 
-        # Test 3: Summary stats
-        response = api_client.get('/api/observations/summary')
-        assert response.status_code == 200
-        summary = response.get_json()
-        assert 'today' in summary
-        assert 'week' in summary
-        assert 'month' in summary
-        assert 'allTime' in summary
+        for period in ('today', 'week', 'month', 'allTime'):
+            response = api_client.get(f'/api/dashboard/summary?period={period}')
+            assert response.status_code == 200
+        assert response.get_json()['totalObservations'] == 3  # allTime
 
     def test_api_empty_database(self, api_client, real_db_manager):
-        """Test API endpoints return proper response when database is empty."""
-        # Test with empty database - returns 200 with null for better frontend UX
-        response = api_client.get('/api/observations/latest')
+        """An empty database is a normal dashboard, not an error."""
+        response = api_client.get('/api/dashboard')
         assert response.status_code == 200
-        assert response.get_json() is None
+        assert response.get_json()['latestObservation'] is None
 
     def test_activity_endpoints(self, api_client, real_db_manager):
         """Test activity-related endpoints with real database."""
@@ -180,7 +169,6 @@ class TestSimpleAPI:
         data = response.get_json()
         assert data['common_name'] == 'American Robin'
         # Verify we got expected bird detail fields
-        assert 'average_confidence' in data
         assert 'first_detected' in data or 'first_detection' in data
         assert 'last_detected' in data or 'last_detection' in data
 

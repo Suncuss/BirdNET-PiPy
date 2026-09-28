@@ -54,6 +54,12 @@ _CANDIDATE_BATCH_ROWS = 500
 # the GIL with the recording pipeline and has no latency requirement.
 _BATCH_PAUSE_SECONDS = 0.05
 
+# Large writes (exports, imported audio) always leave this much of the disk
+# free: recording and SQLite (WAL included) need room to keep going. With
+# auto-cleanup off nothing will ever be purged to make it; with it on, a
+# trigger set near 100% would otherwise let them fill the disk first.
+FREE_SPACE_RESERVE_PERCENT = 5
+
 def _deletable_estimate(accounting, exact):
     """Exact recorded bytes plus, while the frontier is incomplete, the
     labeled per-row estimate for unresolved history — the one place the
@@ -103,16 +109,22 @@ def get_disk_usage(path=None):
 
 def cleanup_headroom_bytes(path=None):
     """Bytes the data disk can still take before usage reaches the cleanup
-    trigger (0 once past it). Writers of large temporary files check this so
-    their file never makes the storage manager purge recordings for room.
-    With auto-cleanup off nothing is ever purged, so it is plain free space.
+    trigger (0 once past it). Writers of large files (exports, imported
+    audio) check this so their file never makes the storage manager purge
+    recordings for room. It never exceeds free space short of
+    FREE_SPACE_RESERVE_PERCENT of the disk — counted from free, not total
+    minus used, which on ext4 also includes root-reserved blocks the app
+    can't write to. With auto-cleanup off nothing is ever purged, so that
+    cap is the whole answer.
     ``path`` is any directory on that disk (defaults to /app/data)."""
     usage = get_disk_usage(path)
     config = _get_storage_config()
-    if not config['auto_cleanup_enabled']:
-        return usage['free_bytes']
-    trigger_bytes = usage['total_bytes'] * config['trigger_percent'] / 100
-    return max(0, int(trigger_bytes - usage['used_bytes']))
+    reserve_bytes = usage['total_bytes'] * FREE_SPACE_RESERVE_PERCENT / 100
+    writable = usage['free_bytes'] - reserve_bytes
+    if config['auto_cleanup_enabled']:
+        trigger_bytes = usage['total_bytes'] * config['trigger_percent'] / 100
+        writable = min(writable, trigger_bytes - usage['used_bytes'])
+    return max(0, int(writable))
 
 
 def _detection_filename_candidates(detection):

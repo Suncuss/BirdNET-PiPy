@@ -87,14 +87,15 @@ run_backend_lint() {
 
     # Run as the host user so ruff's cache and --fix rewrites stay
     # host-owned. pip installs to $HOME/.local (HOME=/tmp, writable for
-    # any --user uid), so ruff is invoked by its installed path.
+    # any --user uid), so ruff is invoked by its installed path. The ruff
+    # version is requirements-test.txt's pin, which Dependabot updates.
     docker run --rm \
         --user "$(id -u):$(id -g)" \
         -e HOME=/tmp \
         -v "$(pwd)/backend:/app" \
         -w /app \
         python:3.11-slim \
-        sh -c "pip install -q --user ruff && /tmp/.local/bin/ruff check . $fix_flag" || BACKEND_FAILED=true
+        sh -c "pip install -q --user \$(grep -E '^ruff==' requirements-test.txt) && /tmp/.local/bin/ruff check . $fix_flag" || BACKEND_FAILED=true
 
     if [ "$BACKEND_FAILED" = true ]; then
         echo -e "${RED}[LINT]${NC} Backend: issues found"

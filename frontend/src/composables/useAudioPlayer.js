@@ -1,4 +1,5 @@
 import { ref, onUnmounted } from 'vue'
+import { playbackErrorMessage } from '@/utils/errorMessages'
 import { useLogger } from './useLogger'
 
 /**
@@ -87,7 +88,7 @@ export function useAudioPlayer() {
       // Only update error state if this audio is still the current one
       if (!isCurrentAudio()) return
 
-      const errorMessage = getAudioErrorMessage(event.target?.error)
+      const errorMessage = playbackErrorMessage(event.target?.error)
       logger.warn('Audio playback error:', { id, error: errorMessage })
       error.value = errorMessage
       stopAudio()
@@ -107,7 +108,7 @@ export function useAudioPlayer() {
       if (!isCurrentAudio()) return false
 
       logger.warn('Failed to play audio:', err)
-      error.value = err.message || 'Failed to play audio'
+      error.value = playbackErrorMessage(audio.error, err)
       stopAudio()
       return false
     }
@@ -121,28 +122,6 @@ export function useAudioPlayer() {
    */
   const isPlaying = (id) => {
     return currentPlayingId.value === id
-  }
-
-  /**
-   * Get human-readable error message from MediaError.
-   * Uses numeric codes directly to avoid dependency on MediaError global.
-   */
-  const getAudioErrorMessage = (mediaError) => {
-    if (!mediaError) return 'Unknown audio error'
-
-    // MediaError codes (1=ABORTED, 2=NETWORK, 3=DECODE, 4=SRC_NOT_SUPPORTED)
-    switch (mediaError.code) {
-      case 1: // MEDIA_ERR_ABORTED
-        return 'Audio playback aborted'
-      case 2: // MEDIA_ERR_NETWORK
-        return 'Network error loading audio'
-      case 3: // MEDIA_ERR_DECODE
-        return 'Audio decode error'
-      case 4: // MEDIA_ERR_SRC_NOT_SUPPORTED
-        return 'Audio format not supported'
-      default:
-        return 'Audio playback error'
-    }
   }
 
   /**

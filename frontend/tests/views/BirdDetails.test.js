@@ -78,9 +78,7 @@ const mockBirdDetails = {
   total_visits: 50,
   first_detected: '2024-01-01T10:00:00',
   last_detected: '2024-01-15T14:30:00',
-  average_confidence: 0.85,
-  peak_activity_time: '06:00',
-  seasonality: 'Year-round'
+  peak_activity_time: '06:00'
 }
 
 const mockImageData = {

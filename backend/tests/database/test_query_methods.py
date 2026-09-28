@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from core.timezone_service import local_now
+from tests.database.conftest import summary_all_periods
 
 
 class TestDatabaseQueryMethods:
@@ -562,7 +563,7 @@ class TestDatabaseQueryMethods:
         # depend on the docker container's system tz matching the configured
         # timezone in user_settings.json.
         now = local_now()
-        all_stats = test_db_manager.get_summary_stats_all_periods(
+        all_stats = summary_all_periods(test_db_manager,
             now.replace(hour=0, minute=0, second=0, microsecond=0),
             now - timedelta(weeks=1),
             now - timedelta(days=30),
@@ -578,7 +579,7 @@ class TestDatabaseQueryMethods:
     def test_summary_stats_buckets_by_period(self, test_db_manager, frozen_db_now):
         """Detections in different time windows land in the right buckets.
 
-        Pins the load-bearing semantic of get_summary_stats_all_periods: the
+        Pins the load-bearing semantic of the per-period summary: the
         CASE-WHEN-driven per-period counts (and the empty-period guards)
         must correctly route a detection at -2 days into today/week/month
         but not all-time-only, and a detection at -45 days into all-time
@@ -610,7 +611,7 @@ class TestDatabaseQueryMethods:
         _insert(now - timedelta(days=45),
                 'Old Bird', 'Speciesus antiquus')
 
-        all_stats = test_db_manager.get_summary_stats_all_periods(
+        all_stats = summary_all_periods(test_db_manager,
             today_start, week_start, month_start,
         )
 
@@ -679,7 +680,7 @@ class TestDatabaseQueryMethods:
             'cutoff': 0.5, 'sensitivity': 0.75, 'overlap': 0.25,
         })
 
-        all_stats = test_db_manager.get_summary_stats_all_periods(
+        all_stats = summary_all_periods(test_db_manager,
             today_start, week_start, month_start,
         )
 
@@ -747,7 +748,7 @@ class TestDatabaseQueryMethods:
             'cutoff': 0.5, 'sensitivity': 0.75, 'overlap': 0.25,
         })
 
-        all_stats = test_db_manager.get_summary_stats_all_periods(
+        all_stats = summary_all_periods(test_db_manager,
             today_start, week_start, month_start,
         )
 
@@ -787,7 +788,7 @@ class TestDatabaseQueryMethods:
                 'cutoff': 0.5, 'sensitivity': 0.75, 'overlap': 0.25,
             })
 
-        all_stats = test_db_manager.get_summary_stats_all_periods(
+        all_stats = summary_all_periods(test_db_manager,
             today_start, week_start, month_start,
         )
 

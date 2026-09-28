@@ -117,20 +117,8 @@ class BirdNetModel(BirdDetectionModel):
         # Apply custom sigmoid with sensitivity
         model_output = custom_sigmoid(model_output, sensitivity)
 
-        # Shared post-processing: collect raw top-3 and filtered candidates
-        prediction = self._post_process(self._labels, model_output, cutoff, chunk_index)
-
-        # Privacy filter: check for human detection
-        human_detection = any('Human' in species_label for species_label, _ in prediction.candidates)
-        if human_detection:
-            logger.warning("Human detected in audio - chunk discarded for privacy")
-            return ChunkPrediction(
-                raw_top3=prediction.raw_top3,
-                candidates=(),
-                human_detected=True,
-            )
-
-        return prediction
+        # Shared post-processing: raw top-3, cutoff and the privacy filter
+        return self._post_process(self._labels, model_output, cutoff, chunk_index)
 
     def get_labels(self) -> list[str]:
         if self._labels is None:

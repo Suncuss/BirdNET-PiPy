@@ -188,15 +188,8 @@ def _migrate_audio_sources(settings, *, persist=True):
     has_old_keys = any(k in audio for k in old_keys)
 
     if not has_old_keys:
-        # Already migrated or fresh install — just ensure next_source_id
-        if 'sources' in audio and 'next_source_id' not in audio:
-            existing_ids = []
-            for s in audio['sources']:
-                try:
-                    existing_ids.append(int(s['id'].split('_', 1)[1]))
-                except (KeyError, IndexError, ValueError):
-                    pass
-            audio['next_source_id'] = max(existing_ids, default=-1) + 1
+        # Already migrated or fresh install (load_user_settings derives a
+        # missing next_source_id from the saved file itself)
         return
 
     sources = []
@@ -380,7 +373,6 @@ LOCATION_FILTER_CACHE_SIZE = _get_positive_int_env('BIRDNET_LOCATION_CACHE_SIZE'
 # ── Audio ─────────────────────────────────────────────────────────────────────
 
 RECORDING_LENGTH = user_settings['audio']['recording_length']
-OVERLAP = user_settings['audio']['overlap']
 ANALYSIS_CHUNK_LENGTH = user_settings['audio']['recording_chunk_length']
 
 # Sample rate is determined by model, not user-configurable
@@ -389,13 +381,6 @@ try:
 except ValueError:
     SAMPLE_RATE = MODEL_SAMPLE_RATES[ModelType.BIRDNET]
 
-# ── Detection ─────────────────────────────────────────────────────────────────
-
-SENSITIVITY = user_settings['detection']['sensitivity']
-CUTOFF = user_settings['detection']['cutoff']
-ALLOWED_SPECIES = user_settings['species_filter']['allowed_species']
-BLOCKED_SPECIES = user_settings['species_filter']['blocked_species']
-
 # ── Location ──────────────────────────────────────────────────────────────────
 
 LAT = user_settings['location']['latitude']
@@ -403,41 +388,12 @@ LON = user_settings['location']['longitude']
 LOCATION_CONFIGURED = user_settings['location']['configured']
 TIMEZONE = user_settings['location']['timezone']
 
-
-def _is_valid_timezone(tz):
-    if not tz:
-        return False
-    try:
-        from zoneinfo import ZoneInfo
-        ZoneInfo(tz)
-        return True
-    except Exception:
-        return False
-
-
-LOCATION_READY = LOCATION_CONFIGURED and _is_valid_timezone(TIMEZONE)
-
 # ── BirdWeather ───────────────────────────────────────────────────────────────
 
 BIRDWEATHER_ID = user_settings['birdweather']['id']
 
-# ── Notifications ────────────────────────────────────────────────────────────
-
-NOTIFICATIONS_APPRISE_URLS = user_settings['notifications']['apprise_urls']
-NOTIFICATIONS_EVERY_DETECTION = user_settings['notifications']['every_detection']
-NOTIFICATIONS_RATE_LIMIT_SECONDS = user_settings['notifications']['rate_limit_seconds']
-NOTIFICATIONS_FIRST_OF_DAY = user_settings['notifications']['first_of_day']
-NOTIFICATIONS_RARE_SPECIES = user_settings['notifications']['rare_species']
-NOTIFICATIONS_RARE_THRESHOLD = user_settings['notifications']['rare_threshold']
-NOTIFICATIONS_RARE_WINDOW_DAYS = user_settings['notifications']['rare_window_days']
-NOTIFICATIONS_AUDIO_STATUS = user_settings['notifications']['audio_status']
-
 # ── Spectrogram ───────────────────────────────────────────────────────────────
 
-SPECTROGRAM_MAX_FREQ_IN_KHZ = user_settings['spectrogram']['max_freq_khz']
-SPECTROGRAM_MIN_FREQ_IN_KHZ = user_settings['spectrogram']['min_freq_khz']
-SPECTROGRAM_MAX_DBFS = user_settings['spectrogram']['max_dbfs']
-SPECTROGRAM_MIN_DBFS = user_settings['spectrogram']['min_dbfs']
 SPECTROGRAM_FONT_PATH = f'{BASE_DIR}/assets/Inter-Regular.ttf'
 
 # ── Storage ───────────────────────────────────────────────────────────────────

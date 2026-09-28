@@ -35,11 +35,6 @@ class _AudioStatusEvent:
         self.payload = payload
 
 
-def load_user_settings():
-    """Compatibility wrapper around runtime settings cache."""
-    return get_runtime_settings()
-
-
 class NotificationService:
     """Thread-safe notification service with background processing."""
 
@@ -54,7 +49,7 @@ class NotificationService:
 
     def _load_config(self):
         """Load notification config from runtime settings cache."""
-        settings = load_user_settings()
+        settings = get_runtime_settings()
         # Keep the full settings dict so the message-builders can reach the
         # display.bird_name_language preference without a second load.
         self._settings = settings
@@ -415,7 +410,7 @@ def get_notification_service(db_manager=None):
     global _notification_service
     with _notification_service_lock:
         if _notification_service is None and db_manager is not None:
-            settings = load_user_settings()
+            settings = get_runtime_settings()
             if settings['notifications']['apprise_urls']:
                 _notification_service = NotificationService(db_manager)
     return _notification_service

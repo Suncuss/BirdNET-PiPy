@@ -10,20 +10,15 @@ from model_service.label_utils import (
     _ensure_language_loaded,
     _ensure_loaded,
     clear_species_cache,
+    get_common_name,
     get_localized_name,
     get_localized_name_from_english,
     get_species_list,
+    is_human_label,
     parse_geomodel_labels,
     resolve_to_scientific_name,
     resolve_to_scientific_names,
 )
-
-
-@pytest.fixture(autouse=True)
-def _reset_cache():
-    clear_species_cache()
-    yield
-    clear_species_cache()
 
 
 class TestSpeciesTableLayout:
@@ -273,6 +268,12 @@ def _retained_module_cache_bytes(module: types.ModuleType) -> int:
 class TestSpeciesTableMemoryFootprint:
     """Regression guard against the dict-of-dicts shape returning."""
 
+    @pytest.fixture(autouse=True)
+    def _cold_cache(self):
+        # Measures what one load retains, so start from an empty cache (the
+        # parsed table otherwise persists across tests, languages included)
+        clear_species_cache()
+
     def test_metadata_only_load_under_8_mb(self):
         _ensure_loaded()
         used = _retained_module_cache_bytes(label_utils)
@@ -292,3 +293,49 @@ class TestSpeciesTableMemoryFootprint:
             f'label_utils cache retained {used:,} bytes after metadata + DE '
             'load; expected < 10 MB.'
         )
+
+
+class TestIsHumanLabel:
+    """The privacy filter's test for "this label is a person"."""
+
+    @pytest.mark.parametrize('label', [
+        'Human vocal_Human vocal',
+        'Human non-vocal_Human non-vocal',
+        'Human whistle_Human whistle',
+        'Homo sapiens_human',
+        'Homo Sapiens_Human vocal',
+    ])
+    def test_people_are_human(self, label):
+        assert is_human_label(label)
+
+    @pytest.mark.parametrize('label', [
+        'Catamenia homochroa_Paramo Seedeater',  # epithet contains "homo"
+        'Turdus migratorius_American Robin',
+        '',
+    ])
+    def test_birds_are_not(self, label):
+        assert not is_human_label(label)
+
+    def test_bundled_label_files_flag_exactly_their_people(self):
+        """A relabelled or new model file must fail here rather than let a
+        person through the privacy filter and into a saved clip."""
+        from config import settings
+        from model_service.label_utils import parse_v3_labels
+
+        with open(settings.LABELS_PATH) as f:
+            v24 = [line.strip() for line in f if line.strip()]
+        v31 = [f'{sci}_{common}' for sci, common in parse_v3_labels(settings.LABELS_V3_PATH)]
+
+        assert {label for label in v24 if is_human_label(label)} == {
+            'Human non-vocal_Human non-vocal',
+            'Human vocal_Human vocal',
+            'Human whistle_Human whistle',
+        }
+        assert {label for label in v31 if is_human_label(label)} == {
+            'Homo sapiens_human',
+            'Homo Sapiens_Human vocal',
+        }
+        # Whatever the genus spelling, a label that calls itself human is one
+        for label in v24 + v31:
+            if 'human' in get_common_name(label).lower():
+                assert is_human_label(label), label

@@ -39,18 +39,44 @@ docker build -f Dockerfile.test -t "$IMAGE" .
 # actually bites on such hosts; --memory takes over where the
 # controller exists (CI, or after cgroup_enable=memory cgroup_memory=1
 # is added to /boot/firmware/cmdline.txt and the host rebooted).
+#
+# /app/data is a fresh in-memory tmpfs for every run. Every data path is
+# hard-wired under /app/data (config/settings.py BASE_DIR), and modules open
+# the DB, logs and flags there at import time, so without this the suite read
+# and wrote the host's backend/data: results depended on leftover settings a
+# clean checkout (or CI) doesn't have. tests/conftest.py refuses to run
+# without it. mode=1777: the tmpfs is root-owned and --user must write it.
 docker run --rm \
     --user "$(id -u):$(id -g)" \
     --memory=4g --memory-swap=4g \
     -e HOME=/tmp \
     -v "$(pwd):/app" \
+    --tmpfs /app/data:rw,mode=1777 \
     -w /app \
     -e PYTHONPATH=/app \
     "$IMAGE" \
-    bash -c "ulimit -v 6291456; ./run-tests.sh $*"
+    bash -c 'ulimit -v 6291456; exec ./run-tests.sh "$@"' run-tests "$@"
+
+# The stream supervisor (deployment/audio) has its own unittest suite; it
+# loads backend modules by path, so it runs from a copy of the repo layout
+# (read-only mounts) along with the full backend suite. It spawns
+# subprocesses, so it gets the same two memory guards as the run above.
+if [ $# -eq 0 ]; then
+    echo ""
+    echo "Running stream supervisor tests..."
+    docker run --rm \
+        --user "$(id -u):$(id -g)" \
+        --memory=4g --memory-swap=4g \
+        -e HOME=/tmp \
+        -v "$(pwd):/src/backend:ro" \
+        -v "$(pwd)/../deployment:/src/deployment:ro" \
+        -w /src \
+        "$IMAGE" \
+        bash -c 'ulimit -v 6291456; exec python -m unittest discover -s deployment/audio/tests'
+fi
 
 # If coverage was requested, remind about the report
-if [[ "$@" == *"coverage"* ]]; then
+if [[ "$*" == *"coverage"* ]]; then
     echo ""
     echo "Coverage report is available at: backend/htmlcov/index.html"
 fi

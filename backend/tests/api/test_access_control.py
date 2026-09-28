@@ -40,7 +40,6 @@ class TestPublicAccessGating:
         with auth_enabled_app(real_db_manager) as (client, _):
             assert client.get('/api/species/all').status_code == 200
             assert client.get('/api/dashboard').status_code == 200
-            assert client.get('/api/observations/recent').status_code == 200
 
     def test_species_all_ok_with_detections_when_auth_enabled(self, real_db_manager):
         """Regression: the Species Catalog is built off the request thread (the
@@ -61,7 +60,6 @@ class TestPublicAccessGating:
         with auth_enabled_app(real_db_manager, access={'public_access': False}) as (client, _):
             assert client.get('/api/species/all').status_code == 401
             assert client.get('/api/dashboard').status_code == 401
-            assert client.get('/api/observations/recent').status_code == 401
             assert client.get('/api/bird/American%20Robin/recordings').status_code == 401
 
     def test_owner_reads_even_when_public_access_off(self, real_db_manager):
@@ -348,9 +346,10 @@ class TestObservationsContract:
     def test_latest_and_recent_include_media_signatures(self, real_db_manager):
         self._seed(real_db_manager)
         with auth_enabled_app(real_db_manager) as (client, _):
-            latest = client.get('/api/observations/latest').get_json()
+            dashboard = client.get('/api/dashboard').get_json()
+            latest = dashboard['latestObservation']
             assert latest and latest.get('audio_sig')
-            recent = client.get('/api/observations/recent').get_json()
+            recent = dashboard['recentObservations']['all']
             assert recent and recent[0].get('audio_sig')
 
 

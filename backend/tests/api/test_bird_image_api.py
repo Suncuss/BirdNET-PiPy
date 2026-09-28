@@ -11,8 +11,6 @@ import pytest
 # JPEG magic bytes (smallest valid JPEG header)
 JPEG_HEADER = b'\xff\xd8\xff\xe0' + b'\x00' * 100
 PNG_HEADER = b'\x89PNG' + b'\x00' * 100
-GIF_HEADER = b'GIF89a' + b'\x00' * 100
-WEBP_HEADER = b'RIFF' + b'\x00\x00\x00\x00' + b'WEBP' + b'\x00' * 100
 
 
 class TestBirdImageUpload:
@@ -739,12 +737,6 @@ class TestWikimediaChoiceSidecar:
             finally:
                 for p in patches:
                     p.stop()
-
-    def test_get_returns_404_when_no_sidecar(self, choice_client):
-        client, _ = choice_client
-        response = client.get('/api/bird/American Robin/wikimedia_choice')
-        assert response.status_code == 404
-        assert response.get_json()['hasChoice'] is False
 
     def test_put_creates_sidecar(self, choice_client):
         client, images_dir = choice_client

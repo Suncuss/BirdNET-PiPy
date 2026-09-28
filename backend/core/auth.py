@@ -426,19 +426,23 @@ def is_authenticated():
     # Sessions carry the epoch they were minted under. change_password() bumps
     # it, so a password change actually evicts every other signed-in device
     # instead of leaving stateless cookies valid forever. Sessions predating
-    # the epoch (and configs predating it) both read as 0, so an upgrade does
-    # not sign anyone out.
+    # the epoch (and configs predating it) both read as 0. (Cookies that old
+    # also lack a session_id, so the check below signs them out anyway.)
     if session.get('epoch', 0) != config.get('session_epoch', 0):
+        return False
+
+    # Every login mints a session_id; a signed cookie without one predates
+    # them and can't be revoked on its own, so it has to sign in again.
+    session_id = get_session_id()
+    if not session_id:
         return False
 
     # A normal logout revokes only this browser's signed cookie. Keeping the
     # small denylist in auth.json closes the short reconnect/replay window
     # without turning every request into a server-side session lookup.
-    session_id = get_session_id()
     revoked_sessions = config.get('revoked_sessions', {})
     return not (
-        session_id
-        and isinstance(revoked_sessions, dict)
+        isinstance(revoked_sessions, dict)
         and session_id in revoked_sessions
     )
 
@@ -680,7 +684,6 @@ def authenticate(password):
 
     # Set session
     session['authenticated'] = True
-    session['authenticated_at'] = datetime.utcnow().isoformat()
     # Stable identity for every browser login. Socket.IO connections use this
     # to join a session-specific room, so logging out one browser does not have
     # to evict every other signed-in device.
@@ -688,11 +691,6 @@ def authenticate(password):
         isinstance(revoked_sessions, dict)
         and existing_session_id in revoked_sessions
     )
-    # Pin the preserved identity rather than leaving it to be re-derived. A
-    # cookie predating session IDs falls back to an identity built from
-    # authenticated_at, which the line above has just replaced — so without
-    # this the identity silently shifts on re-login and logout looks for the
-    # sockets of a session that no longer exists.
     session['session_id'] = (
         secrets.token_urlsafe(24)
         if (not existing_session_id or session_was_revoked)
@@ -706,23 +704,15 @@ def authenticate(password):
 
 
 def get_session_id():
-    """Return a stable identity for the signed-in browser session, if any.
+    """Return the stable identity login() gave this browser session, if any.
 
-    ``authenticated_at`` is the upgrade fallback for cookies created before
-    session IDs were added. It is unique per successful login and remains
-    stable when Flask refreshes the signed cookie.
+    It stays the same when Flask refreshes the signed cookie.
     """
     if not session.get('authenticated', False):
         return None
 
     session_id = session.get('session_id')
-    if isinstance(session_id, str) and session_id:
-        return session_id
-
-    authenticated_at = session.get('authenticated_at')
-    if isinstance(authenticated_at, str) and authenticated_at:
-        return f"legacy:{session.get('epoch', 0)}:{authenticated_at}"
-    return None
+    return session_id if isinstance(session_id, str) and session_id else None
 
 
 def revoke_session_id(session_id):

@@ -1,11 +1,10 @@
 import { ref } from 'vue'
 
 /**
- * Shared app-level status state.
- * Used to coordinate UI during initialization and restarts.
+ * Shared app-level status state: whether the station's location is set up
+ * (gates the setup wizard) and its display name.
  */
 const locationConfigured = ref(null) // null = checking, false = not configured, true = ready
-const isRestarting = ref(false)
 const stationName = ref('')
 
 export function useAppStatus() {
@@ -13,24 +12,14 @@ export function useAppStatus() {
     locationConfigured.value = value
   }
 
-  const setRestarting = (value) => {
-    isRestarting.value = value
-  }
-
-  // Convenience: true when app is ready for normal operation
-  const isReady = () => locationConfigured.value === true && !isRestarting.value
-
   const setStationName = (value) => {
     stationName.value = value || ''
   }
 
   return {
     locationConfigured,
-    isRestarting,
     stationName,
     setLocationConfigured,
-    setRestarting,
-    setStationName,
-    isReady
+    setStationName
   }
 }

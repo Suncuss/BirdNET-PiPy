@@ -1,7 +1,11 @@
 
+# Every direct dependency is pinned to an exact version. A floating range
+# re-resolves whenever this file (or a base image) changes and the build cache
+# misses, silently shipping new majors to every station; upgrades arrive as
+# reviewed Dependabot PRs instead (.github/dependabot.yml).
+
 # Web framework and extensions
 Flask==3.1.3
-Flask-Cors==6.0.0
 Flask-SocketIO==5.6.1
 
 # WSGI server (production) — replaces the Werkzeug dev server
@@ -15,24 +19,19 @@ bcrypt==4.2.1
 # Data processing and analysis
 numpy==1.26.4  # Keep 1.26.x for compatibility with TensorFlow Lite
 
-# Audio processing
-
 # Machine Learning
 tflite-runtime==2.14.0  # Keep stable version for model compatibility
-onnxruntime>=1.16.0  # ONNX Runtime for BirdNET V3.1 model
+onnxruntime==1.28.0  # ONNX Runtime for BirdNET V3.1 model
 
 # Requests
-requests>=2.32.4
+requests==2.34.2
 
 # Notifications
-apprise>=1.8.0
-paho-mqtt>=2.0.0
+apprise==1.12.0
+paho-mqtt==2.1.0  # Apprise's MQTT plugin imports it (never imported directly)
 
 # Timezone utilities (Rust wheel, no compiler needed; ~50MB smaller than timezonefinder)
-tzfpy>=1.3.2
+tzfpy==1.3.2
 
 # Visualization (spectrogram rendering)
-Pillow>=10.4.0
-
-# File system monitoring
-watchdog==6.0.0
+Pillow==12.3.0

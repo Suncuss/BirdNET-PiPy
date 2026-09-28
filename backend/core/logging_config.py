@@ -213,26 +213,13 @@ def setup_logging(service_name, log_level=None, format_type=None):
     # Suppress noisy libraries
     logging.getLogger('werkzeug').setLevel(logging.WARNING)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
-    logging.getLogger('matplotlib').setLevel(logging.WARNING)
-    logging.getLogger('matplotlib.font_manager').setLevel(logging.WARNING)
     logging.getLogger('PIL').setLevel(logging.WARNING)
-    logging.getLogger('watchdog.observers.inotify_buffer').setLevel(logging.WARNING)
 
     return logger
 
 def get_logger(name):
     """Get a logger instance for a specific module"""
     return logging.getLogger(name)
-
-# Example usage patterns
-class LoggerMixin:
-    """Mixin class to add logging capabilities to any class"""
-
-    @property
-    def logger(self):
-        if not hasattr(self, '_logger'):
-            self._logger = logging.getLogger(self.__class__.__module__ + '.' + self.__class__.__name__)
-        return self._logger
 
 # Decorators for common logging patterns
 import functools

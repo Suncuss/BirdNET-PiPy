@@ -13,6 +13,10 @@ updates:
       timezone: America/New_York
     commit-message:
       prefix: "chore"
+    ignore:
+      # tflite-runtime 2.14.0 (the last release) ships wheels up to 3.11 only
+      - dependency-name: python
+        versions: [">= 3.12"]
 
   - package-ecosystem: docker
     directory: /frontend
@@ -24,6 +28,11 @@ updates:
       timezone: America/New_York
     commit-message:
       prefix: "chore"
+    ignore:
+      # Node majors move with frontend/.nvmrc on purpose (26 breaks
+      # happy-dom's localStorage in the test suite)
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: docker
     directory: /deployment/audio
@@ -35,3 +44,39 @@ updates:
       timezone: America/New_York
     commit-message:
       prefix: "chore"
+
+  # Python and npm packages are pinned exactly; minor/patch updates come as
+  # one grouped PR a week, majors one per package so each gets its own review.
+  - package-ecosystem: pip
+    directory: /backend
+    target-branch: dev
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: America/New_York
+    commit-message:
+      prefix: "chore"
+    groups:
+      python-minor-and-patch:
+        update-types: ["minor", "patch"]
+    ignore:
+      # tflite-runtime 2.14.0 (the last release) is built against numpy 1.x,
+      # so numpy 2 breaks V2.4 inference; the Dockerfile's separate
+      # numpy==1.26.4 install would not stop requirements.txt upgrading it
+      - dependency-name: numpy
+        versions: [">= 2"]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    target-branch: dev
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: America/New_York
+    commit-message:
+      prefix: "chore"
+    groups:
+      npm-minor-and-patch:
+        update-types: ["minor", "patch"]

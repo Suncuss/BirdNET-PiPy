@@ -19,7 +19,8 @@ export const supersededSettingsRevision = () => superseded
 export const acceptSettingsRevision = (response) => {
   // Our ETag is a hash of the saved settings document. nginx adds W/ when
   // compressing the response, but that does not change the content revision
-  // used by /settings/status or the API's If-Match precondition.
+  // carried by the socket's settings_status event or the API's If-Match
+  // precondition.
   const next = response.headers?.etag?.replace(/^W\//, '') || null
   if (next !== etag) superseded = etag
   etag = next

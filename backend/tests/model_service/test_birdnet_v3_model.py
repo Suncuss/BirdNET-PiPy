@@ -38,7 +38,6 @@ class TestBirdNetV3ModelPredict:
         model._input_name = "input"
         model._prediction_output_name = "predictions"
 
-        # Set labels (no Human class in V3.1)
         model._labels = [
             "Turdus migratorius_American Robin",
             "Cardinalis cardinalis_Northern Cardinal",
@@ -84,26 +83,40 @@ class TestBirdNetV3ModelPredict:
         for _label, confidence in results:
             assert confidence >= 0.5
 
-    def test_predict_no_privacy_filter(self, mock_v3_model):
-        """Test that V3.1 has NO human detection / privacy filter."""
-        # Even if we add a label with "Human", V3.1 should NOT filter it out
-        # (unlike V2.4 which checks for Human and returns empty list)
+    # Both V3.1 human labels, spelled as in the bundled labels file
+    @pytest.mark.parametrize('human_label', [
+        'Homo sapiens_human',
+        'Homo Sapiens_Human vocal',
+    ])
+    def test_privacy_filter_discards_a_chunk_with_a_person(self, mock_v3_model, human_label):
         mock_v3_model._labels = [
             "Turdus migratorius_American Robin",
-            "Homo sapiens_Human",
+            human_label,
             "Cyanocitta cristata_Blue Jay"
         ]
-
-        predictions = np.array([[0.3, 0.9, 0.1]])  # Human has highest confidence
-        mock_v3_model._session.run.return_value = [predictions]
+        # The robin clears the cutoff too, but its clip would hold the voice
+        mock_v3_model._session.run.return_value = [np.array([[0.8, 0.9, 0.1]])]
 
         audio_chunk = np.zeros(96000, dtype=np.float32)
-        results = mock_v3_model.predict(audio_chunk, sensitivity=1.0, cutoff=0.0)
+        prediction = mock_v3_model.predict_chunk(audio_chunk, sensitivity=1.0, cutoff=0.5)
 
-        # V3.1 should NOT filter out Human - returns all results
-        assert len(results) == 3
-        labels = [r[0] for r in results]
-        assert "Homo sapiens_Human" in labels
+        assert prediction.candidates == ()
+        assert prediction.human_detected is True
+        assert prediction.raw_top3[0][0] == human_label  # still logged
+
+    def test_privacy_filter_ignores_a_person_below_the_cutoff(self, mock_v3_model):
+        mock_v3_model._labels = [
+            "Turdus migratorius_American Robin",
+            "Homo Sapiens_Human vocal",
+            "Cyanocitta cristata_Blue Jay"
+        ]
+        mock_v3_model._session.run.return_value = [np.array([[0.8, 0.2, 0.1]])]
+
+        audio_chunk = np.zeros(96000, dtype=np.float32)
+        prediction = mock_v3_model.predict_chunk(audio_chunk, sensitivity=1.0, cutoff=0.5)
+
+        assert prediction.candidates == (("Turdus migratorius_American Robin", pytest.approx(0.8)),)
+        assert prediction.human_detected is False
 
     def test_sensitivity_scaling(self, mock_v3_model):
         """Test probs^(1/sensitivity) math: 1.0 is no-op, >1.0 boosts, <1.0 reduces."""

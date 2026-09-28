@@ -368,9 +368,7 @@ export default {
     const chartHasData = ref(false)
     const chartLoadedOnce = ref(false)
     const chartError = ref(false)
-    const averageConfidence = ref(0)
     const peakActivityTime = ref('')
-    const seasonality = ref('')
     // Recordings state
     const allRecordings = ref([])       // Store all 16 fetched recordings
     const recordingSort = ref('recent') // Default to most recent
@@ -508,9 +506,7 @@ export default {
         totalVisits.value = data.total_visits
         firstDetected.value = new Date(data.first_detected)
         lastDetected.value = new Date(data.last_detected)
-        averageConfidence.value = data.average_confidence
         peakActivityTime.value = data.peak_activity_time
-        seasonality.value = data.seasonality
       } catch (error) {
         console.error('Error fetching bird details:', error)
         return
@@ -856,9 +852,7 @@ export default {
       onImageApplied,
       onWikimediaImageError,
       revertToWikimedia,
-      averageConfidence,
       peakActivityTime,
-      seasonality,
       formatDate,
       formatHourLabel,
 	      detectionChart,

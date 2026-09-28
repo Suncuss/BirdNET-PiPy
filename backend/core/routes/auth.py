@@ -26,7 +26,7 @@ from core.auth import (
     setup_password,
 )
 from core.logging_config import get_logger, log_api_request
-from core.runtime_config import get_runtime_settings, invalidate_runtime_settings_cache
+from core.runtime_config import get_runtime_settings
 from core.settings_store import (
     load_user_settings,
     save_user_settings,
@@ -225,7 +225,6 @@ def save_access_settings():
         current_settings['access'] = get_default_settings()['access']
     current_settings['access'].update(data)
     save_user_settings(current_settings)
-    invalidate_runtime_settings_cache()
     from core.api import revoke_public_sockets
     revoke_public_sockets()
 

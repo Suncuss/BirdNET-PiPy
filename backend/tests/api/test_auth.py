@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -619,14 +620,19 @@ class TestSessionEviction:
         self._change(owner)
         assert self._authenticated(other) is False
 
-        # Owner forgets the new password and uses the documented recovery.
-        with open(auth_module.RESET_PASSWORD_FILE, 'w') as f:
-            f.write('reset')
-        auth_module.check_password_reset()
-        self._setup(owner, password='recovered123')
+        # Owner forgets the new password and uses the documented recovery,
+        # which in real life comes well after the eviction. The epoch has
+        # one-second resolution and test hashing is fast, so without moving
+        # the clock this whole flow can fit inside a single second.
+        real_time = time.time
+        with patch('time.time', lambda: real_time() + 3600):
+            with open(auth_module.RESET_PASSWORD_FILE, 'w') as f:
+                f.write('reset')
+            auth_module.check_password_reset()
+            self._setup(owner, password='recovered123')
 
-        # The evicted session must NOT come back from the dead.
-        assert self._authenticated(other) is False
+            # The evicted session must NOT come back from the dead.
+            assert self._authenticated(other) is False
 
     def test_password_change_rotates_capability_secrets(self, auth_app):
         """A stolen session can mint signed media URLs (24-48h) and share

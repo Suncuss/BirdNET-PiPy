@@ -191,11 +191,11 @@ class TestDashboardSummaryLocalization:
             ))
 
         with _patch_settings('de'):
-            response = api_client.get('/api/observations/summary')
+            response = api_client.get('/api/dashboard/summary?period=allTime')
             assert response.status_code == 200
             data = response.get_json()
 
-        all_time = data['allTime']
+        all_time = data
         # The English fields keep V2's string (for backward-compat with any
         # consumer that reads them), but the Display field is localized.
         assert all_time['mostCommonSpeciesScientificName'] == 'Turdus merula'
@@ -269,9 +269,9 @@ class TestEmptyScientificNameLegacyRows:
         ))
 
         with _patch_settings('en'):
-            response = api_client.get('/api/observations/summary')
+            response = api_client.get('/api/dashboard/summary?period=allTime')
             assert response.status_code == 200
             data = response.get_json()
 
         # COUNT(DISTINCT COALESCE(...)) should treat the two as two species.
-        assert data['allTime']['uniqueSpecies'] == 2
+        assert data['uniqueSpecies'] == 2

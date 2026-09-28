@@ -29,11 +29,11 @@ class TestBirdNetModelPredict:
         model.meta_input_layer_index = None
         model.meta_output_layer_index = None
 
-        # Set labels (including Human for privacy filter testing)
+        # Set labels (including V2.4's human voice label for privacy filter testing)
         model._labels = [
             "Turdus migratorius_American Robin",
             "Cardinalis cardinalis_Northern Cardinal",
-            "Homo sapiens_Human",
+            "Human vocal_Human vocal",
             "Cyanocitta cristata_Blue Jay"
         ]
         model._ebird_codes = {}

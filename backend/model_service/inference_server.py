@@ -18,13 +18,11 @@ from config.constants import (
 warnings.filterwarnings('ignore', category=UserWarning, module='numpy.core.getlimits')
 import os
 import subprocess
-import sys
 import time
 import wave
 
 from flask import Flask, jsonify, request
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.logging_config import get_logger, log_execution_time, setup_logging
 from core.runtime_config import get_runtime_settings
 from core.timezone_service import get_timezone_str

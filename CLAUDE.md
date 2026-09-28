@@ -33,7 +33,7 @@ Prefer simple, modular code with small focused components.
 **Build & Deploy:**
 ```bash
 ./build.sh                  # Builds all Docker images (frontend + backend); does NOT deploy
-docker compose up -d        # Deploy: recreate containers on the newly built images
+docker compose up -d        # Deploy: recreate containers on the new images (backend: on every build, via its build-ID label)
 ./build.sh --test           # Run tests before building
 ./build.sh --help           # Show all options
 ```
@@ -71,7 +71,7 @@ docs/            # ARCHITECTURE, INSTALLATION, PRIVACY
 internal_docs/   # Planning notes (workflow, reviews, design docs) — gitignored, do not commit
 ```
 
-`AGENTS.md` is a symlink to this file.
+`AGENTS.md` is a local symlink to this file; it is gitignored, so a fresh clone won't have it.
 
 ## Development Notes
 

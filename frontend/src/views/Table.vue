@@ -195,17 +195,17 @@
         </div>
 	
         <div
-          v-if="actionError"
+          v-if="bannerError"
           class="flex items-start justify-between gap-3 px-4 py-3 bg-red-50 border-b border-red-100"
         >
           <p class="text-sm text-red-700">
-            {{ actionError }}
+            {{ bannerError }}
           </p>
           <button
             type="button"
             class="text-red-700 hover:text-red-900 transition-colors"
             title="Dismiss"
-            @click="clearActionError"
+            @click="dismissBannerError"
           >
             <CloseIcon class="w-4 h-4" />
           </button>
@@ -490,6 +490,12 @@
               Delete this <strong>{{ getDisplayCommonName(detectionToDelete) }}</strong> detection from {{ formatDate(detectionToDelete?.timestamp) }}?
             </template>
           </p>
+          <p
+            v-if="actionError"
+            class="-mt-3 mb-5 text-sm text-red-700"
+          >
+            {{ actionError }}
+          </p>
           <div class="flex justify-end gap-3">
             <button
               :disabled="isDeleting"
@@ -592,8 +598,17 @@ const {
 // Audio playback composable
 const {
   currentPlayingId,
-  togglePlay
+  togglePlay,
+  error: audioError,
+  clearError: clearAudioError
 } = useAudioPlayer()
+
+// One banner for whatever went wrong last: a delete or a playback
+const bannerError = computed(() => actionError.value || audioError.value)
+const dismissBannerError = () => {
+  clearActionError()
+  clearAudioError()
+}
 
 const { isAuthenticated } = useAuth()
 
@@ -734,7 +749,10 @@ const showDetectionDetail = (detection) => {
 
 // --- Delete Logic ---
 
+// Opening the dialog starts a new action; a failure shows inside the dialog
+// (the page banner sits under its overlay), so drop any earlier error first.
 const confirmDelete = (detection) => {
+  actionError.value = null
   isBatchDelete.value = false
   detectionToDelete.value = detection
   showDeleteModal.value = true
@@ -742,6 +760,7 @@ const confirmDelete = (detection) => {
 
 const confirmBatchDelete = () => {
   if (selectedCount.value === 0) return
+  actionError.value = null
   isBatchDelete.value = true
   detectionToDelete.value = null
   showDeleteModal.value = true

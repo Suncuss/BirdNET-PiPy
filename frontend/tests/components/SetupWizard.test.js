@@ -41,10 +41,7 @@ vi.mock('@/composables/useServiceRestart', () => ({
 vi.mock('@/composables/useAppStatus', () => ({
   useAppStatus: () => ({
     locationConfigured: { value: null },
-    isRestarting: { value: false },
-    setLocationConfigured: vi.fn(),
-    setRestarting: vi.fn(),
-    isReady: vi.fn(() => false)
+    setLocationConfigured: vi.fn()
   })
 }))
 

@@ -87,6 +87,11 @@ _NEWER = ("(excluded.last_detected > last_detected OR "
           "(excluded.last_detected = last_detected AND "
           "excluded.latest_id > latest_id))")
 
+# sum_confidence has had no reader since GET /api/bird/<name> dropped
+# average_confidence, but it stays maintained: it rides writes to this row
+# that happen anyway, and the releases before that one read it. Zeroing it
+# would show them a wrong average after a downgrade, and dropping the
+# NOT NULL column would make their inserts fail.
 _UPSERT = f"""
 INSERT INTO species (species_key, scientific_name, common_name, ebird_code,
                      detection_count, sum_confidence, first_detected,

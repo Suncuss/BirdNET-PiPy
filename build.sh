@@ -223,6 +223,39 @@ EOF
     fi
 
     print_status "Version info: v$VERSION $COMMIT_HASH ($BRANCH)"
+
+    stamp_build_id "$BUILD_TIME"
+}
+
+# Record this build in .env as BIRDNET_BUILD_ID. docker-compose.yml puts it in
+# a label on the three backend services, so the next `docker compose up -d`
+# sees their config change and recreates them. They run their code from the
+# ./backend bind mount, and the backend image (dependencies only) stays the
+# same across code changes; without this stamp a code-only rebuild left the
+# old processes running while version.json already named the new commit.
+# Best effort: if .env can't be written, the build still succeeds.
+stamp_build_id() {
+    local build_id="$1" tmp rc=0
+    local failed="Could not record the build in .env; after deploying, run: docker compose up -d --force-recreate model-server api main"
+
+    if ! tmp=$(mktemp .env.XXXXXX 2>/dev/null); then
+        print_warning "$failed"
+        return 0
+    fi
+    # Rewrite via a temp file carrying .env's own mode: it can hold secrets
+    # (e.g. ICECAST_PASSWORD). A new .env keeps mktemp's owner-only mode.
+    if [ -f .env ]; then
+        # grep -v exits 1 when it keeps no lines (.env held only the stamp)
+        grep -v '^BIRDNET_BUILD_ID=' .env > "$tmp" || rc=$?
+        if [ "$rc" -gt 1 ] || ! chmod --reference=.env "$tmp"; then
+            rc=2
+        fi
+    fi
+    if [ "$rc" -le 1 ] && echo "BIRDNET_BUILD_ID=${build_id}" >> "$tmp" && mv -f "$tmp" .env; then
+        return 0
+    fi
+    rm -f "$tmp"
+    print_warning "$failed"
 }
 
 # Function to show usage
@@ -384,7 +417,9 @@ fi
 
 print_status "Docker images built successfully!"
 
-# Generate version.json after successful build so it reflects what's actually running
+# Generate version.json after a successful build. Its build ID stamp makes the
+# next `docker compose up -d` recreate the backend, so the running code
+# matches what version.json says.
 generate_version_info
 
 print_status "Build process complete!"

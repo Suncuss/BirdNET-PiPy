@@ -127,6 +127,74 @@ describe('ExportModal', () => {
     expect(wrapper.text()).toContain('1,000 detections')
   })
 
+  it('New export keeps the ready export until a new one starts', async () => {
+    currentJob = makeJob({ state: 'ready', rows_done: 1000, bytes: 4096 })
+    const wrapper = await mountModal()
+
+    await button(wrapper, 'New export').trigger('click')
+    await vi.advanceTimersByTimeAsync(300)
+    await flushPromises()
+    expect(button(wrapper, 'Prepare export')).toBeTruthy()
+    expect(mockApi.delete).not.toHaveBeenCalled()
+
+    // Refused for space: the ready export is still there to go back to
+    mockApi.post.mockRejectedValueOnce(Object.assign(new Error('HTTP 507'), {
+      response: { status: 507, data: { error: 'Not enough free space to prepare this export.' } }
+    }))
+    await button(wrapper, 'Prepare export').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Not enough free space')
+    await button(wrapper, 'Back').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('a[download]').attributes('href')).toBe(`${API_BASE}/detections/export/jobs/job1/file`)
+    expect(wrapper.text()).not.toContain('Not enough free space')
+
+    // A start that goes through replaces it server-side; Back becomes Cancel
+    await button(wrapper, 'New export').trigger('click')
+    await vi.advanceTimersByTimeAsync(300)
+    await flushPromises()
+    mockApi.post.mockResolvedValueOnce({ data: { job: makeJob({ id: 'job2' }) } })
+    await button(wrapper, 'Prepare export').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[role="progressbar"]').exists()).toBe(true)
+    expect(mockApi.delete).not.toHaveBeenCalled()
+    await button(wrapper, 'Cancel export').trigger('click')
+    await flushPromises()
+    expect(button(wrapper, 'Back')).toBeUndefined()
+    expect(button(wrapper, 'Cancel')).toBeTruthy()
+  })
+
+  it('Back asks the server, so an expired export is not offered for download', async () => {
+    currentJob = makeJob({ state: 'ready', rows_done: 1000, bytes: 4096 })
+    const wrapper = await mountModal()
+    await button(wrapper, 'New export').trigger('click')
+    await vi.advanceTimersByTimeAsync(300)
+    await flushPromises()
+
+    currentJob = null // expired on the server while the options were open
+    await button(wrapper, 'Back').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('a[download]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('That export has expired')
+    expect(button(wrapper, 'Back')).toBeUndefined()
+    expect(button(wrapper, 'Prepare export')).toBeTruthy()
+  })
+
+  it('Back shows the export another tab replaced it with', async () => {
+    currentJob = makeJob({ state: 'ready', rows_done: 1000, bytes: 4096 })
+    const wrapper = await mountModal()
+    await button(wrapper, 'New export').trigger('click')
+    await vi.advanceTimersByTimeAsync(300)
+    await flushPromises()
+
+    currentJob = makeJob({ id: 'job2', state: 'ready', rows_done: 10, rows_total: 10, bytes: 512 })
+    await button(wrapper, 'Back').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('a[download]').attributes('href')).toBe(`${API_BASE}/detections/export/jobs/job2/file`)
+  })
+
   it('cancelling a preparing export returns to the options', async () => {
     currentJob = makeJob()
     const wrapper = await mountModal()

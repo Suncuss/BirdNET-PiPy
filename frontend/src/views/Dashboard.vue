@@ -142,16 +142,15 @@
           </div>
           <!-- Call Player -->
           <div
-            ref="canvasContainer"
             class="w-full lg:flex-1 lg:h-full mt-3 lg:mt-0 flex items-center justify-center lg:pr-2"
           >
             <div class="w-full h-full relative flex items-center justify-center">
               <div
                 v-show="!latestObservationIsPlaying"
-                class="absolute inset-0 flex justify-center items-center z-10"
+                class="absolute inset-0 flex justify-center items-center gap-2 px-2 z-10"
               >
                 <button
-                  class="bg-black bg-opacity-50 hover:bg-opacity-70 text-white rounded-full flex items-center justify-center w-10 h-10 lg:w-14 lg:h-14 transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-blue-300"
+                  class="flex-shrink-0 bg-black bg-opacity-50 hover:bg-opacity-70 text-white rounded-full flex items-center justify-center w-10 h-10 lg:w-14 lg:h-14 transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-blue-300"
                   @click="playLatestObservation"
                 >
                   <font-awesome-icon
@@ -159,6 +158,13 @@
                     class="text-lg lg:text-2xl"
                   />
                 </button>
+                <p
+                  v-if="latestPlaybackError"
+                  role="alert"
+                  class="min-w-0 rounded bg-white/80 px-2 py-1 text-xs lg:text-sm text-red-700"
+                >
+                  {{ latestPlaybackError }}
+                </p>
               </div>
               <div
                 class="bg-gray-200 h-12 lg:h-[110px] w-full rounded-lg overflow-hidden flex items-center justify-center"
@@ -294,6 +300,11 @@
             </button>
           </div>
         </div>
+        <AlertBanner
+          :message="audioError || ''"
+          variant="error"
+          @dismiss="clearAudioError"
+        />
         <CenteredMessage
           v-if="!hasLoadedOnce"
           variant="loading"
@@ -439,10 +450,12 @@ import { useTallViewport, ACTIVITY_ROWS } from '@/composables/useTallViewport';
 import SpectrogramModal from '@/components/SpectrogramModal.vue';
 import SpectrogramIcon from '@/components/icons/SpectrogramIcon.vue';
 import CenteredMessage from '@/components/CenteredMessage.vue';
+import AlertBanner from '@/components/AlertBanner.vue';
 import ActivityOverviewCharts from '@/components/ActivityOverviewCharts.vue';
 import DetectionModal from '@/components/DetectionModal.vue';
 import { getAudioUrl, getSpectrogramUrl } from '@/services/media'
 import { getDisplayCommonName } from '@/utils/birdNames'
+import { playbackErrorMessage } from '@/utils/errorMessages'
 import { recordingPath } from '@/utils/detectionLinks'
 import { formatConfidence } from '@/utils/format'
 import { createScrollPacer } from '@/utils/scrollPacer'
@@ -458,6 +471,7 @@ export default {
         SpectrogramModal,
         SpectrogramIcon,
         CenteredMessage,
+        AlertBanner,
         ActivityOverviewCharts,
         DetectionModal
     },
@@ -629,12 +643,15 @@ export default {
         const latestObservationIsPlaying = ref(false)
         const initialLoad = ref(true)
         const spectrogramCanvas = ref(null)
+        const latestPlaybackError = ref(null)
 
         // Audio player composable for simple play/stop in Recent Observations list
         const {
             currentPlayingId,
             togglePlay: audioTogglePlay,
-            stopAudio
+            stopAudio,
+            error: audioError,
+            clearError: clearAudioError
         } = useAudioPlayer()
 
         const summaryPeriods = [
@@ -786,6 +803,9 @@ export default {
         });
 
         // Watch for location to become configured (after setup modal)
+        // A playback error is about one recording; a new detection clears it.
+        watch(() => latestObservationData.value?.id, () => { latestPlaybackError.value = null })
+
         watch(locationConfigured, async (configured) => {
             if (configured === true && !pollInterval) {
                 await startDashboard();
@@ -1001,13 +1021,24 @@ export default {
             latestObservationIsPlaying.value = false;
         };
 
+        // A load error or rejected play() of the latest recording: stop the
+        // spectrogram and say why. Ignores elements already replaced (their
+        // src is cleared on the way out, which itself raises 'error') and a
+        // play() cut short by a pause, which is not a failure.
+        const failLatestPlayback = (element, playRejection) => {
+            if (element !== audioElement || playRejection?.name === 'AbortError') return;
+            console.warn('Latest observation playback failed:', playRejection || element.error);
+            latestPlaybackError.value = playbackErrorMessage(element.error, playRejection);
+            pauseLatestObservation();
+        };
+
         const playLatestObservation = () => {
             // Preserves position and rolling-max calibration vs. tearing down the audio element.
-            if (audioElement && audioElement.currentTime > 0 && !audioElement.ended) {
+            latestPlaybackError.value = null;
+            if (audioElement && audioElement.currentTime > 0 && !audioElement.ended && !audioElement.error) {
                 if (audioCtx?.state === 'suspended') audioCtx.resume();
-                audioElement.play().catch((err) => {
-                    console.warn('Failed to resume audio:', err);
-                });
+                const resumed = audioElement;
+                resumed.play().catch((err) => failLatestPlayback(resumed, err));
                 animationId = requestAnimationFrame(drawSpectrogram);
                 latestObservationIsPlaying.value = true;
                 return;
@@ -1052,11 +1083,10 @@ export default {
             audioElement.addEventListener('playing', () => { audioClockRunning = true; });
             audioElement.addEventListener('waiting', () => { audioClockRunning = false; });
             audioElement.addEventListener('pause', () => { audioClockRunning = false; });
+            const element = audioElement;
+            element.addEventListener('error', () => failLatestPlayback(element));
 
-	            audioElement.play().catch((err) => {
-	                console.warn('Failed to play audio:', err)
-	                latestObservationIsPlaying.value = false
-	            });
+            element.play().catch((err) => failLatestPlayback(element, err));
 	            animationId = requestAnimationFrame(drawSpectrogram);
 	            latestObservationIsPlaying.value = true;
 	        };
@@ -1169,6 +1199,7 @@ export default {
             spectrogramCanvas,
             playLatestObservation,
             pauseLatestObservation,
+            latestPlaybackError,
             detailedBirdActivityError,
             latestObservationError,
             summaryError,
@@ -1176,6 +1207,8 @@ export default {
             hourlyBirdActivityError,
             togglePlayBirdCall,
             currentPlayingId,
+            audioError,
+            clearAudioError,
             latestObservationimageUrl,
             showLeastCommon,
             toggleActivityOrder,

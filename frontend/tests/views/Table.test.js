@@ -102,6 +102,7 @@ describe('Table.vue', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+    vi.unstubAllGlobals()
     document.body.style.overflow = ''
   })
 
@@ -627,8 +628,49 @@ describe('Table.vue', () => {
 	      // Table remains visible and an inline action error is shown
 	      expect(wrapper.text()).toContain('American Robin')
 	      expect(wrapper.text()).toContain('Please log in to delete')
+
+      // The dialog stays open for a retry and says why above its overlay
+      const dialog = wrapper.find('.fixed.inset-0')
+      expect(dialog.exists()).toBe(true)
+      expect(dialog.text()).toContain('Please log in to delete')
+
+      // Reopening starts a fresh action: the old failure is gone
+      await wrapper.findAll('button').find(b => b.text() === 'Cancel').trigger('click')
+      await wrapper.find('tbody tr').findAll('button').pop().trigger('click')
+      expect(wrapper.find('.fixed.inset-0').text()).not.toContain('Please log in to delete')
 	    })
 	  })
+
+  describe('playback errors', () => {
+    it('shows why a recording would not play, in the action banner', async () => {
+      mockApi.get.mockImplementation((url) => {
+        if (url === '/detections') {
+          return Promise.resolve({
+            data: { detections: sampleDetections, pagination: { total_items: 2 } }
+          })
+        }
+        return Promise.resolve({ data: [] })
+      })
+      // A recording removed by storage cleanup: the browser reports
+      // MEDIA_ERR_SRC_NOT_SUPPORTED (code 4) for the 404
+      vi.stubGlobal('Audio', class {
+        play() {
+          queueMicrotask(() => this.onerror?.({ target: { error: { code: 4 } } }))
+          return Promise.resolve()
+        }
+        pause() {}
+      })
+
+      const wrapper = await mountTable()
+      await wrapper.find('tbody tr').findAll('button')[0].trigger('click')
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('This recording is missing or can no longer be opened.')
+
+      await wrapper.find('button[title="Dismiss"]').trigger('click')
+      expect(wrapper.text()).not.toContain('missing or can no longer be opened')
+    })
+  })
 
   describe('pagination', () => {
     it('renders page numbers', async () => {

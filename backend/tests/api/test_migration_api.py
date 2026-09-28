@@ -621,10 +621,9 @@ class TestMigrationIntegration:
             assert any(s['common_name'] == 'American Robin' for s in species)
 
             # Verify we can query the imported data
-            response = api_client.get('/api/observations/recent')
+            response = api_client.get('/api/detections')
             assert response.status_code == 200
-            observations = response.get_json()
-            assert len(observations) >= 5
+            assert response.get_json()['pagination']['total_items'] >= 5
         finally:
             if os.path.exists(db_path):
                 os.unlink(db_path)
@@ -654,10 +653,11 @@ class TestMigrationIntegration:
             # Wait for completion
             wait_for_migration(api_client, migration_id)
 
-            # Check that extra field contains original file name
-            response = api_client.get('/api/observations/latest')
+            # Check that extra field contains original file name (the owner's
+            # table view: public payloads strip extra)
+            response = api_client.get('/api/detections')
             assert response.status_code == 200
-            data = response.get_json()
+            data = response.get_json()['detections'][0]
 
             # The extra field should contain original_file_name
             extra = data.get('extra', {})

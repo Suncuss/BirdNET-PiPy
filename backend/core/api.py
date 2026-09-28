@@ -175,15 +175,6 @@ def _unavailable_model_status():
     }
 
 
-@api.route('/api/model/status', methods=['GET'])
-@log_api_request
-@require_auth
-@handle_api_errors
-def get_model_service_status():
-    """Return authenticated model/filter health without exposing port 5001."""
-    return jsonify(read_model_service_status()), 200
-
-
 def read_model_service_status(timeout=3, quiet=False):
     """Fetch the model server's /api/status, or an 'unavailable' stand-in.
 
@@ -204,14 +195,6 @@ def read_model_service_status(timeout=3, quiet=False):
         log = logger.debug if quiet else logger.warning
         log("Unable to read model service status", extra={'error': str(exc)})
         return _unavailable_model_status()
-
-
-@api.route('/api/settings/status', methods=['GET'])
-@log_api_request
-@require_auth
-@handle_api_errors
-def get_settings_status():
-    return jsonify(read_settings_status(read_model_service_status()))
 
 
 def read_settings_status(model_service):
@@ -306,8 +289,9 @@ def create_app(async_mode='threading'):
     except Exception as e:
         logger.warning("Startup migration temp cleanup failed", extra={'error': str(e)})
 
-    from core.export_jobs import cleanup_export_dir
+    from core.export_jobs import cleanup_export_dir, reset_writer_lane
 
+    reset_writer_lane(async_mode)
     try:
         cleanup_export_dir()
     except Exception as e:

@@ -13,6 +13,7 @@ Design: internal_docs/MEDIA_OWNERSHIP_AND_ROLLUPS_2026-08-15.md (pillar 3).
 from datetime import datetime
 
 import core.db_rollups as db_rollups
+from tests.database.conftest import summary_all_periods
 
 
 def detection(timestamp, common='American Robin',
@@ -259,12 +260,12 @@ class TestSummaryConversion:
         build_all(test_db_manager)
 
         starts = (datetime(2026, 5, 20), datetime(2026, 5, 14), datetime(2026, 4, 20))
-        from_rollups = test_db_manager.get_summary_stats_all_periods(*starts)
+        from_rollups = summary_all_periods(test_db_manager, *starts)
         with test_db_manager.get_db_connection() as conn:
             cur = conn.cursor()
             db_rollups.enqueue_dirty_days(cur, ['2024-01-15'])
             conn.commit()
-        from_raw = test_db_manager.get_summary_stats_all_periods(*starts)
+        from_raw = summary_all_periods(test_db_manager, *starts)
         assert from_rollups == from_raw
         assert from_rollups['allTime']['totalObservations'] == 5
 
@@ -395,7 +396,7 @@ class TestImplementationReviewFixes:
 
         starts = (datetime(2026, 5, 20), datetime(2026, 5, 13, 12, 0, 0),
                   datetime(2026, 4, 20, 12, 0, 0))
-        result = test_db_manager.get_summary_stats_all_periods(*starts)
+        result = summary_all_periods(test_db_manager, *starts)
         assert result['week']['totalObservations'] == 1
         assert result['allTime']['totalObservations'] == 2
 
