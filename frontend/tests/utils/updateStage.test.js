@@ -36,6 +36,12 @@ describe('updateStage', () => {
       })
     })
 
+    it('reads the empty 204 nginx sends when no stage file exists as "no update"', async () => {
+      fetchMock.mockResolvedValue({ ok: true, status: 204, json: () => Promise.reject(new SyntaxError('Unexpected end of JSON input')) })
+
+      expect(await fetchUpdateStage()).toBe(null)
+    })
+
     it('returns a null stage and timestamp when the file has none', async () => {
       fetchMock.mockResolvedValue(response({ message: 'Building images locally' }))
       expect(await fetchUpdateStage()).toEqual({

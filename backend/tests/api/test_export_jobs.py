@@ -199,6 +199,24 @@ class TestPreparedExport:
             assert _start(api_client).status_code == 202
         assert ready['bytes'] + headroom >= 50
 
+    def test_export_discarded_meanwhile_is_not_counted_twice(self, api_client, a_detection):
+        """Another tab discards the ready export while this start runs: the
+        disk reading already includes the space its file freed, so it must
+        not be credited again on top."""
+        import core.export_jobs as export_jobs
+        ready = _prepare(api_client)
+        freed = ready['bytes']
+        assert freed > 0
+
+        def disk_after_discard(*_):
+            export_jobs.discard_job(ready['id'])
+            return freed  # the disk's headroom is just the discarded file's space
+
+        # Fits only if the discarded file were counted twice
+        with patch('core.export_jobs.cleanup_headroom_bytes', side_effect=disk_after_discard), \
+             patch('core.export_jobs._EST_ZIP_BYTES_PER_ROW', 2 * freed):
+            assert _start(api_client).status_code == 507
+
     def test_failed_start_keeps_the_ready_export(self, api_client, real_db_manager):
         """A start whose worker never runs (no thread to be had on a
         low-memory Pi) must neither strand a 'preparing' job that nothing
@@ -427,3 +445,15 @@ def test_cleanup_headroom_bytes(auto_cleanup, used_bytes, free_bytes, expected):
     with patch('core.storage_manager.get_disk_usage', return_value=usage), \
          patch('core.storage_manager._get_storage_config', return_value=config):
         assert cleanup_headroom_bytes() == expected
+
+
+def test_cleanup_headroom_never_promises_the_reserve():
+    """A trigger near 100% would count blocks the (non-root) app can't write:
+    ext4 keeps 50 of this disk for root, so 980 - 850 = 130 before the
+    trigger is really 100 free, and the 5% reserve leaves 50."""
+    from core.storage_manager import cleanup_headroom_bytes
+    usage = {'total_bytes': 1000, 'used_bytes': 850, 'free_bytes': 100}
+    config = {'trigger_percent': 98, 'auto_cleanup_enabled': True}
+    with patch('core.storage_manager.get_disk_usage', return_value=usage), \
+         patch('core.storage_manager._get_storage_config', return_value=config):
+        assert cleanup_headroom_bytes() == 50

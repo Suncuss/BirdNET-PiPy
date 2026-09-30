@@ -732,9 +732,9 @@ const handleClearFilters = () => {
 
 const togglePlayAudio = (detection) => {
   if (!detection?.id) return
-  const audioUrl = getAudioUrl(detection.audio_filename, detection.audio_sig)
-  if (!audioUrl) return
-  togglePlay(detection.id, audioUrl)
+  // No audio file name (media removed by storage cleanup) gives an empty
+  // URL, which the player reports rather than ignoring
+  togglePlay(detection.id, getAudioUrl(detection.audio_filename, detection.audio_sig))
 }
 
 const showSpectrogram = (detection) => {

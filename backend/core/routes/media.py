@@ -10,7 +10,6 @@ import re
 from flask import Response, jsonify, request
 
 from config.settings import (
-    DEFAULT_AUDIO_PATH,
     DEFAULT_IMAGE_PATH,
     EXTRACTED_AUDIO_DIR,
     SPECTROGRAM_DIR,
@@ -76,8 +75,8 @@ def _media_request_authorized(filename):
     filenames listed in public payloads can't be turned into a bulk download.
 
     Checked BEFORE serve_file_with_fallback, which returns a 200 placeholder on
-    any miss: letting that run for an unauthorized request would leak access (and
-    mask a broken gate) instead of returning 401.
+    any spectrogram miss: letting that run for an unauthorized request would
+    leak access (and mask a broken gate) instead of returning 401.
     """
     if is_authenticated():
         return True
@@ -99,9 +98,12 @@ def _follow_rename_in_ownership(old_name, new_name):
 
 @api.route('/api/audio/<filename>')
 def serve_audio(filename):
+    """A missing recording (e.g. removed by storage cleanup) is a 404, not a
+    placeholder clip: the player shows "recording is missing" on the error
+    rather than playing a stand-in as if it were the detection."""
     if not _media_request_authorized(filename):
         return jsonify({'error': 'Authentication required'}), 401
-    return serve_file_with_fallback(EXTRACTED_AUDIO_DIR, filename, DEFAULT_AUDIO_PATH, "audio",
+    return serve_file_with_fallback(EXTRACTED_AUDIO_DIR, filename, None, "audio",
                                     on_rename=_follow_rename_in_ownership)
 
 @api.route('/api/spectrogram/<filename>')

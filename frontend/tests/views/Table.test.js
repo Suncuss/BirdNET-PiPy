@@ -670,6 +670,28 @@ describe('Table.vue', () => {
       await wrapper.find('button[title="Dismiss"]').trigger('click')
       expect(wrapper.text()).not.toContain('missing or can no longer be opened')
     })
+
+    it('says so for a row whose recording is gone, instead of doing nothing', async () => {
+      mockApi.get.mockImplementation((url) => {
+        if (url === '/detections') {
+          // Storage cleanup removed its media: the API sends no file names
+          const gone = { ...sampleDetections[0], audio_filename: null, spectrogram_filename: null }
+          return Promise.resolve({
+            data: { detections: [gone], pagination: { total_items: 1 } }
+          })
+        }
+        return Promise.resolve({ data: [] })
+      })
+      const Audio = vi.fn()
+      vi.stubGlobal('Audio', Audio)
+
+      const wrapper = await mountTable()
+      await wrapper.find('tbody tr').findAll('button')[0].trigger('click')
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('This recording is no longer available.')
+      expect(Audio).not.toHaveBeenCalled()
+    })
   })
 
   describe('pagination', () => {

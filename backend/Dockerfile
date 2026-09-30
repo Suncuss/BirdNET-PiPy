@@ -72,6 +72,9 @@ RUN groupadd -g ${GID} birdnet && \
 # backend checkout over /app for every service, and the runtime loaders
 # re-validate the bundled models they actually read. So the image changes only
 # when dependencies do, and a fresh install doesn't download the models twice.
+# That also means a code change no longer changes the image, so it can't make
+# compose recreate the containers: build.sh's BIRDNET_BUILD_ID label does
+# (docker-compose.yml).
 COPY --from=asset-check /assets-validated /opt/assets-validated
 
 # Copy entrypoint script

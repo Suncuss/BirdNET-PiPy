@@ -276,13 +276,8 @@ def start_export(db_manager, start_date=None, end_date=None):
     os.makedirs(EXPORT_DIR, exist_ok=True)
     # The file lands on the disk the storage manager watches: crossing its
     # trigger would purge recordings to make room for a temporary export.
-    # The export this start replaces is deleted once it starts, so its bytes
-    # count as free.
-    headroom = cleanup_headroom_bytes(EXPORT_DIR) + (seen.bytes if seen else 0)
-    if rows_total * _EST_ZIP_BYTES_PER_ROW > headroom:
-        raise ExportSpaceError(
-            'Not enough free space to prepare this export without triggering '
-            'storage cleanup. Choose a shorter time range or free up space.')
+    # Read before the slot check below, which settles the replaced export.
+    headroom = cleanup_headroom_bytes(EXPORT_DIR)
 
     job = ExportJob(start_date=start_date, end_date=end_date, rows_total=rows_total)
     with _lock:
@@ -290,6 +285,18 @@ def start_export(db_manager, start_date=None, end_date=None):
             # Another start won the race while we counted; its export,
             # even if already finished, is not ours to replace.
             raise ExportBusyError(_job.snapshot())
+        # The export this start replaces is deleted once it starts, so its
+        # bytes count as free, but only while it is still in the slot.
+        # Discarding or expiring it removes its file under this lock, so
+        # once it's gone the reading above already counts that space (or,
+        # if removed after the reading, undercounts it: safe); crediting it
+        # again could let an oversized export trip cleanup.
+        if _job is not None:
+            headroom += _job.bytes
+        if rows_total * _EST_ZIP_BYTES_PER_ROW > headroom:
+            raise ExportSpaceError(
+                'Not enough free space to prepare this export without triggering '
+                'storage cleanup. Choose a shorter time range or free up space.')
         worker = threading.Thread(target=_run_job, name='export-job', daemon=True,
                                   args=(job, db_manager, _writer_lane))
         previous, _job = _job, job

@@ -232,17 +232,11 @@ class TestSimpleAPI:
             with open(test_file, 'wb') as f:
                 f.write(b'fake audio data')
 
-            # Create default file
-            default_file = os.path.join(tmpdir, 'default.mp3')
-            with open(default_file, 'wb') as f:
-                f.write(b'default audio')
-
             # Patch the paths (including auth config to prevent writing to backend/data/)
             with patch('core.auth.AUTH_CONFIG_DIR', tmpdir), \
                  patch('core.auth.AUTH_CONFIG_FILE', os.path.join(tmpdir, 'auth.json')), \
                  patch('core.auth.RESET_PASSWORD_FILE', os.path.join(tmpdir, 'RESET_PASSWORD')), \
                  patch('core.routes.media.EXTRACTED_AUDIO_DIR', audio_dir), \
-                 patch('core.routes.media.DEFAULT_AUDIO_PATH', default_file), \
                  patch('core.db.DatabaseManager'):
 
                 from core.api import create_app
@@ -254,10 +248,11 @@ class TestSimpleAPI:
                 assert response.status_code == 200
                 assert response.data == b'fake audio data'
 
-                # Test non-existent file (should return default)
+                # A missing recording (storage cleanup) is a 404, so the
+                # player reports it instead of playing a placeholder clip
                 response = client.get('/api/audio/missing.mp3')
-                assert response.status_code == 200
-                assert response.data == b'default audio'
+                assert response.status_code == 404
+                assert 'not found' in response.get_json()['error'].lower()
 
     def test_sightings_endpoints(self, api_client, real_db_manager):
         """Test sightings-related endpoints with real database."""

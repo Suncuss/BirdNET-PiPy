@@ -149,6 +149,42 @@ print(f'all backend services use: {unique.pop()}')
     assert_file_contains "$PROJECT_DIR/data/version.json" "\"commit\""
 }
 
+@test "unit: build.sh stamps one build ID in .env, keeping its other keys and mode" {
+    # The backend image no longer changes with the code, so this stamp (a
+    # label in docker-compose.yml) is what makes `compose up -d` recreate the
+    # backend after a build.
+    local saved=""
+    if [ -f "$PROJECT_DIR/.env" ]; then
+        saved=$(mktemp)
+        cp -p "$PROJECT_DIR/.env" "$saved"
+    fi
+    printf 'BIRDNET_CHANNEL=staging\nICECAST_PASSWORD=secret\nBIRDNET_BUILD_ID=old\n' > "$PROJECT_DIR/.env"
+    chmod 640 "$PROJECT_DIR/.env"
+
+    run bash -c "cd \"$PROJECT_DIR\" && ./build.sh --version-only && ./build.sh --version-only"
+    local env_mode env_count env_body build_id
+    env_mode=$(stat -c '%a' "$PROJECT_DIR/.env")
+    env_count=$(grep -c '^BIRDNET_BUILD_ID=' "$PROJECT_DIR/.env")
+    env_body=$(cat "$PROJECT_DIR/.env")
+    build_id=$(grep '^BIRDNET_BUILD_ID=' "$PROJECT_DIR/.env" | cut -d= -f2)
+
+    if [ -n "$saved" ]; then
+        mv "$saved" "$PROJECT_DIR/.env"
+    else
+        rm -f "$PROJECT_DIR/.env"
+    fi
+
+    [ "$status" -eq 0 ]
+    [ "$env_mode" = "640" ]
+    [ "$env_count" -eq 1 ]
+    [[ "$env_body" == *"BIRDNET_CHANNEL=staging"* ]]
+    [[ "$env_body" == *"ICECAST_PASSWORD=secret"* ]]
+    [[ "$env_body" != *"BIRDNET_BUILD_ID=old"* ]]
+    # Same value as version.json's build_time, so the two can be matched up
+    assert_file_contains "$PROJECT_DIR/data/version.json" "\"build_time\": \"$build_id\""
+    [ -z "$(find "$PROJECT_DIR" -maxdepth 1 -name '.env.*')" ]
+}
+
 @test "unit: build.sh works from any cwd without leaving stray files" {
     rm -f "$PROJECT_DIR/data/version.json"
     local temp_dir

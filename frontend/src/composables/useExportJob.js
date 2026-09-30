@@ -14,11 +14,12 @@ const POLL_INTERVAL_MS = 1000
  * to disk instead of holding it in memory.
  *
  * `job` is the server snapshot ({ id, state, rows_done, rows_total, bytes,
- * filename, ... }) or null when there is none. `loading` covers the initial
- * lookup, `starting` a start request. `today` is the station's local date
- * (YYYY-MM-DD) once `load()` has run. `setAside` is a ready export that
- * `newExport()` stepped away from: still on the server until a new start
- * replaces it, so `backToSetAside()` can return to it. `options` everywhere is
+ * filename, ... }) or null when there is none. `loading` covers a lookup of
+ * the current job (the initial one, or Back's), `starting` a start request.
+ * `today` is the station's local date (YYYY-MM-DD) once `load()` has run.
+ * `setAside` is a ready export that `newExport()` stepped away from: still
+ * on the server until a new start replaces it, so `backToSetAside()` can
+ * return to it. `options` everywhere is
  * { range, start_date?, end_date? } with range = all | 7d | 30d | year | custom.
  */
 export function useExportJob() {
@@ -116,10 +117,26 @@ export function useExportJob() {
     error.value = ''
   }
 
-  const backToSetAside = () => {
-    job.value = setAside.value
-    setAside.value = null
+  // Back to that export, as the server has it now rather than as it was
+  // set aside: it may have expired, or another tab may have replaced it,
+  // and a stale copy would offer a Download that 404s.
+  const backToSetAside = async () => {
+    const kept = setAside.value
+    if (!kept) return
     error.value = ''
+    loading.value = true
+    try {
+      const { data } = await api.get('/detections/export/jobs/current')
+      job.value = data.job
+      if (!data.job) error.value = 'That export has expired. Start a new one.'
+      schedulePoll()
+    } catch {
+      // Can't tell: show the kept copy; its Download fails if it is gone.
+      job.value = kept
+    } finally {
+      setAside.value = null
+      loading.value = false
+    }
   }
 
   // Cancel a preparing export, or delete a finished one's file.

@@ -97,7 +97,11 @@ def serve_file_with_fallback(directory, filename, default_file_path, file_type="
     Args:
         directory: Directory to look for the file
         filename: Name of the file to serve
-        default_file_path: Full path to default file if requested file not found
+        default_file_path: Full path to default file if requested file not
+            found, or None to answer a miss with 404 instead. A placeholder
+            suits an <img> (a broken-image icon otherwise); an <audio>
+            element needs the error, or it silently plays the stand-in
+            clip as if it were the recording.
         file_type: Type of file for logging (e.g., "audio", "spectrogram")
         on_rename: Optional callback(old_name, new_name) fired after the lazy
             colon->dash rename, so media ownership records can follow the
@@ -108,6 +112,8 @@ def serve_file_with_fallback(directory, filename, default_file_path, file_type="
         Flask response object
     """
     def serve_default():
+        if default_file_path is None:
+            return jsonify({'error': f'{file_type.capitalize()} file not found'}), 404
         default_dir = os.path.dirname(default_file_path)
         default_name = os.path.basename(default_file_path)
         return make_response(send_from_directory(default_dir, default_name))
@@ -176,7 +182,7 @@ def serve_file_with_fallback(directory, filename, default_file_path, file_type="
                     })
                     return make_response(send_from_directory(directory, legacy_filename))
 
-    logger.warning(f"{file_type.capitalize()} file not found, serving default", extra={
+    logger.warning(f"{file_type.capitalize()} file not found", extra={
         'requested_file': filename,
         'file_type': file_type
     })

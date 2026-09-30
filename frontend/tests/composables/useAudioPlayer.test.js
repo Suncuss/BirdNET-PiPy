@@ -168,13 +168,14 @@ describe('useAudioPlayer', () => {
       expect(player.currentPlayingId.value).toBe(null)
     })
 
-    it('returns false and does not play if audioUrl is missing', async () => {
+    it('reports a detection whose recording is gone instead of playing nothing', async () => {
       const player = useAudioPlayer()
 
       const result = await player.togglePlay('test-id', null)
 
       expect(result).toBe(false)
       expect(player.currentPlayingId.value).toBe(null)
+      expect(player.error.value).toBe('This recording is no longer available.')
     })
 
     it('handles playback failure gracefully', async () => {

@@ -455,7 +455,7 @@ import ActivityOverviewCharts from '@/components/ActivityOverviewCharts.vue';
 import DetectionModal from '@/components/DetectionModal.vue';
 import { getAudioUrl, getSpectrogramUrl } from '@/services/media'
 import { getDisplayCommonName } from '@/utils/birdNames'
-import { playbackErrorMessage } from '@/utils/errorMessages'
+import { ERR_RECORDING_MISSING, playbackErrorMessage } from '@/utils/errorMessages'
 import { recordingPath } from '@/utils/detectionLinks'
 import { formatConfidence } from '@/utils/format'
 import { createScrollPacer } from '@/utils/scrollPacer'
@@ -1044,6 +1044,15 @@ export default {
                 return;
             }
 
+            const latestAudioUrl = getAudioUrl(latestObservationData.value?.bird_song_file_name, latestObservationData.value?.audio_sig)
+            if (!latestAudioUrl) {
+                // Nothing to play (the recording's media is gone): say so and
+                // leave any earlier element alone, so its cleared source can't
+                // raise an error about a recording nobody asked for.
+                latestPlaybackError.value = ERR_RECORDING_MISSING;
+                return;
+            }
+
             if (audioElement) {
                 audioElement.pause();
                 audioElement.src = '';
@@ -1069,8 +1078,6 @@ export default {
             prevFrequencyDataArray.fill(-200);
             timeDomainDataArray = new Float32Array(audioAnalyser.fftSize);
             audioClockRunning = false;
-	            const latestAudioUrl = getAudioUrl(latestObservationData.value?.bird_song_file_name, latestObservationData.value?.audio_sig)
-	            if (!latestAudioUrl) return
 	            audioElement = new Audio(latestAudioUrl);
 	            audioElement.crossOrigin = "anonymous";
             source = audioCtx.createMediaElementSource(audioElement);
@@ -1093,9 +1100,9 @@ export default {
 
         const togglePlayBirdCall = (observation) => {
             if (!observation?.id) return
-            const audioUrl = getAudioUrl(observation?.bird_song_file_name, observation?.audio_sig)
-            if (!audioUrl) return
-            audioTogglePlay(observation.id, audioUrl)
+            // No file name (media removed by storage cleanup) gives an empty
+            // URL, which the player reports in the banner rather than ignoring
+            audioTogglePlay(observation.id, getAudioUrl(observation.bird_song_file_name, observation.audio_sig))
         };
 
         const formatTimestamp = (dateString) => {

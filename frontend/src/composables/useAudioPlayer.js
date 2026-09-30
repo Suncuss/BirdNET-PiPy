@@ -1,5 +1,5 @@
 import { ref, onUnmounted } from 'vue'
-import { playbackErrorMessage } from '@/utils/errorMessages'
+import { ERR_RECORDING_MISSING, playbackErrorMessage } from '@/utils/errorMessages'
 import { useLogger } from './useLogger'
 
 /**
@@ -50,8 +50,15 @@ export function useAudioPlayer() {
    * @returns {Promise<boolean>} - True if playback started, false otherwise
    */
   const togglePlay = async (id, audioUrl) => {
-    if (!id || !audioUrl) {
-      logger.warn('togglePlay called without id or audioUrl')
+    if (!id) {
+      logger.warn('togglePlay called without id')
+      return false
+    }
+    if (!audioUrl) {
+      // The detection has no recording any more (storage cleanup removed
+      // it): say so rather than leaving the play button dead.
+      stopAudio()
+      error.value = ERR_RECORDING_MISSING
       return false
     }
 

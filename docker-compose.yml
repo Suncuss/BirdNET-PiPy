@@ -7,9 +7,17 @@ x-logging: &default-logging
     max-size: 5m
     max-file: "2"
 
+# build.sh records each build in .env as BIRDNET_BUILD_ID. As a label on the
+# backend services it changes their config on every build, so `docker compose
+# up -d` recreates them. They run their code from the ./backend bind mount,
+# and the image (dependencies only) no longer changes when that code does.
+x-build-labels: &build-labels
+  - birdnet.build-id=${BIRDNET_BUILD_ID:-}
+
 services:
   model-server:
     image: ghcr.io/suncuss/birdnet-pipy-backend:${BIRDNET_CHANNEL:-main}
+    labels: *build-labels
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -34,6 +42,7 @@ services:
   api:
     image: ghcr.io/suncuss/birdnet-pipy-backend:${BIRDNET_CHANNEL:-main}
     # No build: — shares image built by model-server service
+    labels: *build-labels
     # Single gevent worker is mandatory: detections fan out via an in-process
     # socketio.emit (no Redis message_queue), so multiple workers would
     # silently drop broadcasts to clients on other workers.
@@ -71,6 +80,7 @@ services:
   main:
     image: ghcr.io/suncuss/birdnet-pipy-backend:${BIRDNET_CHANNEL:-main}
     # No build: — shares image built by model-server service
+    labels: *build-labels
     command: python -m core.main
     restart: unless-stopped
     logging: *default-logging
