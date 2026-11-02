@@ -3,7 +3,8 @@
 
 nginx routes only crawler user-agents to /api/og/recording/<id>; this endpoint
 returns a tiny HTML doc whose <head> carries per-detection OG/Twitter tags so a
-shared link previews as a titled card instead of a bare URL.
+shared link previews as a titled card instead of a bare URL. Every other page
+goes to /api/og/site, the station's own card.
 """
 from tests.api.conftest import auth_enabled_app, insert_detection, iso_ago, login_owner
 
@@ -33,17 +34,14 @@ class TestOgCard:
                 'content="http://localhost/default_bird.png"') in body
         assert 'name="twitter:card" content="summary_large_image"' in body
 
-    def test_missing_detection_falls_back_to_branded_card(self, api_client):
-        # A deleted/stale id still previews — generic branded card, no crash.
+    def test_missing_detection_falls_back_to_station_card(self, api_client):
+        # A deleted/stale id still previews — the station's own card, no crash.
         resp = api_client.get('/api/og/recording/999999')
 
         assert resp.status_code == 200
         body = resp.get_data(as_text=True)
-        assert 'BirdNET-PiPy' in body
+        assert body == api_client.get('/api/og/site').get_data(as_text=True)
         assert 'property="og:url" content="http://localhost/"' in body
-        # Fallback card is still a rich image card.
-        assert ('property="og:image" '
-                'content="http://localhost/default_bird.png"') in body
 
     def test_og_image_uses_forwarded_origin(self, api_client, real_db_manager):
         # The image URL must resolve to the external origin too, else the crawler
@@ -142,6 +140,54 @@ class TestOgCard:
         assert 'javascript' not in body
         assert ('property="og:image" '
                 'content="http://localhost/default_bird.png"') in body
+
+
+class TestSiteOgCard:
+    """The station's own card, served to crawlers for the dashboard and every
+    other page that isn't a detection permalink."""
+
+    def test_renders_station_card(self, api_client):
+        resp = api_client.get('/api/og/site')
+
+        assert resp.status_code == 200
+        assert resp.mimetype == 'text/html'
+        body = resp.get_data(as_text=True)
+        assert 'property="og:title" content="BirdNET-PiPy"' in body
+        assert ('property="og:description" '
+                'content="Live bird detections from a BirdNET-PiPy station."') in body
+        assert 'property="og:url" content="http://localhost/"' in body
+        assert 'rel="canonical" href="http://localhost/"' in body
+        # The landscape card image, declared at its real size.
+        assert ('property="og:image" '
+                'content="http://localhost/og_card.png"') in body
+        assert 'property="og:image:width" content="1200"' in body
+        assert 'property="og:image:height" content="630"' in body
+        assert 'name="twitter:card" content="summary_large_image"' in body
+
+    def test_uses_forwarded_origin(self, api_client):
+        resp = api_client.get(
+            '/api/og/site',
+            headers={'X-Forwarded-Proto': 'https',
+                     'X-Forwarded-Host': 'birds.example.com'},
+        )
+
+        body = resp.get_data(as_text=True)
+        assert 'property="og:url" content="https://birds.example.com/"' in body
+        assert ('property="og:image" '
+                'content="https://birds.example.com/og_card.png"') in body
+
+    def test_anonymous_behind_login_wall_gets_same_card(self, api_client, real_db_manager):
+        # Crawlers are anonymous. The card holds nothing about the station, so
+        # a login-walled station serves it unchanged rather than a 401.
+        open_body = api_client.get('/api/og/site').get_data(as_text=True)
+
+        with auth_enabled_app(
+            real_db_manager, access={'public_access': False},
+        ) as (client, _):
+            resp = client.get('/api/og/site')
+
+            assert resp.status_code == 200
+            assert resp.get_data(as_text=True) == open_body
 
 
 class TestOgCardAccess:

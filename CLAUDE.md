@@ -101,7 +101,7 @@ Before syncing dev to staging or main, always run `./build.sh` first and confirm
 
 ## Changelog
 
-Add user-facing changes as a bullet under `## [Unreleased]` in `CHANGELOG.md`. Keep each entry concise: lead with `Fixed`/`Added`/`Changed`/`Improved`, and state the change and (briefly) the why in one or two sentences. Prefer a single tight bullet over a paragraph — trim mechanism detail that belongs in the commit message, not the changelog. Don't reference GitHub issue numbers in changelog entries.
+Add user-facing changes as a bullet under `## [Unreleased]` in `CHANGELOG.md`. Keep each entry concise: lead with `Fixed`/`Added`/`Changed`/`Improved`, and state the change and (briefly) the why in one or two sentences. Prefer a single tight bullet over a paragraph — trim mechanism detail that belongs in the commit message, not the changelog. Keep the tone modest and plain: say what changed for the user, without speed-up figures, before/after numbers or superlatives. Don't reference GitHub issue numbers in changelog entries.
 
 ## Home Assistant Add-on
 

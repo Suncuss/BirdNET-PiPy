@@ -42,6 +42,8 @@ setup() {
     [[ "$output" == *"--update"* ]]
     [[ "$output" == *"--branch"* ]]
     [[ "$output" == *"--no-reboot"* ]]
+    [[ "$output" == *"--unattended"* ]]
+    [[ "$output" == *"--user NAME"* ]]
 }
 
 @test "unit: unknown option exits with error" {
@@ -55,6 +57,28 @@ setup() {
     run sudo -u "$SUDO_USER" bash "$PROJECT_DIR/install.sh" 2>&1
     [ "$status" -eq 1 ]
     [[ "$output" == *"must be run as root"* ]]
+}
+
+@test "unit: direct root without --user is refused" {
+    # No sudo means no SUDO_USER, so nothing says whose install this is
+    run env -u SUDO_USER bash "$PROJECT_DIR/install.sh" --no-reboot
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"not as direct root"* ]]
+    [[ "$output" == *"--user NAME"* ]]
+}
+
+@test "unit: --user rejects a missing value, an unknown account and root" {
+    run env -u SUDO_USER bash "$PROJECT_DIR/install.sh" --user
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"--user requires an account name"* ]]
+
+    run env -u SUDO_USER bash "$PROJECT_DIR/install.sh" --unattended --user no-such-user-xyz
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no account named 'no-such-user-xyz'"* ]]
+
+    run env -u SUDO_USER bash "$PROJECT_DIR/install.sh" --unattended --user root
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"not root"* ]]
 }
 
 @test "unit: required files exist in repository" {
@@ -720,6 +744,21 @@ print('override: frontend publishes 8080')
 # ============================================================================
 # Update Mode Tests
 # ============================================================================
+
+@test "integration: unattended install runs as direct root for the --user account" {
+    # How an image's first-boot service calls it: plain root (no sudo, so no
+    # SUDO_USER), the account named explicitly, and no --no-reboot: unattended
+    # must never reboot on its own (a reboot here would take the container down)
+    run env -u SUDO_USER bash "$PROJECT_DIR/install.sh" --unattended --user testuser --skip-build
+    echo "Install output: $output"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Reboot skipped (--unattended"* ]]
+
+    assert_file_contains "/etc/systemd/system/birdnet-pipy.service" "User=testuser"
+    assert_service_enabled "birdnet-pipy"
+    assert_sudoers_valid "/etc/sudoers.d/birdnet-pipy"
+    assert_user_in_group testuser docker
+}
 
 @test "integration: no-op update reapplies system configs" {
     # Set up local fake git remote (same commit as local - no-op scenario)

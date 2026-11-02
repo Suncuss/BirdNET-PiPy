@@ -261,7 +261,11 @@ describe('AddNotificationModal - component', () => {
     await wrapper.vm.handleTestAndAdd()
     await flushPromises()
 
-    expect(mockApi.post).toHaveBeenCalledWith('/notifications/test', { apprise_url: 'json://localhost' })
+    expect(mockApi.post).toHaveBeenCalledWith(
+      '/notifications/test',
+      { apprise_url: 'json://localhost' },
+      { timeout: 30000 }
+    )
     expect(wrapper.emitted('add')).toBeTruthy()
     expect(wrapper.emitted('add')[0]).toEqual(['json://localhost'])
   })

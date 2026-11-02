@@ -10,7 +10,6 @@ import re
 from flask import Response, jsonify, request
 
 from config.settings import (
-    DEFAULT_AUDIO_PATH,
     DEFAULT_IMAGE_PATH,
     EXTRACTED_AUDIO_DIR,
     SPECTROGRAM_DIR,
@@ -45,6 +44,7 @@ from core.og_card import (
     format_og_description,
     indefinite_article,
     render_og_card,
+    render_site_og_card,
 )
 from core.settings_store import load_user_settings
 from core.share_tokens import mint_share_token, share_token_subject, verify_share_token
@@ -76,8 +76,8 @@ def _media_request_authorized(filename):
     filenames listed in public payloads can't be turned into a bulk download.
 
     Checked BEFORE serve_file_with_fallback, which returns a 200 placeholder on
-    any miss: letting that run for an unauthorized request would leak access (and
-    mask a broken gate) instead of returning 401.
+    any spectrogram miss: letting that run for an unauthorized request would
+    leak access (and mask a broken gate) instead of returning 401.
     """
     if is_authenticated():
         return True
@@ -99,9 +99,12 @@ def _follow_rename_in_ownership(old_name, new_name):
 
 @api.route('/api/audio/<filename>')
 def serve_audio(filename):
+    """A missing recording (e.g. removed by storage cleanup) is a 404, not a
+    placeholder clip: the player shows "recording is missing" on the error
+    rather than playing a stand-in as if it were the detection."""
     if not _media_request_authorized(filename):
         return jsonify({'error': 'Authentication required'}), 401
-    return serve_file_with_fallback(EXTRACTED_AUDIO_DIR, filename, DEFAULT_AUDIO_PATH, "audio",
+    return serve_file_with_fallback(EXTRACTED_AUDIO_DIR, filename, None, "audio",
                                     on_rename=_follow_rename_in_ownership)
 
 @api.route('/api/spectrogram/<filename>')
@@ -355,31 +358,26 @@ def get_recording_og_card(recording_id):
 
     Resolution is by ID alone (the species segment is decorative) to avoid
     URL-encoding pitfalls with species names containing spaces. A stale/deleted
-    detection falls back to a generic branded card so the link still previews.
-    Every card carries the app's branded bird illustration as ``og:image`` so it
-    unfurls as a large-thumbnail card (which also reveals the description on
-    iMessage). A per-detection image isn't used: the only per-detection raster is
-    a WebP spectrogram, which unfurlers don't reliably render.
+    detection falls back to the station's own card (see get_site_og_card) so
+    the link still previews. A detection card carries the app's branded bird
+    illustration as ``og:image`` so it unfurls as a large-thumbnail card (which
+    also reveals the description on iMessage). A per-detection image isn't used:
+    the only per-detection raster is a WebP spectrogram, which unfurlers don't
+    reliably render.
 
     Access mirrors the by-id permalink gate (owner / share token / public
     recent window): the card is derived from the same data the permalink would
     serve, so it must not reveal more. Crawlers are anonymous, so on an
     auth-enabled station a detection outside the anonymous view unfurls as the
-    SAME generic branded card as a nonexistent id — the link still previews
-    (title + illustration), it names no species, and the route can't be
-    id-walked as an existence oracle for private detections.
+    SAME station card as a nonexistent id — the link still previews (title +
+    image), it names no species, and the route can't be id-walked as an
+    existence oracle for private detections.
     """
     base = _external_base_url()
-    image_url = f"{base}{OG_CARD_IMAGE_PATH}"
 
     detection = _run_db(infra.db_manager.get_detection_by_id, recording_id)
     if not _detection_view_entitled(detection, recording_id):
-        return Response(render_og_card(
-            title="Bird detections",
-            description="Live bird detections from a BirdNET listening station.",
-            url=f"{base}/",
-            image_url=image_url,
-        ), mimetype='text/html')
+        return Response(render_site_og_card(base), mimetype='text/html')
 
     settings = load_user_settings()
     recording = _localize_detection(detection, settings=settings)
@@ -401,5 +399,19 @@ def get_recording_og_card(recording_id):
         title=title,
         description=format_og_description(recording),
         url=share_url,
-        image_url=image_url,
+        image_url=f"{base}{OG_CARD_IMAGE_PATH}",
     ), mimetype='text/html')
+
+
+@api.route('/api/og/site', methods=['GET'])
+@log_api_request
+def get_site_og_card():
+    """Server-rendered Open Graph card for the station itself.
+
+    nginx sends link-unfurl crawlers here for every SPA page that isn't a
+    detection permalink (dashboard, gallery, charts, …), which would otherwise
+    preview as ``index.html``'s bare title. The card is fixed — app name,
+    tagline and a branded image — and carries no station or detection data, so
+    it is the same on a public and a login-walled station.
+    """
+    return Response(render_site_og_card(_external_base_url()), mimetype='text/html')

@@ -119,9 +119,10 @@ _ANON_REACHABLE_ENDPOINTS = frozenset({
     'get_detections', 'get_stream_config',
     # Token/window-gated media + permalink (the handlers do their own checks)
     'serve_audio', 'serve_spectrogram', 'get_bird_recording',
-    # Link-unfurl crawlers are anonymous; the handler mirrors the by-id gate
-    # and falls back to a generic branded card when not entitled
-    'get_recording_og_card',
+    # Link-unfurl crawlers are anonymous; the recording handler mirrors the
+    # by-id gate and falls back to the station card when not entitled, and the
+    # station card itself carries no station or detection data
+    'get_recording_og_card', 'get_site_og_card',
     # Always-public bootstrap / auth / non-detection info
     'get_auth_status', 'auth_login', 'auth_logout', 'auth_setup', 'auth_verify',
     'health_check', 'get_service_readiness',

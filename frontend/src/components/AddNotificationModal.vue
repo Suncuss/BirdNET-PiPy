@@ -155,6 +155,10 @@ import api from '@/services/api'
 import CloseIcon from '@/components/icons/CloseIcon.vue'
 import { useModalDismiss } from '@/composables/useModalDismiss'
 
+// The backend gives a test send up to 25s (it starts a fresh interpreter
+// first); wait a little longer so its own timeout message reaches the user.
+const TEST_REQUEST_TIMEOUT_MS = 30000
+
 // SVG path data for each service icon (Heroicons outline)
 const SERVICE_ICONS = {
   telegram: 'M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5',
@@ -233,7 +237,11 @@ export default {
       // Test via API
       testing.value = true
       try {
-        const { data } = await api.post('/notifications/test', { apprise_url: url })
+        const { data } = await api.post(
+          '/notifications/test',
+          { apprise_url: url },
+          { timeout: TEST_REQUEST_TIMEOUT_MS }
+        )
         testSuccess.value = data.message || 'Test notification sent!'
         emit(isEditing.value ? 'save' : 'add', url)
       } catch (err) {

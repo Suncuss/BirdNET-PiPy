@@ -865,6 +865,21 @@ describe('Dashboard', () => {
       expect(wrapper.text()).toContain('Your browser blocked playback. Try again.')
       expect(wrapper.vm.latestObservationIsPlaying).toBe(false)
     })
+
+    it('says so when the latest detection has no recording left', async () => {
+      const elements = stubLatestPlayer(() => Promise.resolve())
+      const { wrapper, state } = await mountWithLatest()
+      // Storage cleanup removed its media: the API sends no file name
+      state.latestObservationData.value = { ...state.latestObservationData.value, bird_song_file_name: null }
+      await flushPromises()
+
+      wrapper.vm.playLatestObservation()
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('This recording is no longer available.')
+      expect(wrapper.vm.latestObservationIsPlaying).toBe(false)
+      expect(elements).toHaveLength(0)
+    })
   })
 
   describe('unique species toggle', () => {

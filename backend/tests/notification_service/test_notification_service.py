@@ -16,6 +16,17 @@ def make_detection(common_name='American Robin', scientific_name='Turdus migrato
     }
 
 
+def make_audio_event(state='degraded', previous_state='running',
+                     problem_sources=None, at='2024-06-15T10:30:00'):
+    from datetime import datetime
+
+    from core.notification_service import _AudioStatusEvent
+    return _AudioStatusEvent({
+        'state': state, 'previous_state': previous_state,
+        'problem_sources': problem_sources or [],
+    }, datetime.fromisoformat(at))
+
+
 def _create_service(notif_overrides=None, db_manager=None):
     """Create a NotificationService with mocked get_runtime_settings.
 
@@ -457,48 +468,6 @@ class TestNotificationServiceFactory:
         # Cleanup
         ns._notification_service = None
 
-    def test_send_test_notification_calls_apprise(self):
-        """send_test_notification creates Apprise and sends."""
-        mock_apprise_instance = Mock()
-        mock_apprise_instance.notify.return_value = True
-
-        with patch('apprise.Apprise', return_value=mock_apprise_instance):
-            from core.notification_service import send_test_notification
-            success, message = send_test_notification('tgram://bot/chat')
-            assert success is True
-            assert 'success' in message.lower()
-            mock_apprise_instance.add.assert_called_once_with('tgram://bot/chat')
-            mock_apprise_instance.notify.assert_called_once()
-
-    def test_send_test_notification_returns_error_on_failure(self):
-        """send_test_notification returns (False, error_detail) when Apprise fails."""
-        mock_apprise_instance = Mock()
-        mock_apprise_instance.notify.return_value = False
-
-        with patch('apprise.Apprise', return_value=mock_apprise_instance):
-            from core.notification_service import send_test_notification
-            success, message = send_test_notification('invalid://url')
-            assert success is False
-            assert isinstance(message, str)
-            assert len(message) > 0
-
-    def test_extract_apprise_error_friendly_messages(self):
-        """_extract_apprise_error maps known errors to friendly messages."""
-        from core.notification_service import _extract_apprise_error
-
-        assert 'resolve hostname' in _extract_apprise_error('socket.gaierror: Name or service not known')
-        assert 'Connection refused' in _extract_apprise_error('ConnectionRefusedError: Connection refused')
-        assert 'timed out' in _extract_apprise_error('socket.timeout: timed out')
-        assert 'Check your configuration' in _extract_apprise_error('')
-        assert 'Check your configuration' in _extract_apprise_error('   ')
-
-    def test_extract_apprise_error_raw_message(self):
-        """_extract_apprise_error returns raw message for unknown errors."""
-        from core.notification_service import _extract_apprise_error
-
-        result = _extract_apprise_error('MQTT Connection Error received from 127.0.0.1:9999')
-        assert result == 'MQTT Connection Error received from 127.0.0.1:9999'
-
 
 class TestNotificationStationName:
     """Title prefix and body line include display.station_name when set."""
@@ -643,12 +612,11 @@ class TestAudioStatusNotifications:
             notif_overrides={'audio_status': False})
         try:
             with patch.object(service, '_send') as mock_send:
-                service._process_audio_status({
-                    'state': 'degraded', 'previous_state': 'running',
-                    'problem_sources': [{'label': 'Cam', 'state': 'degraded',
-                                         'error': 'boom'}],
-                })
+                service._process_audio_status(make_audio_event(
+                    problem_sources=[{'label': 'Cam', 'state': 'degraded',
+                                      'error': 'boom'}]))
                 mock_send.assert_not_called()
+                assert len(service._audio_outbox) == 0
         finally:
             patcher.stop()
 
@@ -657,12 +625,10 @@ class TestAudioStatusNotifications:
             notif_overrides={'audio_status': True})
         try:
             with patch.object(service, '_send') as mock_send:
-                service._process_audio_status({
-                    'state': 'degraded', 'previous_state': 'running',
-                    'problem_sources': [{'label': 'Backyard Cam',
-                                         'state': 'degraded',
-                                         'error': 'RTSP recording failed: timeout'}],
-                })
+                service._process_audio_status(make_audio_event(
+                    problem_sources=[{'label': 'Backyard Cam',
+                                      'state': 'degraded',
+                                      'error': 'RTSP recording failed: timeout'}]))
                 mock_send.assert_called_once()
                 title, body = mock_send.call_args.args
                 assert 'degraded' in title.lower()
@@ -676,12 +642,10 @@ class TestAudioStatusNotifications:
             notif_overrides={'audio_status': True})
         try:
             with patch.object(service, '_send') as mock_send:
-                service._process_audio_status({
-                    'state': 'running', 'previous_state': 'degraded',
-                    'problem_sources': [],
-                })
+                service._process_audio_status(make_audio_event(
+                    state='running', previous_state='degraded'))
                 title, body = mock_send.call_args.args
-                assert 'recovered' in title.lower()
+                assert title == 'Audio recovered'
                 assert 'recovered' in body.lower()
         finally:
             patcher.stop()
@@ -691,19 +655,14 @@ class TestAudioStatusNotifications:
             notif_overrides={'audio_status': True, 'apprise_urls': []})
         try:
             with patch.object(service, '_send') as mock_send:
-                service._process_audio_status({
-                    'state': 'stopped', 'previous_state': 'running',
-                    'problem_sources': [],
-                })
+                service._process_audio_status(make_audio_event(state='stopped'))
                 mock_send.assert_not_called()
         finally:
             patcher.stop()
 
     def test_audio_status_envelope_is_distinct_from_detection(self):
-        from core.notification_service import _AudioStatusEvent
-        payload = {'state': 'stopped'}
-        ev = _AudioStatusEvent(payload)
-        assert ev.payload is payload
+        ev = make_audio_event(state='stopped')
+        assert ev.payload['state'] == 'stopped'
         assert not isinstance(ev, dict)
 
     def test_notify_audio_status_enqueues_and_worker_dispatches(self):
@@ -722,7 +681,167 @@ class TestAudioStatusNotifications:
                 while time.time() < deadline and not mock_proc.called:
                     time.sleep(0.01)
 
-                mock_proc.assert_called_once_with(payload)
+                mock_proc.assert_called_once()
+                event = mock_proc.call_args.args[0]
+                assert event.payload is payload
+                assert event.occurred_at is not None
+        finally:
+            patcher.stop()
+
+    def test_message_time_is_when_it_happened_not_when_it_was_sent(self):
+        service, patcher = _create_service(
+            notif_overrides={'audio_status': True})
+        try:
+            with patch.object(service, '_send') as mock_send:
+                service._process_audio_status(make_audio_event(
+                    at='2024-06-15T10:30:00'))
+                _title, body = mock_send.call_args.args
+                assert 'Time: 2024-06-15 10:30:00' in body
+        finally:
+            patcher.stop()
+
+    def test_each_url_is_sent_separately(self):
+        """A retry must be able to target only the URL that missed the alert."""
+        urls = ['mailtos://a', 'ntfy://b']
+        service, patcher = _create_service(
+            notif_overrides={'audio_status': True, 'apprise_urls': urls})
+        try:
+            with patch.object(service, '_send') as mock_send:
+                service._process_audio_status(make_audio_event())
+                assert [c.kwargs['urls'] for c in mock_send.call_args_list] == [
+                    ['mailtos://a'], ['ntfy://b']]
+        finally:
+            patcher.stop()
+
+    def test_undelivered_degraded_is_reported_with_the_recovery(self):
+        """The uplink that broke the stream also blocks the alert; once it is
+        back the user must still hear that audio was degraded."""
+        service, patcher = _create_service(
+            notif_overrides={'audio_status': True})
+        try:
+            with patch.object(service, '_send', return_value=False) as mock_send:
+                service._process_audio_status(make_audio_event(
+                    at='2024-06-15T10:30:00',
+                    problem_sources=[{'label': 'Backyard Cam',
+                                      'state': 'degraded',
+                                      'error': 'No route to host'}]))
+                mock_send.assert_called_once()
+                assert len(service._audio_outbox) == 1
+
+            with patch.object(service, '_send', return_value=True) as mock_send:
+                service._process_audio_status(make_audio_event(
+                    state='running', previous_state='degraded',
+                    at='2024-06-15T10:31:00'))
+                mock_send.assert_called_once()
+                title, body = mock_send.call_args.args
+                assert title == 'Audio degraded and recovered'
+                assert 'was degraded and has recovered' in body
+                assert 'State: running → degraded → running' in body
+                assert 'Backyard Cam' in body
+                assert 'No route to host' in body
+                assert 'From: 2024-06-15 10:30:00' in body
+                assert 'To: 2024-06-15 10:31:00' in body
+                assert len(service._audio_outbox) == 0
+        finally:
+            patcher.stop()
+
+    def test_undelivered_stopped_is_reported_with_the_recovery(self):
+        service, patcher = _create_service(
+            notif_overrides={'audio_status': True})
+        try:
+            with patch.object(service, '_send', return_value=False):
+                service._process_audio_status(make_audio_event(state='stopped'))
+            with patch.object(service, '_send', return_value=True) as mock_send:
+                service._process_audio_status(make_audio_event(
+                    state='running', previous_state='stopped'))
+                title, body = mock_send.call_args.args
+                assert title == 'Audio stopped and recovered'
+                assert 'stopped and has recovered' in body
+        finally:
+            patcher.stop()
+
+    def test_delivered_degraded_is_followed_by_a_plain_recovery(self):
+        service, patcher = _create_service(
+            notif_overrides={'audio_status': True})
+        try:
+            with patch.object(service, '_send', return_value=True) as mock_send:
+                service._process_audio_status(make_audio_event())
+                service._process_audio_status(make_audio_event(
+                    state='running', previous_state='degraded'))
+                titles = [c.args[0] for c in mock_send.call_args_list]
+                assert titles == ['Audio degraded', 'Audio recovered']
+        finally:
+            patcher.stop()
+
+    def test_worker_retries_an_undelivered_alert(self):
+        import time
+
+        service, patcher = _create_service(
+            notif_overrides={'audio_status': True})
+        try:
+            with patch('core.audio_alert_outbox.RETRY_INITIAL_SECONDS', 0.05), \
+                 patch.object(service, '_send',
+                              side_effect=[False, True]) as mock_send:
+                service.notify_audio_status(
+                    {'state': 'stopped', 'previous_state': 'running',
+                     'problem_sources': []})
+
+                deadline = time.time() + 5
+                while time.time() < deadline and mock_send.call_count < 2:
+                    time.sleep(0.01)
+
+                titles = [c.args[0] for c in mock_send.call_args_list]
+                assert titles == ['Audio stopped', 'Audio stopped']
+        finally:
+            patcher.stop()
+
+    def test_turning_the_toggle_off_discards_pending_alerts(self, notification_service):
+        service, set_settings = notification_service
+        set_settings({'audio_status': True})
+        with patch.object(service, '_send', return_value=False):
+            service._process_audio_status(make_audio_event())
+        assert len(service._audio_outbox) == 1
+
+        set_settings({'audio_status': False})
+        with patch.object(service, '_send') as mock_send:
+            service._deliver_audio_alerts()
+            mock_send.assert_not_called()
+        assert len(service._audio_outbox) == 0
+
+    def test_pending_alert_for_a_removed_url_is_dropped(self, notification_service):
+        service, set_settings = notification_service
+        set_settings({'audio_status': True, 'apprise_urls': ['mailtos://old']})
+        with patch.object(service, '_send', return_value=False):
+            service._process_audio_status(make_audio_event())
+
+        set_settings({'audio_status': True, 'apprise_urls': ['mailtos://new']})
+        with patch.object(service, '_send') as mock_send:
+            service._deliver_audio_alerts()
+            mock_send.assert_not_called()
+        assert len(service._audio_outbox) == 0
+
+    def test_send_reports_whether_it_was_delivered(self):
+        service, patcher = _create_service()
+        try:
+            mock_apprise_instance = Mock()
+            with patch('apprise.Apprise', return_value=mock_apprise_instance):
+                mock_apprise_instance.notify.return_value = True
+                assert service._send("Title", "Body") is True
+                mock_apprise_instance.notify.return_value = False
+                assert service._send("Title", "Body") is False
+                mock_apprise_instance.notify.side_effect = OSError('down')
+                assert service._send("Title", "Body") is False
+        finally:
+            patcher.stop()
+
+    def test_send_can_target_a_subset_of_urls(self):
+        service, patcher = _create_service(
+            notif_overrides={'apprise_urls': ['tgram://bot/chat', 'discord://webhook']})
+        try:
+            mock_apprise_instance = Mock()
+            with patch('apprise.Apprise', return_value=mock_apprise_instance):
+                service._send("Title", "Body", urls=['discord://webhook'])
+                mock_apprise_instance.add.assert_called_once_with('discord://webhook')
         finally:
             patcher.stop()
 

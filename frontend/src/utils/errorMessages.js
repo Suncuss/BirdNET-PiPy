@@ -16,6 +16,11 @@ export function fetchErrorMessage(error) {
   return body?.code && body.error ? body.error : ERR_UNREACHABLE
 }
 
+// A detection whose recording is gone (its media was removed, e.g. by
+// storage cleanup): the API sends no audio file name, so there is nothing
+// to even try to play.
+export const ERR_RECORDING_MISSING = 'This recording is no longer available.'
+
 // User-facing message for a recording that won't play: pass the element's
 // MediaError (from its 'error' event, or audio.error), and the reason play()
 // rejected when that is how it failed.
