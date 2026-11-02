@@ -5,11 +5,17 @@ Uses async queue with background worker thread, following birdweather_service.py
 """
 
 import html
+import json
+import os
 import queue
+import subprocess
+import sys
 import threading
 from datetime import datetime
 
 from config.constants import RecorderState
+from core.apprise_send import FALLBACK_TEST_ERROR, close_mqtt_clients
+from core.audio_alert_outbox import AudioAlertOutbox
 from core.bird_name_utils import get_localized_common_name
 from core.logging_config import get_logger
 from core.runtime_config import get_runtime_settings, resolve_source_label
@@ -20,19 +26,27 @@ logger = get_logger(__name__)
 
 NOTIFICATION_QUEUE_MAXSIZE = 100
 
+# Upper bound for a Test-button send, kept under the frontend's request
+# timeout for it (AddNotificationModal.vue) so the user sees this error.
+TEST_SEND_TIMEOUT_SECONDS = 25
+_APPRISE_SEND_SCRIPT = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), 'apprise_send.py')
+
 
 class _AudioStatusEvent:
     """Queue envelope marking an audio-pipeline status change.
 
     Wrapping the payload (rather than putting a bare dict on the queue)
     keeps it unambiguously distinct from detection dicts the worker also
-    processes.
+    processes. ``occurred_at`` is stamped when the change happened, since
+    delivery can be much later.
     """
 
-    __slots__ = ('payload',)
+    __slots__ = ('payload', 'occurred_at')
 
-    def __init__(self, payload):
+    def __init__(self, payload, occurred_at):
         self.payload = payload
+        self.occurred_at = occurred_at
 
 
 class NotificationService:
@@ -42,6 +56,7 @@ class NotificationService:
         self._db = db_manager
         self._queue = queue.Queue(maxsize=NOTIFICATION_QUEUE_MAXSIZE)
         self._last_notified = {}  # {scientific_name: detection_timestamp_str}
+        self._audio_outbox = AudioAlertOutbox()  # worker thread only
         self._load_config()
         self._worker = threading.Thread(target=self._worker_loop, daemon=True)
         self._worker.start()
@@ -82,7 +97,7 @@ class NotificationService:
         unconditionally from the recording thread.
         """
         try:
-            self._queue.put_nowait(_AudioStatusEvent(payload))
+            self._queue.put_nowait(_AudioStatusEvent(payload, local_now()))
         except queue.Full:
             logger.warning("Notification queue full, dropping audio status", extra={
                 'state': payload.get('state'),
@@ -91,14 +106,26 @@ class NotificationService:
     def _worker_loop(self):
         """Process notifications sequentially in background."""
         while True:
-            item = self._queue.get()
+            try:
+                item = self._queue.get(
+                    timeout=self._audio_outbox.seconds_until_retry())
+            except queue.Empty:
+                item = None  # woken only to retry undelivered audio alerts
             try:
                 if isinstance(item, _AudioStatusEvent):
-                    self._process_audio_status(item.payload)
-                else:
+                    self._process_audio_status(item)
+                elif item is not None:
                     self._process_detection(item)
+                # Checked after every item, not just on a timeout, so a
+                # steady run of detections can't starve the retries.
+                if self._audio_outbox.retry_due():
+                    self._load_config()
+                    self._deliver_audio_alerts()
             except Exception as e:
                 logger.error("Notification processing failed", extra={'error': str(e)})
+                # Whatever went wrong, never spin on an overdue retry.
+                if self._audio_outbox.retry_due():
+                    self._audio_outbox.defer_retry()
 
     def _process_detection(self, detection):
         """Evaluate triggers and send notification if any fire."""
@@ -146,56 +173,78 @@ class NotificationService:
         message = self._build_message(detection, triggers)
         self._send(title, message)
 
-    def _process_audio_status(self, payload):
-        """Send an audio-pipeline status notification if enabled.
+    def _process_audio_status(self, event):
+        """Queue an audio-pipeline status change and try to deliver it.
 
-        ``payload`` keys:
+        ``event.payload`` keys:
             state:         current aggregate state ('degraded'|'stopped'|'running')
             previous_state: state before this transition (may be None)
             problem_sources: list of {label, state, error} for affected sources
                              (empty on a recovery)
         """
         self._load_config()
+        self._audio_outbox.add(
+            self._apprise_urls, event.payload, event.occurred_at)
+        self._deliver_audio_alerts()
 
+    def _deliver_audio_alerts(self):
+        """Send what the outbox holds; whatever fails is retried later.
+
+        Expects a fresh ``_load_config``. Turning the toggle off (or removing
+        the URLs) discards anything still waiting.
+        """
         if not self._apprise_urls or not self._audio_status:
+            self._audio_outbox.clear()
             return
+        self._audio_outbox.flush(self._send_audio_alert)
 
-        state = payload.get('state', '')
-        recovered = state == RecorderState.RUNNING
+    def _send_audio_alert(self, alert):
+        """Deliver one outbox entry; True when nothing is left to retry."""
+        if alert.url not in self._apprise_urls:
+            return True  # that URL has since been removed from the settings
+        title = f"{self._station_prefix()}{self._audio_alert_title(alert)}"
+        return self._send(
+            title, self._build_audio_status_message(alert), urls=[alert.url])
 
-        if recovered:
-            title = f"{self._station_prefix()}Audio recovered"
-        elif state == RecorderState.STOPPED:
-            title = f"{self._station_prefix()}Audio stopped"
-        else:
-            title = f"{self._station_prefix()}Audio degraded"
+    @staticmethod
+    def _audio_alert_title(alert):
+        state = alert.payload.get('state', '')
+        if state == RecorderState.RUNNING:
+            return "Audio recovered"
+        title = "Audio stopped" if state == RecorderState.STOPPED else "Audio degraded"
+        return f"{title} and recovered" if alert.recovered_at else title
 
-        message = self._build_audio_status_message(payload, recovered)
-        self._send(title, message)
+    def _build_audio_status_message(self, alert):
+        """Build the audio-status notification body as HTML.
 
-    def _build_audio_status_message(self, payload, recovered):
-        """Build the audio-status notification body as HTML."""
+        An alert carrying ``recovered_at`` is a problem whose own message
+        never got through before it ended, so it reports the whole episode.
+        """
+        payload = alert.payload
         state = payload.get('state', '')
         previous_state = payload.get('previous_state')
         problem_sources = payload.get('problem_sources') or []
+        stopped = state == RecorderState.STOPPED
+        resolved = alert.recovered_at is not None
 
-        when = self._format_when(local_now().isoformat())
+        when = self._format_when(alert.occurred_at.isoformat())
 
-        if recovered:
+        if state == RecorderState.RUNNING:
             headline = "Audio capture has recovered and is running normally."
-        elif state == RecorderState.STOPPED:
+        elif resolved:
+            headline = ("Audio capture stopped and has recovered." if stopped
+                        else "Audio capture was degraded and has recovered.")
+        elif stopped:
             headline = "Audio capture has stopped — no recordings are being made."
         else:
             headline = "Audio capture is degraded."
 
         lines = [f"<b>{html.escape(headline)}</b>"]
 
-        if previous_state:
-            lines.append(
-                f"State: {html.escape(str(previous_state))} → {html.escape(str(state))}"
-            )
-        else:
-            lines.append(f"State: {html.escape(str(state))}")
+        states = [previous_state, state] if previous_state else [state]
+        if resolved:
+            states.append(RecorderState.RUNNING)
+        lines.append("State: " + " → ".join(html.escape(str(s)) for s in states))
 
         for src in problem_sources:
             label = html.escape(str(src.get('label', 'Unknown source')))
@@ -207,7 +256,13 @@ class NotificationService:
                 snippet = str(error).strip().splitlines()[0][:200]
                 lines.append(f"  {html.escape(snippet)}")
 
-        lines.append(f"Time: {html.escape(when)}")
+        if resolved:
+            until = self._format_when(alert.recovered_at.isoformat())
+            lines.append(f"From: {html.escape(when)}")
+            lines.append(f"To: {html.escape(until)}")
+            lines.append("This alert could not be delivered when the problem began.")
+        else:
+            lines.append(f"Time: {html.escape(when)}")
 
         station = self._settings.get('display', {}).get('station_name', '').strip()
         if station:
@@ -376,24 +431,33 @@ class NotificationService:
 
         return '<br>\n'.join(lines)
 
-    def _send(self, title, message):
-        """Send notification to all configured Apprise URLs."""
+    def _send(self, title, message, urls=None):
+        """Send notification to the given Apprise URLs (default: all configured).
+
+        Returns True only when every one of them accepted it.
+        """
+        ap = None
         try:
             import apprise
             ap = apprise.Apprise()
-            for url in self._apprise_urls:
+            for url in self._apprise_urls if urls is None else urls:
                 ap.add(url)
             result = ap.notify(
                 title=title,
                 body=message,
                 body_format=apprise.NotifyFormat.HTML,
             )
-            if result:
-                logger.info("Notification sent", extra={'title': title})
-            else:
-                logger.warning("Notification send returned failure", extra={'title': title})
         except Exception as e:
             logger.error("Failed to send notification", extra={'error': str(e)})
+            return False
+        finally:
+            if ap is not None:
+                close_mqtt_clients(ap)
+        if result:
+            logger.info("Notification sent", extra={'title': title})
+        else:
+            logger.warning("Notification send returned failure", extra={'title': title})
+        return bool(result)
 
 
 # Singleton
@@ -419,71 +483,41 @@ def get_notification_service(db_manager=None):
 def send_test_notification(apprise_url):
     """Send a test notification synchronously. Used by the test endpoint.
 
+    The send runs in a short-lived plain interpreter (core/apprise_send.py),
+    not in the calling API worker. That worker is gevent-patched, and under
+    gevent Apprise's MQTT plugin trips over its own network thread whenever
+    the broker takes more than ~10 ms to accept the connection, so the test
+    failed against working brokers (GH #73). The child also sends the way
+    the main process really does: plain threads, no monkey-patching.
+
     Args:
-        apprise_url: Single Apprise URL to test
+        apprise_url: Single Apprise URL to test (passed on stdin, never argv,
+            since it can carry credentials)
 
     Returns:
         tuple: (True, message) on success, (False, error_detail) on failure
     """
-    import io
-    import logging
-
     try:
-        import apprise
-        ap = apprise.Apprise()
-        ap.add(apprise_url)
-
-        # Capture apprise logger output to extract error details
-        stream = io.StringIO()
-        handler = logging.StreamHandler(stream)
-        handler.setLevel(logging.WARNING)
-        apprise_logger = logging.getLogger('apprise')
-        apprise_logger.addHandler(handler)
-
-        try:
-            result = ap.notify(
-                title="BirdNET-PiPy Test Notification",
-                body="If you see this, notifications are working correctly!"
-            )
-        finally:
-            apprise_logger.removeHandler(handler)
-
-        if result:
-            return True, 'Test notification sent successfully'
-
-        log_output = stream.getvalue().strip()
-        detail = _extract_apprise_error(log_output)
-        return False, detail
-
-    except Exception as e:
+        proc = subprocess.run(
+            [sys.executable, '-I', _APPRISE_SEND_SCRIPT],
+            input=apprise_url,
+            capture_output=True,
+            text=True,
+            timeout=TEST_SEND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return False, 'Timed out waiting for the notification service to respond.'
+    except OSError as e:
         logger.error("Test notification failed", extra={'error': str(e)})
         return False, str(e)
 
-
-def _extract_apprise_error(log_output):
-    """Extract a user-friendly error message from apprise log output."""
-    if not log_output or not log_output.strip():
-        return 'Failed to send test notification. Check your configuration.'
-
-    # Apprise sometimes logs a clean one-liner (e.g. "MQTT Connection Error...")
-    # Other times it logs a full traceback — grab the last line for the root cause
-    lines = log_output.strip().split('\n')
-    last_line = lines[-1].strip()
-
-    # If the last line is a recognizable exception, make it friendlier
-    friendly = {
-        'Name or service not known': 'Could not resolve hostname. Check the server address.',
-        'Connection refused': 'Connection refused. Check the server address and port.',
-        'timed out': 'Connection timed out. Check the server address and port.',
-        'No route to host': 'No route to host. Check the server address.',
-        'Connection reset': 'Connection was reset by the server.',
-    }
-    for keyword, message in friendly.items():
-        if keyword in last_line:
-            return message
-
-    # Return the raw last line if it's short enough to be useful
-    if len(last_line) < 200:
-        return last_line
-
-    return 'Failed to send test notification. Check your configuration.'
+    try:
+        result = json.loads(proc.stdout.strip().splitlines()[-1])
+        return bool(result['ok']), str(result['detail'])
+    except (IndexError, KeyError, TypeError, ValueError):
+        stderr_lines = proc.stderr.strip().splitlines()
+        logger.error("Test notification helper failed", extra={
+            'returncode': proc.returncode,
+            'error': stderr_lines[-1][:200] if stderr_lines else '',
+        })
+        return False, FALLBACK_TEST_ERROR

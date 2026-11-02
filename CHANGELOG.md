@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Added `--unattended` and `--user NAME` options to `install.sh` for automated installs, such as a first-boot service, that run as root without sudo and never reboot on their own.
+- Added a link preview card for the Dashboard and the other pages, so a station link shared in a chat app shows a title and image instead of a bare link.
+- Fixed the "Audio degraded" and "Audio stopped" notifications being lost when the internet connection dropped. An alert that can't be sent is now retried, and if audio recovers first, one message reports both.
+- Fixed MQTT notifications stopping after a few hundred messages, which could also stop recording until a restart. Each MQTT message left a connection open; connections are now closed after each send.
+- Fixed the notification Test button failing for MQTT with "The connection was lost" when the broker was slow to accept the connection.
+
 ## [0.8.11] - 2026-09-30
 
 - Changed the CSV export to open a window where you pick a time range, show progress while the file is prepared, then download it as a .zip. Large exports no longer time out, and closing the window doesn't stop an export in progress.

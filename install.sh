@@ -78,6 +78,8 @@ TARGET_BRANCH=""  # Target branch for install/update (default: main for install,
 NO_REBOOT=false   # Skip reboot prompt (for testing)
 SKIP_BUILD=false  # Skip Docker image build (for testing)
 WEB_PORT=""       # Host port for the web interface (--port; empty = keep existing .env value or default 80)
+INSTALL_USER=""   # Account to install for (--user; lets automation run as root without sudo)
+UNATTENDED=false  # No one at the keyboard (--unattended, e.g. an image's first-boot service)
 
 # ============================================================================
 # Logging Functions
@@ -111,17 +113,36 @@ check_root() {
         exit 1
     fi
 
-    # Check if running as direct root (not via sudo)
-    if [ "$EUID" -eq 0 ] && [ -z "$SUDO_USER" ]; then
+    # Direct root (not via sudo) can't tell whose install this is, unless
+    # --user names the account (automation such as a first-boot service)
+    if [ -z "$SUDO_USER" ] && [ -z "$INSTALL_USER" ]; then
         print_error "Please run this script with sudo, not as direct root"
         print_info "Example: sudo ./install.sh"
+        print_info "Automation running as root: pass --user NAME"
+        exit 1
+    fi
+}
+
+# --user must name an existing regular account: the service runs as it and
+# the pre-built images expect its UID, so neither root nor a typo can stand in
+validate_install_user() {
+    [ -n "$INSTALL_USER" ] || return 0
+
+    if ! id -u "$INSTALL_USER" &> /dev/null; then
+        print_error "--user: no account named '$INSTALL_USER'"
+        exit 1
+    fi
+    if [ "$(id -u "$INSTALL_USER")" -eq 0 ]; then
+        print_error "--user must be a regular account, not root"
         exit 1
     fi
 }
 
 # Get the actual user (not root when using sudo)
 get_actual_user() {
-    if [ -n "$SUDO_USER" ]; then
+    if [ -n "$INSTALL_USER" ]; then
+        echo "$INSTALL_USER"
+    elif [ -n "$SUDO_USER" ]; then
         echo "$SUDO_USER"
     else
         echo "$USER"
@@ -196,6 +217,10 @@ show_usage() {
     echo "  --branch BRANCH      Target branch (default: main for install, current for update)"
     echo "  --port PORT          Host port for the web interface (default: 80, remembered across updates)"
     echo "  --no-reboot          Skip automatic reboot after installation (for testing)"
+    echo "  --unattended         For automation with no one at the keyboard (e.g. a"
+    echo "                       first-boot service): never prompts or reboots"
+    echo "  --user NAME          Install for this account; lets automation run as root"
+    echo "                       without sudo"
     echo "  --skip-build         Skip Docker image build (for testing)"
     echo "  --help               Show this help message"
     echo ""
@@ -1300,6 +1325,10 @@ show_completion_message() {
 
 # Reboot system after installation
 prompt_reboot() {
+    if [ "$UNATTENDED" = true ]; then
+        print_status "Reboot skipped (--unattended: the caller decides when to reboot)"
+        return 0
+    fi
     if [ "$NO_REBOOT" = true ]; then
         print_status "Reboot skipped (--no-reboot flag)"
         return 0
@@ -1344,6 +1373,18 @@ main() {
                 NO_REBOOT=true
                 shift
                 ;;
+            --unattended)
+                UNATTENDED=true
+                shift
+                ;;
+            --user)
+                if [ -z "${2:-}" ]; then
+                    print_error "--user requires an account name"
+                    exit 1
+                fi
+                INSTALL_USER="$2"
+                shift 2
+                ;;
             --skip-build)
                 SKIP_BUILD=true
                 shift
@@ -1356,9 +1397,16 @@ main() {
         esac
     done
 
+    # Nothing may wait on a prompt no one will answer (apt/debconf, git credentials)
+    if [ "$UNATTENDED" = true ]; then
+        export DEBIAN_FRONTEND=noninteractive
+        export GIT_TERMINAL_PROMPT=0
+    fi
+
     # Platform and permission checks
     detect_platform
     check_root
+    validate_install_user
 
     # Compute actual user details once (used by all functions below)
     init_user_vars
@@ -1389,6 +1437,8 @@ main() {
         [ -n "$TARGET_BRANCH" ] && ARGS+=(--branch "$TARGET_BRANCH")
         [ -n "$WEB_PORT" ] && ARGS+=(--port "$WEB_PORT")
         [ "$NO_REBOOT" = true ] && ARGS+=(--no-reboot)
+        [ "$UNATTENDED" = true ] && ARGS+=(--unattended)
+        [ -n "$INSTALL_USER" ] && ARGS+=(--user "$INSTALL_USER")
         [ "$SKIP_BUILD" = true ] && ARGS+=(--skip-build)
         reexec_from_clone "${ARGS[@]}"
         # Script exits here (exec replaces process)

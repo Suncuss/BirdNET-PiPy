@@ -1,4 +1,4 @@
-"""Open Graph share-card rendering for detection permalinks.
+"""Open Graph share-card rendering for detection permalinks and the station.
 
 Pure presentation helpers: given a (localized) detection payload and the
 absolute URLs the route resolved, produce the tiny HTML document whose
@@ -9,12 +9,21 @@ business — see api.get_recording_og_card.
 import html
 from datetime import datetime
 
-# A single static PNG (the app's branded bird illustration) backs every card.
+# A static PNG (the app's branded bird illustration) backs every detection card.
 # It lives in the frontend's public/ dir, so nginx serves it at the web root —
 # the OG endpoint only needs to reference its absolute URL. PNG (not the WebP
 # original) because several unfurlers won't render WebP og:images.
 OG_CARD_IMAGE_PATH = "/default_bird.png"
 _OG_CARD_IMAGE_SIZE = (1024, 1024)  # square — the full branded illustration
+
+# The station's own card: the dashboard and every other page that isn't a
+# detection permalink, and any detection the viewer isn't entitled to see. Its
+# image is a landscape card with the wordmark and tagline drawn in, served from
+# public/ the same way. The description repeats the tagline on the image.
+SITE_CARD_IMAGE_PATH = "/og_card.png"
+_SITE_CARD_IMAGE_SIZE = (1200, 630)
+SITE_CARD_TITLE = "BirdNET-PiPy"
+SITE_CARD_DESCRIPTION = "Live bird detections from a BirdNET-PiPy station."
 
 
 def _format_og_timestamp(ts):
@@ -62,16 +71,17 @@ def indefinite_article(noun):
     return 'an' if word[0] in 'aeiou' else 'a'
 
 
-def render_og_card(*, title, description, url, image_url, site_name="BirdNET-PiPy"):
+def render_og_card(*, title, description, url, image_url,
+                   image_size=_OG_CARD_IMAGE_SIZE, site_name="BirdNET-PiPy"):
     """Render a minimal HTML doc carrying Open Graph + Twitter Card meta tags for
     link-unfurl crawlers (iMessage/LinkPresentation, Slack, Discord, …). Only
     crawlers reach this (nginx routes them here); a canonical link + meta-refresh
     send any stray human to the real SPA page. All values are attribute-escaped.
 
-    Every card carries the branded illustration (``image_url``, the caller's
-    absolute URL for OG_CARD_IMAGE_PATH): a ``summary_large_image`` card also
-    reveals the description on iMessage (its no-image card shows only the
-    title)."""
+    Every card carries a branded image (``image_url``, the caller's absolute
+    URL for one of the paths above; ``image_size`` is its pixel size): a
+    ``summary_large_image`` card also reveals the description on iMessage (its
+    no-image card shows only the title)."""
     def e(s):
         return html.escape(str(s), quote=True)
     t, d, u, s = e(title), e(description), e(url), e(site_name)
@@ -80,7 +90,7 @@ def render_og_card(*, title, description, url, image_url, site_name="BirdNET-PiP
     # to avoid a redundant doubled brand.
     page_title = t if site_name in title else f"{t} · {s}"
     iu = e(image_url)
-    w, h = _OG_CARD_IMAGE_SIZE
+    w, h = image_size
     return (
         "<!DOCTYPE html>\n"
         '<html lang="en" prefix="og: https://ogp.me/ns#">\n'
@@ -105,6 +115,19 @@ def render_og_card(*, title, description, url, image_url, site_name="BirdNET-PiP
         f'<meta name="twitter:description" content="{d}">\n'
         f'<meta http-equiv="refresh" content="0; url={u}">\n'
         "</head>\n"
-        f'<body><p>View this detection at <a href="{u}">{u}</a>.</p></body>\n'
+        f'<body><p><a href="{u}">{u}</a></p></body>\n'
         "</html>\n"
+    )
+
+
+def render_site_og_card(base):
+    """The station's own card. ``base`` is the external origin
+    (``scheme://host``). It carries no station or detection data, so it is the
+    same for every viewer."""
+    return render_og_card(
+        title=SITE_CARD_TITLE,
+        description=SITE_CARD_DESCRIPTION,
+        url=f"{base}/",
+        image_url=f"{base}{SITE_CARD_IMAGE_PATH}",
+        image_size=_SITE_CARD_IMAGE_SIZE,
     )
