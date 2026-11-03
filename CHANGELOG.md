@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.8.12] - 2026-11-03
+
 - Added `--unattended` and `--user NAME` options to `install.sh` for automated installs, such as a first-boot service, that run as root without sudo and never reboot on their own.
 - Added a link preview card for the Dashboard and the other pages, so a station link shared in a chat app shows a title and image instead of a bare link.
 - Fixed the "Audio degraded" and "Audio stopped" notifications being lost when the internet connection dropped. An alert that can't be sent is now retried, and if audio recovers first, one message reports both.
