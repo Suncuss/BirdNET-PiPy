@@ -45,6 +45,29 @@ _SPECIES_KEY = db_species.SPECIES_KEY
 PRIVATE_DETECTION_FIELDS = ('latitude', 'longitude')
 
 
+def _fold_taxon_groups(rows, count_key):
+    """Merge catalog/summary rows using the same taxonomy and name rules."""
+    merged = {}
+    for row in sorted(rows, key=lambda r: (r['common_name'] or '', r['scientific_name'] or '')):
+        group = same_taxon_group(row['scientific_name'])
+        key = ('scientific', group[0]) if group else ('common', row['common_name'] or '')
+        entry = merged.get(key)
+        if entry is None:
+            merged[key] = {**dict(row), '_representative_count': row[count_key]}
+            continue
+        if row[count_key] > entry['_representative_count']:
+            entry.update(scientific_name=row['scientific_name'], common_name=row['common_name'],
+                         _representative_count=row[count_key])
+        entry[count_key] += row[count_key]
+        if 'first_detected' in entry:
+            entry['first_detected'] = min(entry['first_detected'], row['first_detected'])
+        entry['last_detected'] = max(entry['last_detected'], row['last_detected'])
+    result = list(merged.values())
+    for entry in result:
+        del entry['_representative_count']
+    return result
+
+
 def _iso_ts(dt):
     """Render a datetime in the canonical stored-timestamp layout
     (db_schema.TIMESTAMP_FORMAT, e.g. '2026-07-12T20:54:01').
@@ -1223,6 +1246,79 @@ class DatabaseManager:
 
         return {'labels': labels, 'data': counts}
 
+    def get_species_summary(self, start_date=None, end_date=None):
+        """Summarize inclusive local dates, or read the species projection for all history."""
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            if start_date is None:
+                # The species projection is maintained independently of daily rollups.
+                cur.execute("""
+                    SELECT scientific_name, common_name, detection_count AS count,
+                           first_detected, last_detected FROM species
+                """)
+                rows = [dict(row) for row in cur.fetchall()]
+            else:
+                # Read readiness and data in one snapshot, including missing-name lookups.
+                cur.execute('BEGIN')
+                try:
+                    if db_rollups.rollups_ready(cur):
+                        cur.execute("""
+                            SELECT d.species_key,
+                                   COALESCE(s.scientific_name, d.species_key) AS scientific_name,
+                                   COALESCE(s.common_name, d.species_key) AS common_name,
+                                   SUM(d.count) AS count,
+                                   MIN(d.first_ts) AS first_detected,
+                                   MAX(d.last_ts) AS last_detected,
+                                   s.species_key IS NULL AS missing_names
+                            FROM species_day d LEFT JOIN species s ON s.species_key = d.species_key
+                            WHERE d.date >= ? AND d.date <= ?
+                            GROUP BY d.species_key
+                        """, (start_date, end_date))
+                        rows = [dict(row) for row in cur.fetchall()]
+                    else:
+                        cur.execute(f"""
+                            WITH counts AS (
+                                SELECT {_SPECIES_KEY} AS species_key, COUNT(*) AS count,
+                                       MIN(timestamp) AS first_detected,
+                                       MAX(timestamp) AS last_detected
+                                FROM detections
+                                WHERE timestamp >= ? AND timestamp < ?
+                                GROUP BY {_SPECIES_KEY}
+                            )
+                            SELECT c.species_key,
+                                   COALESCE(s.scientific_name, c.species_key) AS scientific_name,
+                                   COALESCE(s.common_name, c.species_key) AS common_name,
+                                   c.count, c.first_detected, c.last_detected,
+                                   s.species_key IS NULL AS missing_names
+                            FROM counts c LEFT JOIN species s ON s.species_key = c.species_key
+                        """, (f'{start_date}T00:00:00', f'{end_date}T~'))
+                        rows = [dict(row) for row in cur.fetchall()]
+                    for row in rows:
+                        key = row.pop('species_key')
+                        if row.pop('missing_names'):
+                            # Resolve missing projection names from the latest detection
+                            # across all history, matching a later species-table rebuild.
+                            cur.execute("""
+                                SELECT scientific_name, common_name FROM detections
+                                WHERE scientific_name = ?
+                                ORDER BY timestamp DESC, id DESC LIMIT 1
+                            """, (key,))
+                            names = cur.fetchone()
+                            if names is None:
+                                cur.execute("""
+                                    SELECT scientific_name, common_name FROM detections
+                                    WHERE common_name = ? AND COALESCE(scientific_name, '') = ''
+                                    ORDER BY timestamp DESC, id DESC LIMIT 1
+                                """, (key,))
+                                names = cur.fetchone()
+                            if names is not None:
+                                row.update(dict(names))
+                finally:
+                    conn.commit()
+        result = _fold_taxon_groups(rows, 'count')
+        return sorted(result, key=lambda r: (-r['count'], r['scientific_name'] or '',
+                                             r['common_name'] or ''))
+
     def get_all_unique_species(self):
         """Get all unique bird species ever detected, sorted alphabetically.
 
@@ -1249,33 +1345,9 @@ class DatabaseManager:
             cur.execute(query)
             results = cur.fetchall()
 
-        merged = {}
-        for row in results:
-            group = same_taxon_group(row['scientific_name'])
-            # Legacy rows can carry a blank scientific_name; they key on their
-            # own common_name, exactly as the rollup does.
-            key = group[0] if group else (row['common_name'] or '')
-            existing = merged.get(key)
-            if existing is None:
-                merged[key] = {
-                    'common_name': row['common_name'],
-                    'scientific_name': row['scientific_name'],
-                    'last_detected': row['last_detected'],
-                    '_count': row['detection_count'],
-                }
-                continue
-            if row['last_detected'] > existing['last_detected']:
-                existing['last_detected'] = row['last_detected']
-            # Ties keep the first row, i.e. the alphabetically-first common
-            # name, so the displayed entry is stable across requests.
-            if row['detection_count'] > existing['_count']:
-                existing['common_name'] = row['common_name']
-                existing['scientific_name'] = row['scientific_name']
-                existing['_count'] = row['detection_count']
-
-        species = list(merged.values())
+        species = _fold_taxon_groups(results, 'detection_count')
         for entry in species:
-            del entry['_count']
+            del entry['detection_count']
         species.sort(key=lambda s: s['common_name'])
         return species
 

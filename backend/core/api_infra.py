@@ -114,6 +114,7 @@ _ANON_REACHABLE_ENDPOINTS = frozenset({
     'get_dashboard', 'get_dashboard_summary', 'get_unique_detections', 'get_sightings',
     'get_bird_details', 'serve_bird_image', 'get_bird_recordings',
     'get_detection_distribution', 'get_all_species', 'get_available_species',
+    'get_species_summary',
     # Feature-gated (require_feature decides on the charts/table/live_feed flags)
     'get_hourly_activity', 'get_activity_overview', 'get_detection_trends',
     'get_detections', 'get_stream_config',

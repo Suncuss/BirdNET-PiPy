@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Added a species summary API for detection counts and first/last timestamps over a date range or all history, respecting station public visibility.
+
 ## [0.8.12] - 2026-11-03
 
 - Added `--unattended` and `--user NAME` options to `install.sh` for automated installs, such as a first-boot service, that run as root without sudo and never reboot on their own.

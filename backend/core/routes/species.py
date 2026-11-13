@@ -14,14 +14,38 @@ from core.api_utils import (
 )
 from core.auth import require_scope
 from core.detection_presenter import _localize_detection, _localize_species_list
+from core.export_jobs import resolve_range
 from core.logging_config import get_logger, log_api_request
 from core.settings_store import load_user_settings
-from core.timezone_service import local_now
+from core.timezone_service import get_timezone_str, local_now
 from model_service.label_utils import get_species_list
 
 logger = get_logger(__name__)
 
 _available_species_cache = {}
+
+
+@api.route('/api/species/summary', methods=['GET'])
+@require_scope('public:read')
+@log_api_request
+@handle_api_errors
+def get_species_summary():
+    """Return per-species counts and detection boundaries for local dates."""
+    start = request.args.get('start_date')
+    end = request.args.get('end_date')
+    if start is not None or end is not None:
+        resolved = resolve_range('custom', start, end)
+        if (start, end) != resolved:
+            raise ValueError('Dates must use YYYY-MM-DD')
+        start, end = resolved
+    species = _run_db(infra.db_manager.get_species_summary, start, end)
+    return jsonify({
+        'start_date': start,
+        'end_date': end,
+        'timezone': get_timezone_str(),
+        'species': species,
+    })
+
 
 @api.route('/api/bird/<species_name>', methods=['GET'])
 @require_scope('public:read')
