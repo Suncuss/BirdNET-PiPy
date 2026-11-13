@@ -1,4 +1,4 @@
-"""HTTP contract and owner access for species summaries."""
+"""HTTP contract and public visibility for species summaries."""
 import pytest
 
 from tests.api.conftest import auth_enabled_app, insert_detection, login_owner
@@ -52,11 +52,21 @@ def test_invalid_dates(api_client, query):
 
 
 @pytest.mark.parametrize('public_access', [False, True])
-def test_owner_only_even_when_charts_are_public(real_db_manager, public_access):
+@pytest.mark.parametrize('charts_public', [False, True])
+def test_follows_station_public_visibility(real_db_manager, public_access, charts_public):
+    insert_detection(real_db_manager)
     with auth_enabled_app(real_db_manager, access={
-        'public_access': public_access, 'charts_public': True,
+        'public_access': public_access, 'charts_public': charts_public,
     }) as (client, _):
-        assert client.get('/api/species/summary').status_code == 401
-        assert client.get('/api/species/summary?start_date=2026-11-07&end_date=2026-11-13').status_code == 401
+        for url in (
+            '/api/species/summary',
+            '/api/species/summary?start_date=2024-01-15&end_date=2024-01-15',
+        ):
+            response = client.get(url)
+            assert response.status_code == (200 if public_access else 401)
+            if public_access:
+                assert set(response.get_json()['species'][0]) == {
+                    'scientific_name', 'common_name', 'count', 'first_detected', 'last_detected',
+                }
         login_owner(client)
         assert client.get('/api/species/summary').status_code == 200

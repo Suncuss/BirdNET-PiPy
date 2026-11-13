@@ -3,8 +3,10 @@
 ## Species summary
 
 `GET /api/species/summary` returns detection counts and first/last timestamps
-for every species in a date range. It requires an authenticated owner session
-when authentication is enabled. Public charts access does not grant access.
+for every species in a date range. It follows the station's public-visibility
+setting: public stations allow anonymous requests; private stations require an
+authenticated owner session.
+The separate public-charts setting does not affect this endpoint.
 Authentication-disabled installations can call it without signing in.
 
 | Parameter | Meaning |

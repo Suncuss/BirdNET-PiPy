@@ -1,8 +1,13 @@
 """Species summaries must agree before and after daily rollup construction."""
 import pytest
 
-import core.db_rollups as db_rollups
-from tests.database.test_db_rollups import build_all, detection, old_code_insert
+from tests.database.test_db_rollups import detection, old_code_insert
+
+
+def build_all(db):
+    import core.db_rollups as db_rollups
+    while not db_rollups.advance_build(db, max_days=2):
+        pass
 
 
 @pytest.fixture(params=[False, True], ids=['raw', 'rollups'])
@@ -73,6 +78,8 @@ def test_taxonomy_aliases_legacy_names_and_sorting(summary_db, monkeypatch):
 
 
 def test_dirty_rollups_fall_back_to_raw_records(test_db_manager):
+    import core.db_rollups as db_rollups
+
     db = test_db_manager
     db.insert_detection(detection('2026-11-07T10:00:00'))
     build_all(db)
@@ -85,16 +92,23 @@ def test_dirty_rollups_fall_back_to_raw_records(test_db_manager):
     assert {row['common_name'] for row in rows} == {'American Robin', 'Old Bird'}
     while db_rollups.consume_dirty_days(db):
         pass
-    # Rebuild the species projection too, as the normal maintenance path does.
-    db.rebuild_species_table()
     assert db.get_species_summary('2026-11-07', '2026-11-08') == rows
 
 
-def test_ready_summary_does_not_scan_detection_history(test_db_manager):
+@pytest.mark.parametrize('ready', [False, True], ids=['unready', 'ready'])
+def test_all_history_reads_only_species_projection(test_db_manager, monkeypatch, ready):
+    import core.db_rollups as db_rollups
+
     db = test_db_manager
     for i in range(1000):
         db.insert_detection(detection(f'2026-11-07T10:{i // 60:02d}:{i % 60:02d}'))
-    build_all(db)
+    if ready:
+        build_all(db)
+
+    def unexpected_readiness_check(cur):
+        pytest.fail('All-history summary must not depend on daily-rollup readiness')
+
+    monkeypatch.setattr(db_rollups, 'rollups_ready', unexpected_readiness_check)
     statements = []
     with db.get_db_connection() as conn:
         conn.set_trace_callback(statements.append)
@@ -103,6 +117,79 @@ def test_ready_summary_does_not_scan_detection_history(test_db_manager):
     finally:
         with db.get_db_connection() as conn:
             conn.set_trace_callback(None)
+    assert not any('detections' in sql or 'species_day' in sql for sql in statements)
+    assert len(statements) == 1
+    assert 'FROM species' in statements[0]
+
+
+def test_ready_date_summary_uses_daily_rollups(test_db_manager):
+    db = test_db_manager
+    db.insert_detection(detection('2026-11-07T10:00:00'))
+    build_all(db)
+    statements = []
+    with db.get_db_connection() as conn:
+        conn.set_trace_callback(statements.append)
+    try:
+        assert db.get_species_summary('2026-11-07', '2026-11-07')[0]['count'] == 1
+    finally:
+        with db.get_db_connection() as conn:
+            conn.set_trace_callback(None)
     assert not any('FROM detections' in sql for sql in statements)
     assert any('FROM species_day' in sql for sql in statements)
     assert statements[0] == 'BEGIN'
+    assert statements[-1] == 'COMMIT'
+
+
+@pytest.mark.parametrize('scientific', ['Oldus birdus', ''])
+def test_missing_species_names_use_newest_detection(test_db_manager, scientific):
+    db = test_db_manager
+    # Alphabetical order and insertion order both disagree with newest timestamp.
+    old_code_insert(db, '2026-11-07T10:00:00', 'Z Newest', scientific)
+    old_code_insert(db, '2026-11-07T09:00:00', 'A Older', scientific)
+    expected_names = ['A Older', 'Z Newest'] if not scientific else ['Z Newest']
+    raw = db.get_species_summary('2026-11-07', '2026-11-07')
+    assert [row['common_name'] for row in raw] == expected_names
+    build_all(db)
+    assert db.get_species_summary('2026-11-07', '2026-11-07') == raw
+
+
+def test_raw_name_ties_use_latest_id(test_db_manager):
+    db = test_db_manager
+    old_code_insert(db, '2026-11-07T10:00:00', 'A Older')
+    old_code_insert(db, '2026-11-07T10:00:00', 'Z Newest')
+    before = db.get_species_summary('2026-11-07', '2026-11-07')
+    assert before[0]['common_name'] == 'Z Newest'
+    build_all(db)
+    assert db.get_species_summary('2026-11-07', '2026-11-07') == before
+    db.rebuild_species_table()
+    assert db.get_species_summary('2026-11-07', '2026-11-07') == before
+
+
+def test_catalog_and_summary_share_taxonomy_rules(summary_db, monkeypatch):
+    import core.db as db_module
+    monkeypatch.setattr(db_module, 'same_taxon_group', lambda name: ('same taxon',))
+    db = summary_db([
+        ('2026-11-07T10:00:00', 'A Bird', 'Oldus birdus'),
+        ('2026-11-08T10:00:00', 'Z Bird', 'Newus birdus'),
+    ])
+    summary = db.get_species_summary()[0]
+    catalog = db.get_all_unique_species()
+    assert summary['count'] == 2
+    assert catalog == [{key: summary[key] for key in (
+        'scientific_name', 'common_name', 'last_detected',
+    )}]
+    assert summary['common_name'] == 'A Bird'
+
+
+def test_missing_name_uses_latest_detection_outside_range(test_db_manager):
+    db = test_db_manager
+    old_code_insert(db, '2026-11-07T10:00:00', 'A Older')
+    old_code_insert(db, '2026-11-08T10:00:00', 'Z Newest')
+    before = db.get_species_summary('2026-11-07', '2026-11-07')
+    assert before[0]['common_name'] == 'Z Newest'
+    assert before[0]['count'] == 1
+    assert before[0]['last_detected'] == '2026-11-07T10:00:00'
+    build_all(db)
+    assert db.get_species_summary('2026-11-07', '2026-11-07') == before
+    db.rebuild_species_table()
+    assert db.get_species_summary('2026-11-07', '2026-11-07') == before
