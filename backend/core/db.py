@@ -1223,6 +1223,69 @@ class DatabaseManager:
 
         return {'labels': labels, 'data': counts}
 
+    def get_species_summary(self, start_date=None, end_date=None):
+        """Summarize inclusive local dates, or all history when omitted.
+
+        Read readiness and aggregates in the same snapshot. Unbuilt or dirty
+        daily rollups must not return partial counts during imports/repair.
+        """
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            cur.execute('BEGIN')
+            if db_rollups.rollups_ready(cur):
+                where = 'WHERE d.date >= ? AND d.date <= ?' if start_date else ''
+                params = (start_date, end_date) if start_date else ()
+                cur.execute(f"""
+                    SELECT s.scientific_name, s.common_name,
+                           SUM(d.count) AS count,
+                           MIN(d.first_ts) AS first_detected,
+                           MAX(d.last_ts) AS last_detected
+                    FROM species_day d JOIN species s ON s.species_key = d.species_key
+                    {where}
+                    GROUP BY d.species_key
+                """, params)
+            else:
+                where = 'WHERE timestamp >= ? AND timestamp < ?' if start_date else ''
+                params = (f'{start_date}T00:00:00', f'{end_date}T~') if start_date else ()
+                cur.execute(f"""
+                    WITH counts AS (
+                        SELECT {_SPECIES_KEY} AS species_key,
+                               MAX(scientific_name) AS scientific_name,
+                               MIN(common_name) AS common_name, COUNT(*) AS count,
+                               MIN(timestamp) AS first_detected,
+                               MAX(timestamp) AS last_detected
+                        FROM detections {where}
+                        GROUP BY {_SPECIES_KEY}
+                    )
+                    SELECT COALESCE(s.scientific_name, c.scientific_name) AS scientific_name,
+                           COALESCE(s.common_name, c.common_name) AS common_name,
+                           c.count, c.first_detected, c.last_detected
+                    FROM counts c LEFT JOIN species s ON s.species_key = c.species_key
+                """, params)
+            rows = cur.fetchall()
+
+        # Match the catalog's taxonomy grouping and most-detected representative.
+        # Explicit ordering also makes equal-count name choices deterministic.
+        merged = {}
+        for row in sorted(rows, key=lambda r: (r['common_name'] or '', r['scientific_name'] or '')):
+            group = same_taxon_group(row['scientific_name'])
+            key = ('scientific', group[0]) if group else ('common', row['common_name'] or '')
+            entry = merged.get(key)
+            if entry is None:
+                merged[key] = {**dict(row), '_representative_count': row['count']}
+                continue
+            if row['count'] > entry['_representative_count']:
+                entry.update(scientific_name=row['scientific_name'], common_name=row['common_name'],
+                             _representative_count=row['count'])
+            entry['count'] += row['count']
+            entry['first_detected'] = min(entry['first_detected'], row['first_detected'])
+            entry['last_detected'] = max(entry['last_detected'], row['last_detected'])
+        result = list(merged.values())
+        for entry in result:
+            del entry['_representative_count']
+        return sorted(result, key=lambda r: (-r['count'], r['scientific_name'] or '',
+                                             r['common_name'] or ''))
+
     def get_all_unique_species(self):
         """Get all unique bird species ever detected, sorted alphabetically.
 
