@@ -43,6 +43,22 @@ KIND_DIRS = {
 }
 
 
+def media_directories(kind):
+    from core.media_storage import get_audio_search_dirs, get_spectrogram_search_dirs
+    resolver = get_audio_search_dirs if kind == KIND_AUDIO else get_spectrogram_search_dirs
+    return resolver(internal_dir=KIND_DIRS[kind])
+
+
+def media_path(kind, filename):
+    """Find an owned file after a storage change, retaining its filename."""
+    directories = media_directories(kind)
+    for directory in directories:
+        path = os.path.join(directory, filename)
+        if os.path.exists(path):
+            return path
+    return os.path.join(directories[0], filename)
+
+
 class MediaOwnershipError(Exception):
     """Base for ownership-boundary failures."""
 
@@ -238,16 +254,53 @@ def unlink_owned_files(owned):
     """
     removed = []
     for f in owned:
-        path = os.path.join(KIND_DIRS[f['kind']], f['filename'])
-        try:
-            os.remove(path)
+        failed = False
+        for directory in media_directories(f['kind']):
+            path = os.path.join(directory, f['filename'])
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                failed = True
+                logger.warning("Failed to unlink owned media file", extra={
+                    'path': path, 'error': str(e)})
+        if not failed:
             removed.append(f['filename'])
-        except FileNotFoundError:
-            removed.append(f['filename'])
-        except OSError as e:
-            logger.warning("Failed to unlink owned media file", extra={
-                'path': path, 'error': str(e)})
     return removed
+
+
+def unlink_owned_files_on_device(owned, device):
+    """Free space only on this filesystem, preserving copies elsewhere.
+
+    Ownership is retired only when no copy remains in any visible media
+    directory. Bytes count actual successful removals on the pressured disk.
+    """
+    removed = []
+    bytes_freed = 0
+    files_removed = 0
+    for media in owned:
+        failed = False
+        paths = [os.path.join(directory, media['filename'])
+                 for directory in media_directories(media['kind'])]
+        for path in paths:
+            try:
+                stat = os.stat(path, follow_symlinks=False)
+                if stat.st_dev != device:
+                    continue
+                os.remove(path)
+                bytes_freed += stat.st_size
+                files_removed += 1
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                failed = True
+                logger.warning('Could not remove media from full filesystem',
+                               extra={'path': path, 'error': str(exc)})
+        if not failed and not any(os.path.lexists(path) for path in paths):
+            removed.append(media['filename'])
+    return {'removed_filenames': removed, 'bytes_freed': bytes_freed,
+            'files_removed': files_removed}
 
 
 def rename_media(cursor, old_name, new_name):

@@ -112,16 +112,15 @@ class MaintenanceInProgressError(Exception):
 
 
 def index_build_active(db_manager, now=None):
-    """Whether the live-media index build currently holds the lease.
+    """Whether an index build or media move blocks media mutations.
 
-    Only the build blocks short interactive mutations — a running import
-    holds the lease for hours but its batch writes interleave fine with a
+    A running import holds the lease for hours but its batch writes interleave fine with a
     user's delete; the build holds SQLite's writer lock for its entire
     statement, which is what would strand a mutation mid-operation."""
     now = now if now is not None else time.time()
     with db_manager.get_db_connection() as conn:
         lease = _read_lease(conn.cursor())
-    return bool(lease and lease['role'] == 'index_build'
+    return bool(lease and lease['role'] in ('index_build', 'media_transfer')
                 and lease['expires'] > now)
 
 

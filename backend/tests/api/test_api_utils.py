@@ -47,6 +47,21 @@ class TestServeFileWithFallback:
                     # Should serve the requested file
                     mock_send.assert_called_with(tmpdir, 'test_file.mp3')
 
+    def test_serves_file_from_later_search_directory(self, app):
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            filename = 'test_file.mp3'
+            default_file = os.path.join(first, 'default.mp3')
+            open(default_file, 'wb').close()
+            open(os.path.join(second, filename), 'wb').close()
+
+            from core.api_utils import serve_file_with_fallback
+
+            with app.app_context(), patch('core.api_utils.send_from_directory') as mock_send:
+                mock_send.return_value = MagicMock()
+                serve_file_with_fallback([first, second], filename, default_file, 'audio')
+
+            mock_send.assert_called_with(second, filename)
+
     def test_migrates_legacy_colon_file_to_dash(self, app):
         """Should rename legacy colon-pattern file to dash-pattern and serve."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -213,6 +228,21 @@ class TestRecordingHasMedia:
         open(os.path.join(spectrogram_dir, 's.webp'), 'wb').close()
         rec = {'audio_filename': 'a.mp3', 'spectrogram_filename': 's.webp'}
         assert recording_has_media(rec, audio_dir, spectrogram_dir) is True
+
+    def test_true_when_files_are_in_fallback_directories(self, recording_dirs):
+        from core.api_utils import recording_has_media
+        audio_dir, spectrogram_dir = recording_dirs
+        missing_audio = os.path.join(audio_dir, 'missing')
+        missing_spectrogram = os.path.join(spectrogram_dir, 'missing')
+        open(os.path.join(audio_dir, 'a.mp3'), 'wb').close()
+        open(os.path.join(spectrogram_dir, 's.webp'), 'wb').close()
+        rec = {'audio_filename': 'a.mp3', 'spectrogram_filename': 's.webp'}
+
+        assert recording_has_media(
+            rec,
+            [missing_audio, audio_dir],
+            [missing_spectrogram, spectrogram_dir],
+        ) is True
 
     def test_false_when_audio_missing(self, recording_dirs):
         from core.api_utils import recording_has_media

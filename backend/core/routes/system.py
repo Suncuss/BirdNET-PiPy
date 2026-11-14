@@ -11,13 +11,13 @@ import time
 import requests
 from flask import jsonify, request
 
-from config.settings import BASE_DIR
 from core import api_infra as infra
 from core.api_infra import _run_db, api
 from core.api_utils import handle_api_errors
 from core.auth import get_request_tier, require_auth, require_scope
 from core.ha_mode import get_runtime_mode, is_home_assistant_mode
 from core.logging_config import get_logger, log_api_request
+from core.media_storage import get_effective_storage_path, get_media_storage_status
 from core.settings_store import load_user_settings
 from core.update_service import (
     _HA_CORE_API_BASE,
@@ -47,6 +47,108 @@ _update_check_cache = {
     'cache_key': None  # format: "channel:current_commit"
 }
 UPDATE_CHECK_CACHE_TTL = 3600  # 1 hour in seconds
+
+
+@api.route('/api/system/media-transfer', methods=['GET'])
+@require_auth
+@log_api_request
+@handle_api_errors
+def get_media_transfer():
+    from core.media_transfer import transfer_status
+    from core.runtime_config import read_saved_settings
+    from core.settings_store import settings_etag
+    progress = transfer_status()
+    if progress['state'] in ('complete', 'failed'):
+        settings = read_saved_settings(force_reload=True)
+        response = jsonify({**progress, 'settings': settings})
+        response.headers['ETag'] = settings_etag(settings)
+        return response
+    return jsonify(progress)
+
+
+@api.route('/api/system/storage-devices', methods=['GET'])
+@require_auth
+@log_api_request
+@handle_api_errors
+def get_connected_storage():
+    from core.storage_discovery import get_storage_devices
+    return jsonify(get_storage_devices())
+
+
+@api.route('/api/system/storage/format-status', methods=['GET'])
+@require_auth
+@handle_api_errors
+def get_drive_format_status():
+    from core.storage_format import format_status
+    status = format_status()
+    if status['state'] == 'complete':
+        status['media_storage'] = get_media_storage_status()
+    return jsonify(status)
+
+
+@api.route('/api/system/storage/format', methods=['POST'])
+@require_auth
+@log_api_request
+@handle_api_errors
+def start_drive_format():
+    from core.auth import is_auth_enabled, is_authenticated
+    from core.storage_format import format_status, queue_format
+    # require_auth also permits auth-disabled installations. Destructive work
+    # requires a signed-in owner, even when other settings are publicly editable.
+    if not is_auth_enabled() or not is_authenticated():
+        return jsonify({'error': 'Enable password protection and sign in before formatting a drive.'}), 403
+    if not format_status()['ready']:
+        return jsonify({'error': 'Drive formatting is unavailable. Update the host installation first.'}), 503
+    # Reuse the same current-inventory and typed-name checks as the dry run.
+    result = preview_drive_format()
+    if isinstance(result, tuple):
+        return result
+    try:
+        return jsonify(queue_format(request.get_json())), 202
+    except FileExistsError:
+        return jsonify({'error': 'A drive is already being formatted.'}), 409
+
+
+@api.route('/api/system/storage/format-dry-run', methods=['POST'])
+@require_auth
+@log_api_request
+@handle_api_errors
+def preview_drive_format():
+    """Return a plan from current metadata. No disk commands or jobs run."""
+    from core.storage_discovery import get_storage_devices
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict) or not all(
+        isinstance(payload.get(field), str) and payload[field]
+        for field in ('path', 'device_id', 'confirmation')
+    ):
+        return jsonify({'error': 'Select a drive and type its name.'}), 400
+    inventory = get_storage_devices()
+    if inventory['state'] != 'available':
+        return jsonify({'error': inventory['message']}), 503
+    drive = next((drive for drive in inventory['devices']
+                  if drive['path'] == payload['path'] and drive['device_id'] == payload['device_id']), None)
+    if drive is None:
+        return jsonify({'error': 'Drive information changed. Refresh the drive list and try again.'}), 409
+    if drive['preparation_eligible'] is not True:
+        return jsonify({'error': drive['eligibility_reason']}), 409
+    if payload['confirmation'] != drive['name']:
+        return jsonify({'error': 'The typed drive name does not match.'}), 400
+    return jsonify({
+        'dry_run': True,
+        'drive': {key: drive[key] for key in ('device_id', 'path', 'name', 'size_bytes')},
+        'filesystem': 'ext4',
+        'erases_all_data': True,
+        'formatting_enabled': False,
+    })
+
+
+@api.route('/api/system/media-targets', methods=['GET'])
+@require_auth
+@log_api_request
+@handle_api_errors
+def get_system_media_targets():
+    """List media targets and report the currently effective storage path."""
+    return jsonify(get_media_storage_status()), 200
 
 
 def _build_update_check_result(update_available, current_commit, remote_commit,
@@ -108,8 +210,8 @@ def get_cleanup_preview():
 @log_api_request
 @handle_api_errors
 def get_system_storage():
-    """Get disk storage information for the data directory (matches df output)"""
-    data_path = os.path.join(BASE_DIR, 'data')
+    """Get disk storage information for the effective media target."""
+    data_path = get_effective_storage_path()
 
     try:
         # Use statvfs to match df's calculation (excludes reserved blocks)
