@@ -30,6 +30,8 @@ from core.media_ownership import (
     KIND_SPECTROGRAM,
     PART_SUFFIX,
     DetectionMissingError,
+    media_directories,
+    media_path,
     recompute_media_bytes,
     record_media,
     rename_media,
@@ -213,7 +215,7 @@ def scan_disk(db_manager, now=None):
     stats = {'reattached': 0, 'residue_removed': 0, 'parts_removed': 0,
              'pending_grace': 0, 'legacy_unowned': 0, 'unrecognized': 0}
 
-    for directory in KIND_DIRS.values():
+    for directory in dict.fromkeys(path for kind in KIND_DIRS for path in media_directories(kind)):
         try:
             entries = os.scandir(directory)
         except OSError:
@@ -284,7 +286,7 @@ def audit_ownership(db_manager):
             touched_owners = set()
             for row in batch:
                 last_filename = row['filename']
-                path = os.path.join(KIND_DIRS[row['kind']], row['filename'])
+                path = media_path(row['kind'], row['filename'])
                 if row['owner_id'] is None:
                     # Old-code delete left the ownership row behind (no FK
                     # by design): finish the job.
@@ -301,8 +303,7 @@ def audit_ownership(db_manager):
                     # record behind the disk — follow a normalized sibling
                     # before declaring the file gone.
                     normalized = row['filename'].replace(':', '-')
-                    normalized_path = os.path.join(
-                        KIND_DIRS[row['kind']], normalized)
+                    normalized_path = media_path(row['kind'], normalized)
                     if normalized != row['filename'] and os.path.exists(normalized_path):
                         rename_media(cur, row['filename'], normalized)
                         stats['renames_followed'] += 1

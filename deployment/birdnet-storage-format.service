@@ -1,0 +1,7 @@
+[Unit]
+Description=Format a confirmed BirdNET media drive
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/birdnet-pipy/storage-format.py
+TimeoutStartSec=30min

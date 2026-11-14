@@ -164,6 +164,7 @@ const mockSettings = {
     quiet_hours: { enabled: false, start: '22:00', end: '06:00' }
   },
   storage: {
+    media_target: 'internal',
     auto_cleanup_enabled: true,
     trigger_percent: 85,
     target_percent: 80,
@@ -433,6 +434,278 @@ describe('Settings', () => {
       expect(mockApi.get).toHaveBeenCalledWith('/settings')
       expect(wrapper.vm.settings.audio.recording_length).toBe(9)
       expect(wrapper.vm.settings.audio.overlap).toBe(0.0)
+    })
+
+    it('shows connected drive information only when expanded', async () => {
+      mockApi.get.mockImplementation((url) => url === '/system/storage-devices'
+        ? Promise.resolve({ data: { state: 'available', devices: [{
+            path: '/dev/sda', name: 'USB SSD', size_bytes: 500000000000,
+            connection: 'USB', filesystems: ['exfat'], mounted: false,
+            system_drive: false, read_only: false,
+            preparation_eligible: false, eligibility_reason: 'Contains BirdNET database'
+          }] } })
+        : defaultGetResponse(url))
+      const wrapper = mountSettings()
+      await flushPromises()
+      expect(mockApi.get).not.toHaveBeenCalledWith('/system/storage-devices')
+      const details = wrapper.find('details')
+      details.element.open = true
+      await details.trigger('toggle')
+      await flushPromises()
+      expect(details.text()).toContain('USB SSD · 500 GB')
+      expect(details.text()).toContain('/dev/sda · USB · exfat · Not mounted')
+      expect(details.text()).toContain('Contains BirdNET database')
+      expect(details.findAll('button')).toHaveLength(0)
+      expect(mockApi.put).not.toHaveBeenCalled()
+      expect(mockApi.post).not.toHaveBeenCalled()
+      details.element.open = false
+      await details.trigger('toggle')
+    })
+
+    it('opens a format confirmation for an eligible synthetic drive', async () => {
+      mockApi.get.mockImplementation((url) => url === '/system/storage-devices'
+        ? Promise.resolve({ data: { state: 'available', devices: [{
+            path: '/dev/sda', device_id: 'synthetic-device', name: 'BIRDSTORE', size_bytes: 500000000000,
+            connection: 'USB', filesystems: ['exfat'], mounted: false,
+            preparation_eligible: true, eligibility_reason: 'Eligible for preparation'
+          }] } })
+        : defaultGetResponse(url))
+      const wrapper = mountSettings()
+      document.body.appendChild(wrapper.element)
+      await flushPromises()
+      const details = wrapper.get('details')
+      details.element.open = true
+      await details.trigger('toggle')
+      await flushPromises()
+      await details.get('button').trigger('click')
+      expect(wrapper.get('dialog').text()).toContain('BIRDSTORE · 500 GB')
+      expect(wrapper.get('dialog').text()).toContain('/dev/sda')
+      const buttons = wrapper.get('dialog').findAll('button')
+      expect(wrapper.get('dialog').text()).toContain('Erase and format')
+      await buttons.find(button => button.text() === 'Cancel').trigger('click')
+      expect(wrapper.find('dialog').exists()).toBe(false)
+      expect(mockApi.put).not.toHaveBeenCalled()
+      expect(mockApi.post).not.toHaveBeenCalled()
+    })
+
+    it('reuses the existing progress banner for a synthetic formatting job', async () => {
+      vi.useFakeTimers()
+      let status = { state: 'idle', ready: true }
+      const drive = { id: '/managed-media/synthetic-uuid', label: 'BIRDSTORE 12345678', available: true }
+      mockApi.get.mockImplementation(url => {
+        if (url === '/system/storage/format-status') return Promise.resolve({ data: status })
+        if (url === '/system/media-targets') return Promise.resolve({
+          data: { targets: status.state === 'complete' ? [drive] : [] }
+        })
+        return defaultGetResponse(url)
+      })
+      const wrapper = mountSettings()
+      await flushPromises()
+      wrapper.vm.formatStarted({ id: 'synthetic-job', state: 'queued', message: 'Waiting for host…' })
+      await flushPromises()
+      expect(wrapper.text()).toContain('Waiting for host…')
+      status = { id: 'synthetic-job', state: 'formatting', message: 'Creating ext4 filesystem…' }
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(wrapper.text()).toContain('Creating ext4 filesystem…')
+      status = { id: 'synthetic-job', state: 'mounting', message: 'Mounting formatted drive…' }
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(wrapper.text()).toContain('Mounting formatted drive…')
+      expect(wrapper.vm.formatActive).toBe(true)
+      status = { id: 'synthetic-job', state: 'complete', message: 'Drive formatted and mounted.' }
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(wrapper.vm.formatActive).toBe(false)
+      expect(wrapper.text()).toContain('Drive formatted and mounted.')
+      expect(wrapper.get('#mediaStorageTarget').text()).toContain('BIRDSTORE 12345678')
+      vi.useRealTimers()
+    })
+
+    it('keeps the formatting dialog open until the user dismisses the result', async () => {
+      vi.useFakeTimers()
+      let status = { state: 'idle' }
+      mockApi.get.mockImplementation(url => url === '/system/storage/format-status'
+        ? Promise.resolve({ data: status }) : defaultGetResponse(url))
+      mockApi.post.mockResolvedValue({ data: { id: 'modal-job', state: 'queued', message: 'Waiting for formatting…' } })
+      const wrapper = mountSettings()
+      document.body.appendChild(wrapper.element)
+      await flushPromises()
+      wrapper.vm.openFormatConfirmation({ name: 'BIRDSTORE', path: '/dev/sda', device_id: 'synthetic', size_bytes: 500000000000, preparation_eligible: true })
+      await flushPromises()
+      await wrapper.get('dialog input').setValue('BIRDSTORE')
+      await wrapper.get('dialog').findAll('button').find(button => button.text() === 'Erase and format').trigger('click')
+      await flushPromises()
+      expect(wrapper.get('dialog').text()).toContain('Formatting drive')
+      expect(wrapper.get('dialog progress').exists()).toBe(true)
+      status = { id: 'modal-job', state: 'complete', message: 'Drive formatted and mounted.', media_storage: {
+        targets: [{ id: '/managed-media/ssd', label: 'BIRDSTORE SSD', available: true }]
+      } }
+      await vi.advanceTimersByTimeAsync(2000)
+      await flushPromises()
+      expect(wrapper.get('dialog').text()).toContain('Drive ready')
+      expect(wrapper.get('#mediaStorageTarget').text()).toContain('BIRDSTORE SSD')
+      await vi.advanceTimersByTimeAsync(6000)
+      expect(wrapper.get('dialog').text()).toContain('Drive formatted and mounted.')
+      await wrapper.get('dialog').findAll('button').find(button => button.text() === 'Done').trigger('click')
+      expect(wrapper.find('dialog').exists()).toBe(false)
+      vi.useRealTimers()
+    })
+
+    it('keeps freshly mounted media choices when an older request finishes late', async () => {
+      vi.useFakeTimers()
+      const staleResponses = []
+      let status = { state: 'idle' }
+      mockApi.get.mockImplementation(url => {
+        if (url === '/system/media-targets') return new Promise(resolve => staleResponses.push(resolve))
+        if (url === '/system/storage/format-status') return Promise.resolve({ data: status })
+        return defaultGetResponse(url)
+      })
+      const wrapper = mountSettings()
+      await flushPromises()
+      expect(staleResponses.length).toBeGreaterThan(0)
+      wrapper.vm.formatStarted({ id: 'fresh-job', state: 'queued' })
+      status = { id: 'fresh-job', state: 'complete', message: 'Drive formatted and mounted.', media_storage: {
+        targets: [{ id: '/managed-media/ssd', label: 'BIRDSTORE SSD', available: true }]
+      } }
+      await vi.advanceTimersByTimeAsync(2000)
+      await flushPromises()
+      expect(wrapper.get('#mediaStorageTarget').text()).toContain('BIRDSTORE SSD')
+      staleResponses.forEach(resolve => resolve({ data: { targets: [] } }))
+      await flushPromises()
+      expect(wrapper.get('#mediaStorageTarget').text()).toContain('BIRDSTORE SSD')
+      vi.useRealTimers()
+    })
+
+    it('refreshes mounted drive status after formatting and ignores older discovery results', async () => {
+      vi.useFakeTimers()
+      let status = { state: 'idle' }
+      let finishOldRequest
+      const drive = { path: '/dev/sda', device_id: 'synthetic-device', name: 'BIRDSTORE',
+        size_bytes: 500000000000, connection: 'USB', filesystems: ['ext4'], mounted: true }
+      let discovery = { state: 'available', updated_at: 10, devices: [{ ...drive, mounted: false }] }
+      mockApi.get.mockImplementation(url => {
+        if (url === '/system/storage/format-status') return Promise.resolve({ data: status })
+        if (url === '/system/storage-devices') {
+          if (!finishOldRequest) return new Promise(resolve => { finishOldRequest = resolve })
+          return Promise.resolve({ data: discovery })
+        }
+        return defaultGetResponse(url)
+      })
+      const wrapper = mountSettings()
+      await flushPromises()
+      const details = wrapper.get('details')
+      details.element.open = true
+      await details.trigger('toggle')
+      await flushPromises()
+      wrapper.vm.formatStarted({ id: 'mount-refresh', state: 'queued' })
+      status = { id: 'mount-refresh', state: 'complete', message: 'Drive formatted and mounted.',
+        storage_devices: { state: 'available', updated_at: 20, devices: [drive] } }
+      await vi.advanceTimersByTimeAsync(2000)
+      await flushPromises()
+      expect(details.text()).toContain('/dev/sda · USB · ext4 · Mounted')
+      finishOldRequest({ data: discovery })
+      await flushPromises()
+      expect(details.text()).not.toContain('Not mounted')
+      // A later request can still read an older periodic host snapshot.
+      await vi.advanceTimersByTimeAsync(15000)
+      expect(details.text()).not.toContain('Not mounted')
+      // Newer host information must still be applied, including disconnection.
+      discovery = { ...discovery, updated_at: 30 }
+      await vi.advanceTimersByTimeAsync(15000)
+      expect(details.text()).toContain('Not mounted')
+      vi.useRealTimers()
+    })
+
+    it('preserves newer discovery when loading an old completed formatting job', async () => {
+      let finishStatus
+      const drive = { path: '/dev/sda', name: 'BIRDSTORE', size_bytes: 500000000000,
+        connection: 'USB', filesystems: ['ext4'], mounted: false }
+      mockApi.get.mockImplementation(url => {
+        if (url === '/system/storage/format-status') return new Promise(resolve => { finishStatus = resolve })
+        if (url === '/system/storage-devices') return Promise.resolve({
+          data: { state: 'available', updated_at: 30, devices: [drive] }
+        })
+        return defaultGetResponse(url)
+      })
+      const wrapper = mountSettings()
+      await flushPromises()
+      const details = wrapper.get('details')
+      details.element.open = true
+      await details.trigger('toggle')
+      await flushPromises()
+      finishStatus({ data: { state: 'complete', storage_devices: {
+        state: 'available', updated_at: 20, devices: [{ ...drive, mounted: true }]
+      } } })
+      await flushPromises()
+      expect(details.text()).toContain('Not mounted')
+    })
+
+    it('loads and displays available media storage targets', async () => {
+      let moveQueued = false
+      const movedSettings = createMockSettings()
+      movedSettings.storage.media_target = '/external-media/USB_ONE'
+      mockApi.get.mockImplementation((url) => {
+        if (url === '/system/media-transfer') return Promise.resolve({
+          data: moveQueued
+            ? { state: 'complete', message: 'Media moved · Recording resumed', settings: movedSettings,
+                changes: { full_restart_required: false, changed_paths: ['storage.media_target'] } }
+            : { state: 'idle' }
+        })
+        if (url !== '/system/media-targets') return defaultGetResponse(url)
+        return Promise.resolve({
+          data: {
+            targets: [
+              { id: 'internal', label: 'Internal storage (SD card)', available: true },
+              { id: '/external-media/USB_ONE', label: 'USB_ONE', available: true },
+              { id: '/external-media/USB_TWO', label: 'USB_TWO', available: true }
+            ],
+            fallback_active: false
+          }
+        })
+      })
+
+      const wrapper = mountSettings()
+      await flushPromises()
+
+      expect(mockApi.get).toHaveBeenCalledWith('/system/media-targets')
+      const driveSelect = wrapper.find('#mediaStorageTarget')
+      expect(driveSelect.findAll('option').map(option => option.text()))
+        .toEqual(['SD card / internal storage', 'USB_ONE', 'USB_TWO'])
+      expect(wrapper.findAll('input[type="radio"]')).toHaveLength(0)
+      expect(wrapper.find('#mediaStorageMoveExisting').exists()).toBe(false)
+
+      await driveSelect.setValue('/external-media/USB_ONE')
+      expect(wrapper.vm.settings.storage.media_target).toBe('/external-media/USB_ONE')
+      expect(wrapper.vm.hasUnsavedChanges).toBe(true)
+      const moveCheckbox = wrapper.find('#mediaStorageMoveExisting')
+      expect(moveCheckbox.attributes('type')).toBe('checkbox')
+      expect(moveCheckbox.element.checked).toBe(false)
+      expect(wrapper.text()).toContain('Move existing media to new location')
+      expect(wrapper.text()).toContain('Changed media storage not saved')
+      expect(wrapper.text()).toContain('Database and settings stay where they are.')
+
+      await moveCheckbox.setValue(true)
+      expect(wrapper.text()).toContain('Recording pauses during the move and resumes automatically.')
+      mockApi.put.mockImplementation(() => {
+        moveQueued = true
+        return Promise.resolve({ data: { transfer: { state: 'waiting', message: 'Waiting to pause recording' } } })
+      })
+      await wrapper.vm.saveSettings()
+      await flushPromises()
+      expect(mockApi.put).toHaveBeenCalledWith('/settings',
+        { storage: { media_target: '/external-media/USB_ONE' } },
+        { headers: { 'X-Move-Existing-Media': 'true' } })
+      expect(wrapper.vm.settings.storage.media_target).toBe('/external-media/USB_ONE')
+      expect(wrapper.text()).toContain('Media moved · Recording resumed')
+      expect(mockWaitForRestart).not.toHaveBeenCalled()
+
+      await driveSelect.setValue('/external-media/USB_TWO')
+      expect(wrapper.vm.settings.storage.media_target).toBe('/external-media/USB_TWO')
+      expect(wrapper.find('#mediaStorageMoveExisting').element.checked).toBe(false)
+
+      await driveSelect.setValue('/external-media/USB_ONE')
+      expect(wrapper.vm.settings.storage.media_target).toBe('/external-media/USB_ONE')
+      expect(wrapper.vm.hasUnsavedChanges).toBe(false)
+      expect(wrapper.find('#mediaStorageMoveExisting').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('Changed media storage not saved')
     })
 
     it('shows a skeleton until the first payload lands, not empty-state text', async () => {

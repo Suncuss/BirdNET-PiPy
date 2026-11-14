@@ -1,0 +1,13 @@
+[Unit]
+Description=Restore BirdNET media drives before Docker starts
+After=local-fs.target
+Before=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/birdnet-pipy/storage_mounts.py
+RemainAfterExit=yes
+TimeoutStartSec=45
+
+[Install]
+WantedBy=docker.service

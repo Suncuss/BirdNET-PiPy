@@ -467,7 +467,8 @@ class TestCleanupStorage:
         (storage_manager imports unlink_owned_files by value from the
         freshest core.media_ownership generation)."""
         import core.media_ownership as mo
-        import core.storage_manager  # noqa: F401 - ensure the chain is loaded
+        import core.storage_manager as sm
+        monkeypatch.setattr(sm, 'get_effective_storage_path', lambda: str(tmp_path))
         audio_dir = tmp_path / 'audio'
         spec_dir = tmp_path / 'spec'
         audio_dir.mkdir(exist_ok=True)
@@ -475,6 +476,38 @@ class TestCleanupStorage:
         monkeypatch.setitem(mo.KIND_DIRS, 'audio', str(audio_dir))
         monkeypatch.setitem(mo.KIND_DIRS, 'spectrogram', str(spec_dir))
         return mo, audio_dir, spec_dir
+
+    def test_pressure_cleanup_preserves_other_drives_and_surviving_copies(
+            self, test_db_manager, monkeypatch, tmp_path):
+        import tempfile
+
+        import core.storage_manager as sm
+        from config.settings import BASE_DIR
+        mo, other_drive, _ = self._media_env(monkeypatch, tmp_path)
+        # The test container provides /app/data as tmpfs; tmp_path is on its
+        # root filesystem. Exercise two actual filesystems without faking st_dev.
+        with tempfile.TemporaryDirectory(dir=os.path.join(BASE_DIR, 'data')) as folder:
+            from pathlib import Path
+            full_drive = Path(folder)
+            assert full_drive.stat().st_dev != other_drive.stat().st_dev
+            monkeypatch.setattr(sm, 'get_effective_storage_path', lambda: str(full_drive))
+            monkeypatch.setattr(mo, 'media_directories', lambda kind: [str(full_drive), str(other_drive)])
+            _, older_other = self._resolved_row_with_file(
+                test_db_manager, mo, other_drive, '2024-01-01T10:00:00', 1000)
+            owner, pressured_file = self._resolved_row_with_file(
+                test_db_manager, mo, full_drive, '2024-01-02T10:00:00', 1000)
+            surviving_copy = other_drive / pressured_file.name
+            surviving_copy.write_bytes(pressured_file.read_bytes())
+            with patch.object(sm, 'get_disk_usage', return_value=mock_disk_usage_needing(1000)):
+                result = sm.cleanup_storage(test_db_manager, target_percent=80,
+                                            keep_per_species=0, keep_recent_per_species=0)
+            assert result['target_reached']
+            assert result['bytes_freed'] == 1000
+            assert result['files_deleted'] == 1
+            assert not pressured_file.exists()
+            assert older_other.read_bytes() == b'x' * 1000
+            assert surviving_copy.read_bytes() == b'x' * 1000
+            assert test_db_manager.get_detection_media(owner)[0]['filename'] == surviving_copy.name
 
     def _resolved_row_with_file(self, db, mo, audio_dir, timestamp, size,
                                 species=('American Robin', 'Turdus migratorius')):
@@ -880,7 +913,8 @@ class TestImplementationReviewFixes:
         result must never say unachievable AND reached."""
         import core.media_frontier as mf
         import core.media_ownership as mo
-        import core.storage_manager  # noqa: F401
+        import core.storage_manager as sm
+        monkeypatch.setattr(sm, 'get_effective_storage_path', lambda: str(tmp_path))
         audio_dir = tmp_path / 'audio'
         audio_dir.mkdir()
         monkeypatch.setitem(mo.KIND_DIRS, 'audio', str(audio_dir))

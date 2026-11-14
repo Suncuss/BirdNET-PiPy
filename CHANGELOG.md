@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+- Fixed connected-drive status remaining stale after formatting. Successful jobs now return fresh mount information, and older discovery responses cannot overwrite it.
+
+- Fixed duplicate drive mounts on hosts with shared mount propagation by separating the managed media folder from its parent's sharing group. Storage guidance now directs users to the Media storage dropdown.
+
+- Fixed repeated media setup stacking duplicate mounts and hiding mounted drives. Existing bind mounts are now detected from the kernel mount table.
+
+- Improved drive formatting feedback with a persistent progress dialog and an automatically refreshed media storage dropdown after completion.
+
+- Changed drive formatting to start only for a confirmed request and exit when finished, removing idle helper launches and heartbeat writes.
+
+- Fixed missing drive-formatting support after updating an existing installation. Host setup is completed automatically before containers start.
+
 ## [0.8.12] - 2026-11-03
 
 - Added `--unattended` and `--user NAME` options to `install.sh` for automated installs, such as a first-boot service, that run as root without sudo and never reboot on their own.

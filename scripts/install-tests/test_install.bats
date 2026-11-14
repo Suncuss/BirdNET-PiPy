@@ -664,6 +664,150 @@ print('override: frontend publishes 8080')
 # Integration Tests (full installation flow)
 # ============================================================================
 
+@test "integration: repeated media setup preserves one bind and existing child mounts" {
+    # Real kernel mounts, but only a temporary directory and an empty tmpfs.
+    # No block devices, formatting commands, application data or containers.
+    run python3 - "$PROJECT_DIR" <<'PYMOUNT'
+import importlib.util
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+spec = importlib.util.spec_from_file_location('mounts', Path(sys.argv[1]) / 'deployment/storage_mounts.py')
+mounts = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mounts)
+
+with tempfile.TemporaryDirectory() as directory:
+    # Native systemd hosts have a shared parent. A self-bind inherits its peer
+    # group unless explicitly detached, causing each child mount to appear twice.
+    subprocess.run(['mount', '--bind', directory, directory], check=True)
+    subprocess.run(['mount', '--make-rshared', directory], check=True)
+    root = Path(directory) / 'media'
+    root.mkdir()
+    # Also cover upgrading an already-created bind with the wrong peer group.
+    subprocess.run(['mount', '--bind', str(root), str(root)], check=True)
+    mounts.MEDIA_ROOT = root
+    mounts.prepare_root()
+    assert not os.path.ismount(root), 'Fixture must exercise a same-filesystem bind mount'
+    # Mirror Docker's rslave view and verify it still receives later mounts.
+    observer = Path(directory) / 'container-view'
+    observer.mkdir()
+    subprocess.run(['mount', '--bind', str(root), str(observer)], check=True)
+    subprocess.run(['mount', '--make-rslave', str(observer)], check=True)
+    mounts.prepare_root()
+    child = root / 'synthetic-child'
+    child.mkdir()
+    subprocess.run(['mount', '-t', 'tmpfs', '-o', 'size=1m', 'tmpfs', str(child)], check=True)
+    sentinel = child / 'preserved.txt'
+    sentinel.write_text('existing media remains visible')
+
+    def entries():
+        return [line for line in Path('/proc/self/mountinfo').read_text().splitlines()
+                if line.split()[4] == str(root) or line.split()[4].startswith(str(root) + '/')]
+
+    before = entries()
+    assert len(before) == 2, before
+    for attempt in range(5):
+        mounts.prepare_root()
+        assert entries() == before, 'Repeated setup added mount layers'
+        assert sentinel.read_text() == 'existing media remains visible'
+        assert (observer / 'synthetic-child/preserved.txt').read_text() == 'existing media remains visible'
+        print(f'Repeated setup {attempt + 1}/5: mount IDs and child contents preserved', flush=True)
+    subprocess.run(['umount', str(child)], check=True)
+    assert not mounts.is_mountpoint(observer / 'synthetic-child')
+    subprocess.run(['umount', str(observer)], check=True)
+    subprocess.run(['umount', str(root)], check=True)
+    subprocess.run(['umount', directory], check=True)
+PYMOUNT
+    echo "Mount regression output: $output"
+    [ "$status" -eq 0 ]
+}
+
+@test "integration: host storage upgrade works with stock update permissions" {
+    # First restart after a stock updater fetched the new release: the new
+    # checkout/images exist, but the helper and its sudo permissions do not.
+    # This test creates no formatting request and formats no drives.
+    install -d -o testuser -g testuser "$PROJECT_DIR/data/flags"
+    rm -f /etc/sudoers.d/testuser
+    cat > /etc/sudoers.d/birdnet-pipy <<EOF
+testuser ALL=(ALL) NOPASSWD: $PROJECT_DIR/install.sh --update
+testuser ALL=(ALL) NOPASSWD: $PROJECT_DIR/install.sh --update --branch *
+EOF
+    chmod 440 /etc/sudoers.d/birdnet-pipy
+    run visudo -cf /etc/sudoers.d/birdnet-pipy
+    [ "$status" -eq 0 ]
+    [ ! -e /usr/local/libexec/birdnet-pipy/storage-format.py ]
+    run sudo -u testuser env TEST_PROJECT="$PROJECT_DIR" bash -c '
+        source <(sed "/^main$/d" "$TEST_PROJECT/deployment/birdnet-service.sh")
+        PROJECT_ROOT="$TEST_PROJECT"
+        ensure_host_storage_setup
+    '
+    local setup_status="$status"
+    local setup_output="$output"
+    # Restore the test harness permission even if setup failed.
+    echo 'testuser ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/testuser
+    chmod 440 /etc/sudoers.d/testuser
+    echo "Host upgrade output: $setup_output"
+    [ "$setup_status" -eq 0 ]
+    [[ "$setup_output" == *"Host storage integration is ready"* ]]
+    [[ "$setup_output" == *"no images fetched or built"* ]]
+    for helper in storage-format.py storage_mounts.py; do
+        assert_file_executable "/usr/local/libexec/birdnet-pipy/$helper"
+        [ "$(stat -c '%U:%G:%a' "/usr/local/libexec/birdnet-pipy/$helper")" = root:root:755 ]
+    done
+    assert_sudoers_valid /etc/sudoers.d/birdnet-pipy
+    assert_service_enabled birdnet-media-mounts
+    assert_file_contains "$PROJECT_DIR/.env" 'BIRDNET_MANAGED_MEDIA_PROPAGATION=rslave'
+    run bash -c "cd '$PROJECT_DIR' && docker compose config --format json | python3 -c '
+import json, sys
+services = json.load(sys.stdin)[\"services\"]
+for name in (\"api\", \"main\", \"model-server\"):
+    mount = next(v for v in services[name][\"volumes\"] if v[\"target\"] == \"/managed-media\")
+    assert mount[\"source\"] == \"/var/lib/birdnet-pipy/media\"
+    assert mount[\"bind\"][\"propagation\"] == \"rslave\"
+'"
+    [ "$status" -eq 0 ]
+    assert_service_enabled birdnet-storage-format.path
+    assert_file_exists "$PROJECT_DIR/data/flags/storage-format-available"
+    # No helper has run just to advertise availability.
+    [ "$(systemctl show birdnet-storage-format.service -p ExecMainStartTimestampMonotonic --value)" = 0 ]
+    # Publish an expired synthetic request atomically. It must fail before any
+    # disk commands, while exercising the real file event and one-shot service.
+    run sudo -u testuser python3 -c "
+import json, os
+from pathlib import Path
+flags = Path('$PROJECT_DIR/data/flags')
+temporary = flags / '.synthetic-format-request'
+temporary.write_text(json.dumps({'id': 'integration-expired', 'created_at': 0}))
+os.rename(temporary, flags / 'storage-format-request.json')
+"
+    [ "$status" -eq 0 ]
+    for attempt in {1..30}; do
+        if [ -f "$PROJECT_DIR/data/flags/storage-format-status.json" ] && [ ! -e "$PROJECT_DIR/data/flags/storage-format-request.json" ]; then break; fi
+        sleep 1
+    done
+    run python3 -c "import json; p=json.load(open('$PROJECT_DIR/data/flags/storage-format-status.json')); assert p['state']=='failed'; assert 'expired' in p['message']"
+    [ "$status" -eq 0 ]
+    [ ! -e "$PROJECT_DIR/data/flags/storage-format-request.json" ]
+    local stamp started
+    stamp=$(stat -c '%Y' "$PROJECT_DIR/data/flags/storage-format-status.json")
+    started=$(systemctl show birdnet-storage-format.service -p ExecMainStartTimestampMonotonic --value)
+    [ "$started" != 0 ]
+    sleep 6
+    [ "$(stat -c '%Y' "$PROJECT_DIR/data/flags/storage-format-status.json")" = "$stamp" ]
+    [ "$(systemctl show birdnet-storage-format.service -p ExecMainStartTimestampMonotonic --value)" = "$started" ]
+    [ "$(systemctl show birdnet-storage-format.service -p ActiveState --value)" = inactive ]
+    run sudo -u testuser env TEST_PROJECT="$PROJECT_DIR" bash -c '
+        source <(sed "/^main$/d" "$TEST_PROJECT/deployment/birdnet-service.sh")
+        PROJECT_ROOT="$TEST_PROJECT"
+        ensure_host_storage_setup
+    '
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"Installing host storage integration"* ]]
+}
+
 @test "integration: full installation completes successfully" {
     # Run installation with --no-reboot --skip-build
     # --skip-build skips Docker image build (which doesn't work in DinD due to overlay issues)
@@ -674,6 +818,11 @@ print('override: frontend publishes 8080')
     run sudo SUDO_USER=testuser bash "$PROJECT_DIR/install.sh" --no-reboot --skip-build --port 8080
     echo "Install output: $output"
     [ "$status" -eq 0 ]
+    assert_service_enabled birdnet-storage-format.path
+    run systemctl is-active birdnet-storage-format.path
+    [ "$status" -eq 0 ]
+    assert_file_exists "$PROJECT_DIR/data/flags/storage-format-available"
+    [ "$(systemctl show birdnet-storage-format.service -p ActiveState --value)" = inactive ]
 }
 
 @test "integration: git is installed" {
@@ -820,4 +969,30 @@ print('override: frontend publishes 8080')
     echo "Update output: $output"
     [ "$status" -eq 0 ]
     [[ "$output" == *"has no pre-built images, building locally"* ]]
+}
+
+@test "integration: uninstall removes the storage format watcher and availability" {
+    # Independent fixture so this cleanup check can run on its own.
+    install -d -o testuser -g testuser "$PROJECT_DIR/data/flags"
+    touch "$PROJECT_DIR/data/flags/storage-format-available"
+    cp "$PROJECT_DIR/deployment/birdnet-storage-format.service" /etc/systemd/system/
+    sed "s|@REQUEST_PATH@|$PROJECT_DIR/data/flags/storage-format-request.json|" \
+        "$PROJECT_DIR/deployment/birdnet-storage-format.path" > /etc/systemd/system/birdnet-storage-format.path
+    systemctl daemon-reload
+    systemctl enable --now birdnet-storage-format.path
+    assert_file_exists "$PROJECT_DIR/data/flags/storage-format-available"
+    mkdir -p /var/lib/birdnet-pipy
+    printf '["synthetic-preserved-registry"]\n' > /var/lib/birdnet-pipy/media-mounts.json
+    uninstall_storage_from_project() {
+        # The library loader uses /dev/fd; the real invocation uses the repo.
+        SCRIPT_DIR="$PROJECT_DIR"
+        remove_sudoers
+    }
+    run run_uninstall_function uninstall_storage_from_project
+    echo "Uninstall output: $output"
+    [ "$status" -eq 0 ]
+    [ ! -e /etc/systemd/system/birdnet-storage-format.path ]
+    [ ! -e /etc/systemd/system/birdnet-storage-format.service ]
+    [ ! -e "$PROJECT_DIR/data/flags/storage-format-available" ]
+    assert_file_contains /var/lib/birdnet-pipy/media-mounts.json synthetic-preserved-registry
 }

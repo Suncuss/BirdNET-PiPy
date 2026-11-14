@@ -19,6 +19,7 @@ from core.bird_name_utils import (
 )
 from core.ha_mode import is_home_assistant_mode
 from core.logging_config import get_logger, log_api_request
+from core.media_storage import is_valid_media_target_id
 from core.runtime_config import (
     classify_setting_changes,
     deep_merge_settings,
@@ -305,6 +306,13 @@ def update_settings():
         incoming_settings = request.json
         if not incoming_settings or not isinstance(incoming_settings, dict):
             return jsonify({'error': 'No settings data provided'}), 400
+        incoming_storage = incoming_settings.get('storage')
+        if incoming_storage is not None:
+            if not isinstance(incoming_storage, dict):
+                return jsonify({'error': 'storage must be an object'}), 400
+            if ('media_target' in incoming_storage
+                    and not is_valid_media_target_id(incoming_storage['media_target'])):
+                return jsonify({'error': 'Invalid media storage target'}), 400
 
         current_settings = load_user_settings()
         new_settings = deep_merge_settings(current_settings, incoming_settings)
@@ -364,6 +372,19 @@ def update_settings():
         changed_paths = get_setting_differences(current_settings, new_settings)
         change_plan = classify_setting_changes(changed_paths, current_settings, new_settings)
 
+        if request.headers.get('X-Move-Existing-Media') == 'true':
+            if 'storage.media_target' not in changed_paths:
+                return jsonify({'error': 'Choose a different media storage location first.'}), 400
+            from core.media_transfer import queue_transfer
+            try:
+                transfer = queue_transfer(new_settings, {
+                    'changed_paths': changed_paths,
+                    **change_plan,
+                })
+            except ValueError as exc:
+                return jsonify({'error': str(exc)}), 400
+            return jsonify({'transfer': transfer}), 202
+
         # Save settings to JSON file and clear caches
         save_user_settings(new_settings)
         # display.* preferences feed _localize_* in the cached payload;
@@ -394,7 +415,7 @@ def update_settings():
         if not changed_paths:
             message = 'No changes detected.'
         elif change_plan['full_restart_required']:
-            message = 'Settings saved. Restart services to apply the model change.'
+            message = 'Settings saved. Restart services to apply these changes.'
         else:
             message = 'Settings saved. Live settings take effect at the next processing boundary.'
 

@@ -89,13 +89,20 @@ def validate_date_param(required=False):
     return decorator
 
 
+def _as_directory_list(directories):
+    """Normalize one directory or an ordered directory collection to a list."""
+    if isinstance(directories, (str, os.PathLike)):
+        return [os.fspath(directories)]
+    return [os.fspath(directory) for directory in directories]
+
+
 def serve_file_with_fallback(directory, filename, default_file_path, file_type="file",
                              on_rename=None):
     """
     Generic file serving function with fallback to default file
 
     Args:
-        directory: Directory to look for the file
+        directory: Directory, or ordered directories, to look for the file
         filename: Name of the file to serve
         default_file_path: Full path to default file if requested file not
             found, or None to answer a miss with 404 instead. A placeholder
@@ -127,60 +134,61 @@ def serve_file_with_fallback(directory, filename, default_file_path, file_type="
         })
         return serve_default()
 
-    file_path = os.path.join(directory, filename)
+    for candidate_dir in _as_directory_list(directory):
+        file_path = os.path.join(candidate_dir, filename)
 
-    # Security: Verify resolved path is within the directory (prevents symlink attacks)
-    real_dir = os.path.realpath(directory)
-    real_file = os.path.realpath(file_path)
-    if not real_file.startswith(real_dir + os.sep) and real_file != real_dir:
-        logger.warning(f"Symlink attack attempt blocked for {file_type}", extra={
-            'requested_file': filename,
-            'resolved_path': real_file,
-            'expected_dir': real_dir
-        })
-        return serve_default()
+        # Security: Verify resolved path is within the directory (prevents symlink attacks)
+        real_dir = os.path.realpath(candidate_dir)
+        real_file = os.path.realpath(file_path)
+        if not real_file.startswith(real_dir + os.sep) and real_file != real_dir:
+            logger.warning(f"Symlink attack attempt blocked for {file_type}", extra={
+                'requested_file': filename,
+                'resolved_path': real_file,
+                'expected_dir': real_dir
+            })
+            continue
 
-    if os.path.exists(file_path):
-        logger.debug(f"Serving {file_type} file", extra={
-            'file': filename,
-            'file_type': file_type
-        })
-        return make_response(send_from_directory(directory, filename))
+        if os.path.exists(file_path):
+            logger.debug(f"Serving {file_type} file", extra={
+                'file': filename,
+                'file_type': file_type
+            })
+            return make_response(send_from_directory(candidate_dir, filename))
 
-    # Fallback: try old colon pattern (lazy migration)
-    legacy_filename = get_legacy_filename(filename)
-    if legacy_filename:
-        legacy_path = os.path.join(directory, legacy_filename)
+        # Fallback: try old colon pattern (lazy migration)
+        legacy_filename = get_legacy_filename(filename)
+        if legacy_filename:
+            legacy_path = os.path.join(candidate_dir, legacy_filename)
 
-        # Security: Verify legacy resolved path is within the directory
-        real_legacy = os.path.realpath(legacy_path)
-        if real_legacy.startswith(real_dir + os.sep) or real_legacy == real_dir:
-            if os.path.exists(legacy_path):
-                # Lazy migration: rename to new dash pattern
-                try:
-                    os.rename(legacy_path, file_path)
-                    logger.info(f"Migrated {file_type} file from colon to dash pattern", extra={
-                        'old_file': legacy_filename,
-                        'new_file': filename,
-                        'file_type': file_type
-                    })
-                    if on_rename is not None:
-                        try:
-                            on_rename(legacy_filename, filename)
-                        except Exception:
-                            logger.warning(
-                                f"Ownership record update failed after {file_type} rename",
-                                exc_info=True)
-                    return make_response(send_from_directory(directory, filename))
-                except OSError as e:
-                    # Rename failed, serve from old location
-                    logger.warning(f"Failed to rename {file_type} file, serving from old location", extra={
-                        'old_file': legacy_filename,
-                        'new_file': filename,
-                        'error': str(e),
-                        'file_type': file_type
-                    })
-                    return make_response(send_from_directory(directory, legacy_filename))
+            # Security: Verify legacy resolved path is within the directory
+            real_legacy = os.path.realpath(legacy_path)
+            if real_legacy.startswith(real_dir + os.sep) or real_legacy == real_dir:
+                if os.path.exists(legacy_path):
+                    # Lazy migration: rename to new dash pattern
+                    try:
+                        os.rename(legacy_path, file_path)
+                        logger.info(f"Migrated {file_type} file from colon to dash pattern", extra={
+                            'old_file': legacy_filename,
+                            'new_file': filename,
+                            'file_type': file_type
+                        })
+                        if on_rename is not None:
+                            try:
+                                on_rename(legacy_filename, filename)
+                            except Exception:
+                                logger.warning(
+                                    f"Ownership record update failed after {file_type} rename",
+                                    exc_info=True)
+                        return make_response(send_from_directory(candidate_dir, filename))
+                    except OSError as e:
+                        # Rename failed, serve from old location
+                        logger.warning(f"Failed to rename {file_type} file, serving from old location", extra={
+                            'old_file': legacy_filename,
+                            'new_file': filename,
+                            'error': str(e),
+                            'file_type': file_type
+                        })
+                        return make_response(send_from_directory(candidate_dir, legacy_filename))
 
     logger.warning(f"{file_type.capitalize()} file not found", extra={
         'requested_file': filename,
@@ -207,8 +215,10 @@ def recording_has_media(recording, audio_dir, spectrogram_dir):
     spectrogram = recording.get('spectrogram_filename')
     return (
         bool(audio and spectrogram)
-        and os.path.exists(os.path.join(audio_dir, audio))
-        and os.path.exists(os.path.join(spectrogram_dir, spectrogram))
+        and any(os.path.exists(os.path.join(path, audio))
+                for path in _as_directory_list(audio_dir))
+        and any(os.path.exists(os.path.join(path, spectrogram))
+                for path in _as_directory_list(spectrogram_dir))
     )
 
 

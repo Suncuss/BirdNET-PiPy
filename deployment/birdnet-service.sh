@@ -531,6 +531,8 @@ enable_swap_if_available() {
 
 # Function to monitor both restart and update flags
 monitor_flags() {
+    local discovery_count=0
+    local discovery_state=unknown
     while true; do
         # Check update flag first (higher priority)
         if [ -f "$UPDATE_FLAG_FILE" ]; then
@@ -539,8 +541,81 @@ monitor_flags() {
         elif [ -f "$RESTART_FLAG_FILE" ]; then
             restart_containers
         fi
+        # Refresh read-only drive metadata every 15 seconds.
+        if [ "$discovery_count" -eq 0 ]; then
+            if bash "$PROJECT_ROOT/deployment/storage-discovery.sh" "$PROJECT_ROOT/data/flags/storage-devices.json"; then
+                if [ "$discovery_state" != available ]; then
+                    log_info "Read-only USB/SSD discovery available"
+                fi
+                discovery_state=available
+            else
+                if [ "$discovery_state" != unavailable ]; then
+                    log_warning "USB/SSD discovery unavailable; recording continues normally"
+                fi
+                discovery_state=unavailable
+            fi
+        fi
+        discovery_count=$(( (discovery_count + 1) % 3 ))
         sleep "$CHECK_INTERVAL"
     done
+}
+
+# Complete host setup when an older updater has fetched new code but is still
+# running its old functions. This also covers manually rebuilt installations.
+host_storage_setup_current() {
+    local installed=/usr/local/libexec/birdnet-pipy
+    cmp -s "$PROJECT_ROOT/deployment/storage-format.py" "$installed/storage-format.py" || return 1
+    cmp -s "$PROJECT_ROOT/deployment/storage_mounts.py" "$installed/storage_mounts.py" || return 1
+    cmp -s "$PROJECT_ROOT/backend/core/storage_devices.py" "$installed/storage_devices.py" || return 1
+    cmp -s "$PROJECT_ROOT/deployment/birdnet-media-mounts.service" /etc/systemd/system/birdnet-media-mounts.service || return 1
+    cmp -s "$PROJECT_ROOT/deployment/birdnet-storage-format.service" /etc/systemd/system/birdnet-storage-format.service || return 1
+    [ -x "$installed/storage-format.py" ] && [ -x "$installed/storage_mounts.py" ] || return 1
+    grep -qx 'BIRDNET_MANAGED_MEDIA_PATH=/var/lib/birdnet-pipy/media' "$PROJECT_ROOT/.env" || return 1
+    grep -qx 'BIRDNET_MANAGED_MEDIA_PROPAGATION=rslave' "$PROJECT_ROOT/.env" || return 1
+    python3 - "$PROJECT_ROOT" <<'PYCONFIG' || return 1
+import json, os, sys
+try:
+    with open('/etc/birdnet-pipy/storage-format.json') as stream:
+        config = json.load(stream)
+    expected = {'project': os.path.realpath(sys.argv[1]),
+                'flags': os.path.realpath(sys.argv[1]) + '/data/flags',
+                'uid': os.getuid(), 'gid': os.getgid()}
+    with open(os.path.join(sys.argv[1], 'deployment/birdnet-storage-format.path')) as stream:
+        template = stream.read()
+    request = os.path.join(expected['flags'], 'storage-format-request.json').replace('%', '%%')
+    with open('/etc/systemd/system/birdnet-storage-format.path') as stream:
+        installed = stream.read()
+    sys.exit(0 if config == expected and installed == template.replace('@REQUEST_PATH@', request) else 1)
+except (OSError, ValueError):
+    sys.exit(1)
+PYCONFIG
+    systemctl is-enabled --quiet birdnet-media-mounts.service || return 1
+    systemctl is-active --quiet birdnet-storage-format.path || return 1
+    [ -f "$PROJECT_ROOT/data/flags/storage-format-available" ] || return 1
+    sudo -n -l "$installed/storage_mounts.py" >/dev/null 2>&1 || return 1
+}
+
+ensure_host_storage_setup() {
+    if host_storage_setup_current; then
+        return 0
+    fi
+    rm -f "$PROJECT_ROOT/data/flags/storage-format-available"
+    log_info "Installing host storage integration for this release..."
+    local branch
+    branch=$(git -C "$PROJECT_ROOT" branch --show-current)
+    # The branch is required by stock sudoers; this mode never fetches it.
+    branch="${branch:-main}"
+    if ! sudo -n "$PROJECT_ROOT/install.sh" --update --branch "$branch" --configure-host; then
+        rm -f "$PROJECT_ROOT/data/flags/storage-format-available"
+        log_error "Host storage setup failed; see /var/log/birdnet-pipy-install.log"
+        return 1
+    fi
+    if ! host_storage_setup_current; then
+        rm -f "$PROJECT_ROOT/data/flags/storage-format-available"
+        log_error "Host storage setup is incomplete; formatting remains unavailable"
+        return 1
+    fi
+    log_info "Host storage integration is ready"
 }
 
 # Main execution
@@ -548,11 +623,26 @@ main() {
     log_info "BirdNET-PiPy Service Starting..."
     log_info "Working directory: $PROJECT_ROOT"
 
+    # This must precede container creation: the installer prepares shared mounts
+    # and Compose bindings. Failure must not take existing recording offline.
+    if ! ensure_host_storage_setup; then
+        log_warning "Continuing recording without drive formatting; host setup needs attention"
+    fi
+
     # Enable swap if available (for low-memory systems like Pi Zero)
     enable_swap_if_available
 
     # Setup audio socket (symlink to user PulseAudio or start system-wide)
     setup_audio_socket
+
+    # Mount saved media before container startup. The early boot unit normally
+    # does this before Docker itself starts; this also covers service restarts.
+    if [ -x /usr/local/libexec/birdnet-pipy/storage_mounts.py ]; then
+        log_info "Preparing managed media mounts..."
+        if ! sudo -n /usr/local/libexec/birdnet-pipy/storage_mounts.py; then
+            log_warning "Managed media mounts unavailable; check the service log"
+        fi
+    fi
 
     # Start Docker containers
     start_containers
