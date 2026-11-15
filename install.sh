@@ -936,7 +936,9 @@ install_storage_formatter() {
     print_status "Installing host drive formatter and media mount helper..."
     # Never grant root execution of a helper in the user-writable checkout.
     install -d -o root -g root -m 755 /usr/local/libexec/birdnet-pipy /etc/birdnet-pipy
-    install -d -o root -g root -m 700 /var/lib/birdnet-pipy
+    # Other local accounts may stat the media filesystem without listing state.
+    # Change only this parent, never ownership or permissions beneath it.
+    install -d -o root -g root -m 711 /var/lib/birdnet-pipy
     install -o root -g root -m 755 "$PROJECT_ROOT/deployment/storage-format.py" /usr/local/libexec/birdnet-pipy/storage-format.py
     install -o root -g root -m 644 "$PROJECT_ROOT/backend/core/storage_devices.py" /usr/local/libexec/birdnet-pipy/storage_devices.py
     install -o root -g root -m 755 "$PROJECT_ROOT/deployment/storage_mounts.py" /usr/local/libexec/birdnet-pipy/storage_mounts.py

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fixed host storage setup restricting traversal to managed media mounts. Local monitoring accounts can read filesystem usage without changing media ownership or file permissions.
+
 - Fixed connected-drive status remaining stale after formatting. Successful jobs now return fresh mount information, and older discovery responses cannot overwrite it.
 
 - Fixed duplicate drive mounts on hosts with shared mount propagation by separating the managed media folder from its parent's sharing group. Storage guidance now directs users to the Media storage dropdown.

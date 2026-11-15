@@ -730,6 +730,13 @@ PYMOUNT
     # checkout/images exist, but the helper and its sudo permissions do not.
     # This test creates no formatting request and formats no drives.
     install -d -o testuser -g testuser "$PROJECT_DIR/data/flags"
+    # Reproduce an existing installation whose state parent blocks monitoring.
+    install -d -o root -g root -m 700 /var/lib/birdnet-pipy
+    install -d -o root -g root -m 755 /var/lib/birdnet-pipy/media
+    local recording=/var/lib/birdnet-pipy/media/synthetic-permissions.mp3
+    install -o testuser -g testuser -m 640 /dev/null "$recording"
+    local recording_permissions
+    recording_permissions=$(stat -c '%u:%g:%a' "$recording")
     rm -f /etc/sudoers.d/testuser
     cat > /etc/sudoers.d/birdnet-pipy <<EOF
 testuser ALL=(ALL) NOPASSWD: $PROJECT_DIR/install.sh --update
@@ -753,6 +760,11 @@ EOF
     [ "$setup_status" -eq 0 ]
     [[ "$setup_output" == *"Host storage integration is ready"* ]]
     [[ "$setup_output" == *"no images fetched or built"* ]]
+    [ "$(stat -c '%U:%G:%a' /var/lib/birdnet-pipy)" = root:root:711 ]
+    [ "$(stat -c '%u:%g:%a' "$recording")" = "$recording_permissions" ]
+    # An unrelated unprivileged account can read filesystem usage by path.
+    run sudo -u nobody stat -f /var/lib/birdnet-pipy/media
+    [ "$status" -eq 0 ]
     for helper in storage-format.py storage_mounts.py; do
         assert_file_executable "/usr/local/libexec/birdnet-pipy/$helper"
         [ "$(stat -c '%U:%G:%a' "/usr/local/libexec/birdnet-pipy/$helper")" = root:root:755 ]

@@ -195,7 +195,7 @@ def main():
     if len(sys.argv) != 1 or os.geteuid() != 0:
         raise SystemExit('Run the installed formatter as root without arguments.')
     config = json.loads(CONFIG.read_text())
-    JOURNAL.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    JOURNAL.parent.mkdir(mode=0o711, parents=True, exist_ok=True)
     with open(JOURNAL.parent / 'storage-format.lock', 'w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         serve(config)

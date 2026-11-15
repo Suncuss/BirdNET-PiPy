@@ -575,6 +575,8 @@ host_storage_setup_current() {
     python3 - "$PROJECT_ROOT" <<'PYCONFIG' || return 1
 import json, os, sys
 try:
+    if os.stat('/var/lib/birdnet-pipy').st_mode & 0o111 != 0o111:
+        sys.exit(1)
     with open('/etc/birdnet-pipy/storage-format.json') as stream:
         config = json.load(stream)
     expected = {'project': os.path.realpath(sys.argv[1]),

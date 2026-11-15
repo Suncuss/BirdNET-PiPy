@@ -90,6 +90,7 @@ class HostUpgradeTests(unittest.TestCase):
         self.assertIn('setup is incomplete', result.stdout)
 
     def prepare_current_setup(self):
+        (self.root / 'state').mkdir(mode=0o711)
         for name in ('libexec', 'units', 'config'):
             (self.root / name).mkdir()
         (self.project / 'backend/core').mkdir(parents=True)
@@ -122,6 +123,12 @@ class HostUpgradeTests(unittest.TestCase):
         result = self.run_shell('systemctl() { return 0; }; sudo() { return 0; }; ensure_host_storage_setup')
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertNotIn('Installing host', result.stdout)
+
+    def test_restricted_state_directory_needs_refresh(self):
+        self.prepare_current_setup()
+        (self.root / 'state').chmod(0o700)
+        result = self.run_shell('systemctl() { return 0; }; sudo() { return 0; }; host_storage_setup_current')
+        self.assertNotEqual(result.returncode, 0)
 
     def test_partial_or_outdated_setup_needs_refresh(self):
         self.prepare_current_setup()

@@ -156,6 +156,13 @@ class InstallerWiringTests(unittest.TestCase):
             function = function.replace('/etc/birdnet-pipy', str(config_dir))
             function = function.replace('/etc/systemd/system', str(units_dir))
             function = function.replace('/var/lib/birdnet-pipy', str(root / 'state'))
+            state = root / 'state'
+            state.mkdir(mode=0o700)
+            recording = state / 'media/recording.mp3'
+            recording.parent.mkdir(mode=0o750)
+            recording.write_bytes(b'synthetic recording')
+            recording.chmod(0o640)
+            preserved = [(path, path.stat()) for path in (recording.parent, recording)]
             units_dir.mkdir()
             stub = root / 'install-stub.py'
             stub.write_text("""import os, pathlib, shutil, sys
@@ -168,7 +175,9 @@ for flag in ('-o', '-g'):
     del args[index:index + 2]
 index = args.index('-m'); mode = int(args[index + 1], 8); del args[index:index + 2]
 if args[0] == '-d':
-    for path in args[1:]: pathlib.Path(path).mkdir(parents=True, exist_ok=True)
+    for path in args[1:]:
+        pathlib.Path(path).mkdir(parents=True, exist_ok=True)
+        os.chmod(path, mode)
 else:
     shutil.copyfile(*args); os.chmod(args[-1], mode)
 """)
@@ -178,11 +187,17 @@ else:
                 'set_env_var() { printf \'%s=%s\\n\' \"$1\" \"$2\" >> \"$PROJECT_ROOT/.env\"; }\n' +
                 'chown() { :; }\nsystemctl() { printf "%s\\n" "$*" >> "' + str(root / 'events') + '"; }\n' +
                 'install() { python3 "' + str(stub) + '" "$@"; }\n' +
-                function + '\ninstall_storage_formatter\n')
+                function + '\ninstall_storage_formatter\ninstall_storage_formatter\n')
             result = subprocess.run(['bash', str(script)], env=dict(os.environ,
                 PROJECT_ROOT=str(project), ACTUAL_UID='1000', ACTUAL_GID='1001'),
                 capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(state.stat().st_mode & 0o777, 0o711)
+            for path, before in preserved:
+                after = path.stat()
+                self.assertEqual((after.st_uid, after.st_gid, after.st_mode),
+                                 (before.st_uid, before.st_gid, before.st_mode))
+            self.assertEqual(recording.read_bytes(), b'synthetic recording')
             config = json.loads((config_dir / 'storage-format.json').read_text())
             self.assertEqual((config['uid'], config['gid']), (1000, 1001))
             self.assertEqual((helper_dir / 'storage_mounts.py').stat().st_mode & 0o777, 0o755)

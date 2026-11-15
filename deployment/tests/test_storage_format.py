@@ -180,6 +180,21 @@ class FormattingTests(unittest.TestCase):
             self.assertEqual(drive['filesystems'], ['ext4'])
             self.assertEqual(drive['mount_points'], ['/managed-media/synthetic'])
 
+    def test_formatter_fallback_creates_traversable_state_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / 'config.json'
+            config.write_text('{}')
+            state = root / 'state'
+            with patch.object(formatter, 'CONFIG', config), \
+                    patch.object(formatter, 'JOURNAL', state / 'journal.json'), \
+                    patch.object(formatter.sys, 'argv', ['storage-format.py']), \
+                    patch.object(formatter.os, 'geteuid', return_value=0), \
+                    patch.object(formatter, 'serve') as serve:
+                formatter.main()
+            serve.assert_called_once_with({})
+            self.assertEqual(state.stat().st_mode & 0o777, 0o711)
+
     def test_inventory_refresh_failure_does_not_report_formatting_failure(self):
         with tempfile.TemporaryDirectory() as directory:
             flags = Path(directory)

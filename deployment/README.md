@@ -135,6 +135,9 @@ one-shot job that runs the fixed helper without arguments and exits afterward.
 There is no periodic formatter launch or heartbeat. Progress is published to
 `data/flags/storage-format-status.json` and shown in the existing Settings banner.
 A root-owned journal in `/var/lib/birdnet-pipy` prevents replay after interruption.
+This parent directory is owned by `root:root` with mode `0711`, allowing local
+monitoring accounts to reach the media filesystem without listing the directory.
+Installation does not change ownership or permissions of existing media files.
 API writes, including restarts and media transfers, are blocked while a request
 is pending.
 
