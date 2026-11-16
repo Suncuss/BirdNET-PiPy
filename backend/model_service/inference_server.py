@@ -24,6 +24,7 @@ import wave
 from flask import Flask, jsonify, request
 
 from core.logging_config import get_logger, log_execution_time, setup_logging
+from core.media_storage import get_allowed_recording_dirs
 from core.runtime_config import get_runtime_settings
 from core.timezone_service import get_timezone_str
 from core.utils import build_detection_filenames
@@ -567,12 +568,16 @@ def analyze_audio_file():
         audio_file_path = data['audio_file_path']
 
         # Validate path is within allowed directory (prevent path traversal)
-        allowed_dir = os.path.realpath(settings.RECORDING_DIR)
+        runtime_settings = get_runtime_settings()
+        allowed_dirs = get_allowed_recording_dirs(
+            runtime_settings, internal_dir=settings.RECORDING_DIR
+        )
         resolved_path = os.path.realpath(audio_file_path)
-        if not resolved_path.startswith(allowed_dir + os.sep):
+        if not any(resolved_path.startswith(path + os.sep) for path in allowed_dirs):
             logger.warning("Path traversal attempt blocked", extra={
                 'requested_path': audio_file_path,
-                'resolved_path': resolved_path
+                'resolved_path': resolved_path,
+                'allowed_dirs': allowed_dirs,
             })
             return jsonify({"error": "Invalid file path"}), 400
 
@@ -584,7 +589,6 @@ def analyze_audio_file():
             return jsonify({"error": f"File not found: {audio_file_path}"}), 404
 
         # Get current analysis settings from runtime config
-        runtime_settings = get_runtime_settings()
         location_settings = runtime_settings.get('location', {})
         detection_settings = runtime_settings.get('detection', {})
         audio_settings = runtime_settings.get('audio', {})

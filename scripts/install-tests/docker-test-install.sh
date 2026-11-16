@@ -27,6 +27,7 @@ MIN_FREE_DISK_GB=15
 KEEP_CONTAINER=false
 UNIT_ONLY=false
 BUILD_ONLY=false
+TEST_FILTER=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -37,6 +38,14 @@ while [[ $# -gt 0 ]]; do
         --unit-only)
             UNIT_ONLY=true
             shift
+            ;;
+        --filter)
+            if [ -z "${2:-}" ]; then
+                echo "--filter requires a BATS test-name pattern" >&2
+                exit 1
+            fi
+            TEST_FILTER="$2"
+            shift 2
             ;;
         --build-only)
             BUILD_ONLY=true
@@ -50,6 +59,7 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --keep        Keep container running after tests for debugging"
             echo "  --unit-only   Run only unit tests (no full installation)"
+            echo "  --filter PATTERN  Run only matching BATS tests"
             echo "  --build-only  Only build the test image, don't run tests"
             echo "  --help        Show this help message"
             echo ""
@@ -224,22 +234,25 @@ print_status "Running BATS tests..."
 echo ""
 
 # Determine which tests to run
-if [ "$UNIT_ONLY" = true ]; then
-    BATS_FILTER="--filter 'unit:'"
+if [ -n "$TEST_FILTER" ]; then
+    print_status "Running selected tests: $TEST_FILTER"
+elif [ "$UNIT_ONLY" = true ]; then
+    TEST_FILTER='unit:'
     print_status "Running unit tests only..."
 else
-    BATS_FILTER=""
     print_status "Running all tests..."
 fi
 
 # Run tests
 set +e  # Don't exit on test failure
-docker exec "$CONTAINER_NAME" bash -c "
+docker exec -e TEST_FILTER="$TEST_FILTER" "$CONTAINER_NAME" bash -c '
     cd /tests
     export PROJECT_DIR=/home/testuser/BirdNET-PiPy
     export BATS_LIB_PATH=/usr/lib
-    bats $BATS_FILTER test_install.bats
-"
+    args=()
+    if [ -n "$TEST_FILTER" ]; then args=(--filter "$TEST_FILTER"); fi
+    bats "${args[@]}" test_install.bats
+'
 TEST_EXIT_CODE=$?
 set -e
 

@@ -23,7 +23,8 @@ import time
 from core import maintenance_lease
 from core.db_schema import LIVE_MEDIA_INDEXES, keyset_after
 from core.logging_config import get_logger
-from core.media_ownership import KIND_AUDIO, KIND_DIRS, KIND_SPECTROGRAM
+from core.media_ownership import KIND_AUDIO, KIND_SPECTROGRAM, media_path
+from core.media_ownership import KIND_DIRS as KIND_DIRS
 from core.storage_manager import _detection_filename_candidates
 from core.utils import get_legacy_filename
 
@@ -112,13 +113,15 @@ def _resolve_row_files(cursor, detection):
             name = candidate[key]
             if name is None:
                 continue
-            directory = KIND_DIRS[kind]
-            path = os.path.join(directory, name)
+            path = media_path(kind, name)
+            directory = os.path.dirname(path)
             if not os.path.exists(path):
                 legacy = get_legacy_filename(name)
                 if not legacy:
                     continue
-                legacy_path = os.path.join(directory, legacy)
+                legacy_path = media_path(kind, legacy)
+                directory = os.path.dirname(legacy_path)
+                path = os.path.join(directory, name)
                 if not os.path.exists(legacy_path):
                     continue
                 try:

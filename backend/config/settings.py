@@ -75,7 +75,8 @@ DEFAULT_SETTINGS = {
         # 0 = disabled). Protections always win: every policy deletes only
         # rows outside the keep_per_species / keep_recent_per_species sets.
         "retention_days": 0,       # delete media older than N days, daily
-        "media_budget_gb": 0       # keep total media at or under N GB, daily
+        "media_budget_gb": 0,      # keep total media at or under N GB, daily
+        "media_target": "internal"
     },
     "updates": {
         "channel": "release"  # "release" = main branch, "latest" = staging branch

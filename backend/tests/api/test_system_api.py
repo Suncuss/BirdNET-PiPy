@@ -14,6 +14,33 @@ class TestSystemAPI:
         'build_time': '2025-11-28T10:00:00Z'
     }
 
+    def test_get_media_targets(self, api_client):
+        status = {
+            'preferred_target_id': 'internal',
+            'effective_target_id': 'internal',
+            'fallback_active': False,
+            'targets': [{'id': 'internal'}],
+        }
+        with patch('core.routes.system.get_media_storage_status', return_value=status):
+            response = api_client.get('/api/system/media-targets')
+
+        assert response.status_code == 200
+        assert response.get_json() == status
+
+    def test_storage_discovery_reads_snapshot_and_has_no_write_endpoint(self, api_client, tmp_path, monkeypatch):
+        import json
+
+        import core.storage_discovery as discovery
+        snapshot = tmp_path / 'storage-devices.json'
+        snapshot.write_text(json.dumps({'blockdevices': [
+            {'name': 'sda', 'type': 'disk', 'tran': 'usb', 'model': 'USB SSD', 'size': 1000}
+        ]}))
+        monkeypatch.setattr(discovery, 'SNAPSHOT_PATH', str(snapshot))
+        response = api_client.get('/api/system/storage-devices')
+        assert response.status_code == 200
+        assert response.json['devices'][0]['name'] == 'USB SSD'
+        assert api_client.post('/api/system/storage-devices').status_code == 405
+
     def test_get_version_info_success(self, api_client):
         """Test GET /api/system/version returns version info"""
         with patch('core.routes.system.load_version_info') as mock_load:

@@ -211,7 +211,7 @@ def classify_setting_changes(
     When old_settings and new_settings are provided, source label-only
     changes are classified as hot_reload_paths instead of requiring a restart.
     """
-    full_restart_exact = {"model.type"}
+    full_restart_exact = {"model.type", "storage.media_target"}
     component_prefixes = ("audio.sources",)
     component_exact = {"audio.recording_length"}
 

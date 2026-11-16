@@ -28,14 +28,18 @@ import time
 from datetime import timedelta
 
 from config.settings import (
-    BASE_DIR,
     DEFAULT_SETTINGS,
     EXTRACTED_AUDIO_DIR,
     SPECTROGRAM_DIR,
 )
 from core.db_maintenance import maybe_run_health_cycle
 from core.logging_config import get_logger
-from core.media_ownership import unlink_owned_files
+from core.media_ownership import unlink_owned_files, unlink_owned_files_on_device
+from core.media_storage import (
+    get_audio_search_dirs,
+    get_effective_storage_path,
+    get_spectrogram_search_dirs,
+)
 from core.runtime_config import get_runtime_settings
 from core.utils import build_detection_filenames, get_legacy_filename
 
@@ -89,13 +93,13 @@ def get_disk_usage(path=None):
     """Get disk usage statistics for the data directory.
 
     Args:
-        path: Path to check (defaults to /app/data)
+        path: Path to check (defaults to the effective media target)
 
     Returns:
         dict with total_bytes, used_bytes, free_bytes, percent_used
     """
     if path is None:
-        path = os.path.join(BASE_DIR, 'data')
+        path = get_effective_storage_path()
 
     usage = shutil.disk_usage(path)
 
@@ -176,15 +180,18 @@ def _existing_detection_paths(detection):
     """
     candidates = _detection_filename_candidates(detection)
     paths = []
-    for key, directory in (('audio_filename', EXTRACTED_AUDIO_DIR),
-                           ('spectrogram_filename', SPECTROGRAM_DIR)):
-        for filenames in candidates:
-            for name in (filenames[key], get_legacy_filename(filenames[key])):
-                if name is None:
-                    continue
-                path = os.path.join(directory, name)
-                if os.path.exists(path):
-                    paths.append(path)
+    for key, directories in (
+        ('audio_filename', get_audio_search_dirs(internal_dir=EXTRACTED_AUDIO_DIR)),
+        ('spectrogram_filename', get_spectrogram_search_dirs(internal_dir=SPECTROGRAM_DIR)),
+    ):
+        for directory in directories:
+            for filenames in candidates:
+                for name in (filenames[key], get_legacy_filename(filenames[key])):
+                    if name is None:
+                        continue
+                    path = os.path.join(directory, name)
+                    if os.path.exists(path):
+                        paths.append(path)
     return paths
 
 
@@ -243,7 +250,7 @@ def estimate_deletable_size(db_manager, keep_per_species=None, keep_recent_per_s
 
 def _delete_candidates(db_manager, protected, *, bytes_target=None,
                        cutoff_timestamp=None, drive_frontier=False,
-                       frontier_done=None):
+                       frontier_done=None, pressure_device=None):
     """The shared deletion executor every cleanup policy runs through.
 
     Walks the live-media partial index oldest-first, skipping protected
@@ -253,7 +260,8 @@ def _delete_candidates(db_manager, protected, *, bytes_target=None,
     (retention — the walk is timestamp-ordered, so reaching the cutoff
     ends it). Only the disk-pressure caller sets ``drive_frontier``: when
     resolved candidates run out it advances the resolution frontier
-    synchronously to surface more history.
+    synchronously to surface more history. Disk-pressure cleanup passes
+    ``pressure_device`` to leave files on other filesystems untouched.
     """
     from core.media_frontier import advance_frontier, frontier_complete
 
@@ -303,14 +311,21 @@ def _delete_candidates(db_manager, protected, *, bytes_target=None,
                 continue
 
             owned = media_by_id.get(row['id'], [])
-            removed = unlink_owned_files(owned)
-            if not removed:
-                continue
-            db_manager.remove_detection_media(removed)
-            removed_set = set(removed)
-            result['bytes_freed'] += sum(
-                f['bytes'] for f in owned if f['filename'] in removed_set)
-            result['files_deleted'] += 1
+            if pressure_device is not None:
+                deleted = unlink_owned_files_on_device(owned, pressure_device)
+                if deleted['removed_filenames']:
+                    db_manager.remove_detection_media(deleted['removed_filenames'])
+                result['bytes_freed'] += deleted['bytes_freed']
+                result['files_deleted'] += bool(deleted['files_removed'])
+            else:
+                removed = unlink_owned_files(owned)
+                if not removed:
+                    continue
+                db_manager.remove_detection_media(removed)
+                removed_set = set(removed)
+                result['bytes_freed'] += sum(
+                    f['bytes'] for f in owned if f['filename'] in removed_set)
+                result['files_deleted'] += 1
 
         if past_cutoff:
             break
@@ -484,7 +499,9 @@ def cleanup_storage(db_manager, target_percent=None, keep_per_species=None,
         'frontier_complete': False,
     }
 
-    usage = get_disk_usage()
+    storage_path = get_effective_storage_path()
+    pressure_device = os.stat(storage_path).st_dev
+    usage = get_disk_usage(storage_path)
     current_percent = usage['percent_used']
 
     if current_percent <= target_percent:
@@ -542,7 +559,8 @@ def cleanup_storage(db_manager, target_percent=None, keep_per_species=None,
     walk = _delete_candidates(db_manager, protected,
                               bytes_target=bytes_to_free,
                               drive_frontier=True,
-                              frontier_done=frontier_done)
+                              frontier_done=frontier_done,
+                              pressure_device=pressure_device)
     result['bytes_freed'] = walk['bytes_freed']
     result['files_deleted'] = walk['files_deleted']
     result['frontier_complete'] = walk['frontier_complete']

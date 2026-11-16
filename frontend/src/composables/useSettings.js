@@ -134,11 +134,11 @@ export function useSettings() {
     settingsLoad.reset()
   }
 
-  const write = async (endpoint, payload, { base, patch = payload } = {}) => {
+  const write = async (endpoint, payload, { base, patch = payload, moveExistingMedia = false } = {}) => {
     if (base && settingsConflict(base, settings.value, patch)) {
       throw new Error('These settings changed since you started editing. Reload settings before saving.')
     }
-    const response = await writeSettings(endpoint, payload)
+    const response = await writeSettings(endpoint, payload, { moveExistingMedia })
     if (response.data?.settings) setSettings(response.data.settings)
     else if (endpoint === '/settings') patchSettings(payload)
     return response

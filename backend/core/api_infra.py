@@ -6,13 +6,12 @@ single ``api`` blueprint and the DB executor without importing ``core.api``
 """
 from functools import wraps
 
-from flask import Blueprint, jsonify, request
-
 from core.auth import is_authenticated
 from core.db import DatabaseManager
 from core.db_executor import create_db_executor
 from core.internal_auth import INTERNAL_SECRET_HEADER, verify_internal_secret
 from core.logging_config import get_logger, setup_logging
+from flask import Blueprint, jsonify, request
 
 # Configure logging BEFORE constructing DatabaseManager below: its __init__
 # runs schema init/migrations and logs diagnostics, which would otherwise hit
@@ -22,6 +21,17 @@ setup_logging('api')
 logger = get_logger(__name__)
 
 api = Blueprint('api', __name__)
+@api.before_request
+def protect_media_move():
+    if request.method not in ('GET', 'HEAD', 'OPTIONS'):
+        from core.storage_format import format_pending
+        if format_pending():
+            return jsonify({'error': 'A drive is being formatted. Wait for it to finish before making changes.'}), 409
+        from core.media_transfer import transfer_pending
+        if transfer_pending():
+            return jsonify({'error': 'Media is being moved. Wait for it to finish before making changes.'}), 409
+
+
 db_manager = DatabaseManager()
 db_executor = create_db_executor('threading')
 

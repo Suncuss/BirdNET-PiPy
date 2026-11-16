@@ -31,8 +31,11 @@ services:
       - ./backend:/app
       - ./data:/app/data
       - ./data/flags:/app/data/flags
+      - ${BIRDNET_MEDIA_PATH:-./data/external-media}:/external-media:ro
+      - ${BIRDNET_MANAGED_MEDIA_PATH:-./data/managed-media}:/managed-media:ro,${BIRDNET_MANAGED_MEDIA_PROPAGATION:-rprivate}
     environment:
       - PYTHONPATH=/app
+      - BIRDNET_EXTERNAL_MEDIA_CONFIGURED=${BIRDNET_MEDIA_PATH:+true}
       - LOG_FORMAT=human
       - LOG_LEVEL=INFO
       - CONSOLE_LOG_LEVEL=${CONSOLE_LOG_LEVEL:-WARNING}
@@ -67,8 +70,11 @@ services:
       - ./backend:/app
       - ./data:/app/data
       - ./data/flags:/app/data/flags
+      - ${BIRDNET_MEDIA_PATH:-./data/external-media}:/external-media
+      - ${BIRDNET_MANAGED_MEDIA_PATH:-./data/managed-media}:/managed-media:${BIRDNET_MANAGED_MEDIA_PROPAGATION:-rprivate}
     environment:
       - PYTHONPATH=/app
+      - BIRDNET_EXTERNAL_MEDIA_CONFIGURED=${BIRDNET_MEDIA_PATH:+true}
       - LOG_FORMAT=human
       - LOG_LEVEL=INFO
       - CONSOLE_LOG_LEVEL=${CONSOLE_LOG_LEVEL:-WARNING}
@@ -92,12 +98,15 @@ services:
       - ./backend:/app
       - ./data:/app/data
       - ./data/flags:/app/data/flags
+      - ${BIRDNET_MEDIA_PATH:-./data/external-media}:/external-media
+      - ${BIRDNET_MANAGED_MEDIA_PATH:-./data/managed-media}:/managed-media:${BIRDNET_MANAGED_MEDIA_PROPAGATION:-rprivate}
       # PulseAudio socket for audio access
       # birdnet-service.sh ensures /run/pulse/native exists (system-wide or symlink to user socket)
       - /run/pulse:/run/pulse:ro
     environment:
       - PYTHONPATH=/app
       - PULSE_SERVER=unix:/run/pulse/native
+      - BIRDNET_EXTERNAL_MEDIA_CONFIGURED=${BIRDNET_MEDIA_PATH:+true}
       - LOG_FORMAT=human
       - LOG_LEVEL=INFO
       - CONSOLE_LOG_LEVEL=${CONSOLE_LOG_LEVEL:-WARNING}

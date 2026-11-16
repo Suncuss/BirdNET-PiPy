@@ -17,7 +17,7 @@
         class="shrink-0 ml-4"
         :loading="loading"
         loading-text="Saving..."
-        :disabled="!loaded || restartInProgress || quietHoursSaving || sourceSaving"
+        :disabled="!loaded || restartInProgress || formatActive || mediaTransferActive || quietHoursSaving || sourceSaving"
         @click="saveSettings"
       >
         {{ modelChanged ? 'Save and restart' : 'Save' }}
@@ -83,12 +83,26 @@
 
     <!-- Restart/Update Progress (replaces update available banner when active) -->
     <div
-      v-if="(serviceRestart.isRestarting.value || systemUpdate.isRestarting.value) && (serviceRestart.restartMessage.value || systemUpdate.restartMessage.value)"
+      v-if="formatActive || mediaTransferActive || ((serviceRestart.isRestarting.value || systemUpdate.isRestarting.value) && (serviceRestart.restartMessage.value || systemUpdate.restartMessage.value))"
       class="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg"
     >
       <div class="flex items-center gap-2 text-blue-700 text-sm">
         <Spinner class="h-4 w-4" />
-        <span>{{ serviceRestart.restartMessage.value || systemUpdate.restartMessage.value }}</span>
+        <span role="status">{{ formatActive ? formatProgress.message : mediaTransferActive ? mediaTransferMessage : serviceRestart.restartMessage.value || systemUpdate.restartMessage.value }}</span>
+      </div>
+      <div
+        v-if="mediaTransferActive && mediaTransferProgress.bytes_total > 0"
+        class="mt-2 w-full h-2 bg-gray-200 rounded-full overflow-hidden"
+        role="progressbar"
+        aria-label="Media copied"
+        :aria-valuenow="mediaTransferPercent"
+        aria-valuemin="0"
+        aria-valuemax="100"
+      >
+        <div
+          class="h-full bg-green-600 rounded-full transition-all duration-300"
+          :style="{ width: mediaTransferPercent + '%' }"
+        />
       </div>
     </div>
 
@@ -144,7 +158,7 @@
     <fieldset
       v-if="loaded"
       class="space-y-4"
-      :disabled="loading || serviceRestart.isRestarting.value || systemUpdate.isRestarting.value"
+      :disabled="loading || mediaTransferActive || serviceRestart.isRestarting.value || systemUpdate.isRestarting.value"
     >
       <!-- Location & Audio -->
       <div class="bg-white rounded-lg shadow-sm border border-gray-100 p-5">
@@ -345,6 +359,144 @@
         <p class="text-xs text-gray-400 mt-3">
           Auto-cleanup removes oldest recordings when usage exceeds {{ settings.storage.trigger_percent }}%.
         </p>
+        <div class="mt-5 border-t border-gray-100 pt-4 space-y-3">
+          <div>
+            <label
+              for="mediaStorageTarget"
+              class="text-sm text-gray-600"
+            >Media storage</label>
+            <select
+              id="mediaStorageTarget"
+              v-model="settings.storage.media_target"
+              :disabled="mediaTransferActive"
+              class="mt-1 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-800 focus:border-green-600 focus:outline-none focus:ring-1 focus:ring-green-600"
+            >
+              <option
+                v-for="target in mediaStorageTargets"
+                :key="target.id"
+                :value="target.id"
+              >
+                {{ formatMediaTargetOption(target) }}
+              </option>
+            </select>
+            <p
+              v-if="settings.storage.media_target !== 'internal'"
+              class="mt-1 text-xs text-gray-400"
+            >
+              BirdNET-PiPy falls back to the SD card if this drive is missing or unwritable.
+            </p>
+          </div>
+
+          <details @toggle="toggleDriveDiscovery">
+            <summary class="cursor-pointer text-sm text-gray-600">
+              Connected drives
+            </summary>
+            <p
+              v-if="!driveDiscovery"
+              class="mt-2 text-xs text-gray-500"
+            >
+              Checking connected drives...
+            </p>
+            <p
+              v-else-if="driveDiscovery.state !== 'available'"
+              class="mt-2 text-xs text-gray-500"
+            >
+              {{ driveDiscovery.message }}
+            </p>
+            <p
+              v-else-if="!driveDiscovery.devices.length"
+              class="mt-2 text-xs text-gray-500"
+            >
+              No USB drives or SSDs detected.
+            </p>
+            <dl
+              v-else
+              class="mt-2 space-y-3"
+            >
+              <div
+                v-for="drive in driveDiscovery.devices"
+                :key="drive.path"
+              >
+                <dt class="text-sm text-gray-800">
+                  {{ drive.name }} · {{ formatDriveSize(drive.size_bytes) }}
+                </dt>
+                <dd class="text-xs text-gray-500">
+                  {{ drive.path }} · {{ drive.connection }} · {{ drive.filesystems.join(', ') || 'Unknown format' }} · {{ drive.mounted ? 'Mounted' : 'Not mounted' }}<span v-if="!drive.eligibility_reason && drive.system_drive"> · System drive</span><span v-if="!drive.eligibility_reason && drive.read_only"> · Read-only</span>
+                </dd>
+                <dd
+                  v-if="drive.eligibility_reason"
+                  class="text-xs text-gray-600"
+                >
+                  {{ drive.eligibility_reason }}
+                </dd>
+                <dd v-if="drive.preparation_eligible === true">
+                  <button
+                    type="button"
+                    class="text-xs text-gray-600 underline underline-offset-2 hover:text-red-700"
+                    @click="openFormatConfirmation(drive)"
+                  >
+                    Format…
+                  </button>
+                </dd>
+              </div>
+            </dl>
+          </details>
+
+          <div v-if="mediaStorageChanged">
+            <label class="flex items-start gap-2 text-sm text-gray-800">
+              <input
+                id="mediaStorageMoveExisting"
+                v-model="moveExistingMedia"
+                :disabled="mediaTransferActive"
+                type="checkbox"
+                class="mt-1 rounded text-green-600 focus:ring-green-600"
+              >
+              <span>Move existing media to new location</span>
+            </label>
+            <p class="mt-1 text-xs text-gray-500">
+              Database and settings stay where they are.
+            </p>
+            <p
+              v-if="moveExistingMedia"
+              class="mt-1 text-xs text-gray-500"
+            >
+              Recording pauses during the move and resumes automatically.
+            </p>
+          </div>
+
+          <p
+            v-if="externalMediaTargets.length === 0"
+            class="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600"
+          >
+            Connect and prepare a drive, then select it in the Media storage dropdown.
+          </p>
+
+          <div
+            v-if="mediaStorageStatus || mediaStorageChanged"
+            class="rounded-md border px-3 py-2 text-sm"
+            :class="mediaStorageChanged ? 'border-red-200 bg-red-50 text-red-700' : mediaStorageStatus.fallback_active ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-green-200 bg-green-50 text-green-900'"
+            role="status"
+          >
+            <p class="font-medium">
+              {{ mediaStorageChanged ? 'Changed media storage not saved' : mediaStorageStatus.fallback_active ? 'Using internal fallback storage' : 'Current media storage' }}
+            </p>
+            <p
+              v-if="mediaStorageStatus?.fallback_active"
+              class="mt-1 text-xs"
+            >
+              Preferred: {{ mediaStorageStatus.preferred_target?.label || 'Internal storage (SD card)' }}
+            </p>
+            <p class="mt-1 text-xs">
+              Current: {{ mediaStorageStatus?.effective_target?.label || 'Internal storage (SD card)' }}
+            </p>
+            <p
+              v-if="mediaStorageStatus?.fallback_active"
+              class="mt-1 text-xs"
+            >
+              {{ mediaStorageStatus.fallback_reason === 'unwritable' ? 'The selected directory is mounted but not writable.' : 'The selected directory is currently unavailable.' }}
+            </p>
+          </div>
+        </div>
       </div>
 
       <!-- Security (Collapsible) -->
@@ -1592,6 +1744,15 @@
       @delete="handleDeleteNotificationFromModal"
     />
 
+    <FormatDriveModal
+      v-if="selectedFormatDrive"
+      :drive="selectedFormatDrive"
+      :size-label="formatDriveSize(selectedFormatDrive.size_bytes)"
+      :progress="formatProgress"
+      @close="selectedFormatDrive = null"
+      @started="formatStarted"
+    />
+
     <!-- Confirm Remove Notification URL -->
     <ConfirmModal
       v-if="confirmRemoveIndex !== null"
@@ -1629,7 +1790,7 @@ import { FILTER_DEFAULTS, modelTypeOptions } from '@/utils/modelDefaults'
 import { isSourceEnabled, sourceAudioStatus, sourceIsChanging, streamingError, summarizeAudioStatus } from '@/utils/audioStatus'
 import { QUIET_HOURS_DEFAULTS, describeQuietHours, parseHHMM } from '@/utils/quietHours'
 import api from '@/services/api'
-import { supersededSettingsRevision } from '@/services/settingsWrites'
+import { acceptSettingsRevision, supersededSettingsRevision } from '@/services/settingsWrites'
 import SpeciesFilterModal from '@/components/SpeciesFilterModal.vue'
 import AlertBanner from '@/components/AlertBanner.vue'
 import AppButton from '@/components/AppButton.vue'
@@ -1640,6 +1801,7 @@ import MigrationModal from '@/components/MigrationModal.vue'
 import ExportModal from '@/components/ExportModal.vue'
 import AddNotificationModal from '@/components/AddNotificationModal.vue'
 import ConfirmModal from '@/components/ConfirmModal.vue'
+import FormatDriveModal from '@/components/FormatDriveModal.vue'
 import StreamSourceModal from '@/components/StreamSourceModal.vue'
 import CollapsibleSection from '@/components/CollapsibleSection.vue'
 import ToggleSwitch from '@/components/ToggleSwitch.vue'
@@ -1672,6 +1834,7 @@ export default {
     ExportModal,
     AddNotificationModal,
     ConfirmModal,
+    FormatDriveModal,
     StreamSourceModal,
     CollapsibleSection,
     ToggleSwitch,
@@ -1737,6 +1900,95 @@ export default {
 
     // Storage state
     const storage = ref(null)
+    const mediaStorageStatus = ref(null)
+    let mediaTargetsRequest = 0
+    const driveDiscovery = ref(null)
+    let driveDiscoveryRequest = 0
+    const selectedFormatDrive = ref(null)
+    const formatProgress = ref(null)
+    const formatActive = computed(() => ['queued', 'checking', 'unmounting', 'partitioning', 'formatting', 'mounting'].includes(formatProgress.value?.state))
+    let formatTimer = null
+    const pollFormat = async () => {
+      try {
+        const { data } = await api.get('/system/storage/format-status')
+        if (viewStopped) return
+        const wasActive = formatActive.value
+        if (data.state === 'complete') {
+          if (data.storage_devices && (!driveDiscovery.value?.updated_at
+              || data.storage_devices.updated_at >= driveDiscovery.value.updated_at)) {
+            driveDiscoveryRequest += 1
+            driveDiscovery.value = data.storage_devices
+          }
+          if (data.media_storage) {
+            // A pre-format request must not replace the mounted drive list.
+            mediaTargetsRequest += 1
+            mediaStorageStatus.value = data.media_storage
+          } else {
+            await loadMediaTargets()
+          }
+        }
+        formatProgress.value = data
+        if (['complete', 'failed'].includes(data.state)) {
+          clearInterval(formatTimer)
+          formatTimer = null
+          if (wasActive) showStatus(data.state === 'complete' ? 'success' : 'error', data.message)
+          if (!data.storage_devices) loadConnectedDrives()
+        } else if (formatActive.value && !formatTimer) {
+          formatTimer = setInterval(pollFormat, 2000)
+        }
+      } catch {
+        if (formatActive.value) formatProgress.value.message = 'Could not read formatting progress. The host may still be formatting. Keep the drive connected.'
+      }
+    }
+    const formatStarted = (job) => {
+      formatProgress.value = job
+      clearInterval(formatTimer)
+      formatTimer = setInterval(pollFormat, 2000)
+    }
+    const openFormatConfirmation = (drive) => {
+      if (drive.preparation_eligible === true && !mediaTransferActive.value && !formatActive.value) {
+        selectedFormatDrive.value = { ...drive }
+      }
+    }
+
+    let driveDiscoveryTimer = null
+    const loadConnectedDrives = async () => {
+      const requestId = ++driveDiscoveryRequest
+      try {
+        const { data } = await api.get('/system/storage-devices')
+        if (viewStopped || requestId !== driveDiscoveryRequest) return
+        // The periodic host snapshot can briefly predate the format result.
+        if (driveDiscovery.value?.updated_at && data.updated_at < driveDiscovery.value.updated_at) return
+        driveDiscovery.value = data
+      } catch {
+        if (!viewStopped && requestId === driveDiscoveryRequest) driveDiscovery.value = {
+          state: 'unavailable', message: 'Drive discovery is unavailable.'
+        }
+      }
+    }
+    const toggleDriveDiscovery = (event) => {
+      clearInterval(driveDiscoveryTimer)
+      if (event.target.open) {
+        loadConnectedDrives()
+        driveDiscoveryTimer = setInterval(loadConnectedDrives, 15000)
+      }
+    }
+    const formatDriveSize = bytes => `${(bytes / 1e9).toLocaleString(undefined, { maximumFractionDigits: 1 })} GB`
+
+    const moveExistingMedia = ref(false)
+    const mediaTransferProgress = ref(null)
+    const mediaTransferActive = computed(() => mediaTransferProgress.value
+      && !['idle', 'complete', 'failed'].includes(mediaTransferProgress.value.state))
+    const mediaTransferPercent = computed(() => mediaTransferProgress.value?.bytes_total
+      ? Math.min(100, Math.floor(mediaTransferProgress.value.bytes_done * 100 / mediaTransferProgress.value.bytes_total))
+      : 0)
+    const mediaTransferMessage = computed(() => {
+      const p = mediaTransferProgress.value
+      if (!p) return ''
+      if (!p.files_total) return p.message
+      const mb = bytes => (bytes / (1024 * 1024)).toFixed(1)
+      return `${p.message} · ${p.files_done} / ${p.files_total} files · ${mb(p.bytes_done)} / ${mb(p.bytes_total)} MB copied`
+    })
 
     // One settings-status snapshot confirms recording, live streaming, pause
     // and per-source errors, all from the same acknowledged revision.
@@ -1761,12 +2013,12 @@ export default {
     const currentApplicationStatus = computed(() => {
       // Not `updating`: the stack is still up while an update is dispatched,
       // and no banner yet explains a blank status.
-      if (serviceRestart.isRestarting.value || systemUpdate.isRestarting.value) return null
+      if (mediaTransferActive.value || serviceRestart.isRestarting.value || systemUpdate.isRestarting.value) return null
       const status = applicationStatus.value
       return settingsStore.revision.value && status?.revision !== settingsStore.revision.value ? null : status
     })
     const modelStatus = computed(() => currentApplicationStatus.value?.model_service || null)
-    const modelUnreported = computed(() => !restartInProgress.value && !settingsStatusLoading.value &&
+    const modelUnreported = computed(() => !mediaTransferActive.value && !restartInProgress.value && !settingsStatusLoading.value &&
       modelStatus.value?.status !== 'loading' && currentApplicationStatus.value?.model?.state !== 'active')
     const savedSources = computed(() => settingsStore.settings.value?.audio?.sources || [])
     const sourceStatuses = computed(() => Object.fromEntries(savedSources.value.map(source =>
@@ -1920,7 +2172,7 @@ export default {
       audio: {},
       spectrogram: {},
       playback: { normalize: false },
-      storage: { auto_cleanup_enabled: true, trigger_percent: 85, target_percent: 80 },
+      storage: { auto_cleanup_enabled: true, trigger_percent: 85, target_percent: 80, media_target: 'internal' },
       updates: {},
       model: { type: 'birdnet' },
       display: {},
@@ -1956,7 +2208,8 @@ export default {
         station_name: s.display?.station_name || '',
         site_url: s.display?.site_url || ''
       },
-      birdweather: { id: s.birdweather?.id }
+      birdweather: { id: s.birdweather?.id },
+      storage: { media_target: s.storage?.media_target || 'internal' }
     })
 
     // Take snapshot of current settings for change detection
@@ -2088,6 +2341,41 @@ export default {
     })
 
     // Load storage info
+    const loadMediaTargets = async () => {
+      const requestId = ++mediaTargetsRequest
+      try {
+        const { data } = await api.get('/system/media-targets')
+        if (!viewStopped && requestId === mediaTargetsRequest) mediaStorageStatus.value = data
+      } catch (error) {
+        console.error('Error loading media targets:', error)
+      }
+    }
+
+    const mediaStorageChanged = computed(() => Boolean(originalSettings.value)
+      && (settings.value.storage?.media_target || 'internal') !== originalSettings.value.storage.media_target)
+
+    // A different destination starts with the non-moving option.
+    watch(() => settings.value.storage?.media_target, () => {
+      moveExistingMedia.value = false
+    })
+
+    const externalMediaTargets = computed(() => {
+      const targets = mediaStorageStatus.value?.targets
+      if (!Array.isArray(targets)) return []
+      return targets.filter(target => target.id !== 'internal')
+    })
+
+    const mediaStorageTargets = computed(() => [
+      { id: 'internal', label: 'SD card / internal storage', available: true },
+      ...externalMediaTargets.value
+    ])
+
+    const formatMediaTargetOption = (target) => {
+      if (!target) return 'Unknown target'
+      if (target.id === 'internal') return target.label || 'Internal storage (SD card)'
+      return target.available === false ? `${target.label} (missing)` : target.label
+    }
+
     const loadStorageInfo = async () => {
       try {
         const { data } = await api.get('/system/storage')
@@ -2135,6 +2423,8 @@ export default {
       if (!data.access) data.access = { public_access: true, charts_public: false, table_public: false, live_feed_public: false }
       if (data.access.public_access === undefined) data.access.public_access = true
       if (!data.playback) data.playback = { normalize: false }
+      if (!data.storage) data.storage = {}
+      if (!data.storage.media_target) data.storage.media_target = 'internal'
       if (data.updates.channel === 'stable') data.updates.channel = 'release'
       if (!data.audio) data.audio = {}
 
@@ -2266,6 +2556,50 @@ export default {
       }
     }
 
+    const waitForMediaTransfer = async (initial) => {
+      mediaTransferProgress.value = initial
+      while (!viewStopped) {
+        const response = await api.get('/system/media-transfer')
+        const progress = response.data
+        mediaTransferProgress.value = progress
+        if (['complete', 'failed'].includes(progress.state)) {
+          if (progress.settings) {
+            acceptSettingsRevision(response)
+            settingsStore.setSettings(progress.settings)
+          }
+          if (progress.state === 'failed') {
+            // A removal/resume error can happen after the destination was
+            // saved. Adopt server truth rather than offering a stale retry.
+            if (progress.location_saved && progress.settings) adoptSettings(progress.settings)
+            throw new Error(progress.message)
+          }
+          moveExistingMedia.value = false
+          await loadStorageInfo()
+          return {
+            settings: progress.settings,
+            changes: progress.changes,
+            message: progress.warning || progress.message
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, 1000))
+      }
+      throw new Error('The media move continues. Return to Settings to see its progress.')
+    }
+
+    const recoverMediaTransfer = async () => {
+      try {
+        const { data } = await api.get('/system/media-transfer')
+        if (!data.state || ['idle', 'complete', 'failed'].includes(data.state)) return
+        const result = await waitForMediaTransfer(data)
+        adoptSettings(result.settings)
+        await loadMediaTargets()
+        const restarted = await triggerRestartIfRequired(result)
+        if (!restarted) showStatus('success', result.message)
+      } catch (error) {
+        settingsSaveError.value = error.message
+      }
+    }
+
     // Save settings to API (returns response payload on success, null on failure)
     const saveSettingsOnly = async () => {
       // Do not let a stale full-document save overlap the schedule endpoint.
@@ -2289,8 +2623,13 @@ export default {
           patch.detection = { ...patch.detection, species_filter_threshold: settings.value.detection.species_filter_threshold }
         }
         if (!Object.keys(patch).length) return { changes: { changed_paths: [] } }
-        const { data } = await settingsStore.save(patch, { base: originalSettings.value })
+        let { data } = await settingsStore.save(patch, {
+          base: originalSettings.value,
+          moveExistingMedia: mediaStorageChanged.value && moveExistingMedia.value
+        })
+        if (data.transfer) data = await waitForMediaTransfer(data.transfer)
         acknowledgeSettings(settings.value, originalSettings.value, patch, data.settings || patch)
+        await loadMediaTargets()
         return data
       } catch (error) {
         console.error('Error saving settings:', error)
@@ -2888,6 +3227,7 @@ export default {
 
     // Navigation guard - intercept route changes when there are unsaved changes
     onBeforeRouteLeave(async () => {
+      if (mediaTransferActive.value) return false
       if (hasUnsavedChanges.value) {
         showUnsavedModal.value = true
         // Return a Promise - navigation blocked until resolved
@@ -2899,7 +3239,7 @@ export default {
     })
 
     const refreshOnFocus = () => {
-      if (settingsStore.pendingWrites.value > 0 || restartInProgress.value) return
+      if (settingsStore.pendingWrites.value > 0 || restartInProgress.value || mediaTransferActive.value) return
       if (hasUnsavedChanges.value || hasOpenSettingsDialog.value) settingsStore.refresh()
       else loadSettings()
     }
@@ -2935,6 +3275,9 @@ export default {
       unwatchSettingsStatus = recorderHealth.watchSettingsStatus()
       loadSettings()
       loadStorageInfo()
+      loadMediaTargets()
+      recoverMediaTransfer()
+      pollFormat()
       loadSpeciesList()
       // Its failure message never auto-clears, so it must not blame a restart
       // already under way; the watcher above loads it once services are back.
@@ -2950,6 +3293,8 @@ export default {
       window.removeEventListener('beforeunload', handleBeforeUnload)
       window.removeEventListener('focus', refreshOnFocus)
       clearTimeout(settingsRetryTimer)
+      clearInterval(driveDiscoveryTimer)
+      clearInterval(formatTimer)
       unwatchSettingsStatus()
     })
 
@@ -2979,6 +3324,24 @@ export default {
       showLogsModal,
       manualRestart,
       storage,
+      mediaStorageStatus,
+      driveDiscovery,
+      selectedFormatDrive,
+      formatStarted,
+      formatActive,
+      formatProgress,
+      openFormatConfirmation,
+      toggleDriveDiscovery,
+      formatDriveSize,
+      mediaStorageChanged,
+      moveExistingMedia,
+      mediaTransferActive,
+      mediaTransferProgress,
+      mediaTransferMessage,
+      mediaTransferPercent,
+      mediaStorageTargets,
+      externalMediaTargets,
+      formatMediaTargetOption,
       showExportModal,
       saveSettings,
       toggleUpdateChannel,

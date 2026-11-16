@@ -201,6 +201,19 @@ remove_service() {
 
 # Remove sudoers configuration
 remove_sudoers() {
+    print_status "Removing host drive formatter and mount service..."
+    systemctl disable --now birdnet-media-mounts.service || true
+    systemctl disable --now birdnet-storage-format.path || true
+    systemctl stop birdnet-storage-format.service || true
+    rm -f /etc/systemd/system/birdnet-storage-format.path /etc/systemd/system/birdnet-storage-format.service
+    rm -f "$SCRIPT_DIR/data/flags/storage-format-available"
+    rm -f /etc/systemd/system/birdnet-media-mounts.service
+    systemctl daemon-reload
+    rm -f /usr/local/libexec/birdnet-pipy/storage_mounts.py
+    # Preserve mounted media and the UUID registry. Never erase a drive here.
+    rm -f /usr/local/libexec/birdnet-pipy/storage-format.py /usr/local/libexec/birdnet-pipy/storage_devices.py
+    rm -f /etc/birdnet-pipy/storage-format.json
+    # Keep the replay journal. Reinstalling must not replay an interrupted job.
     local sudoers_file="/etc/sudoers.d/birdnet-pipy"
 
     if [ -f "$sudoers_file" ]; then

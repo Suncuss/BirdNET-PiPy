@@ -26,15 +26,18 @@ export const acceptSettingsRevision = (response) => {
   etag = next
 }
 
-export function writeSettings(endpoint, payload) {
+export function writeSettings(endpoint, payload, { moveExistingMedia = false } = {}) {
   const body = JSON.parse(JSON.stringify(payload))
   const startedSession = session
   generation += 1
   pendingSettingsWrites.value += 1
   const result = queue.then(async () => {
     if (session !== startedSession) throw new Error('Settings session changed')
-    const response = await (etag
-      ? api.put(endpoint, body, { headers: { 'If-Match': etag } })
+    const headers = {}
+    if (etag) headers['If-Match'] = etag
+    if (moveExistingMedia) headers['X-Move-Existing-Media'] = 'true'
+    const response = await (Object.keys(headers).length
+      ? api.put(endpoint, body, { headers })
       : api.put(endpoint, body))
     if (session !== startedSession) throw new Error('Settings session changed')
     generation += 1
