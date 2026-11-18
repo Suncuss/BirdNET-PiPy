@@ -116,7 +116,7 @@ _ANON_REACHABLE_ENDPOINTS = frozenset({
     'get_detection_distribution', 'get_all_species', 'get_available_species',
     # Feature-gated (require_feature decides on the charts/table/live_feed flags)
     'get_hourly_activity', 'get_activity_overview', 'get_detection_trends',
-    'get_detections', 'get_stream_config',
+    'get_detections', 'get_stream_config', 'get_species_summary',
     # Token/window-gated media + permalink (the handlers do their own checks)
     'serve_audio', 'serve_spectrogram', 'get_bird_recording',
     # Link-unfurl crawlers are anonymous; the recording handler mirrors the

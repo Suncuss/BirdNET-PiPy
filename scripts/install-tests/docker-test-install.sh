@@ -211,7 +211,7 @@ docker exec "$CONTAINER_NAME" bash -c "
     # holds the recordings/spectrogram archive (tens of GB) and copying it can
     # fill the host disk. The install tests need code + .git (for update tests),
     # and a fresh install starts with no data anyway.
-    tar -C /project --exclude='./data' --exclude='./frontend/node_modules' --exclude='./internal_docs' -cf - . | tar -C /home/testuser/BirdNET-PiPy -xf -
+    tar -C /project --exclude='./data' --exclude='./data.internal-*' --exclude='./data.moving' --exclude='./frontend/node_modules' --exclude='./internal_docs' -cf - . | tar -C /home/testuser/BirdNET-PiPy -xf -
     chown -R testuser:testuser /home/testuser/BirdNET-PiPy
     chmod +x /home/testuser/BirdNET-PiPy/install.sh /home/testuser/BirdNET-PiPy/build.sh
 

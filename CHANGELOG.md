@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Added `scripts/data-drive.sh` to move the station's data (database, settings and recordings) onto an external USB drive or SSD and back. If the drive is missing or disconnects, the station stops instead of recording to the SD card, and starts again once the drive is back. See docs/EXTERNAL_DRIVE.md.
+- Added a species summary API for detection counts and first/last timestamps over a date range, the last few hours or all history; anonymous access follows the public-charts setting.
+
 ## [0.8.12] - 2026-11-03
 
 - Added `--unattended` and `--user NAME` options to `install.sh` for automated installs, such as a first-boot service, that run as root without sudo and never reboot on their own.

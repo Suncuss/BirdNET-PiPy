@@ -16,7 +16,7 @@
 | Component | Requirement |
 |-----------|-------------|
 | **Raspberry Pi** | Pi 5, Pi 4, Pi 3, or Zero 2W |
-| **Storage** | 128GB+ SD card (V30) or NVMe SSD |
+| **Storage** | 128GB+ SD card (V30) or NVMe SSD; data can also go on a [USB drive or SSD](EXTERNAL_DRIVE.md) |
 | **Microphone** | USB microphone |
 
 All of these run the full system — the board mainly changes how responsive the dashboard feels:
@@ -116,6 +116,10 @@ Changes take effect immediately — no restart required.
 ### Troubleshooting & Advanced Config
 
 For detailed logs, advanced configuration, and architecture details, see the **[System Administration Guide](../deployment/README.md)**.
+
+### External Drive
+
+To keep the recordings and database on a USB drive or SSD instead of the SD card, see **[Storing Data on an External Drive](EXTERNAL_DRIVE.md)**.
 
 ### Web Interface
 

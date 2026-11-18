@@ -1,5 +1,7 @@
 # Ignore data directory (contains audio, db, and spectrograms)
-/data/
+/data
+/data.internal-*
+/data.moving
 backend/data/
 
 # Test artifacts

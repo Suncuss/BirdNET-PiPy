@@ -45,6 +45,71 @@ _SPECIES_KEY = db_species.SPECIES_KEY
 PRIVATE_DETECTION_FIELDS = ('latitude', 'longitude')
 
 
+def _fold_taxon_groups(rows, count_key):
+    """Merge rows whose scientific names are one taxon (a genus split), with
+    the same rules for the catalog and the species summary: counts add up,
+    first/last_detected widen, and the most-detected row's names represent
+    the group (ties keep the alphabetically first common name).
+
+    Rows need scientific_name, common_name, first_detected, last_detected and
+    ``count_key``. Legacy blank-sci rows key on their own common name.
+    """
+    merged, best = {}, {}
+    for row in sorted(rows, key=lambda r: (r['common_name'] or '', r['scientific_name'] or '')):
+        group = same_taxon_group(row['scientific_name'])
+        key = ('scientific', group[0]) if group else ('common', row['common_name'] or '')
+        entry = merged.get(key)
+        if entry is None:
+            merged[key] = dict(row)
+            best[key] = row[count_key]
+            continue
+        if row[count_key] > best[key]:
+            best[key] = row[count_key]
+            entry.update(scientific_name=row['scientific_name'], common_name=row['common_name'])
+        entry[count_key] += row[count_key]
+        entry['first_detected'] = min(entry['first_detected'], row['first_detected'])
+        entry['last_detected'] = max(entry['last_detected'], row['last_detected'])
+    return list(merged.values())
+
+
+# The species summary's dated paths aggregate per species key into a ``counts``
+# CTE, then LEFT JOIN the species projection for display names, so a key with
+# no projection row yet is kept (_named_summary_rows fills in its names).
+_SUMMARY_NAMES_SQL = """
+    SELECT c.species_key,
+           COALESCE(s.scientific_name, c.species_key) AS scientific_name,
+           COALESCE(s.common_name, c.species_key) AS common_name,
+           c.count, c.first_detected, c.last_detected,
+           s.species_key IS NULL AS missing_names
+    FROM counts c LEFT JOIN species s ON s.species_key = c.species_key
+"""
+
+
+def _named_summary_rows(cur):
+    """Fetch a _SUMMARY_NAMES_SQL result, dropping its helper columns and
+    giving keys with no species row the names of their newest detection
+    across all history (what the next species rebuild will pick). Rare: the
+    projection is maintained transactionally, so the lookup only runs after
+    out-of-band writes."""
+    rows = [dict(row) for row in cur.fetchall()]
+    for row in rows:
+        key = row.pop('species_key')
+        if not row.pop('missing_names'):
+            continue
+        # A key is a scientific name, or a legacy blank-sci common name.
+        for where, params in (db_species.species_where(key, None),
+                              db_species.species_where('', key)):
+            cur.execute(f"""
+                SELECT scientific_name, common_name FROM detections
+                WHERE {where} ORDER BY timestamp DESC, id DESC LIMIT 1
+            """, params)
+            names = cur.fetchone()
+            if names is not None:
+                row.update(dict(names))
+                break
+    return rows
+
+
 def _iso_ts(dt):
     """Render a datetime in the canonical stored-timestamp layout
     (db_schema.TIMESTAMP_FORMAT, e.g. '2026-07-12T20:54:01').
@@ -1223,6 +1288,76 @@ class DatabaseManager:
 
         return {'labels': labels, 'data': counts}
 
+    def get_species_summary(self, start_date=None, end_date=None, since=None):
+        """Per-species counts and first/last detection for inclusive local
+        dates, for detections at or after the local datetime ``since``, or for
+        all history when neither is given.
+
+        All history reads the species projection (always maintained, ~one row
+        per species). ``since`` windows start mid-day, so they always read raw
+        detections; the caller bounds them (the route caps them at a week). A
+        date range reads the daily rollups when they are ready and falls back
+        to raw detections otherwise; readiness and data are read in one
+        snapshot so a concurrent build can't mix the two.
+        """
+        with self.get_db_connection() as conn:
+            cur = conn.cursor()
+            if since is not None:
+                rows = self._summary_from_detections(cur, _iso_ts(since))
+            elif start_date is None:
+                rows = self._summary_all_history(cur)
+            else:
+                cur.execute('BEGIN')
+                try:
+                    if db_rollups.rollups_ready(cur):
+                        rows = self._summary_from_rollups(cur, start_date, end_date)
+                    else:
+                        rows = self._summary_from_detections(
+                            cur, f'{start_date}T00:00:00', f'{end_date}T~')
+                finally:
+                    conn.commit()
+        result = _fold_taxon_groups(rows, 'count')
+        return sorted(result, key=lambda r: (-r['count'], r['scientific_name'] or '',
+                                             r['common_name'] or ''))
+
+    @staticmethod
+    def _summary_all_history(cur):
+        cur.execute("""
+            SELECT scientific_name, common_name, detection_count AS count,
+                   first_detected, last_detected FROM species
+        """)
+        return [dict(row) for row in cur.fetchall()]
+
+    @staticmethod
+    def _summary_from_rollups(cur, start_date, end_date):
+        cur.execute(f"""
+            WITH counts AS (
+                SELECT species_key, SUM(count) AS count,
+                       MIN(first_ts) AS first_detected, MAX(last_ts) AS last_detected
+                FROM species_day
+                WHERE date >= ? AND date <= ?
+                GROUP BY species_key
+            )
+            {_SUMMARY_NAMES_SQL}
+        """, (start_date, end_date))
+        return _named_summary_rows(cur)
+
+    @staticmethod
+    def _summary_from_detections(cur, start_ts, end_ts='~'):
+        """Aggregate raw detections with start_ts <= timestamp < end_ts.
+        The default end ('~' sorts above every digit) leaves it unbounded."""
+        cur.execute(f"""
+            WITH counts AS (
+                SELECT {_SPECIES_KEY} AS species_key, COUNT(*) AS count,
+                       MIN(timestamp) AS first_detected, MAX(timestamp) AS last_detected
+                FROM detections
+                WHERE timestamp >= ? AND timestamp < ?
+                GROUP BY {_SPECIES_KEY}
+            )
+            {_SUMMARY_NAMES_SQL}
+        """, (start_ts, end_ts))
+        return _named_summary_rows(cur)
+
     def get_all_unique_species(self):
         """Get all unique bird species ever detected, sorted alphabetically.
 
@@ -1240,42 +1375,17 @@ class DatabaseManager:
         most-detected name as the entry the catalog displays.
         """
         query = """
-        SELECT scientific_name, common_name, last_detected, detection_count
+        SELECT scientific_name, common_name, first_detected, last_detected, detection_count
         FROM species
-        ORDER BY common_name ASC
         """
         with self.get_db_connection() as conn:
             cur = conn.cursor()
             cur.execute(query)
             results = cur.fetchall()
 
-        merged = {}
-        for row in results:
-            group = same_taxon_group(row['scientific_name'])
-            # Legacy rows can carry a blank scientific_name; they key on their
-            # own common_name, exactly as the rollup does.
-            key = group[0] if group else (row['common_name'] or '')
-            existing = merged.get(key)
-            if existing is None:
-                merged[key] = {
-                    'common_name': row['common_name'],
-                    'scientific_name': row['scientific_name'],
-                    'last_detected': row['last_detected'],
-                    '_count': row['detection_count'],
-                }
-                continue
-            if row['last_detected'] > existing['last_detected']:
-                existing['last_detected'] = row['last_detected']
-            # Ties keep the first row, i.e. the alphabetically-first common
-            # name, so the displayed entry is stable across requests.
-            if row['detection_count'] > existing['_count']:
-                existing['common_name'] = row['common_name']
-                existing['scientific_name'] = row['scientific_name']
-                existing['_count'] = row['detection_count']
-
-        species = list(merged.values())
+        species = _fold_taxon_groups(results, 'detection_count')
         for entry in species:
-            del entry['_count']
+            del entry['detection_count'], entry['first_detected']
         species.sort(key=lambda s: s['common_name'])
         return species
 

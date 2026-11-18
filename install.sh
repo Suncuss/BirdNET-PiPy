@@ -1176,7 +1176,7 @@ perform_update() {
     fi
 
     # Fix ownership of git-tracked files only (skip data/ which has large audio files)
-    find "$PROJECT_ROOT" -maxdepth 1 -mindepth 1 -not -name data \
+    find "$PROJECT_ROOT" -maxdepth 1 -mindepth 1 -not -name data -not -name "data.internal-*" \
         -exec chown -R "$ACTUAL_USER:$ACTUAL_USER" {} +
 
     # Step 6: Ensure swap on low-memory systems, then pull or build

@@ -529,9 +529,45 @@ enable_swap_if_available() {
     fi
 }
 
+# Optional external data drive: data/ is a symlink into a folder on a drive
+# mounted by fstab at BIRDNET_DATA_DRIVE (.env, on the internal disk). The
+# marker tells a mounted drive from an empty mount point: a missing drive
+# must never start a fresh station on the SD card.
+DATA_DRIVE=$(sed -n 's/^BIRDNET_DATA_DRIVE=//p' "$PROJECT_ROOT/.env" 2>/dev/null | tail -1)
+DATA_MARKER="$PROJECT_ROOT/data/.birdnet-data-volume"
+DATA_DRIVE_STATE=ok
+
+data_drive_ready() {
+    [ -z "$DATA_DRIVE" ] && return 0
+    mountpoint -q "$DATA_DRIVE" && [ -f "$DATA_MARKER" ]
+}
+
+# Stop the stack while the drive is gone (its containers would only see I/O
+# errors) and bring it back once fstab/systemd has remounted the drive.
+check_data_drive() {
+    if ! data_drive_ready; then
+        if [ "$DATA_DRIVE_STATE" != missing ]; then
+            log_error "Data drive not available at $DATA_DRIVE; stopping containers until it returns"
+            (cd "$PROJECT_ROOT" && timeout 90 docker compose stop) || true
+            DATA_DRIVE_STATE=missing
+        fi
+        return 1
+    fi
+    if [ "$DATA_DRIVE_STATE" = missing ]; then
+        log_info "Data drive available again; starting containers"
+        start_containers && DATA_DRIVE_STATE=ok
+    fi
+    return 0
+}
+
 # Function to monitor both restart and update flags
 monitor_flags() {
     while true; do
+        # Flags live on the data drive; nothing to do until it is back.
+        if ! check_data_drive; then
+            sleep "$CHECK_INTERVAL"
+            continue
+        fi
         # Check update flag first (higher priority)
         if [ -f "$UPDATE_FLAG_FILE" ]; then
             perform_system_update
@@ -554,8 +590,14 @@ main() {
     # Setup audio socket (symlink to user PulseAudio or start system-wide)
     setup_audio_socket
 
-    # Start Docker containers
-    start_containers
+    # Start Docker containers (the monitor starts them later if the data
+    # drive is not mounted yet)
+    if data_drive_ready; then
+        start_containers
+    else
+        log_error "Data drive not available at $DATA_DRIVE; containers will start when it is mounted"
+        DATA_DRIVE_STATE=missing
+    fi
 
     # Start monitoring for restart and update flags in background
     log_info "Starting flag monitor (checking every ${CHECK_INTERVAL}s)..."
